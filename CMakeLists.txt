@@ -103,3 +103,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE src)
 target_include_directories(${PROJECT_NAME} PRIVATE "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/include")
 target_link_directories(${PROJECT_NAME} PRIVATE "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64")
 target_link_libraries(${PROJECT_NAME} PRIVATE SDL3)
+
+# On Windows, place a symlink to the SDL3 runtime DLL next to the executable.
+# Requires Developer Mode or elevation for symlink creation.
+if(WIN32)
+    set(SDL3_DLL_PATH "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll")
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove -f "$<TARGET_FILE_DIR:${PROJECT_NAME}>/SDL3.dll"
+        COMMAND ${CMAKE_COMMAND} -E create_symlink "${SDL3_DLL_PATH}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/SDL3.dll"
+        COMMENT "Symlinking SDL3.dll to output directory")
+endif()
