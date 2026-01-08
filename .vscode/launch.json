@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch AgenticRenderer",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/AgenticRenderer.exe",
+            "args": [
+                // Add command line arguments here
+                // "--verbose",
+                // "--config", "config.json",
+                // "--input", "input.txt",
+                // "--output", "output.txt"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal"
+        }
+    ]
+}

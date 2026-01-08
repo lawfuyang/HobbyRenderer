@@ -39,3 +39,78 @@
 
 # debug information files
 *.dwo
+
+# Build directories
+build/
+out/
+bin/
+lib/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+CMakeUserPresets.json
+
+# Visual Studio files
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.VC.opendb
+*.slnx
+
+# Visual Studio Code (user-specific settings only)
+.vscode/settings.json
+.vscode/.ropeproject
+.vscode/launch.json.user
+
+# Compiled binaries and intermediate files
+*.exp
+*.idb
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*.log
+*.tlog
+*.lastbuildstate
+*.iobj
+*.ipdb
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# IDE specific
+.idea/
+*.code-workspace
+
+# Package manager directories
+vcpkg_installed/
+packages/
