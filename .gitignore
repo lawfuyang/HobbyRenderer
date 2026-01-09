@@ -77,10 +77,8 @@ CMakeUserPresets.json
 *.VC.VC.opendb
 *.slnx
 
-# Visual Studio Code (user-specific settings only)
-.vscode/settings.json
-.vscode/.ropeproject
-.vscode/launch.json.user
+# Visual Studio Code
+.vscode/
 
 # Compiled binaries and intermediate files
 *.exp

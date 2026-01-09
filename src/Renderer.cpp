@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "Utilities.h"
+#include "Config.h"
 
 namespace
 {
@@ -202,8 +203,10 @@ void Renderer::Shutdown()
     SDL_Log("[Shutdown] Clean exit");
 }
 
-int main(int /*argc*/, char* /*argv*/[])
+int main(int argc, char* argv[])
 {
+    Config::ParseCommandLine(argc, argv);
+
     Renderer renderer{};
     if (!renderer.Initialize())
         return 1;
