@@ -96,21 +96,7 @@ set(NVRHI_WITH_VULKAN ON CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX12 OFF CACHE BOOL "" FORCE)
 
-# Silence compiler warnings for external dependencies
-if(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W0")
-else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
-endif()
-
 add_subdirectory(external/nvrhi)
-
-# Re-enable compiler warnings for our code
-if(MSVC)
-    string(REPLACE "/W0" "/W4" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-else()
-    string(REPLACE " -w" " -Wall -Wextra", CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-endif()
 
 # Output all executables to /bin/ directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
