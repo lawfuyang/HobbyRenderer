@@ -45,7 +45,8 @@ build/
 out/
 bin/
 lib/
-external/
+external/*
+!external/nvrhi/
 Debug/
 Release/
 RelWithDebInfo/
