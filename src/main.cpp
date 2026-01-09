@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "GraphicRHI.h"
+#include "Utilities.h"
 
 namespace
 {
@@ -184,5 +185,6 @@ int main(int /*argc*/, char* /*argv*/[])
     }
 
     Shutdown(window, graphicRHI);
+
     return 0;
 }
