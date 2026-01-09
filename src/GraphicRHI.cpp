@@ -56,6 +56,7 @@ bool GraphicRHI::Initialize(SDL_Window* window)
 
 void GraphicRHI::Shutdown()
 {
+    DestroySwapchain();
     DestroyLogicalDevice();
     DestroySurface();
     DestroyInstance();
@@ -140,11 +141,20 @@ bool GraphicRHI::CreateLogicalDevice()
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
+    // Enable device extensions
+    const std::vector<const char*> deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    };
+
+    // Enable device features
     vk::PhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.samplerAnisotropy = VK_TRUE;
 
     vk::DeviceCreateInfo createInfo{};
     createInfo.queueCreateInfoCount = 1;
     createInfo.pQueueCreateInfos = &queueCreateInfo;
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+    createInfo.ppEnabledExtensionNames = deviceExtensions.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
 
     vk::Device vkDevice = vkPhysical.createDevice(createInfo);
@@ -282,4 +292,199 @@ VkPhysicalDevice GraphicRHI::ChoosePhysicalDevice()
 
     m_GraphicsQueueFamily = selectedQueueFamily;
     return static_cast<VkPhysicalDevice>(selected);
+}
+
+bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
+{
+    if (m_Swapchain != VK_NULL_HANDLE)
+    {
+        SDL_Log("[Swapchain] Swapchain already created, destroying old one");
+        DestroySwapchain();
+    }
+
+    if (m_Device == VK_NULL_HANDLE || m_Surface == VK_NULL_HANDLE || m_PhysicalDevice == VK_NULL_HANDLE)
+    {
+        SDL_Log("[Swapchain] Cannot create swapchain: device, surface, or physical device not initialized");
+        SDL_assert(false && "Invalid state for swapchain creation");
+        return false;
+    }
+
+    SDL_Log("[Init] Creating Vulkan swapchain (size: %ux%u)", width, height);
+
+    vk::PhysicalDevice vkPhysical = static_cast<vk::PhysicalDevice>(m_PhysicalDevice);
+    vk::Device vkDevice = static_cast<vk::Device>(m_Device);
+    vk::SurfaceKHR vkSurface = static_cast<vk::SurfaceKHR>(m_Surface);
+
+    // Check if the graphics queue family supports presentation
+    if (!SDL_Vulkan_GetPresentationSupport(m_Instance, m_PhysicalDevice, m_GraphicsQueueFamily))
+    {
+        SDL_Log("[Swapchain] Graphics queue family does not support presentation");
+        SDL_assert(false && "Graphics queue family does not support presentation");
+        return false;
+    }
+
+    // Query surface capabilities
+    const vk::SurfaceCapabilitiesKHR surfaceCapabilities = vkPhysical.getSurfaceCapabilitiesKHR(vkSurface);
+
+    // Choose swap extent
+    VkExtent2D swapExtent;
+    if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+    {
+        swapExtent = static_cast<VkExtent2D>(surfaceCapabilities.currentExtent);
+    }
+    else
+    {
+        swapExtent = {
+            std::clamp(width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width),
+            std::clamp(height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height)
+        };
+    }
+
+    // Query surface formats
+    const std::vector<vk::SurfaceFormatKHR> surfaceFormats = vkPhysical.getSurfaceFormatsKHR(vkSurface);
+    if (surfaceFormats.empty())
+    {
+        SDL_Log("[Swapchain] No surface formats available");
+        SDL_assert(false && "No surface formats available");
+        return false;
+    }
+
+    // Prefer SRGB format if available
+    vk::SurfaceFormatKHR selectedFormat = surfaceFormats[0];
+    for (const vk::SurfaceFormatKHR& format : surfaceFormats)
+    {
+        if (format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+        {
+            selectedFormat = format;
+            break;
+        }
+    }
+
+    SDL_Log("[Init] Swapchain format: %s, color space: %s", vk::to_string(selectedFormat.format).c_str(), vk::to_string(selectedFormat.colorSpace).c_str());
+
+    // Determine present mode
+    const std::vector<vk::PresentModeKHR> presentModes = vkPhysical.getSurfacePresentModesKHR(vkSurface);
+    vk::PresentModeKHR selectedPresentMode = vk::PresentModeKHR::eMailbox;
+    if (std::find(presentModes.begin(), presentModes.end(), vk::PresentModeKHR::eMailbox) == presentModes.end())
+    {
+        selectedPresentMode = vk::PresentModeKHR::eFifo; // always available
+    }
+
+    // Determine image count
+    uint32_t desiredImageCount = std::max(2u, surfaceCapabilities.minImageCount);
+    if (surfaceCapabilities.maxImageCount > 0)
+    {
+        desiredImageCount = std::min(desiredImageCount, surfaceCapabilities.maxImageCount);
+    }
+
+    // Create swapchain
+    vk::SwapchainCreateInfoKHR swapchainCreateInfo{};
+    swapchainCreateInfo.surface = vkSurface;
+    swapchainCreateInfo.minImageCount = desiredImageCount;
+    swapchainCreateInfo.imageFormat = selectedFormat.format;
+    swapchainCreateInfo.imageColorSpace = selectedFormat.colorSpace;
+    swapchainCreateInfo.imageExtent = static_cast<vk::Extent2D>(swapExtent);
+    swapchainCreateInfo.imageArrayLayers = 1;
+    swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+    swapchainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
+    swapchainCreateInfo.queueFamilyIndexCount = 0;
+    swapchainCreateInfo.pQueueFamilyIndices = nullptr;
+    swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
+    swapchainCreateInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+    swapchainCreateInfo.presentMode = selectedPresentMode;
+    swapchainCreateInfo.clipped = VK_TRUE;
+    swapchainCreateInfo.oldSwapchain = nullptr;
+
+    vk::SwapchainKHR vkSwapchain = vkDevice.createSwapchainKHR(swapchainCreateInfo);
+    if (!vkSwapchain)
+    {
+        SDL_Log("[Swapchain] vkCreateSwapchainKHR failed");
+        SDL_assert(false && "vkCreateSwapchainKHR failed");
+        return false;
+    }
+
+    m_Swapchain = static_cast<VkSwapchainKHR>(vkSwapchain);
+    m_SwapchainFormat = static_cast<VkFormat>(selectedFormat.format);
+    m_SwapchainExtent = swapExtent;
+
+    // Get swapchain images
+    const std::vector<vk::Image> vkImages = vkDevice.getSwapchainImagesKHR(vkSwapchain);
+    m_SwapchainImages.clear();
+    m_SwapchainImages.reserve(vkImages.size());
+    for (const vk::Image& img : vkImages)
+    {
+        m_SwapchainImages.push_back(static_cast<VkImage>(img));
+    }
+
+    SDL_Log("[Init] Swapchain created with %zu images", m_SwapchainImages.size());
+
+    // Create image views
+    m_SwapchainImageViews.clear();
+    m_SwapchainImageViews.reserve(m_SwapchainImages.size());
+
+    for (size_t i = 0; i < m_SwapchainImages.size(); ++i)
+    {
+        vk::ImageViewCreateInfo imageViewCreateInfo{};
+        imageViewCreateInfo.image = static_cast<vk::Image>(m_SwapchainImages[i]);
+        imageViewCreateInfo.viewType = vk::ImageViewType::e2D;
+        imageViewCreateInfo.format = static_cast<vk::Format>(m_SwapchainFormat);
+        imageViewCreateInfo.components = {
+            vk::ComponentSwizzle::eIdentity,
+            vk::ComponentSwizzle::eIdentity,
+            vk::ComponentSwizzle::eIdentity,
+            vk::ComponentSwizzle::eIdentity
+        };
+        imageViewCreateInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+        imageViewCreateInfo.subresourceRange.levelCount = 1;
+        imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+        imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+        vk::ImageView vkImageView = vkDevice.createImageView(imageViewCreateInfo);
+        if (!vkImageView)
+        {
+            SDL_Log("[Swapchain] Failed to create image view %zu", i);
+            SDL_assert(false && "createImageView failed");
+            return false;
+        }
+
+        m_SwapchainImageViews.push_back(static_cast<VkImageView>(vkImageView));
+    }
+
+    SDL_Log("[Init] Swapchain image views created successfully");
+    return true;
+}
+
+void GraphicRHI::DestroySwapchain()
+{
+    if (m_Device == VK_NULL_HANDLE)
+    {
+        return; // device already destroyed
+    }
+
+    vk::Device vkDevice = static_cast<vk::Device>(m_Device);
+
+    if (!m_SwapchainImageViews.empty())
+    {
+        SDL_Log("[Shutdown] Destroying swapchain image views");
+        for (VkImageView imageView : m_SwapchainImageViews)
+        {
+            if (imageView != VK_NULL_HANDLE)
+            {
+                vkDevice.destroyImageView(static_cast<vk::ImageView>(imageView));
+            }
+        }
+        m_SwapchainImageViews.clear();
+    }
+
+    if (m_Swapchain != VK_NULL_HANDLE)
+    {
+        SDL_Log("[Shutdown] Destroying Vulkan swapchain");
+        vkDevice.destroySwapchainKHR(static_cast<vk::SwapchainKHR>(m_Swapchain));
+        m_Swapchain = VK_NULL_HANDLE;
+    }
+
+    m_SwapchainImages.clear();
+    m_SwapchainFormat = VK_FORMAT_UNDEFINED;
+    m_SwapchainExtent = {0, 0};
 }

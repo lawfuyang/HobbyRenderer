@@ -126,6 +126,16 @@ bool Renderer::Initialize()
         return false;
     }
 
+    int windowWidth = 0;
+    int windowHeight = 0;
+    SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
+
+    if (!m_RHI.CreateSwapchain(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight)))
+    {
+        Shutdown();
+        return false;
+    }
+
     return true;
 }
 
