@@ -1,13 +1,105 @@
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
+
+#include <nvrhi/vulkan.h>
+#include <nvrhi/validation.h>
+
+#ifndef VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
+    #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+#endif
+#include <vulkan/vulkan.hpp>
+
+// Define the Vulkan dynamic dispatcher - this needs to occur in exactly one cpp file in the program.
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace
 {
     constexpr uint32_t kTargetFPS = 200;
     constexpr uint32_t kFrameDurationMs = SDL_MS_PER_SECOND / kTargetFPS;
+
+    VkInstance CreateVulkanInstance()
+    {
+        SDL_Log("[Init] Creating Vulkan instance");
+
+        // Load Vulkan library through SDL3
+        if (!SDL_Vulkan_LoadLibrary(nullptr))
+        {
+            SDL_Log("SDL_Vulkan_LoadLibrary failed: %s", SDL_GetError());
+            SDL_assert(false && "SDL_Vulkan_LoadLibrary failed");
+            return VK_NULL_HANDLE;
+        }
+
+        // Initialize the dynamic loader
+        vk::detail::DynamicLoader dl;
+        PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = 
+            dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+
+        // Get required instance extensions from SDL3
+        uint32_t sdlExtensionCount = 0;
+        const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
+        if (!sdlExtensions)
+        {
+            SDL_Log("SDL_Vulkan_GetInstanceExtensions failed: %s", SDL_GetError());
+            SDL_assert(false && "SDL_Vulkan_GetInstanceExtensions failed");
+            return VK_NULL_HANDLE;
+        }
+
+        SDL_Log("[Init] SDL3 requires %u Vulkan instance extensions:", sdlExtensionCount);
+        std::vector<const char*> extensions;
+        for (uint32_t i = 0; i < sdlExtensionCount; ++i)
+        {
+            SDL_Log("[Init]   - %s", sdlExtensions[i]);
+            extensions.push_back(sdlExtensions[i]);
+        }
+
+        // Application info
+        vk::ApplicationInfo appInfo{};
+        appInfo.pApplicationName = "Agentic Renderer";
+        appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+        appInfo.pEngineName = "No Engine";
+        appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+        appInfo.apiVersion = VK_API_VERSION_1_3;
+
+        // Instance create info
+        vk::InstanceCreateInfo createInfo{};
+        createInfo.pApplicationInfo = &appInfo;
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        createInfo.ppEnabledExtensionNames = extensions.data();
+        createInfo.enabledLayerCount = 0; // No validation layers for now
+
+        // Create instance
+        vk::Instance instance = vk::createInstance(createInfo);
+        if (!instance)
+        {
+            SDL_Log("vkCreateInstance failed");
+            SDL_assert(false && "vkCreateInstance failed");
+            return VK_NULL_HANDLE;
+        }
+
+        // Initialize the dispatcher with the instance
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(instance);
+
+        SDL_Log("[Init] Vulkan instance created successfully");
+        return static_cast<VkInstance>(instance);
+    }
+
+    void DestroyVulkanInstance(VkInstance instance)
+    {
+        if (instance != VK_NULL_HANDLE)
+        {
+            SDL_Log("[Shutdown] Destroying Vulkan instance");
+            vk::Instance vkInstance = static_cast<vk::Instance>(instance);
+            vkInstance.destroy();
+            SDL_Vulkan_UnloadLibrary();
+        }
+    }
 
     void HandleInput(const SDL_Event& event)
     {
@@ -104,9 +196,12 @@ namespace
         return window;
     }
 
-    void Shutdown(SDL_Window* window)
+    void Shutdown(SDL_Window* window, VkInstance instance)
     {
         SDL_Log("[Shutdown] Destroying window and quitting SDL");
+        
+        DestroyVulkanInstance(instance);
+        
         if (window)
         {
             SDL_DestroyWindow(window);
@@ -121,6 +216,7 @@ int main(int /*argc*/, char* /*argv*/[])
     InitSDL();
 
     SDL_Window* window = CreateWindowScaled();
+    VkInstance vkInstance = CreateVulkanInstance();
 
     SDL_Log("[Run ] Entering main loop");
 
@@ -161,6 +257,6 @@ int main(int /*argc*/, char* /*argv*/[])
         }
     }
 
-    Shutdown(window);
+    Shutdown(window, vkInstance);
     return 0;
 }

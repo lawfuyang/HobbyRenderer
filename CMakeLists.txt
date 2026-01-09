@@ -79,6 +79,12 @@ set(SDL3_URL "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3
 download_library("SDL3" "${SDL3_VERSION}" "${SDL3_URL}" "SDL3-*")
 set(SDL3_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/SDL3")
 
+# NVRHI Configuration
+set(NVRHI_WITH_VULKAN ON CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX12 OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/nvrhi)
+
 # Output all executables to /bin/ directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_SOURCE_DIR}/bin)
@@ -103,6 +109,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE src)
 target_include_directories(${PROJECT_NAME} PRIVATE "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/include")
 target_link_directories(${PROJECT_NAME} PRIVATE "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64")
 target_link_libraries(${PROJECT_NAME} PRIVATE SDL3)
+
+# Link NVRHI
+target_link_libraries(${PROJECT_NAME} PRIVATE nvrhi)
+target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan-Headers)
 
 # On Windows, place a symlink to the SDL3 runtime DLL next to the executable.
 # Requires Developer Mode or elevation for symlink creation.
