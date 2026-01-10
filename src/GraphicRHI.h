@@ -10,6 +10,8 @@ struct GraphicRHI
     void DestroySurface();
     bool CreateSwapchain(uint32_t width, uint32_t height);
     void DestroySwapchain();
+    bool AcquireNextSwapchainImage(uint32_t* outImageIndex);
+    bool PresentSwapchain(uint32_t imageIndex);
 
     VkInstance m_Instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_PhysicalDevice = VK_NULL_HANDLE;
@@ -23,6 +25,7 @@ struct GraphicRHI
     VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
     VkFormat m_SwapchainFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D m_SwapchainExtent = {0, 0};
+    VkFence m_ImageAcquireFence = VK_NULL_HANDLE;
     VkImage m_SwapchainImages[SwapchainImageCount] = {};
     VkImageView m_SwapchainImageViews[SwapchainImageCount] = {};
 

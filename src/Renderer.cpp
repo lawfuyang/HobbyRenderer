@@ -406,6 +406,13 @@ void Renderer::Run()
     {
         const uint64_t frameStart = SDL_GetTicks();
 
+        uint32_t currentSwapchainImage = 0;
+        if (!m_RHI.AcquireNextSwapchainImage(&currentSwapchainImage))
+        {
+            SDL_Log("[Run ] Failed to acquire swapchain image, exiting loop");
+            break;
+        }
+
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -433,8 +440,29 @@ void Renderer::Run()
             }
         }
 
+        // temp to properly get swap chain texture handle to correct state for now, until *some* actual rendering work is done
+        if (nvrhi::CommandListHandle prepareCmd = AcquireCommandList())
+        {
+            nvrhi::TextureHandle swapchainTexture = m_SwapchainTextures[currentSwapchainImage];
+            nvrhi::Color clearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+            // Clear to a known value (transitions to TransferDst) then back to Present for presentation
+            prepareCmd->clearTextureFloat(swapchainTexture, nvrhi::AllSubresources, clearColor);
+            SubmitCommandList(prepareCmd);
+        }
+
         // Render ImGui frame
         m_ImGuiLayer.RenderFrame();
+
+        // Execute any queued GPU work in submission order
+        ExecutePendingCommandLists();
+
+        // Present swapchain
+        if (!m_RHI.PresentSwapchain(currentSwapchainImage))
+        {
+            SDL_Log("[Run ] Present failed, exiting loop");
+            break;
+        }
 
         const uint64_t frameTime = SDL_GetTicks() - frameStart;
         
@@ -453,6 +481,12 @@ void Renderer::Run()
 void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
+
+    if (m_NvrhiDevice)
+    {
+        SDL_Log("[Shutdown] Waiting for GPU to idle");
+        m_NvrhiDevice->waitForIdle();
+    }
 
     m_ImGuiLayer.Shutdown();
     UnloadShaders();
@@ -513,6 +547,10 @@ bool Renderer::CreateNvrhiDevice()
 
 void Renderer::DestroyNvrhiDevice()
 {
+    SDL_assert(m_PendingCommandLists.empty() && "Pending command lists should be empty on device destruction");
+    m_PendingCommandLists.clear();
+    m_CommandListFreeList.clear();
+
     if (m_NvrhiDevice)
     {
         SDL_Log("[Shutdown] Destroying NVRHI device");
@@ -522,18 +560,26 @@ void Renderer::DestroyNvrhiDevice()
 
 nvrhi::CommandListHandle Renderer::AcquireCommandList()
 {
+    nvrhi::CommandListHandle handle;
     if (!m_CommandListFreeList.empty())
     {
-        const nvrhi::CommandListHandle handle = m_CommandListFreeList.back();
+        handle = m_CommandListFreeList.back();
         m_CommandListFreeList.pop_back();
-        return handle;
+    }
+    else
+    {
+        SDL_assert(m_NvrhiDevice && "NVRHI device is not initialized");
+        nvrhi::CommandListParameters params{};
+        params.queueType = nvrhi::CommandQueue::Graphics;
+        handle = m_NvrhiDevice->createCommandList(params);
     }
 
-    SDL_assert(m_NvrhiDevice && "NVRHI device is not initialized");
+    if (handle)
+    {
+        handle->open();
+    }
 
-    nvrhi::CommandListParameters params{};
-    params.queueType = nvrhi::CommandQueue::Graphics;
-    return m_NvrhiDevice->createCommandList(params);
+    return handle;
 }
 
 void Renderer::ReleaseCommandList(const nvrhi::CommandListHandle& commandList)
@@ -544,6 +590,35 @@ void Renderer::ReleaseCommandList(const nvrhi::CommandListHandle& commandList)
     }
 
     m_CommandListFreeList.push_back(commandList);
+}
+
+void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
+{
+    if (!commandList)
+    {
+        return;
+    }
+
+    commandList->close();
+    m_PendingCommandLists.push_back(commandList);
+}
+
+void Renderer::ExecutePendingCommandLists()
+{
+    if (!m_PendingCommandLists.empty())
+    {
+        std::vector<nvrhi::ICommandList*> rawLists;
+        rawLists.reserve(m_PendingCommandLists.size());
+        for (const nvrhi::CommandListHandle& handle : m_PendingCommandLists)
+        {
+            rawLists.push_back(handle.Get());
+        }
+
+        m_NvrhiDevice->executeCommandLists(rawLists.data(), rawLists.size());
+        m_PendingCommandLists.clear();
+    }
+
+    m_NvrhiDevice->runGarbageCollection();
 }
 
 bool Renderer::CreateSwapchainTextures()

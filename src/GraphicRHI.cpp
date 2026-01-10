@@ -622,7 +622,9 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
     swapchainCreateInfo.imageColorSpace = selectedFormat.colorSpace;
     swapchainCreateInfo.imageExtent = static_cast<vk::Extent2D>(swapExtent);
     swapchainCreateInfo.imageArrayLayers = 1;
-    swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+    swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment | 
+                                     vk::ImageUsageFlagBits::eTransferSrc | 
+                                     vk::ImageUsageFlagBits::eTransferDst;
     swapchainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
     swapchainCreateInfo.queueFamilyIndexCount = 0;
     swapchainCreateInfo.pQueueFamilyIndices = nullptr;
@@ -685,6 +687,20 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
     }
 
     SDL_Log("[Init] Swapchain image views created successfully");
+
+    if (m_ImageAcquireFence == VK_NULL_HANDLE)
+    {
+        vk::FenceCreateInfo fenceInfo{};
+        fenceInfo.flags = {};
+        vk::Fence fence = vkDevice.createFence(fenceInfo);
+        if (!fence)
+        {
+            SDL_Log("[Swapchain] Failed to create image acquire fence");
+            return false;
+        }
+        m_ImageAcquireFence = static_cast<VkFence>(fence);
+    }
+
     return true;
 }
 
@@ -714,12 +730,84 @@ void GraphicRHI::DestroySwapchain()
         m_Swapchain = VK_NULL_HANDLE;
     }
 
+    if (m_ImageAcquireFence != VK_NULL_HANDLE)
+    {
+        vkDevice.destroyFence(static_cast<vk::Fence>(m_ImageAcquireFence));
+        m_ImageAcquireFence = VK_NULL_HANDLE;
+    }
+
     for (size_t i = 0; i < SwapchainImageCount; ++i)
     {
         m_SwapchainImages[i] = VK_NULL_HANDLE;
     }
     m_SwapchainFormat = VK_FORMAT_UNDEFINED;
     m_SwapchainExtent = {0, 0};
+}
+
+bool GraphicRHI::AcquireNextSwapchainImage(uint32_t* outImageIndex)
+{
+    if (!outImageIndex)
+    {
+        return false;
+    }
+
+    vk::Device device = static_cast<vk::Device>(m_Device);
+    vk::SwapchainKHR swapchain = static_cast<vk::SwapchainKHR>(m_Swapchain);
+    if (!device || !swapchain)
+    {
+        SDL_Log("[Swapchain] Device or swapchain invalid during acquire");
+        return false;
+    }
+
+    vk::ResultValue<uint32_t> acquired = device.acquireNextImageKHR(swapchain, UINT64_MAX, vk::Semaphore(), static_cast<vk::Fence>(m_ImageAcquireFence));
+    if (acquired.result != vk::Result::eSuccess && acquired.result != vk::Result::eSuboptimalKHR)
+    {
+        SDL_Log("[Swapchain] acquireNextImageKHR failed: %s", vk::to_string(acquired.result).c_str());
+        SDL_assert(false && "acquireNextImageKHR failed");
+        return false;
+    }
+
+    if (m_ImageAcquireFence != VK_NULL_HANDLE)
+    {
+        vk::Result waitResult = device.waitForFences(static_cast<vk::Fence>(m_ImageAcquireFence), VK_TRUE, UINT64_MAX);
+        if (waitResult != vk::Result::eSuccess)
+        {
+            SDL_Log("[Swapchain] waitForFences after acquire failed: %s", vk::to_string(waitResult).c_str());
+            SDL_assert(false && "waitForFences after acquire failed");
+            return false;
+        }
+
+        device.resetFences(static_cast<vk::Fence>(m_ImageAcquireFence));
+    }
+
+    *outImageIndex = acquired.value;
+    return true;
+}
+
+bool GraphicRHI::PresentSwapchain(uint32_t imageIndex)
+{
+    vk::Queue queue = static_cast<vk::Queue>(m_GraphicsQueue);
+    vk::SwapchainKHR swapchain = static_cast<vk::SwapchainKHR>(m_Swapchain);
+    if (!queue || !swapchain)
+    {
+        SDL_Log("[Swapchain] Queue or swapchain invalid during present");
+        return false;
+    }
+
+    vk::PresentInfoKHR presentInfo{};
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &swapchain;
+    presentInfo.pImageIndices = &imageIndex;
+
+    vk::Result result = queue.presentKHR(presentInfo);
+    if (result == vk::Result::eSuccess || result == vk::Result::eSuboptimalKHR)
+    {
+        return true;
+    }
+
+    SDL_Log("[Swapchain] presentKHR failed: %s", vk::to_string(result).c_str());
+    SDL_assert(false && "presentKHR failed");
+    return false;
 }
 
 nvrhi::Format GraphicRHI::VkFormatToNvrhiFormat(VkFormat vkFormat)

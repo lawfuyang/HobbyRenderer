@@ -10,12 +10,15 @@ struct Renderer
     static Renderer* GetInstance();
     nvrhi::CommandListHandle AcquireCommandList();
     void ReleaseCommandList(const nvrhi::CommandListHandle& commandList);
+    void SubmitCommandList(const nvrhi::CommandListHandle& commandList);
+    void ExecutePendingCommandLists();
 
     SDL_Window* m_Window = nullptr;
     GraphicRHI m_RHI{};
     nvrhi::DeviceHandle m_NvrhiDevice;
     nvrhi::TextureHandle m_SwapchainTextures[GraphicRHI::SwapchainImageCount] = {};
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
+    std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;
 
     // Cached shader handles loaded from compiled SPIR-V binaries (keyed by output stem, e.g., "imgui_VSMain")
     std::unordered_map<std::string, nvrhi::ShaderHandle> m_ShaderCache;
