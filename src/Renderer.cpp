@@ -111,15 +111,6 @@ namespace
         SDL_Log("[Init] Window created (%dx%d)", windowW, windowH);
         return window;
     }
-
-    void ImGuiCheckVkResult(VkResult err)
-    {
-        if (err == 0)
-            return;
-        fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
-        if (err < 0)
-            abort();
-    }
 }
 
 bool Renderer::InitializeImGui()
@@ -243,11 +234,6 @@ void Renderer::Run()
     constexpr uint32_t kTargetFPS = 200;
     constexpr uint32_t kFrameDurationMs = SDL_MS_PER_SECOND / kTargetFPS;
 
-    // For FPS calculation
-    double frameTimeSum = 0.0;
-    int frameCount = 0;
-    uint64_t lastFpsUpdate = SDL_GetTicks();
-
     bool running = true;
     while (running)
     {
@@ -285,20 +271,10 @@ void Renderer::Run()
 
         const uint64_t frameTime = SDL_GetTicks() - frameStart;
         
-        // Calculate frame time in milliseconds and microseconds
+        // Calculate frame time and FPS
         m_FrameTime = static_cast<double>(frameTime);
-        frameTimeSum += m_FrameTime;
-        frameCount++;
-
-        // Update FPS every second
-        uint64_t currentTicks = SDL_GetTicks();
-        if (currentTicks - lastFpsUpdate >= 1000)
-        {
-            m_FPS = frameCount * 1000.0 / (currentTicks - lastFpsUpdate);
-            frameTimeSum = 0.0;
-            frameCount = 0;
-            lastFpsUpdate = currentTicks;
-        }
+        if (m_FrameTime > 0.0)
+            m_FPS = 1000.0 / m_FrameTime;
 
         if (frameTime < kFrameDurationMs)
         {
