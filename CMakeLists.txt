@@ -126,7 +126,7 @@ file(GLOB_RECURSE SOURCES
 )
 
 # Create executable
-add_executable(${PROJECT_NAME} ${SOURCES} ${IMGUI_SOURCES})
+add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${IMGUI_SOURCES})
 
 # Define Windows-specific macros to prevent min/max macro conflicts
 if(MSVC)
