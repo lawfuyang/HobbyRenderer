@@ -258,6 +258,18 @@ namespace
     }
 }
 
+Renderer* Renderer::s_Instance = nullptr;
+
+void Renderer::SetInstance(Renderer* instance)
+{
+    s_Instance = instance;
+}
+
+Renderer* Renderer::GetInstance()
+{
+    return s_Instance;
+}
+
 bool Renderer::LoadShaders()
 {
     SDL_Log("[Init] Loading compiled shaders from config");
@@ -507,6 +519,32 @@ void Renderer::DestroyNvrhiDevice()
     }
 }
 
+nvrhi::CommandListHandle Renderer::AcquireCommandList()
+{
+    if (!m_CommandListFreeList.empty())
+    {
+        const nvrhi::CommandListHandle handle = m_CommandListFreeList.back();
+        m_CommandListFreeList.pop_back();
+        return handle;
+    }
+
+    SDL_assert(m_NvrhiDevice && "NVRHI device is not initialized");
+
+    nvrhi::CommandListParameters params{};
+    params.queueType = nvrhi::CommandQueue::Graphics;
+    return m_NvrhiDevice->createCommandList(params);
+}
+
+void Renderer::ReleaseCommandList(const nvrhi::CommandListHandle& commandList)
+{
+    if (!commandList)
+    {
+        return;
+    }
+
+    m_CommandListFreeList.push_back(commandList);
+}
+
 bool Renderer::CreateSwapchainTextures()
 {
     SDL_Log("[Init] Creating NVRHI swap chain texture handles");
@@ -566,10 +604,12 @@ int main(int argc, char* argv[])
     Config::ParseCommandLine(argc, argv);
 
     Renderer renderer{};
+    Renderer::SetInstance(&renderer);
     if (!renderer.Initialize())
         return 1;
 
     renderer.Run();
     renderer.Shutdown();
+    Renderer::SetInstance(nullptr);
     return 0;
 }
