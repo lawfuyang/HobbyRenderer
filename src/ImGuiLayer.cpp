@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ImGuiLayer.h"
+#include "Renderer.h"
 
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -40,12 +41,14 @@ void ImGuiLayer::ProcessEvent(const SDL_Event& event)
     ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
-void ImGuiLayer::RenderFrame(double fps, double frameTime)
+void ImGuiLayer::RenderFrame()
 {
-    (void)fps;
-    (void)frameTime;
-
     return; // TODO
+    
+    Renderer* renderer = Renderer::GetInstance();
+
+    const double fps = renderer->m_FPS;
+    const double frameTime = renderer->m_FrameTime;
 
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();

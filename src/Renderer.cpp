@@ -267,6 +267,7 @@ void Renderer::SetInstance(Renderer* instance)
 
 Renderer* Renderer::GetInstance()
 {
+    SDL_assert(s_Instance && "Renderer instance is not set");
     return s_Instance;
 }
 
@@ -433,7 +434,7 @@ void Renderer::Run()
         }
 
         // Render ImGui frame
-        m_ImGuiLayer.RenderFrame(m_FPS, m_FrameTime);
+        m_ImGuiLayer.RenderFrame();
 
         const uint64_t frameTime = SDL_GetTicks() - frameStart;
         
