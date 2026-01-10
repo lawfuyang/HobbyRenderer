@@ -3,9 +3,6 @@
 #include "Config.h"
 
 #include <SDL3/SDL_main.h>
-#include <imgui.h>
-#include <imgui_impl_sdl3.h>
-#include <imgui_impl_vulkan.h>
 
 namespace
 {
@@ -261,68 +258,6 @@ namespace
     }
 }
 
-bool Renderer::InitializeImGui()
-{
-    SDL_Log("[Init] Initializing ImGui");
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
-
-    ImGui::StyleColorsDark();
-
-    if (!ImGui_ImplSDL3_InitForVulkan(m_Window))
-    {
-        SDL_Log("[Init] Failed to initialize ImGui SDL3 backend");
-        SDL_assert(false && "ImGui_ImplSDL3_InitForVulkan failed");
-        return false;
-    }
-
-    SDL_Log("[Init] ImGui initialized successfully");
-    return true;
-}
-
-void Renderer::ShutdownImGui()
-{
-    SDL_Log("[Shutdown] Shutting down ImGui");
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-}
-
-void Renderer::RenderImGuiFrame()
-{
-    return; // TODO
-
-    // Start ImGui frame
-    ImGui_ImplSDL3_NewFrame();
-    ImGui::NewFrame();
-
-    // Top menu bar
-    if (ImGui::BeginMainMenuBar())
-    {
-        ImGui::Text("FPS: %.1f", m_FPS);
-        ImGui::Text("Frame Time: %.3f ms", m_FrameTime);
-        ImGui::EndMainMenuBar();
-    }
-
-    // Demo window
-    if (ImGui::Begin("Property Grid"))
-    {
-        static bool s_ShowDemoWindow = false;
-        if (ImGui::Checkbox("Show Demo Window", &s_ShowDemoWindow))
-        {
-            ImGui::ShowDemoWindow();
-        }
-        
-        ImGui::End();
-    }
-
-    // Rendering
-    ImGui::Render();
-}
-
 bool Renderer::LoadShaders()
 {
     SDL_Log("[Init] Loading compiled shaders from config");
@@ -435,7 +370,7 @@ bool Renderer::Initialize()
         return false;
     }
 
-    if (!InitializeImGui())
+    if (!m_ImGuiLayer.Initialize(m_Window))
     {
         Shutdown();
         return false;
@@ -461,7 +396,7 @@ void Renderer::Run()
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
-            ImGui_ImplSDL3_ProcessEvent(&event);
+            m_ImGuiLayer.ProcessEvent(event);
 
             if (event.type == SDL_EVENT_QUIT)
             {
@@ -486,7 +421,7 @@ void Renderer::Run()
         }
 
         // Render ImGui frame
-        RenderImGuiFrame();
+        m_ImGuiLayer.RenderFrame(m_FPS, m_FrameTime);
 
         const uint64_t frameTime = SDL_GetTicks() - frameStart;
         
@@ -506,7 +441,7 @@ void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
 
-    ShutdownImGui();
+    m_ImGuiLayer.Shutdown();
     UnloadShaders();
     DestroySwapchainTextures();
     DestroyNvrhiDevice();

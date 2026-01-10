@@ -2,6 +2,7 @@
 
 #include "pch.h"
 #include "GraphicRHI.h"
+#include "ImGuiLayer.h"
 
 struct Renderer
 {
@@ -16,6 +17,9 @@ struct Renderer
     // ImGui state
     double m_FrameTime = 0.0;
     double m_FPS = 0.0;
+
+    // ImGui layer
+    ImGuiLayer m_ImGuiLayer;
 
     bool Initialize();
     void Run();
@@ -33,7 +37,4 @@ private:
     bool LoadShaders();
     void UnloadShaders();
     
-    bool InitializeImGui();
-    void ShutdownImGui();
-    void RenderImGuiFrame();
 };
