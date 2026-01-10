@@ -18,6 +18,50 @@ namespace
         }
     }
 
+    // Get supported instance extensions from those requested
+    std::vector<const char*> GetSupportedInstanceExtensions(const std::vector<const char*>& requested)
+    {
+        const std::vector<vk::ExtensionProperties> availableExtensions = vk::enumerateInstanceExtensionProperties();
+        std::vector<const char*> supported;
+        
+        for (const char* extensionName : requested)
+        {
+            for (const vk::ExtensionProperties& ext : availableExtensions)
+            {
+                if (std::strcmp(extensionName, ext.extensionName) == 0)
+                {
+                    supported.push_back(extensionName);
+                    SDL_Log("[Init] Instance extension supported: %s", extensionName);
+                    break;
+                }
+            }
+        }
+        
+        return supported;
+    }
+
+    // Get supported device extensions from those requested
+    std::vector<const char*> GetSupportedDeviceExtensions(vk::PhysicalDevice physicalDevice, const std::vector<const char*>& requested)
+    {
+        const std::vector<vk::ExtensionProperties> availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
+        std::vector<const char*> supported;
+        
+        for (const char* extensionName : requested)
+        {
+            for (const vk::ExtensionProperties& ext : availableExtensions)
+            {
+                if (std::strcmp(extensionName, ext.extensionName) == 0)
+                {
+                    supported.push_back(extensionName);
+                    SDL_Log("[Init] Device extension supported: %s", extensionName);
+                    break;
+                }
+            }
+        }
+        
+        return supported;
+    }
+
     bool SupportsGraphicsQueue(vk::PhysicalDevice device, uint32_t& outQueueFamily)
     {
         const std::vector<vk::QueueFamilyProperties> queueFamilies = device.getQueueFamilyProperties();
@@ -140,8 +184,19 @@ bool GraphicRHI::CreateInstance()
         m_InstanceExtensions.push_back(sdlExtensions[i]);
     }
 
-    // Add debug utils extension if validation is enabled
+    // Check if validation is enabled
     const bool enableValidation = Config::Get().m_EnableGPUValidation;
+
+    // Optional NVRHI-compatible instance extensions for future-proofing
+    const std::vector<const char*> optionalInstanceExtensions = {
+        VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+    };
+
+    // Filter to only supported extensions
+    const std::vector<const char*> supportedOptionalInstanceExtensions = GetSupportedInstanceExtensions(optionalInstanceExtensions);
+    m_InstanceExtensions.insert(m_InstanceExtensions.end(), supportedOptionalInstanceExtensions.begin(), supportedOptionalInstanceExtensions.end());
+
+    // Add validation layer extensions if validation is enabled
     if (enableValidation)
     {
         m_InstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -241,6 +296,37 @@ bool GraphicRHI::CreateLogicalDevice()
     m_DeviceExtensions.clear();
     m_DeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
+    // Optional NVRHI-compatible device extensions for future-proofing
+    const std::vector<const char*> optionalDeviceExtensions = {
+        // Core graphics extensions
+        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        
+        // Ray tracing extensions and their dependencies
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
+        VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME,
+        
+        // Advanced rendering
+        VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
+        VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME,
+        VK_NV_MESH_SHADER_EXTENSION_NAME,
+        
+        // Debug extensions
+        VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
+        
+        // Descriptor extensions
+        VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
+    };
+
+    // Filter to only supported extensions
+    const std::vector<const char*> supportedOptionalDeviceExtensions = GetSupportedDeviceExtensions(vkPhysical, optionalDeviceExtensions);
+    m_DeviceExtensions.insert(m_DeviceExtensions.end(), supportedOptionalDeviceExtensions.begin(), supportedOptionalDeviceExtensions.end());
+
+    SDL_Log("[Init] Using %zu device extensions", m_DeviceExtensions.size());
     // Enable device features
     vk::PhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
