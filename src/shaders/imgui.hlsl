@@ -5,11 +5,14 @@
 // VERTEX SHADER
 //-----------------------------------------------------------------------------
 
-cbuffer PushConstants : register(b0)
+struct PushConstants
 {
     float2 uScale;
     float2 uTranslate;
 };
+
+[[vk::push_constant]]
+PushConstants pushConstants;
 
 struct VSInput
 {
@@ -30,7 +33,7 @@ VSOutput VSMain(VSInput input)
     VSOutput output;
     output.Color = input.aColor;
     output.UV = input.aUV;
-    output.Position = float4(input.aPos * uScale + uTranslate, 0.0f, 1.0f);
+    output.Position = float4(input.aPos * pushConstants.uScale + pushConstants.uTranslate, 0.0f, 1.0f);
     return output;
 }
 

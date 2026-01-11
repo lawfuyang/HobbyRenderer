@@ -6,6 +6,12 @@
 
 struct Renderer
 {
+    // ShaderMake default SPIRV register shifts (from external/ShaderMake/ShaderMake/ShaderMake.cpp Options)
+    static constexpr uint32_t SPIRV_SAMPLER_SHIFT = 100;  // sRegShift (s#)
+    static constexpr uint32_t SPIRV_TEXTURE_SHIFT = 200;  // tRegShift (t#)
+    static constexpr uint32_t SPIRV_CBUFFER_SHIFT = 300;  // bRegShift (b#)
+    static constexpr uint32_t SPIRV_UAV_SHIFT = 400;      // uRegShift (u#)
+
     static void SetInstance(Renderer* instance);
     static Renderer* GetInstance();
     nvrhi::CommandListHandle AcquireCommandList();

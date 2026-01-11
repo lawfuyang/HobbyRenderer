@@ -301,6 +301,7 @@ bool Renderer::LoadShaders()
         // Create shader descriptor
         nvrhi::ShaderDesc desc;
         desc.shaderType = metadata.shaderType;
+        desc.entryName = metadata.entryPoint;
         desc.debugName = outputPath.generic_string();
 
         // Create shader handle
@@ -333,6 +334,9 @@ nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
     std::unordered_map<std::string, nvrhi::ShaderHandle>::const_iterator it = m_ShaderCache.find(std::string{name});
     if (it != m_ShaderCache.end())
         return it->second;
+    
+    SDL_Log("[Error] Shader '%s' not found in cache!", std::string{name}.c_str());
+    SDL_assert(false && "Requested shader not found in cache");
     return {};
 }
 
