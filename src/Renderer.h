@@ -14,15 +14,16 @@ struct Renderer
 
     static void SetInstance(Renderer* instance);
     static Renderer* GetInstance();
-    nvrhi::CommandListHandle AcquireCommandList();
-    void ReleaseCommandList(const nvrhi::CommandListHandle& commandList);
+    nvrhi::CommandListHandle AcquireCommandList(std::string_view markerName);
     void SubmitCommandList(const nvrhi::CommandListHandle& commandList);
     void ExecutePendingCommandLists();
+    nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
 
     SDL_Window* m_Window = nullptr;
     GraphicRHI m_RHI{};
     nvrhi::DeviceHandle m_NvrhiDevice;
     nvrhi::TextureHandle m_SwapchainTextures[GraphicRHI::SwapchainImageCount] = {};
+    uint32_t m_CurrentSwapchainImage = 0;
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
     std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;
 

@@ -4,6 +4,7 @@
 #include "CommonResources.h"
 
 #include <SDL3/SDL_main.h>
+#include <SDL3/SDL_filesystem.h>
 
 namespace
 {
@@ -71,11 +72,11 @@ namespace
     };
 
     // ShaderMake naming: <sourcefile_without_ext>_<EntryPoint>.spirv
-    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& sourcePath, std::string_view entryPoint)
+    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& exeDir, const std::filesystem::path& sourcePath, std::string_view entryPoint)
     {
         std::filesystem::path filename = sourcePath.stem();
         std::string outName = filename.string() + "_" + std::string(entryPoint) + ".spirv";
-        return std::filesystem::path{"bin"} / "shaders" / outName;
+        return exeDir / "shaders" / outName;
     }
 
     // Parse shaders.cfg to extract shader entries
@@ -276,8 +277,17 @@ bool Renderer::LoadShaders()
 {
     SDL_Log("[Init] Loading compiled shaders from config");
 
+    // Get executable directory
+    const char* basePathCStr = SDL_GetBasePath();
+    if (!basePathCStr)
+    {
+        SDL_Log("[Init] Failed to get base path");
+        return false;
+    }
+    std::filesystem::path exeDir = basePathCStr;
+
     // Parse shaders.cfg to get list of shaders to load
-    const std::filesystem::path configPath = std::filesystem::path{"src"} / "shaders" / "shaders.cfg";
+    const std::filesystem::path configPath = exeDir / ".." / "src" / "shaders" / "shaders.cfg";
     std::vector<ShaderMetadata> shaderMetadata = ParseShaderConfig(configPath.generic_string());
     if (shaderMetadata.empty())
     {
@@ -289,7 +299,7 @@ bool Renderer::LoadShaders()
     for (const ShaderMetadata& metadata : shaderMetadata)
     {
         // Determine output filename based on ShaderMake naming convention
-        std::filesystem::path outputPath = GetShaderOutputPath(metadata.sourcePath, std::string_view{metadata.entryPoint});
+        std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata.sourcePath, std::string_view{metadata.entryPoint});
 
         // Read the compiled binary
         std::vector<uint8_t> binary = ReadBinaryFile(outputPath);
@@ -339,6 +349,11 @@ nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
     SDL_Log("[Error] Shader '%s' not found in cache!", std::string{name}.c_str());
     SDL_assert(false && "Requested shader not found in cache");
     return {};
+}
+
+nvrhi::TextureHandle Renderer::GetCurrentBackBufferTexture() const
+{
+    return m_SwapchainTextures[m_CurrentSwapchainImage];
 }
 
 bool Renderer::Initialize()
@@ -418,8 +433,7 @@ void Renderer::Run()
     {
         const uint64_t frameStart = SDL_GetTicks();
 
-        uint32_t currentSwapchainImage = 0;
-        if (!m_RHI.AcquireNextSwapchainImage(&currentSwapchainImage))
+        if (!m_RHI.AcquireNextSwapchainImage(&m_CurrentSwapchainImage))
         {
             SDL_Log("[Run ] Failed to acquire swapchain image, exiting loop");
             break;
@@ -452,25 +466,16 @@ void Renderer::Run()
             }
         }
 
-        // temp to properly get swap chain texture handle to correct state for now, until *some* actual rendering work is done
-        if (nvrhi::CommandListHandle prepareCmd = AcquireCommandList())
-        {
-            nvrhi::TextureHandle swapchainTexture = m_SwapchainTextures[currentSwapchainImage];
-            nvrhi::Color clearColor(0.0f, 0.0f, 0.0f, 1.0f);
-
-            // Clear to a known value (transitions to TransferDst) then back to Present for presentation
-            prepareCmd->clearTextureFloat(swapchainTexture, nvrhi::AllSubresources, clearColor);
-            SubmitCommandList(prepareCmd);
-        }
-
         // Render ImGui frame
-        m_ImGuiLayer.RenderFrame();
+        nvrhi::CommandListHandle commandList = AcquireCommandList("ImGui");
+        m_ImGuiLayer.RenderFrame(commandList);
+        SubmitCommandList(commandList);
 
         // Execute any queued GPU work in submission order
         ExecutePendingCommandLists();
 
         // Present swapchain
-        if (!m_RHI.PresentSwapchain(currentSwapchainImage))
+        if (!m_RHI.PresentSwapchain(m_CurrentSwapchainImage))
         {
             SDL_Log("[Run ] Present failed, exiting loop");
             break;
@@ -571,7 +576,7 @@ void Renderer::DestroyNvrhiDevice()
     }
 }
 
-nvrhi::CommandListHandle Renderer::AcquireCommandList()
+nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerName)
 {
     nvrhi::CommandListHandle handle;
     if (!m_CommandListFreeList.empty())
@@ -590,19 +595,10 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList()
     if (handle)
     {
         handle->open();
+        handle->beginMarker(markerName.data());
     }
 
     return handle;
-}
-
-void Renderer::ReleaseCommandList(const nvrhi::CommandListHandle& commandList)
-{
-    if (!commandList)
-    {
-        return;
-    }
-
-    m_CommandListFreeList.push_back(commandList);
 }
 
 void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
@@ -612,6 +608,7 @@ void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
         return;
     }
 
+    commandList->endMarker();
     commandList->close();
     m_PendingCommandLists.push_back(commandList);
 }

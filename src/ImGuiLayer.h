@@ -8,7 +8,7 @@ public:
     bool Initialize(SDL_Window* window);
     void Shutdown();
     void ProcessEvent(const SDL_Event& event);
-    void RenderFrame();
+    void RenderFrame(nvrhi::CommandListHandle commandList);
 
 private:
     bool CreateDeviceObjects();
