@@ -296,6 +296,7 @@ bool Scene::LoadScene()
 		desc.initialState = nvrhi::ResourceStates::VertexBuffer;
 		desc.keepInitialState = true;
 		m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(m_VertexBuffer, "Scene_VertexBuffer");
 	}
 
 	if (ibytes > 0)
@@ -306,6 +307,7 @@ bool Scene::LoadScene()
 		desc.initialState = nvrhi::ResourceStates::IndexBuffer;
 		desc.keepInitialState = true;
 		m_IndexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(m_IndexBuffer, "Scene_IndexBuffer");
 	}
 
 	// Upload data using a command list

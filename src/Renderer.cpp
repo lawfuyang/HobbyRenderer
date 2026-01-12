@@ -850,6 +850,8 @@ bool Renderer::CreateSwapchainTextures()
         }
 
         m_SwapchainTextures[i] = texture;
+        // Assign debug name to underlying Vulkan objects
+        m_RHI.SetDebugName(texture, textureDesc.debugName);
     }
 
     SDL_Log("[Init] Created %u NVRHI swap chain texture handles", GraphicRHI::SwapchainImageCount);

@@ -39,6 +39,10 @@ struct GraphicRHI
     const std::vector<const char*>& GetInstanceExtensions() const { return m_InstanceExtensions; }
     const std::vector<const char*>& GetDeviceExtensions() const { return m_DeviceExtensions; }
 
+    // Debug helpers - set debug names on underlying Vulkan objects for NVRHI handles
+    void SetDebugName(const nvrhi::TextureHandle& texture, std::string_view name);
+    void SetDebugName(const nvrhi::BufferHandle& buffer, std::string_view name);
+
 private:
     bool CreateInstance();
     void DestroyInstance();

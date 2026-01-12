@@ -1,5 +1,7 @@
 #include "GraphicRHI.h"
 #include "Config.h"
+#include <nvrhi/nvrhi.h>
+#include <vulkan/vulkan.h>
 
 // Define the Vulkan dynamic dispatcher - this needs to occur in exactly one cpp file in the program.
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -117,6 +119,58 @@ namespace
         }
 
         return VK_FALSE;
+    }
+}
+
+// Helper: set Vulkan debug name using VK_EXT_debug_utils via Vulkan-Hpp dispatch
+static void SetVkObjectName(VkDevice device, VkObjectType objType, uint64_t handle, const char* name)
+{
+    if (!device || !name)
+        return;
+
+    vk::Device vkDevice = static_cast<vk::Device>(device);
+    vk::DebugUtilsObjectNameInfoEXT info;
+    info.pNext = nullptr;
+    info.objectType = static_cast<vk::ObjectType>(objType);
+    info.objectHandle = handle;
+    info.pObjectName = name;
+
+    vkDevice.setDebugUtilsObjectNameEXT(info);
+}
+
+void GraphicRHI::SetDebugName(const nvrhi::TextureHandle& texture, std::string_view name)
+{
+    if (!m_Device || !texture)
+        return;
+
+    // Try image
+    nvrhi::Object imgObj = texture->getNativeObject(nvrhi::ObjectTypes::VK_Image);
+    if (imgObj.integer)
+    {
+        SetVkObjectName(m_Device, VK_OBJECT_TYPE_IMAGE, imgObj.integer, name.data());
+    }
+
+    // Try image view
+    nvrhi::Object viewObj = texture->getNativeObject(nvrhi::ObjectTypes::VK_ImageView);
+    if (viewObj.integer)
+    {
+        std::string viewName;
+        viewName.reserve(name.size() + 6);
+        viewName.append(name.data(), name.size());
+        viewName.append("_view");
+        SetVkObjectName(m_Device, VK_OBJECT_TYPE_IMAGE_VIEW, viewObj.integer, viewName.c_str());
+    }
+}
+
+void GraphicRHI::SetDebugName(const nvrhi::BufferHandle& buffer, std::string_view name)
+{
+    if (!m_Device || !buffer)
+        return;
+
+    nvrhi::Object bufObj = buffer->getNativeObject(nvrhi::ObjectTypes::VK_Buffer);
+    if (bufObj.integer)
+    {
+        SetVkObjectName(m_Device, VK_OBJECT_TYPE_BUFFER, bufObj.integer, name.data());
     }
 }
 
