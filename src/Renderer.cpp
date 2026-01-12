@@ -493,17 +493,21 @@ void Renderer::Run()
             break;
         }
 
-        const uint64_t frameTime = SDL_GetTicks() - frameStart;
-        
-        // Calculate frame time and FPS
-        m_FrameTime = static_cast<double>(frameTime);
+        const uint64_t workTime = SDL_GetTicks() - frameStart;
+
+        // Sleep to maintain target framerate (if needed)
+        if (workTime < kFrameDurationMs)
+        {
+            SDL_Delay(static_cast<uint32_t>(kFrameDurationMs - workTime));
+        }
+
+        // Recompute total frame time (including any sleep) so reported FPS matches ImGui's DeltaTime
+        const uint64_t totalFrameTime = SDL_GetTicks() - frameStart;
+
+        // Calculate frame time (ms) and FPS
+        m_FrameTime = static_cast<double>(totalFrameTime);
         if (m_FrameTime > 0.0)
             m_FPS = 1000.0 / m_FrameTime;
-
-        if (frameTime < kFrameDurationMs)
-        {
-            SDL_Delay(static_cast<uint32_t>(kFrameDurationMs - frameTime));
-        }
     }
 }
 
