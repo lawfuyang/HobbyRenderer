@@ -11,10 +11,23 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_EnableGPUValidation = true;
             SDL_Log("[Config] GPU validation enabled via command line");
         }
+        else if (std::strcmp(arg, "--gltf") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_GltfScene = argv[++i];
+                SDL_Log("[Config] GLTF scene set via command line: %s", s_Instance.m_GltfScene.c_str());
+            }
+            else
+            {
+                SDL_Log("[Config] Missing value for --gltf");
+            }
+        }
         else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0)
         {
             SDL_Log("Agentic Renderer - Command Line Options:");
             SDL_Log("  --gpu-validation         Enable Vulkan validation layers");
+            SDL_Log("  --gltf <path>            Load the specified glTF scene file");
             SDL_Log("  --help, -h               Show this help message");
         }
         else

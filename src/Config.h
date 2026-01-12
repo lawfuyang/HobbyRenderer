@@ -6,6 +6,8 @@ struct Config
 {
     // Graphics settings
     bool m_EnableGPUValidation = false;
+    // Path to a glTF scene to load (empty = none)
+    std::string m_GltfScene = "";
 
     // Add more configuration options here as needed
     // int renderWidth = 1920;
