@@ -62,4 +62,6 @@ public:
     // Load the scene from the path configured in `Config::Get().m_GltfScene`.
     // Only mesh vertex/index data and node hierarchy are loaded for now.
     bool LoadScene();
+    // Release GPU resources and clear scene data
+    void Shutdown();
 };

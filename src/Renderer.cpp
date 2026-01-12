@@ -416,6 +416,14 @@ bool Renderer::Initialize()
         return false;
     }
 
+    // Load scene (if configured) after all renderer resources are ready
+    if (!m_Scene.LoadScene())
+    {
+        SDL_Log("[Init] Failed to load scene");
+        Shutdown();
+        return false;
+    }
+
     return true;
 }
 
@@ -520,6 +528,9 @@ void Renderer::Shutdown()
 
     m_ImGuiLayer.Shutdown();
     CommonResources::GetInstance().Shutdown();
+
+    // Shutdown scene and free its GPU resources
+    m_Scene.Shutdown();
 
     m_BindingLayoutCache.clear();
     m_GraphicsPipelineCache.clear();

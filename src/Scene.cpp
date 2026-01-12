@@ -5,6 +5,7 @@
 
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
+#include <cfloat>
 
 // CPU vertex layout used for uploading
 struct Vertex
@@ -101,8 +102,8 @@ bool Scene::LoadScene()
 	{
 		cgltf_mesh& cgMesh = data->meshes[mi];
 		Mesh mesh;
-		mesh.m_AabbMin = Vector3{ std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
-		mesh.m_AabbMax = Vector3{ -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() };
+		mesh.m_AabbMin = Vector3{ FLT_MAX, FLT_MAX, FLT_MAX };
+		mesh.m_AabbMax = Vector3{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
 
 		for (cgltf_size pi = 0; pi < cgMesh.primitives_count; ++pi)
 		{
@@ -127,7 +128,9 @@ bool Scene::LoadScene()
 
 			if (!posAcc)
 			{
-				SDL_Log("[Scene] Primitive missing POSITION attribute, skipping");
+				//SDL_Log("[Scene] Primitive missing POSITION attribute, skipping");
+				SDL_Log("[Scene] Primitive missing POSITION attribute. Is this normal?");
+				SDL_assert(false && "Primitive missing POSITION attribute");
 				continue;
 			}
 
@@ -252,8 +255,8 @@ bool Scene::LoadScene()
 		{
 			Mesh& mesh = m_Meshes[node.m_MeshIndex];
 			// initialize
-			node.m_AabbMin = Vector3{ std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
-			node.m_AabbMax = Vector3{ -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() };
+			node.m_AabbMin = Vector3{ FLT_MAX, FLT_MAX, FLT_MAX };
+			node.m_AabbMax = Vector3{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
 
 			DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&node.m_WorldTransform));
 			// 8 corners
@@ -321,4 +324,17 @@ bool Scene::LoadScene()
 	cgltf_free(data);
 	SDL_Log("[Scene] Loaded meshes: %zu, nodes: %zu", m_Meshes.size(), m_Nodes.size());
 	return true;
+}
+
+void Scene::Shutdown()
+{
+	// Release GPU buffer handles so NVRHI can free underlying resources
+	m_VertexBuffer = nullptr;
+	m_IndexBuffer = nullptr;
+
+	// Clear CPU-side containers
+	m_Meshes.clear();
+	m_Nodes.clear();
+	m_Materials.clear();
+	m_Textures.clear();
 }

@@ -3,6 +3,7 @@
 #include "pch.h"
 #include "GraphicRHI.h"
 #include "ImGuiLayer.h"
+#include "Scene.h"
 
 struct Renderer
 {
@@ -55,6 +56,8 @@ struct Renderer
 
     // ImGui state
     ImGuiLayer m_ImGuiLayer;
+    // Scene
+    Scene m_Scene;
     double m_FrameTime = 0.0;
     double m_FPS = 0.0;
 
