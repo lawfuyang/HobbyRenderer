@@ -101,7 +101,12 @@ bool Scene::LoadScene()
 		}
 		// metallic / roughness
 		m_Materials.back().m_RoughnessFactor = pbr.roughness_factor;
-		m_Materials.back().m_MetallicFactor = pbr.metallic_factor;
+		// If the glTF omits metallic information, cgltf gives the default 1.0.
+		// Treat a missing metallicFactor and missing metallic_roughness_texture as non-metallic (0.0)
+		float metallic = pbr.metallic_factor;
+		if (pbr.metallic_roughness_texture.texture == NULL && metallic == 1.0f)
+			metallic = 0.0f;
+		m_Materials.back().m_MetallicFactor = metallic;
 	}
 
 	for (cgltf_size i = 0; i < data->images_count; ++i)
