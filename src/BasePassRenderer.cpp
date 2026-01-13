@@ -1,11 +1,29 @@
-#include "BasePassRenderer.h"
+#include "Renderer.h"
 #include "CommonResources.h"
 #include "Camera.h"
-#include "Renderer.h"
 
 // Enable ForwardLighting shared definitions for C++ side
 #define FORWARD_LIGHTING_DEFINE
 #include "shaders/ShaderShared.hlsl"
+
+class BasePassRenderer : public IRenderer
+{
+public:
+    bool Initialize() override;
+    void Render(nvrhi::CommandListHandle commandList) override;
+    const char* GetName() const override { return "BasePass"; }
+
+private:
+    nvrhi::InputLayoutHandle m_InputLayout;
+};
+
+// Register the BasePassRenderer
+static bool s_BasePassRendererRegistered = []() {
+    RendererRegistry::RegisterRenderer([]() {
+        return std::make_shared<BasePassRenderer>();
+    });
+    return true;
+}();
 
 bool BasePassRenderer::Initialize()
 {
@@ -30,7 +48,7 @@ bool BasePassRenderer::Initialize()
     return true;
 }
 
-void BasePassRenderer::Render(const nvrhi::CommandListHandle& commandList)
+void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 {
     Renderer* renderer = Renderer::GetInstance();
     

@@ -6,8 +6,33 @@
 #include "Scene.h"
 #include "Camera.h"
 
-// Forward declaration to avoid cyclic include
-class BasePassRenderer;
+class IRenderer
+{
+public:
+    virtual ~IRenderer() = default;
+    virtual bool Initialize() = 0;
+    virtual void Render(nvrhi::CommandListHandle commandList) = 0;
+    virtual const char* GetName() const = 0;
+};
+
+class RendererRegistry
+{
+public:
+    using Creator = std::function<std::shared_ptr<IRenderer>()>;
+
+    static void RegisterRenderer(Creator creator)
+    {
+        s_Creators.push_back(creator);
+    }
+
+    static const std::vector<Creator>& GetCreators()
+    {
+        return s_Creators;
+    }
+
+private:
+    inline static std::vector<Creator> s_Creators;
+};
 
 struct Renderer
 {
@@ -66,8 +91,8 @@ struct Renderer
     Scene m_Scene;
     // Camera
     Camera m_Camera;
-    // Base pass renderer
-    std::shared_ptr<BasePassRenderer> m_BasePassRenderer;
+    // Renderers
+    std::vector<std::shared_ptr<IRenderer>> m_Renderers;
     double m_FrameTime = 0.0;
     double m_FPS = 0.0;
 

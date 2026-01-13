@@ -2,7 +2,6 @@
 #include "Utilities.h"
 #include "Config.h"
 #include "CommonResources.h"
-#include "BasePassRenderer.h"
 
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -412,13 +411,18 @@ bool Renderer::Initialize()
         return false;
     }
 
-    // Initialize base pass renderer now that shaders and device are ready
-    m_BasePassRenderer = std::make_shared<BasePassRenderer>();
-    if (!m_BasePassRenderer || !m_BasePassRenderer->Initialize())
+    // Initialize renderers now that shaders and device are ready
+    for (const RendererRegistry::Creator& creator : RendererRegistry::GetCreators())
     {
-        SDL_Log("[Init] Failed to initialize BasePassRenderer");
-        Shutdown();
-        return false;
+        auto renderer = creator();
+        if (!renderer || !renderer->Initialize())
+        {
+            SDL_Log("[Init] Failed to initialize a renderer");
+            SDL_assert(false && "Renderer initialization failed");
+            Shutdown();
+            return false;
+        }
+        m_Renderers.push_back(renderer);
     }
 
     // Load scene (if configured) after all renderer resources are ready
@@ -481,12 +485,12 @@ void Renderer::Run()
             SubmitCommandList(commandList);
         }
 
-        // Base pass (forward lighting)
-        if (m_BasePassRenderer)
+        // Render passes
+        for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
         {
-            nvrhi::CommandListHandle baseCmd = AcquireCommandList("BasePass");
-            m_BasePassRenderer->Render(baseCmd);
-            SubmitCommandList(baseCmd);
+            nvrhi::CommandListHandle cmd = AcquireCommandList(renderer->GetName());
+            renderer->Render(cmd);
+            SubmitCommandList(cmd);
         }
 
         // Render ImGui frame
@@ -537,6 +541,9 @@ void Renderer::Shutdown()
 
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
+
+    // Free renderer instances
+    m_Renderers.clear();
 
     m_BindingLayoutCache.clear();
     m_GraphicsPipelineCache.clear();
