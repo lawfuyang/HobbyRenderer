@@ -61,7 +61,8 @@ float G_Smith(float NdotV, float NdotL, float a)
 // Oren-Nayar diffuse model returning the scalar BRDF multiplier
 float OrenNayar(float3 N, float3 V, float3 L, float roughness, float NdotV, float NdotL)
 {
-    float sigma = roughness;
+    // Map roughness [0,1] (PBR) to sigma angle in radians [0, PI/2]
+    float sigma = roughness * (PI * 0.5f);
     float sigma2 = sigma * sigma;
     float A = 1.0f - 0.5f * sigma2 / (sigma2 + 0.33f);
     float B = 0.45f * sigma2 / (sigma2 + 0.09f);
@@ -73,7 +74,8 @@ float OrenNayar(float3 N, float3 V, float3 L, float roughness, float NdotV, floa
     float cosPhi = 0.0f;
     if (VtLen > 1e-6 && LtLen > 1e-6)
     {
-        cosPhi = saturate(dot(Vt / VtLen, Lt / LtLen));
+        cosPhi = dot(Vt / VtLen, Lt / LtLen);
+        cosPhi = max(0.0f, cosPhi);
     }
 
     float theta_i = acos(NdotL);
