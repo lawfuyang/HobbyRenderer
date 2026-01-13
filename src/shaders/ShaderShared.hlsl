@@ -9,7 +9,7 @@
 
 // Map shared scalar/vector/matrix declarations to language-specific forms.
 #ifdef __cplusplus
-  // In C++, prefer simple POD arrays for scalars to match HLSL layout.
+  // In C++, prefer simple POD aliases (types are provided via pch.h)
 #else
   // HLSL path
   typedef float2 Vector2;
@@ -56,5 +56,13 @@ struct PerObjectData
   Matrix World;
   Matrix ViewProj;
   Vector4 BaseColor;
+  Vector2 RoughnessMetallic; // x: roughness, y: metallic
+  Vector4 CameraPos; // xyz: camera world-space position, w: unused
 };
 #endif // FORWARD_LIGHTING_DEFINE
+
+#ifdef __cplusplus
+constexpr float PI = 3.14159265358979323846f;
+#else
+static const float PI = 3.14159265359f;
+#endif

@@ -106,27 +106,31 @@ void BasePassRenderer::Render(const nvrhi::CommandListHandle& commandList)
         PerObjectData cb{};
         cb.ViewProj = viewProj;
         cb.World = node.m_WorldTransform;
-        // Set base color from material (if available)
-        cb.BaseColor = Vector4{1.0f, 1.0f, 1.0f, 1.0f};
-        if (!mesh.m_Primitives.empty())
-        {
-            const Scene::Primitive& firstPrim = mesh.m_Primitives[0];
-            int matIdx = firstPrim.m_MaterialIndex;
-            if (matIdx >= 0 && matIdx < (int)renderer->m_Scene.m_Materials.size())
-            {
-                const Scene::Material& mat = renderer->m_Scene.m_Materials[matIdx];
-                cb.BaseColor = mat.m_BaseColorFactor;
-            }
-        }
 
-        // Write PerObjectData directly into the per-frame volatile constant buffer
-        commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
-
-        // Re-set graphics state so the binding uses the latest volatile CB suballocation
-        commandList->setGraphicsState(state);
-
+        // Draw each primitive with its material values (update volatile CB per-primitive)
         for (const Scene::Primitive& prim : mesh.m_Primitives)
         {
+            // Default material values
+            cb.BaseColor = Vector4{1.0f, 1.0f, 1.0f, 1.0f};
+            cb.RoughnessMetallic = Vector2{1.0f, 0.0f};
+            // Camera position for view vector (xyz), w unused
+            Vector3 camPos = renderer->m_Camera.GetPosition();
+            cb.CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 0.0f };
+
+            // Override from primitive material when available
+            if (prim.m_MaterialIndex >= 0 && prim.m_MaterialIndex < (int)renderer->m_Scene.m_Materials.size())
+            {
+                const Scene::Material& mat = renderer->m_Scene.m_Materials[prim.m_MaterialIndex];
+                cb.BaseColor = mat.m_BaseColorFactor;
+                cb.RoughnessMetallic = Vector2{ mat.m_RoughnessFactor, mat.m_MetallicFactor };
+            }
+
+            // Write PerObjectData directly into the per-frame volatile constant buffer for this primitive
+            commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
+
+            // Re-set graphics state so the binding uses the latest volatile CB suballocation
+            commandList->setGraphicsState(state);
+
             nvrhi::DrawArguments args{};
             args.vertexCount = prim.m_IndexCount;
             args.startIndexLocation = prim.m_IndexOffset;

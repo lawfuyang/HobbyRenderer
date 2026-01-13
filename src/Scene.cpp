@@ -99,6 +99,9 @@ bool Scene::LoadScene()
 				m_Materials.back().m_BaseColorTexture = static_cast<int>(imgIndex);
 			}
 		}
+		// metallic / roughness
+		m_Materials.back().m_RoughnessFactor = pbr.roughness_factor;
+		m_Materials.back().m_MetallicFactor = pbr.metallic_factor;
 	}
 
 	for (cgltf_size i = 0; i < data->images_count; ++i)

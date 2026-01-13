@@ -43,6 +43,8 @@ public:
         std::string m_Name;
         Vector4 m_BaseColorFactor = Vector4{1.0f, 1.0f, 1.0f, 1.0f};
         int m_BaseColorTexture = -1; // index into m_Textures
+        float m_RoughnessFactor = 1.0f;
+        float m_MetallicFactor = 0.0f;
     };
 
     struct Texture

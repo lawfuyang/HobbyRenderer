@@ -7,6 +7,8 @@ class Camera
 public:
     Camera();
 
+    Vector3 GetPosition() const { return m_Position; }
+
     void ProcessEvent(const SDL_Event& event);
     void Update();
 
