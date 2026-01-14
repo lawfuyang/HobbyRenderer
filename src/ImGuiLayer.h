@@ -5,24 +5,8 @@
 class ImGuiLayer
 {
 public:
-    bool Initialize(SDL_Window* window);
+    bool Initialize();
     void Shutdown();
     void ProcessEvent(const SDL_Event& event);
-    void RenderFrame(nvrhi::CommandListHandle commandList);
-
-private:
-    bool CreateDeviceObjects();
-    void DestroyDeviceObjects();
-
-    SDL_Window* m_Window = nullptr;
-
-    // GPU Resources (similar to imgui_impl_vulkan)
-    nvrhi::TextureHandle m_FontTexture;
-    nvrhi::BufferHandle m_VertexBuffer;
-    nvrhi::BufferHandle m_IndexBuffer;
-    
-    nvrhi::InputLayoutHandle m_InputLayout;
-
-    uint32_t m_VertexBufferSize = 0;
-    uint32_t m_IndexBufferSize = 0;
+    void UpdateFrame();
 };

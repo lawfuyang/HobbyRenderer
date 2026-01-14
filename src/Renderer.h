@@ -70,10 +70,6 @@ struct Renderer
     // Swapchain / backbuffer
     nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
 
-    // ImGui helpers
-    // Prepares ImGui frame (calls NewFrame(), builds UI, and calls ImGui::Render()).
-    void UpdateImGuiFrame();
-
     // Create or retrieve a cached binding layout derived from a BindingSetDesc.
     nvrhi::BindingLayoutHandle GetOrCreateBindingLayoutFromBindingSetDesc(const nvrhi::BindingSetDesc& setDesc, nvrhi::ShaderType visibility = nvrhi::ShaderType::All);
 

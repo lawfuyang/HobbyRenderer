@@ -10,9 +10,9 @@
 #include <imgui_impl_sdl3.h>
 #include "CommonResources.h"
 
-bool ImGuiLayer::Initialize(SDL_Window* window)
+bool ImGuiLayer::Initialize()
 {
-    m_Window = window;
+    SDL_Window* window = Renderer::GetInstance()->m_Window;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -22,17 +22,10 @@ bool ImGuiLayer::Initialize(SDL_Window* window)
 
     ImGui::StyleColorsDark();
 
-    if (!ImGui_ImplSDL3_InitForVulkan(m_Window))
+    if (!ImGui_ImplSDL3_InitForVulkan(window))
     {
         SDL_Log("[Init] Failed to initialize ImGui SDL3 backend");
         SDL_assert(false && "ImGui_ImplSDL3_InitForVulkan failed");
-        return false;
-    }
-
-    if (!CreateDeviceObjects())
-    {
-        SDL_Log("[Init] Failed to create ImGui device objects");
-        SDL_assert(false && "CreateDeviceObjects failed");
         return false;
     }
 
@@ -43,83 +36,8 @@ bool ImGuiLayer::Initialize(SDL_Window* window)
 void ImGuiLayer::Shutdown()
 {
     SDL_Log("[Shutdown] Shutting down ImGui");
-    DestroyDeviceObjects();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
-}
-
-bool ImGuiLayer::CreateDeviceObjects()
-{
-    SDL_Log("[Init] Creating ImGui device objects");
-    Renderer* renderer = Renderer::GetInstance();
-
-    // Create input layout (vertex attributes)
-    {
-        nvrhi::VertexAttributeDesc attributes[] = {
-        	{ "POSITION", nvrhi::Format::RG32_FLOAT,  1, 0, offsetof(ImDrawVert,pos), sizeof(ImDrawVert), false },
-        	{ "TEXCOORD0", nvrhi::Format::RG32_FLOAT,  1, 0, offsetof(ImDrawVert,uv),  sizeof(ImDrawVert), false },
-        	{ "COLOR0",    nvrhi::Format::RGBA8_UNORM, 1, 0, offsetof(ImDrawVert,col), sizeof(ImDrawVert), false },
-        };
-
-        // Note: vertexShader parameter is only used by DX11 backend, unused in Vulkan
-        m_InputLayout = renderer->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
-        
-        if (!m_InputLayout)
-        {
-            SDL_Log("[Error] Failed to create ImGui input layout");
-            SDL_assert(false && "ImGui input layout creation failed");
-            return false;
-        }
-    }
-
-    // Create font texture
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        unsigned char* pixels;
-        int width, height;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-
-        nvrhi::TextureDesc textureDesc;
-        textureDesc.width = width;
-        textureDesc.height = height;
-        textureDesc.format = nvrhi::Format::RGBA8_UNORM;
-        textureDesc.dimension = nvrhi::TextureDimension::Texture2D;
-        textureDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-        textureDesc.keepInitialState = true;
-        textureDesc.isRenderTarget = false;
-        textureDesc.isUAV = false;
-        textureDesc.debugName = "ImGui Font Texture";
-
-        m_FontTexture = renderer->m_NvrhiDevice->createTexture(textureDesc);
-        
-        if (!m_FontTexture)
-        {
-            SDL_Log("[Error] Failed to create ImGui font texture");
-            SDL_assert(false && "ImGui font texture creation failed");
-            return false;
-        }
-
-        // Upload font texture data
-        nvrhi::CommandListHandle commandList = renderer->AcquireCommandList("ImGuiFont");
-        commandList->writeTexture(m_FontTexture, 0, 0, pixels, width * 4);
-        renderer->SubmitCommandList(commandList);
-        renderer->ExecutePendingCommandLists();
-    }
-
-    SDL_Log("[Init] ImGui device objects created successfully");
-    return true;
-}
-
-void ImGuiLayer::DestroyDeviceObjects()
-{
-    // Release all GPU resources
-    m_InputLayout = nullptr;
-    m_IndexBuffer = nullptr;
-    m_VertexBuffer = nullptr;
-    m_FontTexture = nullptr;
-
-    m_VertexBufferSize = 0;
-    m_IndexBufferSize = 0;
 }
 
 void ImGuiLayer::ProcessEvent(const SDL_Event& event)
@@ -127,176 +45,78 @@ void ImGuiLayer::ProcessEvent(const SDL_Event& event)
     ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
-void ImGuiLayer::RenderFrame(nvrhi::CommandListHandle commandList)
+void ImGuiLayer::UpdateFrame()
 {
+    // Build ImGui UI and end with ImGui::Render(); rendering happens in ImGuiRenderer::Render
     Renderer* renderer = Renderer::GetInstance();
-    ImDrawData* draw_data = ImGui::GetDrawData();
-    if (draw_data)
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+
+    if (ImGui::BeginMainMenuBar())
     {
-        // Replicate ImGui_ImplVulkan_RenderDrawData behavior using nvrhi
+        ImGui::Text("FPS: %.1f", renderer->m_FPS);
+        ImGui::Text("Frame Time: %.3f ms", renderer->m_FrameTime);
+        ImGui::EndMainMenuBar();
+    }
 
-        int fb_width = (int)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
-        int fb_height = (int)(draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
-        if (fb_width <= 0 || fb_height <= 0)
-            return;
+    static bool s_ShowDemoWindow = false;
+    if (s_ShowDemoWindow)
+    {
+        ImGui::ShowDemoWindow(&s_ShowDemoWindow);
+    }
 
-        // Create framebuffer on demand
-        nvrhi::TextureHandle renderTarget = renderer->GetCurrentBackBufferTexture();
-        nvrhi::FramebufferHandle framebuffer = renderer->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(renderTarget));
-
-        // Create or resize vertex/index buffers
-        size_t vertex_size = draw_data->TotalVtxCount * sizeof(ImDrawVert);
-        size_t index_size = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
-
-        if (!m_VertexBuffer || m_VertexBufferSize < vertex_size)
+    if (ImGui::Begin("Property Grid", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Checkbox("Show Demo Window", &s_ShowDemoWindow);
+        // Camera controls
+        if (ImGui::TreeNode("Camera"))
         {
-            if (m_VertexBufferSize < vertex_size)
+            ImGui::DragFloat("Move Speed", &renderer->m_Camera.m_MoveSpeed, 0.1f, 0.0f, 100.0f);
+            ImGui::DragFloat("Mouse Sensitivity", &renderer->m_Camera.m_MouseSensitivity, 0.0005f, 0.0f, 1.0f, "%.4f");
+
+            // Display camera position
+            Vector3 pos = renderer->m_Camera.GetPosition();
+            ImGui::Text("Position: %.2f, %.2f, %.2f", pos.x, pos.y, pos.z);
+            
+            // Display forward vector (from view matrix, third column)
+            Matrix view = renderer->m_Camera.GetViewMatrix();
+            Vector3 fwd = { view._13, view._23, view._33 };
+            ImGui::Text("Forward: %.2f, %.2f, %.2f", fwd.x, fwd.y, fwd.z);
+            
+            // GLTF Camera selection
+            if (!renderer->m_Scene.m_Cameras.empty())
             {
-                SDL_Log("[ImGui] Vertex buffer size increased from %u to %zu bytes", m_VertexBufferSize, vertex_size);
+                std::vector<const char*> cameraNames;
+                for (const auto& cam : renderer->m_Scene.m_Cameras)
+                {
+                    cameraNames.push_back(cam.m_Name.empty() ? "Unnamed Camera" : cam.m_Name.c_str());
+                }
+                if (ImGui::Combo("GLTF Camera", &renderer->m_SelectedCameraIndex, cameraNames.data(), static_cast<int>(cameraNames.size())))
+                {
+                    if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(renderer->m_Scene.m_Cameras.size()))
+                    {
+                        const Scene::Camera& selectedCam = renderer->m_Scene.m_Cameras[renderer->m_SelectedCameraIndex];
+                        renderer->SetCameraFromSceneCamera(selectedCam);
+                    }
+                }
             }
-            m_VertexBuffer = nullptr;
-            nvrhi::BufferDesc bufferDesc;
-            bufferDesc.byteSize = vertex_size;
-            bufferDesc.isVertexBuffer = true;
-            bufferDesc.initialState = nvrhi::ResourceStates::VertexBuffer;
-            bufferDesc.keepInitialState = true;
-            m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(bufferDesc);
-            m_VertexBufferSize = (uint32_t)vertex_size;
+
+            ImGui::TreePop();
         }
 
-        if (!m_IndexBuffer || m_IndexBufferSize < index_size)
+        // Directional Light controls
+        if (ImGui::TreeNode("Directional Light"))
         {
-            if (m_IndexBufferSize < index_size)
-            {
-                SDL_Log("[ImGui] Index buffer size increased from %u to %zu bytes", m_IndexBufferSize, index_size);
-            }
-            m_IndexBuffer = nullptr;
-            nvrhi::BufferDesc bufferDesc;
-            bufferDesc.byteSize = index_size;
-            bufferDesc.isIndexBuffer = true;
-            bufferDesc.initialState = nvrhi::ResourceStates::IndexBuffer;
-            bufferDesc.keepInitialState = true;
-            m_IndexBuffer = renderer->m_NvrhiDevice->createBuffer(bufferDesc);
-            m_IndexBufferSize = (uint32_t)index_size;
-        }
+            ImGui::DragFloat("Yaw", &renderer->m_DirectionalLight.yaw, 0.01f, -PI, PI);
+            ImGui::DragFloat("Pitch", &renderer->m_DirectionalLight.pitch, 0.01f, -PI * 0.5f, PI * 0.5f);
+            ImGui::DragFloat("Lux", &renderer->m_DirectionalLight.intensity, 100.0f, 0.0f, 200000.0f);
 
-        // Collect vertex/index data
-        std::vector<ImDrawVert> vertices;
-        std::vector<ImDrawIdx> indices;
-        for (const ImDrawList* draw_list : draw_data->CmdLists)
-        {
-            vertices.insert(vertices.end(), draw_list->VtxBuffer.Data, draw_list->VtxBuffer.Data + draw_list->VtxBuffer.Size);
-            indices.insert(indices.end(), draw_list->IdxBuffer.Data, draw_list->IdxBuffer.Data + draw_list->IdxBuffer.Size);
-        }
-
-        // Upload data
-        commandList->writeBuffer(m_VertexBuffer, vertices.data(), vertex_size, 0);
-        commandList->writeBuffer(m_IndexBuffer, indices.data(), index_size, 0);
-
-        // Setup render state
-        nvrhi::GraphicsState state;
-        nvrhi::GraphicsPipelineDesc pipelineDesc;
-        pipelineDesc.VS = renderer->GetShaderHandle("imgui_VSMain");
-        pipelineDesc.PS = renderer->GetShaderHandle("imgui_PSMain");
-        pipelineDesc.inputLayout = m_InputLayout;
-        pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
-        pipelineDesc.renderState.rasterState = CommonResources::GetInstance().RasterCullNone;
-        pipelineDesc.renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetImGui;
-        pipelineDesc.renderState.depthStencilState = CommonResources::GetInstance().DepthDisabled;
-
-        nvrhi::FramebufferInfoEx fbInfo;
-        fbInfo.colorFormats = { renderer->m_RHI.VkFormatToNvrhiFormat(renderer->m_RHI.m_SwapchainFormat) };
-        state.framebuffer = framebuffer;
-        
-        // Create binding set description and query the renderer for its layout so
-        // the pipeline layout can include push-constant ranges and descriptor sets.
-        nvrhi::BindingSetDesc bindingSetDesc;
-        bindingSetDesc.bindings = {
-            nvrhi::BindingSetItem::PushConstants(0, sizeof(PushConstants)),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_FontTexture),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
-        };
-
-        // Query the renderer for the binding layout cached for this binding-set description.
-        nvrhi::BindingLayoutHandle layoutForSet = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bindingSetDesc, nvrhi::ShaderType::All);
-        pipelineDesc.bindingLayouts = { layoutForSet };
-
-        nvrhi::BindingSetHandle bindingSet = renderer->m_NvrhiDevice->createBindingSet(bindingSetDesc, layoutForSet);
-        state.bindings = { bindingSet };
-        state.vertexBuffers = { nvrhi::VertexBufferBinding{m_VertexBuffer, 0, 0} };
-        state.indexBuffer = nvrhi::IndexBufferBinding{ m_IndexBuffer, sizeof(ImDrawIdx) == 2 ? nvrhi::Format::R16_UINT : nvrhi::Format::R32_UINT, 0 };
-
-        // Set viewport to framebuffer size. Vulkan uses an inverted Y, so flip min/max Y for Vulkan.
-        {
-            // minX = 0, maxX = fb_width, minY = fb_height, maxY = 0 => inverted Y viewport for Vulkan
-            state.viewport.viewports.push_back(nvrhi::Viewport(0.0f, (float)fb_width, (float)fb_height, 0.0f, 0.0f, 1.0f));
-        }
-        state.viewport.scissorRects.resize(1);
-
-        nvrhi::GraphicsPipelineHandle pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
-        if (!pipeline)
-        {
-            SDL_Log("[Error] Failed to obtain graphics pipeline from Renderer");
-            SDL_assert(false && "Failed to obtain ImGui graphics pipeline");
-            return;
-        }
-        state.pipeline = pipeline;
-
-        commandList->setGraphicsState(state);
-
-        PushConstants pushConstants{};
-
-        // Push constants (scale and translate)
-        pushConstants.uScale.x = 2.0f / draw_data->DisplaySize.x;
-        pushConstants.uScale.y = 2.0f / draw_data->DisplaySize.y;
-        pushConstants.uTranslate.x = -1.0f - draw_data->DisplayPos.x * pushConstants.uScale.x;
-        pushConstants.uTranslate.y = -1.0f - draw_data->DisplayPos.y * pushConstants.uScale.y;
-        commandList->setPushConstants(&pushConstants, sizeof(pushConstants));
-
-        // Render command lists
-        int global_vtx_offset = 0;
-        int global_idx_offset = 0;
-        for (const ImDrawList* draw_list : draw_data->CmdLists)
-        {
-            for (int cmd_i = 0; cmd_i < draw_list->CmdBuffer.Size; cmd_i++)
-            {
-                const ImDrawCmd* pcmd = &draw_list->CmdBuffer[cmd_i];
-
-                // Project scissor/clipping rectangles into framebuffer space (match ImGui_ImplVulkan)
-                ImVec2 clip_off = draw_data->DisplayPos;
-                ImVec2 clip_scale = draw_data->FramebufferScale;
-
-                ImVec2 clip_min((pcmd->ClipRect.x - clip_off.x) * clip_scale.x, (pcmd->ClipRect.y - clip_off.y) * clip_scale.y);
-                ImVec2 clip_max((pcmd->ClipRect.z - clip_off.x) * clip_scale.x, (pcmd->ClipRect.w - clip_off.y) * clip_scale.y);
-
-                // Clamp to viewport
-                if (clip_min.x < 0.0f) clip_min.x = 0.0f;
-                if (clip_min.y < 0.0f) clip_min.y = 0.0f;
-                if (clip_max.x > (float)fb_width) clip_max.x = (float)fb_width;
-                if (clip_max.y > (float)fb_height) clip_max.y = (float)fb_height;
-                if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
-                    continue;
-
-                nvrhi::Rect& r = state.viewport.scissorRects[0];
-                r.minX = (int)clip_min.x;
-                r.minY = (int)clip_min.y;
-                r.maxX = (int)clip_max.x;
-                r.maxY = (int)clip_max.y;
-
-                commandList->setGraphicsState(state);
-                commandList->setPushConstants(&pushConstants, sizeof(pushConstants));
-
-                // Draw
-                nvrhi::DrawArguments args;
-                args.vertexCount = pcmd->ElemCount;
-                args.startIndexLocation = pcmd->IdxOffset + global_idx_offset;
-                args.startVertexLocation = pcmd->VtxOffset + global_vtx_offset;
-                commandList->drawIndexed(args);
-            }
-            global_idx_offset += draw_list->IdxBuffer.Size;
-            global_vtx_offset += draw_list->VtxBuffer.Size;
+            ImGui::TreePop();
         }
     }
+    ImGui::End();
+
+    ImGui::Render();
 }
 
 
