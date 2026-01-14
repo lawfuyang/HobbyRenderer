@@ -180,8 +180,7 @@ namespace
         SDL_Log("[Init] Starting SDL initialization");
         if (!SDL_Init(SDL_INIT_VIDEO))
         {
-            SDL_Log("SDL_Init failed: %s", SDL_GetError());
-            SDL_assert(false && "SDL_Init failed");
+            SDL_LOG_ASSERT_FAIL("SDL_Init failed", "SDL_Init failed: %s", SDL_GetError());
             return;
         }
         SDL_Log("[Init] SDL initialized");
@@ -196,8 +195,7 @@ namespace
         SDL_Rect usableBounds{};
         if (!SDL_GetDisplayUsableBounds(primaryDisplay, &usableBounds))
         {
-            SDL_Log("SDL_GetDisplayUsableBounds failed: %s", SDL_GetError());
-            SDL_assert(false && "SDL_GetDisplayUsableBounds failed");
+            SDL_LOG_ASSERT_FAIL("SDL_GetDisplayUsableBounds failed", "SDL_GetDisplayUsableBounds failed: %s", SDL_GetError());
             *outWidth = windowW;
             *outHeight = windowH;
             return;
@@ -264,8 +262,7 @@ namespace
         SDL_Window* window = SDL_CreateWindow("Agentic Renderer", windowW, windowH, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
         if (!window)
         {
-            SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
-            SDL_assert(false && "SDL_CreateWindow failed");
+            SDL_LOG_ASSERT_FAIL("SDL_CreateWindow failed", "SDL_CreateWindow failed: %s", SDL_GetError());
             return nullptr;
         }
 
@@ -360,8 +357,7 @@ nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
     if (it != m_ShaderCache.end())
         return it->second;
     
-    SDL_Log("[Error] Shader '%s' not found in cache!", std::string{name}.c_str());
-    SDL_assert(false && "Requested shader not found in cache");
+    SDL_LOG_ASSERT_FAIL("Requested shader not found in cache", "[Error] Shader '%s' not found in cache!", std::string{name}.c_str());
     return {};
 }
 
@@ -451,8 +447,7 @@ bool Renderer::Initialize()
         auto renderer = creator();
         if (!renderer || !renderer->Initialize())
         {
-            SDL_Log("[Init] Failed to initialize a renderer");
-            SDL_assert(false && "Renderer initialization failed");
+            SDL_LOG_ASSERT_FAIL("Renderer initialization failed", "[Init] Failed to initialize a renderer");
             Shutdown();
             return false;
         }
@@ -643,8 +638,7 @@ bool Renderer::CreateNvrhiDevice()
     m_NvrhiDevice = nvrhi::vulkan::createDevice(deviceDesc);
     if (!m_NvrhiDevice)
     {
-        SDL_Log("[Init] Failed to create NVRHI device");
-        SDL_assert(false && "Failed to create NVRHI device");
+        SDL_LOG_ASSERT_FAIL("Failed to create NVRHI device", "[Init] Failed to create NVRHI device");
         return false;
     }
 
@@ -790,8 +784,7 @@ bool Renderer::InitializeGlobalBindlessTextures()
     m_GlobalTextureBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
     if (!m_GlobalTextureBindingLayout)
     {
-        SDL_Log("[Renderer] Failed to create global bindless layout for textures");
-        SDL_assert(false && "Failed to create global bindless layout for textures");
+        SDL_LOG_ASSERT_FAIL("Failed to create global bindless layout for textures", "[Renderer] Failed to create global bindless layout for textures");
         return false;
     }
 
@@ -799,8 +792,7 @@ bool Renderer::InitializeGlobalBindlessTextures()
     m_GlobalTextureDescriptorTable = m_NvrhiDevice->createDescriptorTable(m_GlobalTextureBindingLayout);
     if (!m_GlobalTextureDescriptorTable)
     {
-        SDL_Log("[Renderer] Failed to create global texture descriptor table");
-        SDL_assert(false && "Failed to create global texture descriptor table");
+        SDL_LOG_ASSERT_FAIL("Failed to create global texture descriptor table", "[Renderer] Failed to create global texture descriptor table");
         return false;
     }
 
@@ -812,8 +804,7 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
 {
     if (!texture || !m_GlobalTextureDescriptorTable)
     {
-        SDL_Log("[Renderer] Invalid texture or descriptor table not initialized");
-        SDL_assert(false && "Invalid texture or descriptor table not initialized");
+        SDL_LOG_ASSERT_FAIL("Invalid texture or descriptor table not initialized", "[Renderer] Invalid texture or descriptor table not initialized");
         return UINT32_MAX;
     }
 
@@ -822,8 +813,7 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
     nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
     if (!m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
     {
-        SDL_Log("[Renderer] Failed to register texture at index %u", index);
-        SDL_assert(false && "Failed to register texture in global descriptor table");
+        SDL_LOG_ASSERT_FAIL("Failed to register texture in global descriptor table", "[Renderer] Failed to register texture at index %u", index);
         return UINT32_MAX;
     }
 
@@ -949,8 +939,7 @@ bool Renderer::CreateSwapchainTextures()
     const nvrhi::Format nvrhiFormat = GraphicRHI::VkFormatToNvrhiFormat(m_RHI.m_SwapchainFormat);
     if (nvrhiFormat == nvrhi::Format::UNKNOWN)
     {
-        SDL_Log("[Init] Unsupported swapchain format: %d", m_RHI.m_SwapchainFormat);
-        SDL_assert(false && "Unsupported swapchain format");
+        SDL_LOG_ASSERT_FAIL("Unsupported swapchain format", "[Init] Unsupported swapchain format: %d", m_RHI.m_SwapchainFormat);
         return false;
     }
 
@@ -974,8 +963,7 @@ bool Renderer::CreateSwapchainTextures()
 
         if (!texture)
         {
-            SDL_Log("[Init] Failed to create NVRHI texture handle for swap chain image %zu", i);
-            SDL_assert(false && "Failed to create NVRHI texture handle");
+            SDL_LOG_ASSERT_FAIL("Failed to create NVRHI texture handle", "[Init] Failed to create NVRHI texture handle for swap chain image %zu", i);
             return false;
         }
 
@@ -997,8 +985,7 @@ bool Renderer::CreateSwapchainTextures()
     m_DepthTexture = m_NvrhiDevice->createTexture(depthDesc);
     if (!m_DepthTexture)
     {
-        SDL_Log("[Init] Failed to create depth texture");
-        SDL_assert(false && "Failed to create depth texture");
+        SDL_LOG_ASSERT_FAIL("Failed to create depth texture", "[Init] Failed to create depth texture");
         return false;
     }
     m_RHI.SetDebugName(m_DepthTexture, depthDesc.debugName);

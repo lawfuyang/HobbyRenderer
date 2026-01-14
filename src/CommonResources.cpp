@@ -22,8 +22,7 @@ bool CommonResources::Initialize()
         nvrhi::SamplerHandle sampler = device->createSampler(desc);
         if (!sampler)
         {
-            SDL_Log("[CommonResources] Failed to create %s sampler", name);
-            SDL_assert(false && "Failed to create common sampler");
+            SDL_LOG_ASSERT_FAIL("Failed to create common sampler", "[CommonResources] Failed to create %s sampler", name);
         }
         return sampler;
     };
@@ -167,8 +166,7 @@ bool CommonResources::Initialize()
             nvrhi::TextureHandle texture = device->createTexture(desc);
             if (!texture)
             {
-                SDL_Log("[CommonResources] Failed to create %s texture", name);
-                SDL_assert(false && "Failed to create default texture");
+                SDL_LOG_ASSERT_FAIL("Failed to create default texture", "[CommonResources] Failed to create %s texture", name);
                 return nullptr;
             }
 

@@ -210,8 +210,7 @@ bool GraphicRHI::CreateInstance()
 
     if (!SDL_Vulkan_LoadLibrary(nullptr))
     {
-        SDL_Log("SDL_Vulkan_LoadLibrary failed: %s", SDL_GetError());
-        SDL_assert(false && "SDL_Vulkan_LoadLibrary failed");
+        SDL_LOG_ASSERT_FAIL("SDL_Vulkan_LoadLibrary failed", "SDL_Vulkan_LoadLibrary failed: %s", SDL_GetError());
         return false;
     }
 
@@ -224,8 +223,7 @@ bool GraphicRHI::CreateInstance()
     const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
     if (!sdlExtensions)
     {
-        SDL_Log("SDL_Vulkan_GetInstanceExtensions failed: %s", SDL_GetError());
-        SDL_assert(false && "SDL_Vulkan_GetInstanceExtensions failed");
+        SDL_LOG_ASSERT_FAIL("SDL_Vulkan_GetInstanceExtensions failed", "SDL_Vulkan_GetInstanceExtensions failed: %s", SDL_GetError());
         return false;
     }
 
@@ -278,8 +276,7 @@ bool GraphicRHI::CreateInstance()
             }
             if (!found)
             {
-                SDL_Log("[Init] Validation layer not available: %s", layerName);
-                SDL_assert(false && "Required validation layer not available");
+                SDL_LOG_ASSERT_FAIL("Required validation layer not available", "[Init] Validation layer not available: %s", layerName);
                 return false;
             }
         }
@@ -311,8 +308,7 @@ bool GraphicRHI::CreateInstance()
     vk::Instance instanceHandle = vk::createInstance(createInfo);
     if (!instanceHandle)
     {
-        SDL_Log("vkCreateInstance failed");
-        SDL_assert(false && "vkCreateInstance failed");
+        SDL_LOG_ASSERT_FAIL("vkCreateInstance failed", "vkCreateInstance failed");
         return false;
     }
 
@@ -333,8 +329,7 @@ bool GraphicRHI::CreateLogicalDevice()
 {
     if (m_GraphicsQueueFamily == VK_QUEUE_FAMILY_IGNORED)
     {
-        SDL_Log("Graphics queue family not set before logical device creation");
-        SDL_assert(false && "Graphics queue family not set");
+        SDL_LOG_ASSERT_FAIL("Graphics queue family not set", "Graphics queue family not set before logical device creation");
         return false;
     }
 
@@ -421,8 +416,7 @@ bool GraphicRHI::CreateLogicalDevice()
     vk::Device vkDevice = vkPhysical.createDevice(createInfo);
     if (!vkDevice)
     {
-        SDL_Log("vkCreateDevice failed");
-        SDL_assert(false && "vkCreateDevice failed");
+        SDL_LOG_ASSERT_FAIL("vkCreateDevice failed", "vkCreateDevice failed");
         return false;
     }
 
@@ -444,16 +438,14 @@ bool GraphicRHI::CreateSurface(SDL_Window* window)
 
     if (!window || m_Instance == VK_NULL_HANDLE)
     {
-        SDL_Log("SDL window or Vulkan instance not ready for surface creation");
-        SDL_assert(false && "Invalid state for surface creation");
+        SDL_LOG_ASSERT_FAIL("Invalid state for surface creation", "SDL window or Vulkan instance not ready for surface creation");
         return false;
     }
 
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     if (!SDL_Vulkan_CreateSurface(window, m_Instance, nullptr, &surface))
     {
-        SDL_Log("SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
-        SDL_assert(false && "SDL_Vulkan_CreateSurface failed");
+        SDL_LOG_ASSERT_FAIL("SDL_Vulkan_CreateSurface failed", "SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
         return false;
     }
 
@@ -552,8 +544,7 @@ VkPhysicalDevice GraphicRHI::ChoosePhysicalDevice()
 
     if (devices.empty())
     {
-        SDL_Log("No Vulkan physical devices found");
-        SDL_assert(false && "No Vulkan physical devices found");
+        SDL_LOG_ASSERT_FAIL("No Vulkan physical devices found", "No Vulkan physical devices found");
         return VK_NULL_HANDLE;
     }
 
@@ -587,8 +578,7 @@ VkPhysicalDevice GraphicRHI::ChoosePhysicalDevice()
 
     if (!selected)
     {
-        SDL_Log("No suitable Vulkan physical device with a graphics queue was found");
-        SDL_assert(false && "No suitable Vulkan physical device found");
+        SDL_LOG_ASSERT_FAIL("No suitable Vulkan physical device found", "No suitable Vulkan physical device with a graphics queue was found");
         return VK_NULL_HANDLE;
     }
 
@@ -609,8 +599,7 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
 
     if (m_Device == VK_NULL_HANDLE || m_Surface == VK_NULL_HANDLE || m_PhysicalDevice == VK_NULL_HANDLE)
     {
-        SDL_Log("[Swapchain] Cannot create swapchain: device, surface, or physical device not initialized");
-        SDL_assert(false && "Invalid state for swapchain creation");
+        SDL_LOG_ASSERT_FAIL("Invalid state for swapchain creation", "[Swapchain] Cannot create swapchain: device, surface, or physical device not initialized");
         return false;
     }
 
@@ -623,8 +612,7 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
     // Check if the graphics queue family supports presentation
     if (!SDL_Vulkan_GetPresentationSupport(m_Instance, m_PhysicalDevice, m_GraphicsQueueFamily))
     {
-        SDL_Log("[Swapchain] Graphics queue family does not support presentation");
-        SDL_assert(false && "Graphics queue family does not support presentation");
+        SDL_LOG_ASSERT_FAIL("Graphics queue family does not support presentation", "[Swapchain] Graphics queue family does not support presentation");
         return false;
     }
 
@@ -649,8 +637,7 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
     const std::vector<vk::SurfaceFormatKHR> surfaceFormats = vkPhysical.getSurfaceFormatsKHR(vkSurface);
     if (surfaceFormats.empty())
     {
-        SDL_Log("[Swapchain] No surface formats available");
-        SDL_assert(false && "No surface formats available");
+        SDL_LOG_ASSERT_FAIL("No surface formats available", "[Swapchain] No surface formats available");
         return false;
     }
 
@@ -703,8 +690,7 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
     vk::SwapchainKHR vkSwapchain = vkDevice.createSwapchainKHR(swapchainCreateInfo);
     if (!vkSwapchain)
     {
-        SDL_Log("[Swapchain] vkCreateSwapchainKHR failed");
-        SDL_assert(false && "vkCreateSwapchainKHR failed");
+        SDL_LOG_ASSERT_FAIL("vkCreateSwapchainKHR failed", "[Swapchain] vkCreateSwapchainKHR failed");
         return false;
     }
 
@@ -744,8 +730,7 @@ bool GraphicRHI::CreateSwapchain(uint32_t width, uint32_t height)
         vk::ImageView vkImageView = vkDevice.createImageView(imageViewCreateInfo);
         if (!vkImageView)
         {
-            SDL_Log("[Swapchain] Failed to create image view %zu", i);
-            SDL_assert(false && "createImageView failed");
+            SDL_LOG_ASSERT_FAIL("createImageView failed", "[Swapchain] Failed to create image view %zu", i);
             return false;
         }
 
@@ -828,8 +813,7 @@ bool GraphicRHI::AcquireNextSwapchainImage(uint32_t* outImageIndex)
     vk::ResultValue<uint32_t> acquired = device.acquireNextImageKHR(swapchain, UINT64_MAX, vk::Semaphore(), static_cast<vk::Fence>(m_ImageAcquireFence));
     if (acquired.result != vk::Result::eSuccess && acquired.result != vk::Result::eSuboptimalKHR)
     {
-        SDL_Log("[Swapchain] acquireNextImageKHR failed: %s", vk::to_string(acquired.result).c_str());
-        SDL_assert(false && "acquireNextImageKHR failed");
+        SDL_LOG_ASSERT_FAIL("acquireNextImageKHR failed", "[Swapchain] acquireNextImageKHR failed: %s", vk::to_string(acquired.result).c_str());
         return false;
     }
 
@@ -838,8 +822,7 @@ bool GraphicRHI::AcquireNextSwapchainImage(uint32_t* outImageIndex)
         vk::Result waitResult = device.waitForFences(static_cast<vk::Fence>(m_ImageAcquireFence), VK_TRUE, UINT64_MAX);
         if (waitResult != vk::Result::eSuccess)
         {
-            SDL_Log("[Swapchain] waitForFences after acquire failed: %s", vk::to_string(waitResult).c_str());
-            SDL_assert(false && "waitForFences after acquire failed");
+            SDL_LOG_ASSERT_FAIL("waitForFences after acquire failed", "[Swapchain] waitForFences after acquire failed: %s", vk::to_string(waitResult).c_str());
             return false;
         }
 
@@ -871,8 +854,7 @@ bool GraphicRHI::PresentSwapchain(uint32_t imageIndex)
         return true;
     }
 
-    SDL_Log("[Swapchain] presentKHR failed: %s", vk::to_string(result).c_str());
-    SDL_assert(false && "presentKHR failed");
+    SDL_LOG_ASSERT_FAIL("presentKHR failed", "[Swapchain] presentKHR failed: %s", vk::to_string(result).c_str());
     return false;
 }
 

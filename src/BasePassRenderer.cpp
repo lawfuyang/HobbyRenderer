@@ -34,8 +34,7 @@ bool BasePassRenderer::Initialize()
     m_InputLayout = renderer->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
     if (!m_InputLayout)
     {
-        SDL_Log("[BasePass] Failed to create input layout");
-        SDL_assert(false);
+        SDL_LOG_ASSERT_FAIL("ImGui input layout creation failed", "[BasePass] Failed to create input layout");
         return false;
     }
 

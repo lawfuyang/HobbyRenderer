@@ -60,8 +60,7 @@ bool Scene::LoadScene()
 	SDL_Log("[Scene] Parsed glTF in %llu ms", (unsigned long long)(t_parse - t_start));
 	if (res != cgltf_result_success || !data)
 	{
-		SDL_Log("[Scene] Failed to parse glTF file: %s", scenePath.c_str());
-		SDL_assert(false && "glTF parse failed");
+		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s", scenePath.c_str());
 		return false;
 	}
 
@@ -70,9 +69,8 @@ bool Scene::LoadScene()
 	SDL_Log("[Scene] Loaded buffers in %llu ms", (unsigned long long)(t_loadBuf - t_parse));
 	if (res != cgltf_result_success)
 	{
-		SDL_Log("[Scene] Failed to load glTF buffers");
+		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] Failed to load glTF buffers");
 		cgltf_free(data);
-		SDL_assert(false && "glTF buffer load failed");
 		return false;
 	}
 
@@ -206,8 +204,7 @@ bool Scene::LoadScene()
 			if (!posAcc)
 			{
 				//SDL_Log("[Scene] Primitive missing POSITION attribute, skipping");
-				SDL_Log("[Scene] Primitive missing POSITION attribute. Is this normal?");
-				SDL_assert(false && "Primitive missing POSITION attribute");
+				SDL_LOG_ASSERT_FAIL("Primitive missing POSITION attribute", "[Scene] Primitive missing POSITION attribute. Is this normal?");
 				continue;
 			}
 

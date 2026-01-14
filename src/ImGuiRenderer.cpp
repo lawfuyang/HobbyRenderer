@@ -145,8 +145,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
         nvrhi::GraphicsPipelineHandle pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
         if (!pipeline)
         {
-            SDL_Log("[Error] Failed to obtain graphics pipeline from Renderer");
-            SDL_assert(false && "Failed to obtain ImGui graphics pipeline");
+            SDL_LOG_ASSERT_FAIL("Failed to obtain ImGui graphics pipeline", "[Error] Failed to obtain graphics pipeline from Renderer");
             return;
         }
         state.pipeline = pipeline;
@@ -226,8 +225,7 @@ bool ImGuiRenderer::CreateDeviceObjects()
         
         if (!m_InputLayout)
         {
-            SDL_Log("[Error] Failed to create ImGui input layout");
-            SDL_assert(false && "ImGui input layout creation failed");
+            SDL_LOG_ASSERT_FAIL("ImGui input layout creation failed", "[Error] Failed to create ImGui input layout");
             return false;
         }
     }
@@ -254,8 +252,7 @@ bool ImGuiRenderer::CreateDeviceObjects()
         
         if (!m_FontTexture)
         {
-            SDL_Log("[Error] Failed to create ImGui font texture");
-            SDL_assert(false && "ImGui font texture creation failed");
+            SDL_LOG_ASSERT_FAIL("ImGui font texture creation failed", "[Error] Failed to create ImGui font texture");
             return false;
         }
 

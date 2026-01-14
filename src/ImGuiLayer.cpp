@@ -24,8 +24,7 @@ bool ImGuiLayer::Initialize()
 
     if (!ImGui_ImplSDL3_InitForVulkan(window))
     {
-        SDL_Log("[Init] Failed to initialize ImGui SDL3 backend");
-        SDL_assert(false && "ImGui_ImplSDL3_InitForVulkan failed");
+        SDL_LOG_ASSERT_FAIL("ImGui_ImplSDL3_InitForVulkan failed", "[Init] Failed to initialize ImGui SDL3 backend");
         return false;
     }
 
