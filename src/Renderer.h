@@ -40,7 +40,9 @@ IRenderer* g_##ClassName = nullptr; \
 static bool s_##ClassName##Registered = []() { \
     RendererRegistry::RegisterRenderer([]() { \
         auto renderer = std::make_shared<ClassName>(); \
+        SDL_assert(renderer && "Failed to initialize renderer: " #ClassName ); \
         g_##ClassName = renderer.get(); \
+        SDL_assert(g_##ClassName && "Failed to assign global renderer pointer: " #ClassName ); \
         return renderer; \
     }); \
     return true; \
