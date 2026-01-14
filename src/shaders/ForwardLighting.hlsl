@@ -14,6 +14,8 @@ cbuffer PerFrameCB : register(b0)
 // Structured buffer for per-instance data
 StructuredBuffer<PerInstanceData> instances : register(t0);
 
+SamplerState g_Sampler : register(s0);
+
 float3x3 MakeAdjugateMatrix(float4x4 m)
 {
     return float3x3
@@ -125,9 +127,19 @@ float OrenNayar(float NdotL, float NdotV, float LdotV, float a2, float albedo)
   return albedo * max(0.0, NdotL) * (A + B * s / t) / PI;
 }
 
+// Helper function to sample from bindless textures
+float4 SampleBindlessTexture(uint textureIndex, float2 uv)
+{
+    Texture2D tex = ResourceDescriptorHeap[textureIndex];
+    return tex.Sample(g_Sampler, uv);
+}
+
 float4 PSMain(VSOut input) : SV_TARGET
 {
     PerInstanceData inst = instances[input.instanceID];
+
+    // Test bindless texture sampling - sample white texture
+    //float4 whiteSample = SampleBindlessTexture(DEFAULT_TEXTURE_WHITE, input.uv);
 
     // Reusable locals
     float3 N = normalize(input.normal);
@@ -141,7 +153,7 @@ float4 PSMain(VSOut input) : SV_TARGET
     float VdotH = saturate(dot(V, H));
     float LdotV = saturate(dot(L, V));
 
-    float3 baseColor = inst.BaseColor.xyz;
+    float3 baseColor = inst.BaseColor.xyz;// * whiteSample.xyz; // Modulate with white texture for testing
     float alpha = inst.BaseColor.w;
     float roughness = inst.RoughnessMetallic.x;
     float metallic = inst.RoughnessMetallic.y;

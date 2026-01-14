@@ -381,6 +381,7 @@ bool GraphicRHI::CreateLogicalDevice()
     m_DeviceExtensions.insert(m_DeviceExtensions.end(), supportedOptionalDeviceExtensions.begin(), supportedOptionalDeviceExtensions.end());
 
     SDL_Log("[Init] Using %zu device extensions", m_DeviceExtensions.size());
+
     // Enable device features
     vk::PhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
@@ -391,13 +392,19 @@ bool GraphicRHI::CreateLogicalDevice()
     vulkan13Features.dynamicRendering = VK_TRUE;
     vulkan13Features.synchronization2 = VK_TRUE;
 
+    // Enable mutable descriptor type features (VK_EXT_mutable_descriptor_type)
+    vk::PhysicalDeviceMutableDescriptorTypeFeaturesEXT mutableDescriptorFeatures{};
+    mutableDescriptorFeatures.pNext = &vulkan13Features;
+    mutableDescriptorFeatures.mutableDescriptorType = VK_TRUE;
+
     // Enable Vulkan 1.2 features
     vk::PhysicalDeviceVulkan12Features vulkan12Features{};
-    vulkan12Features.pNext = &vulkan13Features;
+    vulkan12Features.pNext = &mutableDescriptorFeatures;
     vulkan12Features.bufferDeviceAddress = VK_TRUE;
     vulkan12Features.descriptorBindingVariableDescriptorCount = VK_TRUE;
     vulkan12Features.runtimeDescriptorArray = VK_TRUE;
     vulkan12Features.timelineSemaphore = VK_TRUE;
+    vulkan12Features.descriptorBindingPartiallyBound = VK_TRUE;
 
     vk::PhysicalDeviceVulkan11Features vulkan11Features{};
     vulkan11Features.pNext = &vulkan12Features;

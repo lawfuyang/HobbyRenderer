@@ -2,6 +2,8 @@
 #include "CommonResources.h"
 #include "Renderer.h"
 
+#include "shaders/ShaderShared.hlsl"
+
 bool CommonResources::Initialize()
 {
     Renderer* renderer = Renderer::GetInstance();
@@ -148,12 +150,96 @@ bool CommonResources::Initialize()
         DepthGreaterReadWrite.stencilEnable = false;
     }
 
+    // Create default textures
+    {
+        // Helper lambda to create a 1x1 texture with a solid color
+        auto createDefaultTexture = [device](const char* name, nvrhi::Color color) -> nvrhi::TextureHandle
+        {
+            nvrhi::TextureDesc desc;
+            desc.width = 1;
+            desc.height = 1;
+            desc.format = nvrhi::Format::RGBA8_UNORM;
+            desc.isShaderResource = true;
+            desc.initialState = nvrhi::ResourceStates::ShaderResource;
+            desc.keepInitialState = true;
+            desc.debugName = name;
+
+            nvrhi::TextureHandle texture = device->createTexture(desc);
+            if (!texture)
+            {
+                SDL_Log("[CommonResources] Failed to create %s texture", name);
+                SDL_assert(false && "Failed to create default texture");
+                return nullptr;
+            }
+
+            return texture;
+        };
+
+        // Create the textures
+        DefaultTextureBlack = createDefaultTexture("DefaultBlack", nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
+        DefaultTextureWhite = createDefaultTexture("DefaultWhite", nvrhi::Color(1.0f, 1.0f, 1.0f, 1.0f));
+        DefaultTextureGray = createDefaultTexture("DefaultGray", nvrhi::Color(0.5f, 0.5f, 0.5f, 1.0f));
+        DefaultTextureNormal = createDefaultTexture("DefaultNormal", nvrhi::Color(0.5f, 0.5f, 1.0f, 1.0f));
+        DefaultTexturePBR = createDefaultTexture("DefaultPBR", nvrhi::Color(1.0f, 1.0f, 1.0f, 1.0f)); // ORM: Occlusion=1, Roughness=1, Metallic=0
+
+        // Upload texture data using renderer's command list management
+        nvrhi::CommandListHandle commandList = renderer->AcquireCommandList("CommonResources_DefaultTextures");
+
+        // Black texture
+        uint32_t blackPixel = 0xFF000000; // RGBA(0,0,0,255)
+        commandList->writeTexture(DefaultTextureBlack, 0, 0, &blackPixel, sizeof(uint32_t), 0);
+
+        // White texture
+        uint32_t whitePixel = 0xFFFFFFFF; // RGBA(255,255,255,255)
+        commandList->writeTexture(DefaultTextureWhite, 0, 0, &whitePixel, sizeof(uint32_t), 0);
+
+        // Gray texture
+        uint32_t grayPixel = 0xFF808080; // RGBA(128,128,128,255)
+        commandList->writeTexture(DefaultTextureGray, 0, 0, &grayPixel, sizeof(uint32_t), 0);
+
+        // Normal texture
+        uint32_t normalPixel = 0xFFFF8080; // RGBA(128,128,255,255) - note: ABGR order in memory
+        commandList->writeTexture(DefaultTextureNormal, 0, 0, &normalPixel, sizeof(uint32_t), 0);
+
+        // PBR texture (ORM: Occlusion=1, Roughness=1, Metallic=0)
+        uint32_t pbrPixel = 0xFFFFFF00; // RGBA(0,255,255,255) - R=Metallic(0), G=Roughness(255), B=Occlusion(255), A=255
+        commandList->writeTexture(DefaultTexturePBR, 0, 0, &pbrPixel, sizeof(uint32_t), 0);
+
+        renderer->SubmitCommandList(commandList);
+
+        // Note: Default textures are registered later in Renderer::Initialize after bindless system is set up
+    }
+
     SDL_Log("[CommonResources] Initialized successfully");
+    return true;
+}
+
+bool CommonResources::RegisterDefaultTextures()
+{
+    Renderer* renderer = Renderer::GetInstance();
+
+    // Register textures with the global bindless system
+    uint32_t index = renderer->RegisterTexture(DefaultTextureBlack);
+    SDL_assert(index == DEFAULT_TEXTURE_BLACK);
+    index = renderer->RegisterTexture(DefaultTextureWhite);
+    SDL_assert(index == DEFAULT_TEXTURE_WHITE);
+    index = renderer->RegisterTexture(DefaultTextureGray);
+    SDL_assert(index == DEFAULT_TEXTURE_GRAY);
+    index = renderer->RegisterTexture(DefaultTextureNormal);
+    SDL_assert(index == DEFAULT_TEXTURE_NORMAL);
+    index = renderer->RegisterTexture(DefaultTexturePBR);
+    SDL_assert(index == DEFAULT_TEXTURE_PBR);
+    SDL_Log("[CommonResources] Default textures registered with bindless system");
     return true;
 }
 
 void CommonResources::Shutdown()
 {
+    DefaultTexturePBR = nullptr;
+    DefaultTextureNormal = nullptr;
+    DefaultTextureGray = nullptr;
+    DefaultTextureWhite = nullptr;
+    DefaultTextureBlack = nullptr;
     Anisotropic = nullptr;
     PointWrap = nullptr;
     PointClamp = nullptr;

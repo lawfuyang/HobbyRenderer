@@ -148,13 +148,18 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     renderer->m_RHI.SetDebugName(indirectBuffer, "IndirectBuffer");
     commandList->writeBuffer(indirectBuffer, indirectArgs.data(), indirectArgs.size() * sizeof(nvrhi::DrawIndexedIndirectArguments));
 
-    // Update binding set to include the structured buffer
+    // Update binding set to include the structured buffer (no sampler since combined)
     nvrhi::BindingSetDesc bset;
-    bset.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, perFrameCB), nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instanceBuffer) };
+    bset.bindings = { 
+        nvrhi::BindingSetItem::ConstantBuffer(0, perFrameCB), 
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instanceBuffer),
+        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+    };
     nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, nvrhi::ShaderType::All);
-    pipelineDesc.bindingLayouts = { layout };
+    pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
+    
     nvrhi::BindingSetHandle bindingSet = renderer->m_NvrhiDevice->createBindingSet(bset, layout);
-    state.bindings = { bindingSet };
+    state.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
 
     nvrhi::GraphicsPipelineHandle pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
     state.pipeline = pipeline;

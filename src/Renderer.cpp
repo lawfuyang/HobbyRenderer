@@ -412,6 +412,21 @@ bool Renderer::Initialize()
         return false;
     }
 
+    if (!InitializeGlobalBindlessTextures())
+    {
+        SDL_Log("[Init] Failed to initialize global bindless textures");
+        Shutdown();
+        return false;
+    }
+
+    // Register default textures with the global bindless system
+    if (!CommonResources::GetInstance().RegisterDefaultTextures())
+    {
+        SDL_Log("[Init] Failed to register default textures");
+        Shutdown();
+        return false;
+    }
+
     if (!CreateSwapchainTextures())
     {
         Shutdown();
@@ -553,6 +568,11 @@ void Renderer::Shutdown()
     m_ImGuiLayer.Shutdown();
     CommonResources::GetInstance().Shutdown();
 
+    // Shutdown global bindless texture system
+    m_GlobalTextureDescriptorTable = nullptr;
+    m_GlobalTextureBindingLayout = nullptr;
+    m_NextTextureIndex = 0;
+
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
 
@@ -660,6 +680,21 @@ static size_t HashBindingLayoutDesc(const nvrhi::BindingLayoutDesc& d)
     return h;
 }
 
+static size_t HashBindlessLayoutDesc(const nvrhi::BindlessLayoutDesc& d)
+{
+    size_t h = std::hash<uint32_t>()(static_cast<uint32_t>(d.visibility));
+    h = h * 1315423911u + std::hash<uint32_t>()(d.firstSlot);
+    h = h * 1315423911u + std::hash<uint32_t>()(d.maxCapacity);
+    h = h * 1315423911u + std::hash<uint32_t>()(static_cast<uint32_t>(d.layoutType));
+    for (const nvrhi::BindingLayoutItem& it : d.registerSpaces)
+    {
+        // combine slot, type and size
+        uint64_t v = (uint64_t(it.slot) << 32) | (uint64_t(it.type) << 16) | uint64_t(it.size);
+        h = h * 1315423911u + std::hash<uint64_t>()(v);
+    }
+    return h;
+}
+
 static bool BindingLayoutDescEqual(const nvrhi::BindingLayoutDesc& a, const nvrhi::BindingLayoutDesc& b)
 {
     if (a.visibility != b.visibility) return false;
@@ -682,8 +717,7 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
 {
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.visibility = visibility;
-    layoutDesc.registerSpace = 0;
-    layoutDesc.registerSpaceIsDescriptorSet = false;
+    layoutDesc.registerSpaceIsDescriptorSet = true;
     layoutDesc.bindingOffsets.shaderResource = SPIRV_TEXTURE_SHIFT;
     layoutDesc.bindingOffsets.sampler = SPIRV_SAMPLER_SHIFT;
     layoutDesc.bindingOffsets.constantBuffer = SPIRV_CBUFFER_SHIFT;
@@ -723,6 +757,78 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
     }
 
     return handle;
+}
+
+nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindlessLayout(const nvrhi::BindlessLayoutDesc& desc)
+{
+    // Hash and lookup in cache
+    size_t h = HashBindlessLayoutDesc(desc);
+    auto cacheIt = m_BindingLayoutCache.find(h);
+    if (cacheIt != m_BindingLayoutCache.end())
+    {
+        return cacheIt->second;
+    }
+
+    // Not found - create it and cache it
+    nvrhi::BindingLayoutHandle handle = m_NvrhiDevice->createBindlessLayout(desc);
+    if (handle)
+    {
+        m_BindingLayoutCache.emplace(h, handle);
+    }
+
+    return handle;
+}
+
+bool Renderer::InitializeGlobalBindlessTextures()
+{
+    // Create bindless layout for global textures
+    nvrhi::BindlessLayoutDesc bindlessDesc;
+    bindlessDesc.visibility = nvrhi::ShaderType::All;
+    bindlessDesc.maxCapacity = 1024; // Large capacity for many textures
+    bindlessDesc.layoutType = nvrhi::BindlessLayoutDesc::LayoutType::MutableSrvUavCbv;
+
+    m_GlobalTextureBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
+    if (!m_GlobalTextureBindingLayout)
+    {
+        SDL_Log("[Renderer] Failed to create global bindless layout for textures");
+        SDL_assert(false && "Failed to create global bindless layout for textures");
+        return false;
+    }
+
+    // Create descriptor table
+    m_GlobalTextureDescriptorTable = m_NvrhiDevice->createDescriptorTable(m_GlobalTextureBindingLayout);
+    if (!m_GlobalTextureDescriptorTable)
+    {
+        SDL_Log("[Renderer] Failed to create global texture descriptor table");
+        SDL_assert(false && "Failed to create global texture descriptor table");
+        return false;
+    }
+
+    SDL_Log("[Renderer] Global bindless texture system initialized");
+    return true;
+}
+
+uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
+{
+    if (!texture || !m_GlobalTextureDescriptorTable)
+    {
+        SDL_Log("[Renderer] Invalid texture or descriptor table not initialized");
+        SDL_assert(false && "Invalid texture or descriptor table not initialized");
+        return UINT32_MAX;
+    }
+
+    uint32_t index = m_NextTextureIndex++;
+    
+    nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
+    if (!m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
+    {
+        SDL_Log("[Renderer] Failed to register texture at index %u", index);
+        SDL_assert(false && "Failed to register texture in global descriptor table");
+        return UINT32_MAX;
+    }
+
+    SDL_Log("[Renderer] Registered texture at index %u", index);
+    return index;
 }
 
 nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi::GraphicsPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo)

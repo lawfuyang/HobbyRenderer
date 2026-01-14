@@ -74,3 +74,10 @@ constexpr float PI = 3.14159265358979323846f;
 #else
 static const float PI = 3.14159265359f;
 #endif
+
+// Default texture indices for bindless access
+#define DEFAULT_TEXTURE_BLACK 0
+#define DEFAULT_TEXTURE_WHITE 1
+#define DEFAULT_TEXTURE_GRAY 2
+#define DEFAULT_TEXTURE_NORMAL 3
+#define DEFAULT_TEXTURE_PBR 4

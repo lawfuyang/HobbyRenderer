@@ -21,6 +21,9 @@ public:
     bool Initialize();
     void Shutdown();
 
+    // Register default textures with the global bindless system
+    bool RegisterDefaultTextures();
+
     // Common sampler states
     nvrhi::SamplerHandle LinearClamp;   // Bilinear filtering, clamp to edge
     nvrhi::SamplerHandle LinearWrap;    // Bilinear filtering, wrap/repeat
@@ -50,6 +53,11 @@ public:
     nvrhi::DepthStencilState DepthGreaterRead;       // Depth test GreaterEqual, no write
     nvrhi::DepthStencilState DepthGreaterReadWrite;  // Depth test GreaterEqual + write
 
-private:
+    // Default textures
+    nvrhi::TextureHandle DefaultTextureBlack;        // RGBA(0,0,0,1)
+    nvrhi::TextureHandle DefaultTextureWhite;        // RGBA(1,1,1,1)
+    nvrhi::TextureHandle DefaultTextureGray;         // RGBA(0.5,0.5,0.5,1)
+    nvrhi::TextureHandle DefaultTextureNormal;       // RGBA(0.5,0.5,1,1) - neutral normal map
+    nvrhi::TextureHandle DefaultTexturePBR;          // RGBA(0,1,1,1) - ORM: Metallic=0, Roughness=1, Occlusion=1
     CommonResources() = default;
 };
