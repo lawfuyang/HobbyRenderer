@@ -51,8 +51,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     nvrhi::TextureHandle rt = renderer->GetCurrentBackBufferTexture();
     nvrhi::TextureHandle depth = renderer->m_DepthTexture;
     nvrhi::FramebufferHandle framebuffer = renderer->m_NvrhiDevice->createFramebuffer(
-        nvrhi::FramebufferDesc().addColorAttachment(rt).setDepthAttachment(depth)
-    );
+        nvrhi::FramebufferDesc().addColorAttachment(rt).setDepthAttachment(depth));
 
     // ============================================================================
     // Graphics Pipeline Setup
@@ -76,8 +75,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     // Constant Buffer Setup
     // ============================================================================
     nvrhi::BufferDesc cbd = nvrhi::utils::CreateVolatileConstantBufferDesc(
-        (uint32_t)sizeof(PerFrameData), "PerFrameCB", 8
-    );
+        (uint32_t)sizeof(PerFrameData), "PerFrameCB", 8);
     nvrhi::BufferHandle perFrameCB = renderer->m_NvrhiDevice->createBuffer(cbd);
     renderer->m_RHI.SetDebugName(perFrameCB, "PerFrameCB_frame");
 
@@ -86,8 +84,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     // ============================================================================
     state.vertexBuffers = { nvrhi::VertexBufferBinding{ renderer->m_Scene.m_VertexBuffer, 0, 0 } };
     state.indexBuffer = nvrhi::IndexBufferBinding{
-        renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0
-    };
+        renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
 
     uint32_t w = renderer->m_RHI.m_SwapchainExtent.width;
     uint32_t h = renderer->m_RHI.m_SwapchainExtent.height;
@@ -170,18 +167,17 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     // Binding Set Setup
     // ============================================================================
     nvrhi::BindingSetDesc bset;
-    bset.bindings = {
+    bset.bindings =
+    {
         nvrhi::BindingSetItem::ConstantBuffer(0, perFrameCB),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instanceBuffer),
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
     };
-    nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(
-        bset, nvrhi::ShaderType::All
-    );
-    pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
+    nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, nvrhi::ShaderType::All);
+    pipelineDesc.bindingLayouts = { layout, renderer->GetGlobalTextureBindingLayout() };
 
     nvrhi::BindingSetHandle bindingSet = renderer->m_NvrhiDevice->createBindingSet(bset, layout);
-    state.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
+    state.bindings = { bindingSet, renderer->GetGlobalTextureDescriptorTable() };
 
     nvrhi::GraphicsPipelineHandle pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
     state.pipeline = pipeline;

@@ -795,7 +795,7 @@ bool Renderer::InitializeGlobalBindlessTextures()
         SDL_LOG_ASSERT_FAIL("Failed to create global texture descriptor table", "[Renderer] Failed to create global texture descriptor table");
         return false;
     }
-
+    
     SDL_Log("[Renderer] Global bindless texture system initialized");
     return true;
 }
@@ -817,7 +817,7 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
         return UINT32_MAX;
     }
 
-    SDL_Log("[Renderer] Registered texture at index %u", index);
+    SDL_Log("[Renderer] Registered texture (%s) at index %u", texture->getDesc().debugName.c_str(), index);
     return index;
 }
 
@@ -860,8 +860,6 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
 
     return pipeline;
 }
-
-
 
 void Renderer::DestroyNvrhiDevice()
 {
