@@ -174,10 +174,10 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
     };
     nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, nvrhi::ShaderType::All);
-    pipelineDesc.bindingLayouts = { layout, renderer->GetGlobalTextureBindingLayout() };
+    pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
 
     nvrhi::BindingSetHandle bindingSet = renderer->m_NvrhiDevice->createBindingSet(bset, layout);
-    state.bindings = { bindingSet, renderer->GetGlobalTextureDescriptorTable() };
+    state.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
 
     nvrhi::GraphicsPipelineHandle pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
     state.pipeline = pipeline;

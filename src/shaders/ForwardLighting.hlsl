@@ -6,15 +6,15 @@
 #include "ShaderShared.hlsl"
 
 // Define the cbuffer here using the shared PerFrameData struct
-cbuffer PerFrameCB : register(b0)
+cbuffer PerFrameCB : register(b0, space1)
 {
     PerFrameData perFrame;
 };
 
 // Structured buffer for per-instance data
-StructuredBuffer<PerInstanceData> instances : register(t0);
+StructuredBuffer<PerInstanceData> instances : register(t0, space1);
 
-SamplerState g_Sampler : register(s0);
+SamplerState g_Sampler : register(s0, space1);
 
 float3x3 MakeAdjugateMatrix(float4x4 m)
 {
@@ -138,9 +138,6 @@ float4 PSMain(VSOut input) : SV_TARGET
 {
     PerInstanceData inst = instances[input.instanceID];
 
-    // Test bindless texture sampling - sample white texture
-    //float4 whiteSample = SampleBindlessTexture(DEFAULT_TEXTURE_WHITE, input.uv);
-
     // Reusable locals
     float3 N = normalize(input.normal);
     float3 V = normalize(perFrame.CameraPos.xyz - input.worldPos);
@@ -153,7 +150,7 @@ float4 PSMain(VSOut input) : SV_TARGET
     float VdotH = saturate(dot(V, H));
     float LdotV = saturate(dot(L, V));
 
-    float3 baseColor = inst.BaseColor.xyz;// * whiteSample.xyz; // Modulate with white texture for testing
+    float3 baseColor = inst.BaseColor.xyz;
     float alpha = inst.BaseColor.w;
     float roughness = inst.RoughnessMetallic.x;
     float metallic = inst.RoughnessMetallic.y;
@@ -163,7 +160,7 @@ float4 PSMain(VSOut input) : SV_TARGET
 
     // Diffuse BRDF via Oren-Nayar
     float oren = OrenNayar(NdotL, NdotV, LdotV, a2, 1.0f);
-    float3 diffuse = oren * (1.0f - metallic) * inst.BaseColor.xyz / PI;
+    float3 diffuse = oren * (1.0f - metallic) * baseColor / PI;
     
     const float materialSpecular = 0.5f; // TODO
     float3 specularColor = ComputeF0(materialSpecular, baseColor, metallic);

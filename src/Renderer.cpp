@@ -711,7 +711,6 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
 {
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.visibility = visibility;
-    layoutDesc.registerSpaceIsDescriptorSet = true;
     layoutDesc.bindingOffsets.shaderResource = SPIRV_TEXTURE_SHIFT;
     layoutDesc.bindingOffsets.sampler = SPIRV_SAMPLER_SHIFT;
     layoutDesc.bindingOffsets.constantBuffer = SPIRV_CBUFFER_SHIFT;
