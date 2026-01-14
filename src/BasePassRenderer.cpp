@@ -17,13 +17,7 @@ private:
     nvrhi::InputLayoutHandle m_InputLayout;
 };
 
-// Register the BasePassRenderer
-static bool s_BasePassRendererRegistered = []() {
-    RendererRegistry::RegisterRenderer([]() {
-        return std::make_shared<BasePassRenderer>();
-    });
-    return true;
-}();
+REGISTER_RENDERER(BasePassRenderer);
 
 bool BasePassRenderer::Initialize()
 {

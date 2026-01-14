@@ -34,6 +34,18 @@ private:
     inline static std::vector<Creator> s_Creators;
 };
 
+// Macro to register a renderer class
+#define REGISTER_RENDERER(ClassName) \
+IRenderer* g_##ClassName = nullptr; \
+static bool s_##ClassName##Registered = []() { \
+    RendererRegistry::RegisterRenderer([]() { \
+        auto renderer = std::make_shared<ClassName>(); \
+        g_##ClassName = renderer.get(); \
+        return renderer; \
+    }); \
+    return true; \
+}();
+
 struct Renderer
 {
     // ShaderMake default SPIRV register shifts (from external/ShaderMake/ShaderMake/ShaderMake.cpp Options)

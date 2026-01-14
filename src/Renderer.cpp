@@ -487,13 +487,18 @@ void Renderer::Run()
             SubmitCommandList(commandList);
         }
 
-        // Render passes
-        for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
-        {
-            nvrhi::CommandListHandle cmd = AcquireCommandList(renderer->GetName());
-            renderer->Render(cmd);
-            SubmitCommandList(cmd);
+        // define macro for render pass below
+        #define ADD_RENDER_PASS(rendererName) \
+        { \
+            extern IRenderer* rendererName; \
+            nvrhi::CommandListHandle cmd = AcquireCommandList(rendererName->GetName()); \
+            rendererName->Render(cmd); \
+            SubmitCommandList(cmd); \
         }
+
+        ADD_RENDER_PASS(g_BasePassRenderer);
+
+        #undef ADD_RENDER_PASS
 
         // Render ImGui frame
         nvrhi::CommandListHandle commandList = AcquireCommandList("ImGui");
