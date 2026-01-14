@@ -8,6 +8,23 @@
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 
+class ClearRenderer : public IRenderer
+{
+public:
+    bool Initialize() override { return true; }
+    void Render(nvrhi::CommandListHandle commandList) override
+    {
+        Renderer* renderer = Renderer::GetInstance();
+        // Clear color
+        commandList->clearTextureFloat(renderer->GetCurrentBackBufferTexture(), nvrhi::AllSubresources, nvrhi::Color(0.14f, 0.23f, 0.33f, 1.0f));
+        // Clear depth for reversed-Z (clear to 0.0f, no stencil)
+        commandList->clearDepthStencilTexture(renderer->m_DepthTexture, nvrhi::AllSubresources, true, 0.0f, false, 0);
+    }
+    const char* GetName() const override { return "Clear"; }
+};
+
+REGISTER_RENDERER(ClearRenderer);
+
 namespace
 {
     class NvrhiErrorCallback : public nvrhi::IMessageCallback
@@ -480,15 +497,6 @@ void Renderer::Run()
         // Update camera (camera retrieves frame time internally)
         m_Camera.Update();
 
-        {
-            nvrhi::CommandListHandle commandList = AcquireCommandList("Clear");
-            // Clear color
-            commandList->clearTextureFloat(GetCurrentBackBufferTexture(), nvrhi::AllSubresources, nvrhi::Color(0.14f, 0.23f, 0.33f, 1.0f));
-            // Clear depth for reversed-Z (clear to 0.0f, no stencil)
-            commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 0.0f, false, 0);
-            SubmitCommandList(commandList);
-        }
-
         // define macro for render pass below
         #define ADD_RENDER_PASS(rendererName) \
         { \
@@ -498,6 +506,7 @@ void Renderer::Run()
             SubmitCommandList(cmd); \
         }
 
+        ADD_RENDER_PASS(g_ClearRenderer);
         ADD_RENDER_PASS(g_BasePassRenderer);
         ADD_RENDER_PASS(g_ImGuiRenderer);
 
