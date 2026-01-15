@@ -2,6 +2,7 @@
 #include "Config.h"
 #include "Renderer.h"
 #include "CommonResources.h"
+#include "Utilities.h"
 
 // Enable ForwardLighting shared definitions for C++ side
 #define FORWARD_LIGHTING_DEFINE
@@ -50,109 +51,63 @@ static void ComputeWorldTransforms(Scene& scene, int nodeIndex, const Matrix& pa
 		ComputeWorldTransforms(scene, child, node.m_WorldTransform);
 }
 
-bool Scene::LoadScene()
+// --- Helper pieces extracted from Scene::LoadScene for clarity ---
+static void ProcessMaterialsAndImages(cgltf_data* data, Scene& scene)
 {
-	const std::string& scenePath = Config::Get().m_GltfScene;
-	if (scenePath.empty())
-	{
-		SDL_Log("[Scene] No glTF scene configured, skipping load");
-		return true;
-	}
+	SCOPED_TIMER("[Scene] Materials+Images");
 
-	SDL_Log("[Scene] Loading glTF scene: %s", scenePath.c_str());
-
-	uint64_t t_start = SDL_GetTicks();
-
-	cgltf_options options{};
-	cgltf_data* data = nullptr;
-	cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
-	uint64_t t_parse = SDL_GetTicks();
-	SDL_Log("[Scene] Parsed glTF in %llu ms", (unsigned long long)(t_parse - t_start));
-	if (res != cgltf_result_success || !data)
-	{
-		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s", scenePath.c_str());
-		return false;
-	}
-
-	res = cgltf_load_buffers(&options, data, scenePath.c_str());
-	uint64_t t_loadBuf = SDL_GetTicks();
-	SDL_Log("[Scene] Loaded buffers in %llu ms", (unsigned long long)(t_loadBuf - t_parse));
-	if (res != cgltf_result_success)
-	{
-		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] Failed to load glTF buffers");
-		cgltf_free(data);
-		return false;
-	}
-
-	// Textures & materials (minimal)
-	uint64_t t_texmat_start = SDL_GetTicks();
-	uint64_t t_texmat_end = t_texmat_start;
+	// Materials
 	for (cgltf_size i = 0; i < data->materials_count; ++i)
 	{
-		m_Materials.emplace_back();
-		m_Materials.back().m_Name = data->materials[i].name ? data->materials[i].name : std::string();
-		// Read PBR baseColorFactor if present
+		scene.m_Materials.emplace_back();
+		scene.m_Materials.back().m_Name = data->materials[i].name ? data->materials[i].name : std::string();
 		const cgltf_pbr_metallic_roughness& pbr = data->materials[i].pbr_metallic_roughness;
-		// copy base color factor (defaults to 1,1,1,1 if not specified)
-		m_Materials.back().m_BaseColorFactor.x = pbr.base_color_factor[0];
-		m_Materials.back().m_BaseColorFactor.y = pbr.base_color_factor[1];
-		m_Materials.back().m_BaseColorFactor.z = pbr.base_color_factor[2];
-		m_Materials.back().m_BaseColorFactor.w = pbr.base_color_factor[3];
-		if (pbr.base_color_texture.texture)
+		scene.m_Materials.back().m_BaseColorFactor.x = pbr.base_color_factor[0];
+		scene.m_Materials.back().m_BaseColorFactor.y = pbr.base_color_factor[1];
+		scene.m_Materials.back().m_BaseColorFactor.z = pbr.base_color_factor[2];
+		scene.m_Materials.back().m_BaseColorFactor.w = pbr.base_color_factor[3];
+		if (pbr.base_color_texture.texture && pbr.base_color_texture.texture->image)
 		{
-			const cgltf_texture* tex = pbr.base_color_texture.texture;
-			if (tex && tex->image)
-			{
-				cgltf_size imgIndex = tex->image - data->images;
-				m_Materials.back().m_BaseColorTexture = static_cast<int>(imgIndex);
-			}
+			cgltf_size imgIndex = pbr.base_color_texture.texture->image - data->images;
+			scene.m_Materials.back().m_BaseColorTexture = static_cast<int>(imgIndex);
 		}
-		// metallic / roughness
-		m_Materials.back().m_RoughnessFactor = pbr.roughness_factor;
-		// If the glTF omits metallic information, cgltf gives the default 1.0.
-		// Treat a missing metallicFactor and missing metallic_roughness_texture as non-metallic (0.0)
+
 		float metallic = pbr.metallic_factor;
 		if (pbr.metallic_roughness_texture.texture == NULL && metallic == 1.0f)
 			metallic = 0.0f;
-		m_Materials.back().m_MetallicFactor = metallic;
+		scene.m_Materials.back().m_RoughnessFactor = pbr.roughness_factor;
+		scene.m_Materials.back().m_MetallicFactor = metallic;
 
-		if (pbr.metallic_roughness_texture.texture)
+		if (pbr.metallic_roughness_texture.texture && pbr.metallic_roughness_texture.texture->image)
 		{
-			const cgltf_texture* tex = pbr.metallic_roughness_texture.texture;
-			if (tex && tex->image)
-			{
-				cgltf_size imgIndex = tex->image - data->images;
-				m_Materials.back().m_MetallicRoughnessTexture = static_cast<int>(imgIndex);
-			}
+			cgltf_size imgIndex = pbr.metallic_roughness_texture.texture->image - data->images;
+			scene.m_Materials.back().m_MetallicRoughnessTexture = static_cast<int>(imgIndex);
 		}
 
-		if (data->materials[i].normal_texture.texture)
+		if (data->materials[i].normal_texture.texture && data->materials[i].normal_texture.texture->image)
 		{
-			const cgltf_texture* tex = data->materials[i].normal_texture.texture;
-			if (tex && tex->image)
-			{
-				cgltf_size imgIndex = tex->image - data->images;
-				m_Materials.back().m_NormalTexture = static_cast<int>(imgIndex);
-			}
+			cgltf_size imgIndex = data->materials[i].normal_texture.texture->image - data->images;
+			scene.m_Materials.back().m_NormalTexture = static_cast<int>(imgIndex);
 		}
 	}
 
-
+	// Images -> textures (URI only)
 	for (cgltf_size i = 0; i < data->images_count; ++i)
 	{
-		m_Textures.emplace_back();
-		m_Textures.back().m_Uri = data->images[i].uri ? data->images[i].uri : std::string();
+		scene.m_Textures.emplace_back();
+		scene.m_Textures.back().m_Uri = data->images[i].uri ? data->images[i].uri : std::string();
 	}
+}
 
-	// Load textures (URI-only for now). Create GPU textures, upload and register with bindless table.
-	std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
-	Renderer* renderer = Renderer::GetInstance();
-	for (size_t ti = 0; ti < m_Textures.size(); ++ti)
+static void LoadTexturesFromImages(Scene& scene, cgltf_data* data, const std::filesystem::path& sceneDir, Renderer* renderer)
+{
+	SCOPED_TIMER("[Scene] LoadTextures");
+
+	for (size_t ti = 0; ti < scene.m_Textures.size(); ++ti)
 	{
-		auto& tex = m_Textures[ti];
+		auto& tex = scene.m_Textures[ti];
 		if (tex.m_Uri.empty())
 		{
-			// No URI (possibly embedded image) - skip for now
 			SDL_Log("[Scene] Texture %zu has no URI, skipping (embedded images not yet supported)", ti);
 			continue;
 		}
@@ -167,14 +122,13 @@ bool Scene::LoadScene()
 		}
 
 		int width = 0, height = 0, channels = 0;
-		unsigned char* imgData = stbi_load(fullPath.c_str(), &width, &height, &channels, 4); // force RGBA
+		unsigned char* imgData = stbi_load(fullPath.c_str(), &width, &height, &channels, 4);
 		if (!imgData)
 		{
 			SDL_LOG_ASSERT_FAIL("Texture load failed", "[Scene] Failed to load texture: %s", fullPath.c_str());
 			continue;
 		}
 
-		// Create nvrhi texture
 		nvrhi::TextureDesc desc;
 		desc.width = width;
 		desc.height = height;
@@ -191,7 +145,6 @@ bool Scene::LoadScene()
 			continue;
 		}
 
-		// Upload image data
 		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Upload Texture");
 		const size_t bytesPerPixel = nvrhi::getFormatInfo(desc.format).bytesPerBlock;
 		const size_t rowPitch = (size_t)width * bytesPerPixel;
@@ -199,43 +152,33 @@ bool Scene::LoadScene()
 		cmd->writeTexture(tex.m_Handle, 0, 0, imgData, rowPitch, depthPitch);
 		renderer->SubmitCommandList(cmd);
 
-		// Register with bindless table
-		uint32_t idx = renderer->RegisterTexture(tex.m_Handle);
-		if (idx == UINT32_MAX)
+		tex.m_BindlessIndex = renderer->RegisterTexture(tex.m_Handle);
+		if (tex.m_BindlessIndex == UINT32_MAX)
 		{
 			SDL_LOG_ASSERT_FAIL("Bindless texture registration failed", "[Scene] Bindless texture registration failed for %s", tex.m_Uri.c_str());
-			// leave m_BindlessIndex as UINT32_MAX
-		}
-		else
-		{
-			tex.m_BindlessIndex = idx;
-			SDL_Log("[Scene] Registered texture %s at index %u", tex.m_Uri.c_str(), idx);
 		}
 
 		stbi_image_free(imgData);
 	}
+}
 
-	// Update material texture indices
-	for (auto& mat : m_Materials)
+static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
+{
+	SCOPED_TIMER("[Scene] MaterialConstants");
+
+	for (auto& mat : scene.m_Materials)
 	{
 		if (mat.m_BaseColorTexture != -1)
-		{
-			mat.m_AlbedoTextureIndex = m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
-		}
+			mat.m_AlbedoTextureIndex = scene.m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
 		if (mat.m_NormalTexture != -1)
-		{
-			mat.m_NormalTextureIndex = m_Textures[mat.m_NormalTexture].m_BindlessIndex;
-		}
+			mat.m_NormalTextureIndex = scene.m_Textures[mat.m_NormalTexture].m_BindlessIndex;
 		if (mat.m_MetallicRoughnessTexture != -1)
-		{
-			mat.m_RoughnessMetallicTextureIndex = m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
-		}
+			mat.m_RoughnessMetallicTextureIndex = scene.m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
 	}
 
-	// Create material constants buffer
 	std::vector<MaterialConstants> materialConstants;
-	materialConstants.reserve(m_Materials.size());
-	for (const auto& mat : m_Materials)
+	materialConstants.reserve(scene.m_Materials.size());
+	for (const auto& mat : scene.m_Materials)
 	{
 		MaterialConstants mc{};
 		mc.m_BaseColor = mat.m_BaseColorFactor;
@@ -249,31 +192,30 @@ bool Scene::LoadScene()
 		mc.m_RoughnessMetallicTextureIndex = mat.m_RoughnessMetallicTextureIndex;
 		materialConstants.push_back(mc);
 	}
+
 	if (!materialConstants.empty())
 	{
-		Renderer* renderer = Renderer::GetInstance();
 		nvrhi::BufferDesc matBufDesc = nvrhi::BufferDesc()
 			.setByteSize(materialConstants.size() * sizeof(MaterialConstants))
 			.setStructStride(sizeof(MaterialConstants))
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true);
-		m_MaterialConstantsBuffer = renderer->m_NvrhiDevice->createBuffer(matBufDesc);
-		renderer->m_RHI.SetDebugName(m_MaterialConstantsBuffer, "MaterialConstantsBuffer");
+		scene.m_MaterialConstantsBuffer = renderer->m_NvrhiDevice->createBuffer(matBufDesc);
+		renderer->m_RHI.SetDebugName(scene.m_MaterialConstantsBuffer, "MaterialConstantsBuffer");
 
 		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Upload MaterialConstants");
-		cmd->writeBuffer(m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(MaterialConstants));
+		cmd->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(MaterialConstants));
 		renderer->SubmitCommandList(cmd);
 	}
+}
 
-	t_texmat_end = SDL_GetTicks();
-	SDL_Log("[Scene] Materials+Textures in %llu ms", (unsigned long long)(t_texmat_end - t_texmat_start));
-
-	// Cameras
-	uint64_t t_cameras_start = SDL_GetTicks();
+static void ProcessCameras(cgltf_data* data, Scene& scene)
+{
+	SCOPED_TIMER("[Scene] Cameras");
 	for (cgltf_size i = 0; i < data->cameras_count; ++i)
 	{
 		const cgltf_camera& cgCam = data->cameras[i];
-		Camera cam;
+		Scene::Camera cam;
 		cam.m_Name = cgCam.name ? cgCam.name : std::string();
 		if (cgCam.type == cgltf_camera_type_perspective)
 		{
@@ -281,12 +223,10 @@ bool Scene::LoadScene()
 			cam.m_Projection.aspectRatio = p.has_aspect_ratio ? p.aspect_ratio : (16.0f / 9.0f);
 			cam.m_Projection.fovY = p.yfov;
 			cam.m_Projection.nearZ = p.znear;
-			// farZ is always infinite, ignore p.zfar
-			m_Cameras.push_back(std::move(cam));
+			scene.m_Cameras.push_back(std::move(cam));
 		}
 		else if (cgCam.type == cgltf_camera_type_orthographic)
 		{
-			// Skip orthographic cameras
 			SDL_Log("[Scene] Skipping orthographic camera: %s", cam.m_Name.c_str());
 		}
 		else
@@ -294,15 +234,15 @@ bool Scene::LoadScene()
 			SDL_Log("[Scene] Unknown camera type for camera: %s", cam.m_Name.c_str());
 		}
 	}
-	uint64_t t_cameras_end = SDL_GetTicks();
-	SDL_Log("[Scene] Cameras in %llu ms", (unsigned long long)(t_cameras_end - t_cameras_start));
+}
 
-	// Lights
-	uint64_t t_lights_start = SDL_GetTicks();
+static void ProcessLights(cgltf_data* data, Scene& scene)
+{
+	SCOPED_TIMER("[Scene] Lights");
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
 	{
 		const cgltf_light& cgLight = data->lights[i];
-		Light light;
+		Scene::Light light;
 		light.m_Name = cgLight.name ? cgLight.name : std::string();
 		light.m_Color = Vector3{ cgLight.color[0], cgLight.color[1], cgLight.color[2] };
 		light.m_Intensity = cgLight.intensity;
@@ -310,35 +250,33 @@ bool Scene::LoadScene()
 		light.m_SpotInnerConeAngle = cgLight.spot_inner_cone_angle;
 		light.m_SpotOuterConeAngle = cgLight.spot_outer_cone_angle;
 		if (cgLight.type == cgltf_light_type_directional)
-			light.m_Type = Light::Directional;
+			light.m_Type = Scene::Light::Directional;
 		else if (cgLight.type == cgltf_light_type_point)
-			light.m_Type = Light::Point;
+			light.m_Type = Scene::Light::Point;
 		else if (cgLight.type == cgltf_light_type_spot)
-			light.m_Type = Light::Spot;
-		m_Lights.push_back(std::move(light));
+			light.m_Type = Scene::Light::Spot;
+		scene.m_Lights.push_back(std::move(light));
 	}
-	uint64_t t_lights_end = SDL_GetTicks();
-	SDL_Log("[Scene] Lights in %llu ms", (unsigned long long)(t_lights_end - t_lights_start));
+}
 
-	// Collect vertex/index data
-	uint64_t t_mesh_start = SDL_GetTicks();
-	std::vector<Vertex> allVertices;
-	std::vector<uint32_t> allIndices;
+static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<Vertex>& outVertices, std::vector<uint32_t>& outIndices)
+{
+	SCOPED_TIMER("[Scene] Meshes");
+	outVertices.clear();
+	outIndices.clear();
 
-	// Meshes/primitives
 	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 	{
 		cgltf_mesh& cgMesh = data->meshes[mi];
-		Mesh mesh;
+		Scene::Mesh mesh;
 		mesh.m_AabbMin = Vector3{ FLT_MAX, FLT_MAX, FLT_MAX };
 		mesh.m_AabbMax = Vector3{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
 
 		for (cgltf_size pi = 0; pi < cgMesh.primitives_count; ++pi)
 		{
 			cgltf_primitive& prim = cgMesh.primitives[pi];
-			Primitive p;
+			Scene::Primitive p;
 
-			// Find accessors
 			const cgltf_accessor* posAcc = nullptr;
 			const cgltf_accessor* normAcc = nullptr;
 			const cgltf_accessor* uvAcc = nullptr;
@@ -356,16 +294,14 @@ bool Scene::LoadScene()
 
 			if (!posAcc)
 			{
-				//SDL_Log("[Scene] Primitive missing POSITION attribute, skipping");
 				SDL_LOG_ASSERT_FAIL("Primitive missing POSITION attribute", "[Scene] Primitive missing POSITION attribute. Is this normal?");
 				continue;
 			}
 
 			const cgltf_size vertCount = posAcc->count;
-			p.m_VertexOffset = static_cast<uint32_t>(allVertices.size());
+			p.m_VertexOffset = static_cast<uint32_t>(outVertices.size());
 			p.m_VertexCount = static_cast<uint32_t>(vertCount);
 
-			// Read positions (and optionally normals/uvs)
 			for (cgltf_size v = 0; v < vertCount; ++v)
 			{
 				Vertex vx{};
@@ -391,22 +327,20 @@ bool Scene::LoadScene()
 				vx.uv.x = uv[0]; vx.uv.y = uv[1];
 
 				ExtendAABB(mesh.m_AabbMin, mesh.m_AabbMax, vx.pos);
-				allVertices.push_back(vx);
+				outVertices.push_back(vx);
 			}
 
-			// Indices
-			p.m_IndexOffset = static_cast<uint32_t>(allIndices.size());
+			p.m_IndexOffset = static_cast<uint32_t>(outIndices.size());
 			p.m_IndexCount = 0;
 			if (prim.indices)
 			{
 				const cgltf_size idxCount = prim.indices->count;
 				p.m_IndexCount = static_cast<uint32_t>(idxCount);
-				// Read indices (cgltf_accessor_read_index returns cgltf_size)
 				for (cgltf_size k = 0; k < idxCount; ++k)
 				{
 					cgltf_size rawIdx = cgltf_accessor_read_index(prim.indices, k);
 					uint32_t idx = static_cast<uint32_t>(rawIdx);
-					allIndices.push_back(static_cast<uint32_t>(p.m_VertexOffset) + idx);
+					outIndices.push_back(static_cast<uint32_t>(p.m_VertexOffset) + idx);
 				}
 			}
 
@@ -414,24 +348,23 @@ bool Scene::LoadScene()
 			mesh.m_Primitives.push_back(p);
 		}
 
-		m_Meshes.push_back(std::move(mesh));
+		scene.m_Meshes.push_back(std::move(mesh));
 	}
-	uint64_t t_mesh_end = SDL_GetTicks();
-	SDL_Log("[Scene] Mesh processing (vtx+idx) in %llu ms", (unsigned long long)(t_mesh_end - t_mesh_start));
+}
 
-	// Nodes: build simple list and hierarchy
-	uint64_t t_nodes_start = SDL_GetTicks();
+static void ProcessNodesAndHierarchy(cgltf_data* data, Scene& scene)
+{
+	SCOPED_TIMER("[Scene] Nodes+Hierarchy");
 	std::unordered_map<const cgltf_node*, int> nodeMap;
 	for (cgltf_size ni = 0; ni < data->nodes_count; ++ni)
 	{
 		const cgltf_node& cn = data->nodes[ni];
-		Node node;
+		Scene::Node node;
 		node.m_Name = cn.name ? cn.name : std::string();
 		node.m_MeshIndex = cn.mesh ? static_cast<int>(cn.mesh - data->meshes) : -1;
 		node.m_CameraIndex = cn.camera ? static_cast<int>(cn.camera - data->cameras) : -1;
 		node.m_LightIndex = cn.light ? static_cast<int>(cn.light - data->lights) : -1;
 
-		// local transform
 		Matrix localOut{};
 		if (cn.has_matrix)
 		{
@@ -457,11 +390,9 @@ bool Scene::LoadScene()
 		node.m_LocalTransform = localOut;
 		node.m_WorldTransform = node.m_LocalTransform;
 
-		m_Nodes.push_back(std::move(node));
-		nodeMap[&cn] = static_cast<int>(m_Nodes.size()) - 1;
+		scene.m_Nodes.push_back(std::move(node));
+		nodeMap[&cn] = static_cast<int>(scene.m_Nodes.size()) - 1;
 	}
-	uint64_t t_nodes_end = SDL_GetTicks();
-	SDL_Log("[Scene] Node parsing in %llu ms", (unsigned long long)(t_nodes_end - t_nodes_start));
 
 	// Build parent/children links
 	for (cgltf_size ni = 0; ni < data->nodes_count; ++ni)
@@ -474,54 +405,48 @@ bool Scene::LoadScene()
 			{
 				const cgltf_node* child = cn.children[ci];
 				int childIdx = nodeMap.at(child);
-				m_Nodes[idx].m_Children.push_back(childIdx);
-				m_Nodes[childIdx].m_Parent = idx;
+				scene.m_Nodes[idx].m_Children.push_back(childIdx);
+				scene.m_Nodes[childIdx].m_Parent = idx;
 			}
 		}
 	}
 
 	// Set node indices in cameras and lights
-	for (size_t i = 0; i < m_Nodes.size(); ++i)
+	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
 	{
-		const Node& node = m_Nodes[i];
-		if (node.m_CameraIndex >= 0 && node.m_CameraIndex < static_cast<int>(m_Cameras.size()))
+		const Scene::Node& node = scene.m_Nodes[i];
+		if (node.m_CameraIndex >= 0 && node.m_CameraIndex < static_cast<int>(scene.m_Cameras.size()))
 		{
-			m_Cameras[node.m_CameraIndex].m_NodeIndex = static_cast<int>(i);
+			scene.m_Cameras[node.m_CameraIndex].m_NodeIndex = static_cast<int>(i);
 		}
-		if (node.m_LightIndex >= 0 && node.m_LightIndex < static_cast<int>(m_Lights.size()))
+		if (node.m_LightIndex >= 0 && node.m_LightIndex < static_cast<int>(scene.m_Lights.size()))
 		{
-			m_Lights[node.m_LightIndex].m_NodeIndex = static_cast<int>(i);
+			scene.m_Lights[node.m_LightIndex].m_NodeIndex = static_cast<int>(i);
 		}
 	}
 
-	// Compute world transforms (roots are nodes with parent == -1)
-	uint64_t t_xform_start = SDL_GetTicks();
-	for (size_t i = 0; i < m_Nodes.size(); ++i)
+	// Compute world transforms
+	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
 	{
-		if (m_Nodes[i].m_Parent == -1)
+		if (scene.m_Nodes[i].m_Parent == -1)
 		{
 			Matrix identity{};
 			DirectX::XMStoreFloat4x4(&identity, DirectX::XMMatrixIdentity());
-			ComputeWorldTransforms(*this, static_cast<int>(i), identity);
+			ComputeWorldTransforms(scene, static_cast<int>(i), identity);
 		}
 	}
 
-	uint64_t t_xform_end = SDL_GetTicks();
-	SDL_Log("[Scene] World transform computation in %llu ms", (unsigned long long)(t_xform_end - t_xform_start));
-	// Compute per-node AABB by transforming mesh AABB into world space (simple approx: transform 8 corners)
-	uint64_t t_aabb_start = SDL_GetTicks();
-	for (size_t ni = 0; ni < m_Nodes.size(); ++ni)
+	// Compute per-node AABB by transforming mesh AABB into world space
+	for (size_t ni = 0; ni < scene.m_Nodes.size(); ++ni)
 	{
-		Node& node = m_Nodes[ni];
-		if (node.m_MeshIndex >= 0 && node.m_MeshIndex < static_cast<int>(m_Meshes.size()))
+		Scene::Node& node = scene.m_Nodes[ni];
+		if (node.m_MeshIndex >= 0 && node.m_MeshIndex < static_cast<int>(scene.m_Meshes.size()))
 		{
-			Mesh& mesh = m_Meshes[node.m_MeshIndex];
-			// initialize
+			Scene::Mesh& mesh = scene.m_Meshes[node.m_MeshIndex];
 			node.m_AabbMin = Vector3{ FLT_MAX, FLT_MAX, FLT_MAX };
 			node.m_AabbMax = Vector3{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
 
 			DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&node.m_WorldTransform);
-			// 8 corners
 			Vector3 corners[8];
 			corners[0] = Vector3{ mesh.m_AabbMin.x, mesh.m_AabbMin.y, mesh.m_AabbMin.z };
 			corners[1] = Vector3{ mesh.m_AabbMax.x, mesh.m_AabbMin.y, mesh.m_AabbMin.z };
@@ -543,44 +468,41 @@ bool Scene::LoadScene()
 			}
 		}
 	}
-	uint64_t t_aabb_end = SDL_GetTicks();
-	SDL_Log("[Scene] AABB computation in %llu ms", (unsigned long long)(t_aabb_end - t_aabb_start));
+}
 
-	// Set directional light from first GLTF directional light
-	for (const auto& light : m_Lights)
+static void SetupDirectionalLightAndCamera(Scene& scene, Renderer* renderer)
+{
+	SCOPED_TIMER("[Scene] Setup Lights+Camera");
+	for (const auto& light : scene.m_Lights)
 	{
-		if (light.m_Type == Light::Directional && light.m_NodeIndex >= 0 && light.m_NodeIndex < static_cast<int>(m_Nodes.size()))
+		if (light.m_Type == Scene::Light::Directional && light.m_NodeIndex >= 0 && light.m_NodeIndex < static_cast<int>(scene.m_Nodes.size()))
 		{
-			const Matrix& worldTransform = m_Nodes[light.m_NodeIndex].m_WorldTransform;
+			const Matrix& worldTransform = scene.m_Nodes[light.m_NodeIndex].m_WorldTransform;
 			DirectX::XMMATRIX m = DirectX::XMLoadFloat4x4(&worldTransform);
-			// For directional light, direction is the forward (-Z) of the node
 			DirectX::XMVECTOR localDir = DirectX::XMVectorSet(0, 0, -1, 0);
 			DirectX::XMVECTOR worldDir = DirectX::XMVector3TransformNormal(localDir, m);
 			DirectX::XMFLOAT3 dir;
 			DirectX::XMStoreFloat3(&dir, DirectX::XMVector3Normalize(worldDir));
-			// Compute yaw and pitch from direction
 			float yaw = atan2f(dir.x, dir.z);
 			float pitch = asinf(dir.y);
-			Renderer* renderer = Renderer::GetInstance();
 			renderer->m_DirectionalLight.yaw = yaw;
 			renderer->m_DirectionalLight.pitch = pitch;
-			renderer->m_DirectionalLight.intensity = light.m_Intensity * 10000.0f; // assuming lux to our units
-			break; // only first one
+			renderer->m_DirectionalLight.intensity = light.m_Intensity * 10000.0f;
+			break;
 		}
 	}
 
-	// Set the first GLTF camera as the default camera
-	if (!m_Cameras.empty())
+	if (!scene.m_Cameras.empty())
 	{
-		const Camera& firstCam = m_Cameras[0];
-		Renderer* renderer = Renderer::GetInstance();
+		const Scene::Camera& firstCam = scene.m_Cameras[0];
 		renderer->SetCameraFromSceneCamera(firstCam);
-		renderer->m_SelectedCameraIndex = 0; // Set to first camera in dropdown
+		renderer->m_SelectedCameraIndex = 0;
 	}
+}
 
-	// Create GPU buffers for all vertex/index data
-	uint64_t t_gpu_start = SDL_GetTicks();
-	uint64_t t_gpu_end = t_gpu_start;
+static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<Vertex>& allVertices, const std::vector<uint32_t>& allIndices)
+{
+	SCOPED_TIMER("[Scene] GPU Upload");
 
 	const size_t vbytes = allVertices.size() * sizeof(Vertex);
 	const size_t ibytes = allIndices.size() * sizeof(uint32_t);
@@ -592,8 +514,8 @@ bool Scene::LoadScene()
 		desc.isVertexBuffer = true;
 		desc.initialState = nvrhi::ResourceStates::VertexBuffer;
 		desc.keepInitialState = true;
-		m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
-		renderer->m_RHI.SetDebugName(m_VertexBuffer, "Scene_VertexBuffer");
+		scene.m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(scene.m_VertexBuffer, "Scene_VertexBuffer");
 	}
 
 	if (ibytes > 0)
@@ -603,37 +525,75 @@ bool Scene::LoadScene()
 		desc.isIndexBuffer = true;
 		desc.initialState = nvrhi::ResourceStates::IndexBuffer;
 		desc.keepInitialState = true;
-		m_IndexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
-		renderer->m_RHI.SetDebugName(m_IndexBuffer, "Scene_IndexBuffer");
+		scene.m_IndexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(scene.m_IndexBuffer, "Scene_IndexBuffer");
 	}
 
-	// Upload data using a command list
-	if (m_VertexBuffer || m_IndexBuffer)
+	if (scene.m_VertexBuffer || scene.m_IndexBuffer)
 	{
 		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Upload Scene");
-		if (m_VertexBuffer && vbytes > 0)
-			cmd->writeBuffer(m_VertexBuffer, allVertices.data(), vbytes, 0);
-		if (m_IndexBuffer && ibytes > 0)
-			cmd->writeBuffer(m_IndexBuffer, allIndices.data(), ibytes, 0);
+		if (scene.m_VertexBuffer && vbytes > 0)
+			cmd->writeBuffer(scene.m_VertexBuffer, allVertices.data(), vbytes, 0);
+		if (scene.m_IndexBuffer && ibytes > 0)
+			cmd->writeBuffer(scene.m_IndexBuffer, allIndices.data(), ibytes, 0);
 
 		renderer->SubmitCommandList(cmd);
-		t_gpu_end = SDL_GetTicks();
-		SDL_Log("[Scene] GPU upload (create+write+submit) in %llu ms", (unsigned long long)(t_gpu_end - t_gpu_start));
+	}
+}
+
+bool Scene::LoadScene()
+{
+	const std::string& scenePath = Config::Get().m_GltfScene;
+	if (scenePath.empty())
+	{
+		SDL_Log("[Scene] No glTF scene configured, skipping load");
+		return true;
 	}
 
+	SDL_Log("[Scene] Loading glTF scene: %s", scenePath.c_str());
+
+	SCOPED_TIMER("[Scene] LoadScene Total");
+
+	cgltf_options options{};
+	cgltf_data* data = nullptr;
+	cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
+	if (res != cgltf_result_success || !data)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s", scenePath.c_str());
+		return false;
+	}
+
+	res = cgltf_load_buffers(&options, data, scenePath.c_str());
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] Failed to load glTF buffers");
+		cgltf_free(data);
+		return false;
+	}
+
+	Renderer* renderer = Renderer::GetInstance();
+	std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
+
+	ProcessMaterialsAndImages(data, *this);
+	LoadTexturesFromImages(*this, data, sceneDir, renderer);
+	UpdateMaterialsAndCreateConstants(*this, renderer);
+
+	ProcessCameras(data, *this);
+	ProcessLights(data, *this);
+
+	std::vector<Vertex> allVertices;
+	std::vector<uint32_t> allIndices;
+	ProcessMeshes(data, *this, allVertices, allIndices);
+
+	ProcessNodesAndHierarchy(data, *this);
+
+	SetupDirectionalLightAndCamera(*this, renderer);
+
+	CreateAndUploadGpuBuffers(*this, renderer, allVertices, allIndices);
+
 	cgltf_free(data);
-	uint64_t t_end = SDL_GetTicks();
-	SDL_Log("[Scene] Loaded meshes: %zu, nodes: %zu (total %llu ms)", m_Meshes.size(), m_Nodes.size(), (unsigned long long)(t_end - t_start));
-	SDL_Log("[Scene] Breakdown ms: parse=%llu loadbuf=%llu texmat=%llu mesh=%llu nodes=%llu xform=%llu aabb=%llu gpu=%llu", 
-		(unsigned long long)(t_parse - t_start),
-		(unsigned long long)(t_loadBuf - t_parse),
-		(unsigned long long)(t_texmat_end - t_texmat_start),
-		(unsigned long long)(t_mesh_end - t_mesh_start),
-		(unsigned long long)(t_nodes_end - t_nodes_start),
-		(unsigned long long)(t_xform_end - t_xform_start),
-		(unsigned long long)(t_aabb_end - t_aabb_start),
-		(unsigned long long)(t_gpu_end - t_gpu_start));
-	
+	SDL_Log("[Scene] Loaded meshes: %zu, nodes: %zu", m_Meshes.size(), m_Nodes.size());
+
 	return true;
 }
 
