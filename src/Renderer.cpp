@@ -645,7 +645,7 @@ bool Renderer::CreateNvrhiDevice()
     SDL_Log("[Init] NVRHI Vulkan device created successfully");
 
     // Wrap with validation layer if enabled
-    if (Config::Get().m_EnableGPUValidation)
+    if (Config::Get().m_EnableValidation)
     {
         SDL_Log("[Init] Wrapping device with NVRHI validation layer");
         m_NvrhiDevice = nvrhi::validation::createValidationLayer(m_NvrhiDevice);

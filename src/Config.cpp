@@ -6,10 +6,15 @@ void Config::ParseCommandLine(int argc, char* argv[])
     {
         const char* arg = argv[i];
 
-        if (std::strcmp(arg, "--gpu-validation") == 0)
+        if (std::strcmp(arg, "--vulkandebug") == 0)
         {
-            s_Instance.m_EnableGPUValidation = true;
-            SDL_Log("[Config] GPU validation enabled via command line");
+            s_Instance.m_EnableValidation = true;
+            SDL_Log("[Config] Vulkan validation enabled via command line");
+        }
+        else if (std::strcmp(arg, "--vulkandebug-gpu-assisted") == 0)
+        {
+            s_Instance.m_EnableGPUAssistedValidation = true;
+            SDL_Log("[Config] GPU-assisted Vulkan validation enabled via command line");
         }
         else if (std::strcmp(arg, "--gltf") == 0)
         {
@@ -26,9 +31,10 @@ void Config::ParseCommandLine(int argc, char* argv[])
         else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0)
         {
             SDL_Log("Agentic Renderer - Command Line Options:");
-            SDL_Log("  --gpu-validation         Enable Vulkan validation layers");
-            SDL_Log("  --gltf <path>            Load the specified glTF scene file");
-            SDL_Log("  --help, -h               Show this help message");
+            SDL_Log("  --vulkandebug                 Enable Vulkan validation layers");
+            SDL_Log("  --vulkandebug-gpu-assisted    Enable GPU-assisted Vulkan validation (requires --vulkandebug)");
+            SDL_Log("  --gltf <path>                 Load the specified glTF scene file");
+            SDL_Log("  --help, -h                    Show this help message");
         }
         else
         {

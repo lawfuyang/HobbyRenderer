@@ -5,7 +5,8 @@
 struct Config
 {
     // Graphics settings
-    bool m_EnableGPUValidation = false;
+    bool m_EnableValidation = false;
+    bool m_EnableGPUAssistedValidation = false;
     // Path to a glTF scene to load (empty = none)
     std::string m_GltfScene = "";
 

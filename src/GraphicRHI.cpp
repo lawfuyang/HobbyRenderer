@@ -237,7 +237,9 @@ bool GraphicRHI::CreateInstance()
     }
 
     // Check if validation is enabled
-    const bool enableValidation = Config::Get().m_EnableGPUValidation;
+    const bool enableValidation = Config::Get().m_EnableValidation;
+    const bool enableGPUAssisted = Config::Get().m_EnableValidation && Config::Get().m_EnableGPUAssistedValidation;
+    bool hasValidationFeaturesExtension = false;
 
     // Optional NVRHI-compatible instance extensions for future-proofing
     const std::vector<const char*> optionalInstanceExtensions = {
@@ -251,7 +253,25 @@ bool GraphicRHI::CreateInstance()
     // Add validation layer extensions if validation is enabled
     if (enableValidation)
     {
-        m_InstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        std::vector<const char*> validationExtensions = {
+            VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+        };
+        if (enableGPUAssisted)
+        {
+            validationExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+        }
+        std::vector<const char*> supportedValidationExtensions = GetSupportedInstanceExtensions(validationExtensions);
+        m_InstanceExtensions.insert(m_InstanceExtensions.end(), supportedValidationExtensions.begin(), supportedValidationExtensions.end());
+        
+        // Check if validation features extension is supported
+        for (const char* ext : supportedValidationExtensions)
+        {
+            if (std::strcmp(ext, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) == 0)
+            {
+                hasValidationFeaturesExtension = true;
+                break;
+            }
+        }
     }
 
     // Enable validation layers (modern unified layer)
@@ -291,12 +311,26 @@ bool GraphicRHI::CreateInstance()
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_4;
 
+    VkValidationFeaturesEXT validationFeatures{};
+    if (enableGPUAssisted && hasValidationFeaturesExtension)
+    {
+        validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        validationFeatures.enabledValidationFeatureCount = 1;
+        VkValidationFeatureEnableEXT enabledFeatures[] = { VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT };
+        validationFeatures.pEnabledValidationFeatures = enabledFeatures;
+        SDL_Log("[Init] Enabling GPU-assisted Vulkan validation");
+    }
+
     vk::InstanceCreateInfo createInfo{};
     createInfo.pApplicationInfo = &appInfo;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(m_InstanceExtensions.size());
     createInfo.ppEnabledExtensionNames = m_InstanceExtensions.data();
     if (enableValidation)
     {
+        if (enableGPUAssisted && hasValidationFeaturesExtension)
+        {
+            createInfo.pNext = &validationFeatures;
+        }
         createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();
     }
@@ -482,7 +516,7 @@ void GraphicRHI::DestroyInstance()
 
 bool GraphicRHI::SetupDebugMessenger()
 {
-    if (!Config::Get().m_EnableGPUValidation)
+    if (!Config::Get().m_EnableValidation)
     {
         return true;
     }
