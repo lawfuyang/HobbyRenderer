@@ -21,21 +21,38 @@ namespace
     }
 
     // Get supported instance extensions from those requested
-    std::vector<const char*> GetSupportedInstanceExtensions(const std::vector<const char*>& requested)
+    std::vector<const char*> GetSupportedInstanceExtensions(const std::vector<const char*>& requested, const std::vector<const char*>& layers = {})
     {
-        const std::vector<vk::ExtensionProperties> availableExtensions = vk::enumerateInstanceExtensionProperties();
-        std::vector<const char*> supported;
+        std::set<std::string> availableExts;
         
+        // Get extensions from implementation
+        {
+            const std::vector<vk::ExtensionProperties> implExtensions = vk::enumerateInstanceExtensionProperties();
+            for (const auto& ext : implExtensions)
+            {
+                const char* name = ext.extensionName;
+                availableExts.insert(std::string(name));
+            }
+        }
+        
+        // Get extensions from layers
+        for (const char* layerName : layers)
+        {
+            const std::vector<vk::ExtensionProperties> layerExtensions = vk::enumerateInstanceExtensionProperties(std::string(layerName));
+            for (const auto& ext : layerExtensions)
+            {
+                const char* name = ext.extensionName;
+                availableExts.insert(std::string(name));
+            }
+        }
+        
+        std::vector<const char*> supported;
         for (const char* extensionName : requested)
         {
-            for (const vk::ExtensionProperties& ext : availableExtensions)
+            if (availableExts.count(extensionName))
             {
-                if (std::strcmp(extensionName, ext.extensionName) == 0)
-                {
-                    supported.push_back(extensionName);
-                    SDL_Log("[Init] Instance extension supported: %s", extensionName);
-                    break;
-                }
+                supported.push_back(extensionName);
+                SDL_Log("[Init] Instance extension supported: %s", extensionName);
             }
         }
         
@@ -241,6 +258,11 @@ bool GraphicRHI::CreateInstance()
     const bool enableGPUAssisted = Config::Get().m_EnableValidation && Config::Get().m_EnableGPUAssistedValidation;
     bool hasValidationFeaturesExtension = false;
 
+    // Enable validation layers (modern unified layer)
+    const std::vector<const char*> validationLayers = {
+        "VK_LAYER_KHRONOS_validation"
+    };
+
     // Optional NVRHI-compatible instance extensions for future-proofing
     const std::vector<const char*> optionalInstanceExtensions = {
         VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
@@ -260,7 +282,7 @@ bool GraphicRHI::CreateInstance()
         {
             validationExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
         }
-        std::vector<const char*> supportedValidationExtensions = GetSupportedInstanceExtensions(validationExtensions);
+        std::vector<const char*> supportedValidationExtensions = GetSupportedInstanceExtensions(validationExtensions, validationLayers);
         m_InstanceExtensions.insert(m_InstanceExtensions.end(), supportedValidationExtensions.begin(), supportedValidationExtensions.end());
         
         // Check if validation features extension is supported
@@ -269,15 +291,15 @@ bool GraphicRHI::CreateInstance()
             if (std::strcmp(ext, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) == 0)
             {
                 hasValidationFeaturesExtension = true;
+                SDL_Log("[Init] VK_EXT_validation_features extension is supported");
                 break;
             }
         }
+        if (!hasValidationFeaturesExtension && enableGPUAssisted)
+        {
+            SDL_Log("[Init] Warning: VK_EXT_validation_features extension not supported, GPU-assisted validation disabled");
+        }
     }
-
-    // Enable validation layers (modern unified layer)
-    const std::vector<const char*> validationLayers = {
-        "VK_LAYER_KHRONOS_validation"
-    };
 
     if (enableValidation)
     {
@@ -415,6 +437,7 @@ bool GraphicRHI::CreateLogicalDevice()
     vk::PhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
     deviceFeatures.multiDrawIndirect = VK_TRUE;
+    deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
 
     // Enable Vulkan 1.3 features
     vk::PhysicalDeviceVulkan13Features vulkan13Features{};
