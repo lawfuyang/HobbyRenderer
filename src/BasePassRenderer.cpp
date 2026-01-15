@@ -163,7 +163,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         nvrhi::BindingSetItem::ConstantBuffer(0, perFrameCB),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instanceBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(1, renderer->m_Scene.m_MaterialConstantsBuffer),
-        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearWrap)
     };
     nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, nvrhi::ShaderType::All);
     pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };

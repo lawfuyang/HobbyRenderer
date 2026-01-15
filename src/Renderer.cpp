@@ -601,8 +601,8 @@ Vector3 Renderer::GetDirectionalLightDirection() const
     float cosPitch = cos(m_DirectionalLight.pitch);
     float sinPitch = sin(m_DirectionalLight.pitch);
     
-    // Direction from light to surface (opposite of light direction)
-    return Vector3{ sinYaw * cosPitch, sinPitch, cosYaw * cosPitch };
+    // Direction from surface to light (pointing toward the light)
+    return Vector3{ -sinYaw * cosPitch, -sinPitch, -cosYaw * cosPitch };
 }
 
 void Renderer::SetCameraFromSceneCamera(const Scene::Camera& sceneCam)

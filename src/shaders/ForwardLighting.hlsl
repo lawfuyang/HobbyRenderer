@@ -44,10 +44,7 @@ VSOut VSMain(VertexInput input, uint instanceID : SV_StartInstanceLocation)
     float4 worldPos = mul(float4(input.m_Pos, 1.0f), inst.m_World);
     o.Position = mul(worldPos, perFrame.m_ViewProj);
 
-    // Alien math to calculate the normal and tangent in world space, without inverse-transposing the world matrix
-    // https://github.com/graphitemaster/normals_revisited
-    // https://x.com/iquilezles/status/1866219178409316362
-    // https://www.shadertoy.com/view/3s33zj
+    // Alien math to calculate the normal in world space, without inverse-transposing the world matrix
     float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(inst.m_World);
 
     o.normal = normalize(mul(input.m_Normal, adjugateWorldMatrix));
@@ -55,6 +52,30 @@ VSOut VSMain(VertexInput input, uint instanceID : SV_StartInstanceLocation)
     o.worldPos = worldPos.xyz;
     o.instanceID = instanceID;
     return o;
+}
+
+// Unpacks a 2 channel normal to xyz
+float3 TwoChannelNormalX2(float2 normal)
+{
+    float2 xy = 2.0f * normal - 1.0f;
+    float z = sqrt(1 - dot(xy, xy));
+    return float3(xy.x, xy.y, z);
+}
+
+// Christian Schuler, "Normal Mapping without Precomputed Tangents", ShaderX 5, Chapter 2.6, pp. 131-140
+// See also follow-up blog post: http://www.thetenthplanet.de/archives/1180
+float3x3 CalculateTBNWithoutTangent(float3 p, float3 n, float2 uv)
+{
+    float3 dp1 = ddx(p);
+    float3 dp2 = ddy(p);
+    float2 duv1 = ddx(uv);
+    float2 duv2 = ddy(uv);
+
+    float3x3 M = float3x3(dp1, dp2, cross(dp1, dp2));
+    float2x3 inverseM = float2x3(cross(M[1], M[2]), cross(M[2], M[0]));
+    float3 t = normalize(mul(float2(duv1.x, duv2.x), inverseM));
+    float3 b = normalize(mul(float2(duv1.y, duv2.y), inverseM));
+    return float3x3(t, b, n);
 }
 
 // 0.08 is a max F0 we define for dielectrics which matches with Crystalware and gems (0.05 - 0.08)
@@ -89,7 +110,7 @@ float3 F_Schlick(float3 f0, float VdotH)
 // GGX / Trowbridge-Reitz
 // Note the division by PI here
 // [Walter et al. 2007, "Microfacet models for refraction through rough surfaces"]
-float D_GGX(float NdotH, float a2)
+float D_GGX(float a2, float NdotH)
 {
     float d = (NdotH * a2 - NdotH) * NdotH + 1;
     return a2 / (PI * d * d);
@@ -141,22 +162,60 @@ float4 PSMain(VSOut input) : SV_TARGET
     PerInstanceData inst = instances[input.instanceID];
     MaterialConstants mat = materials[inst.m_MaterialIndex];
 
-    // Reusable locals
-    float3 N = normalize(input.normal);
-    float3 V = normalize(perFrame.m_CameraPos.xyz - input.worldPos);
-    float3 L = perFrame.m_LightDirection;
-    float3 H = normalize(V + L);
+    // Only sample textures when the material indicates presence.
+    // When absent, assign the "sample" variables from MaterialConstants to avoid sampling.
+    bool hasAlbedo = (mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0;
+    float4 albedoSample = hasAlbedo
+        ? SampleBindlessTexture(mat.m_AlbedoTextureIndex, input.uv)
+        : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
-    float NdotL = saturate(dot(N, L));
+    bool hasORM = (mat.m_TextureFlags & TEXFLAG_ROUGHNESS_METALLIC) != 0;
+    float4 ormSample = hasORM
+        ? SampleBindlessTexture(mat.m_RoughnessMetallicTextureIndex, input.uv)
+        : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 0.0f, 0.0f);
+
+    bool hasNormal = (mat.m_TextureFlags & TEXFLAG_NORMAL) != 0;
+    float4 nmSample = hasNormal
+        ? SampleBindlessTexture(mat.m_NormalTextureIndex, input.uv)
+        : float4(0.5f, 0.5f, 1.0f, 0.0f);
+
+    float3 normalMap = TwoChannelNormalX2(nmSample.xy);
+
+    // Compute TBN matrix
+    float3x3 TBN = CalculateTBNWithoutTangent(input.worldPos, input.normal, input.uv);
+
+    // Reusable locals
+    float3 N = normalize(mul(normalMap, TBN));
+    float3 V = normalize(perFrame.m_CameraPos.xyz - input.worldPos);
+    float3 H = normalize(V + perFrame.m_LightDirection);
+
+    float NdotL = saturate(dot(N, perFrame.m_LightDirection));
     float NdotV = saturate(abs(dot(N, V)) + 1e-5); // Bias to avoid artifacting
     float NdotH = saturate(dot(N, H));
     float VdotH = saturate(dot(V, H));
-    float LdotV = saturate(dot(L, V));
+    float LdotV = saturate(dot(perFrame.m_LightDirection, V));
 
-    float3 baseColor = mat.m_BaseColor.xyz;
-    float alpha = mat.m_BaseColor.w;
+    float3 baseColor;
+    float alpha;
+    if (hasAlbedo)
+    {
+        baseColor = albedoSample.xyz * mat.m_BaseColor.xyz;
+        alpha = albedoSample.w * mat.m_BaseColor.w;
+    }
+    else
+    {
+        baseColor = mat.m_BaseColor.xyz;
+        alpha = mat.m_BaseColor.w;
+    }
+    // Start with material constants, then override from ORM texture when present
     float roughness = mat.m_RoughnessMetallic.x;
     float metallic = mat.m_RoughnessMetallic.y;
+    if (hasORM)
+    {
+        // ORM texture layout: R = occlusion, G = roughness, B = metallic
+        roughness = ormSample.y;
+        metallic = ormSample.z;
+    }
 
     float a = roughness * roughness;
 	float a2 = clamp(a * a, 0.0001f, 1.0f);
@@ -178,7 +237,7 @@ float4 PSMain(VSOut input) : SV_TARGET
 
     float3 radiance = float3(perFrame.m_LightIntensity, perFrame.m_LightIntensity, perFrame.m_LightIntensity);
     // Fake ambient (IBL fallback): small ambient multiplied by baseColor and reduced by metallic
-    float3 ambient = baseColor * 0.03f * (1.0f - metallic);
+    float3 ambient = (1.0f - NdotL) * baseColor * 0.03f;
     float3 color = ambient + (diffuse + spec) * radiance * NdotL;
     return float4(color, alpha);
 }

@@ -65,6 +65,10 @@ struct MaterialConstants
 {
   Vector4 m_BaseColor;
   Vector2 m_RoughnessMetallic; // x: roughness, y: metallic
+  uint m_TextureFlags;
+  uint m_AlbedoTextureIndex;
+  uint m_NormalTextureIndex;
+  uint m_RoughnessMetallicTextureIndex;
   Vector2 m_Padding;
 };
 
@@ -89,3 +93,8 @@ static const float PI = 3.14159265359f;
 #define DEFAULT_TEXTURE_GRAY 2
 #define DEFAULT_TEXTURE_NORMAL 3
 #define DEFAULT_TEXTURE_PBR 4
+
+// Texture presence flags stored in MaterialConstants.m_TextureFlags
+#define TEXFLAG_ALBEDO (1u << 0)
+#define TEXFLAG_NORMAL (1u << 1)
+#define TEXFLAG_ROUGHNESS_METALLIC (1u << 2)

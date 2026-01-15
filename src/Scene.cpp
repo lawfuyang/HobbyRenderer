@@ -10,6 +10,12 @@
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
 
+// stb_image for loading textures
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
+#define STB_IMAGE_IMPLEMENTATION
+#include "../external/stb_image.h"
+
 // CPU vertex layout used for uploading
 struct Vertex
 {
@@ -109,6 +115,121 @@ bool Scene::LoadScene()
 		if (pbr.metallic_roughness_texture.texture == NULL && metallic == 1.0f)
 			metallic = 0.0f;
 		m_Materials.back().m_MetallicFactor = metallic;
+
+		if (pbr.metallic_roughness_texture.texture)
+		{
+			const cgltf_texture* tex = pbr.metallic_roughness_texture.texture;
+			if (tex && tex->image)
+			{
+				cgltf_size imgIndex = tex->image - data->images;
+				m_Materials.back().m_MetallicRoughnessTexture = static_cast<int>(imgIndex);
+			}
+		}
+
+		if (data->materials[i].normal_texture.texture)
+		{
+			const cgltf_texture* tex = data->materials[i].normal_texture.texture;
+			if (tex && tex->image)
+			{
+				cgltf_size imgIndex = tex->image - data->images;
+				m_Materials.back().m_NormalTexture = static_cast<int>(imgIndex);
+			}
+		}
+	}
+
+
+	for (cgltf_size i = 0; i < data->images_count; ++i)
+	{
+		m_Textures.emplace_back();
+		m_Textures.back().m_Uri = data->images[i].uri ? data->images[i].uri : std::string();
+	}
+
+	// Load textures (URI-only for now). Create GPU textures, upload and register with bindless table.
+	std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
+	Renderer* renderer = Renderer::GetInstance();
+	for (size_t ti = 0; ti < m_Textures.size(); ++ti)
+	{
+		auto& tex = m_Textures[ti];
+		if (tex.m_Uri.empty())
+		{
+			// No URI (possibly embedded image) - skip for now
+			SDL_Log("[Scene] Texture %zu has no URI, skipping (embedded images not yet supported)", ti);
+			continue;
+		}
+
+		std::string fullPath = (sceneDir / tex.m_Uri).string();
+		cgltf_decode_uri(fullPath.data());
+
+		if (!std::filesystem::exists(fullPath))
+		{
+			SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.c_str());
+			continue;
+		}
+
+		int width = 0, height = 0, channels = 0;
+		unsigned char* imgData = stbi_load(fullPath.c_str(), &width, &height, &channels, 4); // force RGBA
+		if (!imgData)
+		{
+			SDL_LOG_ASSERT_FAIL("Texture load failed", "[Scene] Failed to load texture: %s", fullPath.c_str());
+			continue;
+		}
+
+		// Create nvrhi texture
+		nvrhi::TextureDesc desc;
+		desc.width = width;
+		desc.height = height;
+		desc.format = nvrhi::Format::RGBA8_UNORM;
+		desc.isShaderResource = true;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		desc.debugName = tex.m_Uri.c_str();
+		tex.m_Handle = renderer->m_NvrhiDevice->createTexture(desc);
+		if (!tex.m_Handle)
+		{
+			SDL_LOG_ASSERT_FAIL("Texture creation failed", "[Scene] GPU texture creation failed for %s", tex.m_Uri.c_str());
+			stbi_image_free(imgData);
+			continue;
+		}
+
+		// Upload image data
+		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Upload Texture");
+		const size_t bytesPerPixel = nvrhi::getFormatInfo(desc.format).bytesPerBlock;
+		const size_t rowPitch = (size_t)width * bytesPerPixel;
+		const size_t depthPitch = rowPitch * (size_t)height;
+		cmd->writeTexture(tex.m_Handle, 0, 0, imgData, rowPitch, depthPitch);
+		renderer->SubmitCommandList(cmd);
+
+		// Register with bindless table
+		uint32_t idx = renderer->RegisterTexture(tex.m_Handle);
+		if (idx == UINT32_MAX)
+		{
+			SDL_LOG_ASSERT_FAIL("Bindless texture registration failed", "[Scene] Bindless texture registration failed for %s", tex.m_Uri.c_str());
+			// leave m_BindlessIndex as UINT32_MAX
+		}
+		else
+		{
+			tex.m_BindlessIndex = idx;
+			SDL_Log("[Scene] Registered texture %s at index %u", tex.m_Uri.c_str(), idx);
+		}
+
+		stbi_image_free(imgData);
+	}
+
+	// Update material texture indices
+	for (auto& mat : m_Materials)
+	{
+		if (mat.m_BaseColorTexture != -1)
+		{
+			mat.m_AlbedoTextureIndex = m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
+		}
+		if (mat.m_NormalTexture != -1)
+		{
+			mat.m_NormalTextureIndex = m_Textures[mat.m_NormalTexture].m_BindlessIndex;
+		}
+		if (mat.m_MetallicRoughnessTexture != -1)
+		{
+			mat.m_RoughnessMetallicTextureIndex = m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
+		}
 	}
 
 	// Create material constants buffer
@@ -119,6 +240,13 @@ bool Scene::LoadScene()
 		MaterialConstants mc{};
 		mc.m_BaseColor = mat.m_BaseColorFactor;
 		mc.m_RoughnessMetallic = Vector2{ mat.m_RoughnessFactor, mat.m_MetallicFactor };
+		mc.m_TextureFlags = 0;
+		if (mat.m_BaseColorTexture != -1) mc.m_TextureFlags |= TEXFLAG_ALBEDO;
+		if (mat.m_NormalTexture != -1) mc.m_TextureFlags |= TEXFLAG_NORMAL;
+		if (mat.m_MetallicRoughnessTexture != -1) mc.m_TextureFlags |= TEXFLAG_ROUGHNESS_METALLIC;
+		mc.m_AlbedoTextureIndex = mat.m_AlbedoTextureIndex;
+		mc.m_NormalTextureIndex = mat.m_NormalTextureIndex;
+		mc.m_RoughnessMetallicTextureIndex = mat.m_RoughnessMetallicTextureIndex;
 		materialConstants.push_back(mc);
 	}
 	if (!materialConstants.empty())
@@ -137,11 +265,6 @@ bool Scene::LoadScene()
 		renderer->SubmitCommandList(cmd);
 	}
 
-	for (cgltf_size i = 0; i < data->images_count; ++i)
-	{
-		m_Textures.emplace_back();
-		m_Textures.back().m_Uri = data->images[i].uri ? data->images[i].uri : std::string();
-	}
 	t_texmat_end = SDL_GetTicks();
 	SDL_Log("[Scene] Materials+Textures in %llu ms", (unsigned long long)(t_texmat_end - t_texmat_start));
 
@@ -458,7 +581,6 @@ bool Scene::LoadScene()
 	// Create GPU buffers for all vertex/index data
 	uint64_t t_gpu_start = SDL_GetTicks();
 	uint64_t t_gpu_end = t_gpu_start;
-	Renderer* renderer = Renderer::GetInstance();
 
 	const size_t vbytes = allVertices.size() * sizeof(Vertex);
 	const size_t ibytes = allIndices.size() * sizeof(uint32_t);
@@ -495,7 +617,6 @@ bool Scene::LoadScene()
 			cmd->writeBuffer(m_IndexBuffer, allIndices.data(), ibytes, 0);
 
 		renderer->SubmitCommandList(cmd);
-		renderer->ExecutePendingCommandLists();
 		t_gpu_end = SDL_GetTicks();
 		SDL_Log("[Scene] GPU upload (create+write+submit) in %llu ms", (unsigned long long)(t_gpu_end - t_gpu_start));
 	}
@@ -527,6 +648,10 @@ void Scene::Shutdown()
 	m_Meshes.clear();
 	m_Nodes.clear();
 	m_Materials.clear();
+	for (auto& tex : m_Textures)
+	{
+		tex.m_Handle = nullptr;
+	}
 	m_Textures.clear();
 	m_Cameras.clear();
 	m_Lights.clear();

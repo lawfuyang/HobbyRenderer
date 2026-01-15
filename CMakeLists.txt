@@ -4,6 +4,12 @@ project(AgenticRenderer)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Download stb_image.h if not present
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/external/stb_image.h")
+    message(STATUS "Downloading stb_image.h...")
+    file(DOWNLOAD "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h" "${CMAKE_SOURCE_DIR}/external/stb_image.h" SHOW_PROGRESS)
+endif()
+
 # Speed up MSVC builds by enabling multi-processor compilation.
 if(MSVC)
     add_compile_options(/MP)
