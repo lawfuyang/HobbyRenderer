@@ -180,6 +180,9 @@ struct Renderer
     double m_FrameTime = 0.0;
     double m_FPS       = 0.0;
 
+    // Main view pipeline statistics
+    nvrhi::PipelineStatistics m_MainViewPipelineStatistics;
+
     // Frame counter for double buffering
     uint32_t m_FrameNumber = 0;
 

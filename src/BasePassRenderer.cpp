@@ -15,6 +15,7 @@ public:
 
 private:
     nvrhi::InputLayoutHandle m_InputLayout;
+    nvrhi::PipelineStatisticsQueryHandle m_PipelineQueries[2];
 };
 
 REGISTER_RENDERER(BasePassRenderer);
@@ -38,12 +39,27 @@ bool BasePassRenderer::Initialize()
         return false;
     }
 
+    // Create pipeline statistics queries for double buffering
+    m_PipelineQueries[0] = renderer->m_NvrhiDevice->createPipelineStatisticsQuery();
+    m_PipelineQueries[1] = renderer->m_NvrhiDevice->createPipelineStatisticsQuery();
+
     return true;
 }
 
 void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 {
     Renderer* renderer = Renderer::GetInstance();
+
+    // ============================================================================
+    // Pipeline Statistics Query
+    // ============================================================================
+    const int readIndex = renderer->m_FrameNumber % 2;
+    const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
+    if (renderer->m_NvrhiDevice->pollPipelineStatisticsQuery(m_PipelineQueries[readIndex])) 
+    {
+        renderer->m_MainViewPipelineStatistics = renderer->m_NvrhiDevice->getPipelineStatistics(m_PipelineQueries[readIndex]);
+        renderer->m_NvrhiDevice->resetPipelineStatisticsQuery(m_PipelineQueries[readIndex]);
+    }
 
     // ============================================================================
     // Framebuffer Setup
@@ -187,6 +203,13 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 
     state.indirectParams = indirectBuffer;
 
+    // Begin pipeline statistics query
+    commandList->beginPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
+
     commandList->setGraphicsState(state);
+
     commandList->drawIndexedIndirect(0, (uint32_t)indirectArgs.size());
+
+    // End pipeline statistics query
+    commandList->endPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
 }

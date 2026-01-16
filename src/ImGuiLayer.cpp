@@ -148,6 +148,28 @@ void ImGuiLayer::UpdateFrame()
                 }
                 ImGui::EndTable();
             }
+
+            ImGui::TreePop();
+        }
+
+        // Pipeline statistics
+        if (ImGui::TreeNode("Main View Pipeline Statistics"))
+        {
+            const auto& stats = renderer->m_MainViewPipelineStatistics;
+            ImGui::Text("Input Assembly Vertices: %llu", stats.IAVertices);
+            ImGui::Text("Input Assembly Primitives: %llu", stats.IAPrimitives);
+            ImGui::Text("Vertex Shader Invocations: %llu", stats.VSInvocations);
+            ImGui::Text("Geometry Shader Invocations: %llu", stats.GSInvocations);
+            ImGui::Text("Geometry Shader Primitives: %llu", stats.GSPrimitives);
+            ImGui::Text("Clipping Invocations: %llu", stats.CInvocations);
+            ImGui::Text("Clipping Primitives: %llu", stats.CPrimitives);
+            ImGui::Text("Pixel Shader Invocations: %llu", stats.PSInvocations);
+            ImGui::Text("Hull Shader Invocations: %llu", stats.HSInvocations);
+            ImGui::Text("Domain Shader Invocations: %llu", stats.DSInvocations);
+            ImGui::Text("Compute Shader Invocations: %llu", stats.CSInvocations);
+            ImGui::Text("Amplification Shader Invocations: %llu", stats.ASInvocations);
+            ImGui::Text("Mesh Shader Invocations: %llu", stats.MSInvocations);
+            ImGui::Text("Mesh Shader Primitives: %llu", stats.MSPrimitives);
             ImGui::TreePop();
         }
     }

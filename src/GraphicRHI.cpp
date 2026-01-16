@@ -438,6 +438,7 @@ bool GraphicRHI::CreateLogicalDevice()
     deviceFeatures.samplerAnisotropy = VK_TRUE;
     deviceFeatures.multiDrawIndirect = VK_TRUE;
     deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
+    deviceFeatures.pipelineStatisticsQuery = VK_TRUE;
 
     // Enable Vulkan 1.3 features
     vk::PhysicalDeviceVulkan13Features vulkan13Features{};
