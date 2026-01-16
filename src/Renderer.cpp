@@ -485,7 +485,7 @@ void Renderer::Run()
 
         if (!m_RHI.AcquireNextSwapchainImage(&m_CurrentSwapchainImage))
         {
-            SDL_Log("[Run ] Failed to acquire swapchain image, exiting loop");
+            SDL_LOG_ASSERT_FAIL("AcquireNextSwapchainImage failed", "[Run ] AcquireNextSwapchainImage failed");
             break;
         }
 
