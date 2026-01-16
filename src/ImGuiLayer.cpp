@@ -100,6 +100,20 @@ void ImGuiLayer::UpdateFrame()
                 }
             }
 
+            if (ImGui::Button("Reset Camera"))
+            {
+                if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(renderer->m_Scene.m_Cameras.size()))
+                {
+                    const Scene::Camera& selectedCam = renderer->m_Scene.m_Cameras[renderer->m_SelectedCameraIndex];
+                    renderer->SetCameraFromSceneCamera(selectedCam);
+                }
+                else
+                {
+                    // Reset to 0,0,0 position and default orientation
+                    renderer->m_Camera.Reset();
+                }
+            }
+
             ImGui::TreePop();
         }
 

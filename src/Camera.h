@@ -32,6 +32,9 @@ public:
     // Set projection parameters
     void SetProjection(const ProjectionParams& proj) { m_Proj = proj; }
 
+    // Reset camera to default position and orientation
+    void Reset();
+
     // Movement / input tuning (access directly)
     float m_MoveSpeed = 5.0f;
     float m_MouseSensitivity = 0.0025f;

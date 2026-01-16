@@ -69,6 +69,18 @@ void Camera::ProcessEvent(const SDL_Event& event)
         }
     }
     break;
+    case SDL_EVENT_MOUSE_WHEEL:
+    {
+        if (m_Rotating)
+        {
+            float multiplier = (event.wheel.y > 0) ? 1.1f : 0.9f;
+            m_MoveSpeed *= multiplier;
+            // Clamp speed
+            if (m_MoveSpeed < 0.1f) m_MoveSpeed = 0.1f;
+            if (m_MoveSpeed > 100.0f) m_MoveSpeed = 100.0f;
+        }
+    }
+    break;
     case SDL_EVENT_WINDOW_RESIZED:
     {
         int w = event.window.data1;
@@ -188,4 +200,11 @@ void Camera::SetFromMatrix(const Matrix& worldTransform)
     m_Yaw = atan2f(fwd.x, fwd.z);
     Renderer* renderer = Renderer::GetInstance();
     m_Pitch = -asinf(fwd.y); // Negate pitch for Vulkan coordinate system
+}
+
+void Camera::Reset()
+{
+    m_Position = { 0.0f, 0.0f, 0.0f };
+    m_Yaw = 0.0f;
+    m_Pitch = 0.0f;
 }
