@@ -535,6 +535,9 @@ void Renderer::Run()
 
         #undef ADD_RENDER_PASS
 
+        // Wait for GPU to finish all work before presenting
+        m_NvrhiDevice->waitForIdle();
+
         // Execute any queued GPU work in submission order
         ExecutePendingCommandLists();
 
