@@ -142,9 +142,10 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 
         uint32_t numPrimitives = (uint32_t)renderer->m_Scene.m_InstanceData.size();
         CullingConstants cullData;
-        cullData.g_NumPrimitives = numPrimitives;
-        memcpy(cullData.g_FrustumPlanes, frustumPlanes, sizeof(frustumPlanes));
-        cullData.g_View = view;
+        cullData.m_NumPrimitives = numPrimitives;
+        memcpy(cullData.m_FrustumPlanes, frustumPlanes, sizeof(frustumPlanes));
+        cullData.m_View = view;
+        cullData.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
         commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
         commandList->setComputeState(cullState);

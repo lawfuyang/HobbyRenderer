@@ -126,6 +126,14 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
+        // Culling controls
+        if (ImGui::TreeNode("Culling"))
+        {
+            ImGui::Checkbox("Enable Frustum Culling", &renderer->m_EnableFrustumCulling);
+
+            ImGui::TreePop();
+        }
+
         // Timings
         if (ImGui::TreeNode("Timings"))
         {

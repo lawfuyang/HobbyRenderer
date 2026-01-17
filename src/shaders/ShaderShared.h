@@ -103,9 +103,10 @@ struct DrawIndexedIndirectArguments
 
 struct CullingConstants
 {
-  Vector4 g_FrustumPlanes[5];
-  Matrix g_View;
-  uint g_NumPrimitives;
+  Vector4 m_FrustumPlanes[5];
+  Matrix m_View;
+  uint m_NumPrimitives;
+  uint m_EnableFrustumCulling;
 };
 
 #ifdef __cplusplus

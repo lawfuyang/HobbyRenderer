@@ -183,6 +183,9 @@ struct Renderer
     // Frame counter for double buffering
     uint32_t m_FrameNumber = 0;
 
+    // Frustum culling enable flag
+    bool m_EnableFrustumCulling = true;
+
     // ============================================================================
     // Public Methods
     // ============================================================================

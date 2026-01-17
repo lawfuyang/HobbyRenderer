@@ -74,12 +74,12 @@ bool FrustumAABBTest(Vector3 min, Vector3 max, Vector4 planes[5], Matrix view)
 void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
 	uint instanceIndex = dispatchThreadId.x;
-	if (instanceIndex >= g_Culling.g_NumPrimitives)
+	if (instanceIndex >= g_Culling.m_NumPrimitives)
 		return;
 
 	PerInstanceData inst = g_InstanceData[instanceIndex];
 
-    if (!FrustumAABBTest(inst.m_Min, inst.m_Max, g_Culling.g_FrustumPlanes, g_Culling.g_View))
+    if (g_Culling.m_EnableFrustumCulling && !FrustumAABBTest(inst.m_Min, inst.m_Max, g_Culling.m_FrustumPlanes, g_Culling.m_View))
         return;
 
 	uint index;
