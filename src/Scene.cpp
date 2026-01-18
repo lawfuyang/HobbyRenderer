@@ -16,13 +16,104 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "../external/stb_image.h"
 
-// CPU vertex layout used for uploading
+#include "meshoptimizer.h"
+
 struct Vertex
 {
 	Vector3 pos;
 	Vector3 normal;
 	Vector2 uv;
 };
+
+const char* cgltf_result_tostring(cgltf_result result)
+{
+	switch (result)
+	{
+	case cgltf_result_success: return "success";
+	case cgltf_result_data_too_short: return "data_too_short";
+	case cgltf_result_unknown_format: return "unknown_format";
+	case cgltf_result_invalid_json: return "invalid_json";
+	case cgltf_result_invalid_gltf: return "invalid_gltf";
+	case cgltf_result_invalid_options: return "invalid_options";
+	case cgltf_result_file_not_found: return "file_not_found";
+	case cgltf_result_io_error: return "io_error";
+	case cgltf_result_out_of_memory: return "out_of_memory";
+	case cgltf_result_legacy_gltf: return "legacy_gltf";
+	default: return "unknown";
+	}
+}
+
+// referred from meshoptimizer
+static cgltf_result decompressMeshopt(cgltf_data* data)
+{
+	for (size_t i = 0; i < data->buffer_views_count; ++i)
+	{
+		if (!data->buffer_views[i].has_meshopt_compression)
+			continue;
+		cgltf_meshopt_compression* mc = &data->buffer_views[i].meshopt_compression;
+
+		const unsigned char* source = (const unsigned char*)mc->buffer->data;
+		if (!source)
+			return cgltf_result_invalid_gltf;
+		source += mc->offset;
+
+		void* result = malloc(mc->count * mc->stride);
+		if (!result)
+			return cgltf_result_out_of_memory;
+
+		data->buffer_views[i].data = result;
+
+		int rc = -1;
+
+		switch (mc->mode)
+		{
+		case cgltf_meshopt_compression_mode_attributes:
+			rc = meshopt_decodeVertexBuffer(result, mc->count, mc->stride, source, mc->size);
+			break;
+
+		case cgltf_meshopt_compression_mode_triangles:
+			rc = meshopt_decodeIndexBuffer(result, mc->count, mc->stride, source, mc->size);
+			break;
+
+		case cgltf_meshopt_compression_mode_indices:
+			rc = meshopt_decodeIndexSequence(result, mc->count, mc->stride, source, mc->size);
+			break;
+
+		default:
+			return cgltf_result_invalid_gltf;
+		}
+
+		if (rc != 0)
+			return cgltf_result_io_error;
+
+		switch (mc->filter)
+		{
+		case cgltf_meshopt_compression_filter_octahedral:
+			meshopt_decodeFilterOct(result, mc->count, mc->stride);
+			break;
+
+		case cgltf_meshopt_compression_filter_quaternion:
+			meshopt_decodeFilterQuat(result, mc->count, mc->stride);
+			break;
+
+		case cgltf_meshopt_compression_filter_exponential:
+			meshopt_decodeFilterExp(result, mc->count, mc->stride);
+			break;
+
+		// uncomment when cgltf version has this filter
+	#if 0
+		case cgltf_meshopt_compression_filter_color:
+			meshopt_decodeFilterColor(result, mc->count, mc->stride);
+			break;
+	#endif
+
+		default:
+			break;
+		}
+	}
+
+	return cgltf_result_success;
+}
 
 // Helpers for AABB
 static void ExtendAABB(Vector3& minOut, Vector3& maxOut, const Vector3& v)
@@ -630,14 +721,30 @@ bool Scene::LoadScene()
 	cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
 	if (res != cgltf_result_success || !data)
 	{
-		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s", scenePath.c_str());
+		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s (result: %s)", scenePath.c_str(), cgltf_result_tostring(res));
+		return false;
+	}
+
+	res = cgltf_validate(data);
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF validation failed", "[Scene] glTF validation failed for file: %s (result: %s)", scenePath.c_str(), cgltf_result_tostring(res));
+		cgltf_free(data);
 		return false;
 	}
 
 	res = cgltf_load_buffers(&options, data, scenePath.c_str());
 	if (res != cgltf_result_success)
 	{
-		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] Failed to load glTF buffers");
+		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] Failed to load glTF buffers (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	res = decompressMeshopt(data);
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF meshopt decompression failed", "[Scene] Failed to decompress meshopt-compressed data (result: %s)", cgltf_result_tostring(res));
 		cgltf_free(data);
 		return false;
 	}

@@ -37,6 +37,8 @@
 #include <DirectXMath.h>
 #include <DirectXCollision.h>
 
+#include <dxgiformat.h>
+
 using Vector = DirectX::XMVECTOR;
 using Matrix = DirectX::XMFLOAT4X4;
 

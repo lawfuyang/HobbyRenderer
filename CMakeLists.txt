@@ -120,6 +120,7 @@ set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX12 OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(external/nvrhi)
+add_subdirectory(external/meshoptimizer)
 
 # ============================================================================
 # ImGui Configuration
@@ -176,8 +177,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE nvrhi)
 target_link_libraries(${PROJECT_NAME} PRIVATE nvrhi_vk)
 target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan-Headers)
 
+# Link meshoptimizer
+target_link_libraries(${PROJECT_NAME} PRIVATE meshoptimizer)
+
 # cgltf Include
 target_include_directories(${PROJECT_NAME} PRIVATE "${CGLTF_SRC_DIR}")
+
+# meshoptimizer Include
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external/meshoptimizer/src")
 
 # ============================================================================
 # ShaderMake Integration (offline HLSL -> SPIRV compilation)
@@ -192,7 +199,6 @@ set(SHADERMAKE_FIND_DXC OFF)
 
 add_subdirectory(external/ShaderMake)
 
-# Shader build configuration
 set(SHADER_CONFIG       ${CMAKE_SOURCE_DIR}/src/shaders/shaders.cfg)
 set(SHADER_OUTPUT_DIR   ${CMAKE_SOURCE_DIR}/bin/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
