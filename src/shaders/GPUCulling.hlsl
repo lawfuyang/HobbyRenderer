@@ -26,7 +26,7 @@ RWStructuredBuffer<DrawIndexedIndirectArguments> g_VisibleArgs : register(u0);
 RWStructuredBuffer<uint> g_VisibleCount : register(u1);
 RWStructuredBuffer<uint> g_OccludedIndices : register(u2);
 RWStructuredBuffer<uint> g_OccludedCount : register(u3);
-SamplerState g_HZBMaxSampler : register(s0);
+SamplerState g_MinReductionSampler : register(s0);
 
 bool FrustumAABBTest(float3 min, float3 max, float4 planes[5], float4x4 view)
 {
@@ -147,8 +147,8 @@ bool OcclusionAABBTest(float3 aabbMin, float3 aabbMax, float4x4 viewProj, uint2 
 
     // Sample HZB at center using max reduction sampler
     float centerX = (minX + maxX) * 0.5f;
-    float centerY = (minY + maxY) * 0.5f;
-    float hzbDepth = g_HZB.SampleLevel(g_HZBMaxSampler, float2(centerX / HZBDims.x, centerY / HZBDims.y), mipLevel);
+    float centerY = 1.0f - (minY + maxY) * 0.5f;
+    float hzbDepth = g_HZB.SampleLevel(g_MinReductionSampler, float2(centerX / HZBDims.x, centerY / HZBDims.y), mipLevel);
 
     // If the closest point of our AABB is behind the farthest point in HZB, it's occluded (note reversed depth logic)
     return nearZ >= hzbDepth;

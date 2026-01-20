@@ -71,7 +71,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, visibleCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(2, occludedIndicesBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(3, occludedCountBuffer),
-        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MaxReductionClamp)
+        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
     };
     nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset, nvrhi::ShaderType::Compute);
     nvrhi::BindingSetHandle cullBindingSet = renderer->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
@@ -340,7 +340,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
             nvrhi::BindingSetItem::ConstantBuffer(0, hzbFromDepthCB),
             nvrhi::BindingSetItem::Texture_SRV(0, renderer->m_DepthTexture),
             nvrhi::BindingSetItem::Texture_UAV(0, renderer->m_HZBTexture,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MaxReductionClamp)
+            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
         };
         nvrhi::BindingLayoutHandle hzbFromDepthLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(hzbFromDepthBset, nvrhi::ShaderType::Compute);
         nvrhi::BindingSetHandle hzbFromDepthBindingSet = renderer->m_NvrhiDevice->createBindingSet(hzbFromDepthBset, hzbFromDepthLayout);
@@ -380,7 +380,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
             nvrhi::BindingSetItem::ConstantBuffer(0, downsampleCB),
             nvrhi::BindingSetItem::Texture_SRV(0, renderer->m_HZBTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{mip - 1, 1, 0, 1}),
             nvrhi::BindingSetItem::Texture_UAV(0, renderer->m_HZBTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{mip, 1, 0, 1}),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MaxReductionClamp)
+            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
         };
         nvrhi::BindingLayoutHandle downsampleLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(downsampleBset, nvrhi::ShaderType::Compute);
         nvrhi::BindingSetHandle downsampleBindingSet = renderer->m_NvrhiDevice->createBindingSet(downsampleBset, downsampleLayout);

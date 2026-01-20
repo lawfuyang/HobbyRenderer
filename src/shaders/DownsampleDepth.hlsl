@@ -5,7 +5,7 @@ cbuffer DownsampleCB : register(b0)
     DownsampleConstants g_DownsampleConstants;
 };
 
-SamplerState g_Sampler : register(s0);
+SamplerState g_MinReductionSampler : register(s0);
 Texture2D<float> g_HZBMipIn : register(t0);
 RWTexture2D<float> g_HZBMipOut : register(u0);
 
@@ -19,6 +19,6 @@ void Downsample_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    float value = g_HZBMipIn.SampleLevel(g_Sampler, (coord + 0.5) / float2(g_DownsampleConstants.m_OutputWidth, g_DownsampleConstants.m_OutputHeight), 0);
+    float value = g_HZBMipIn.SampleLevel(g_MinReductionSampler, (coord + 0.5) / float2(g_DownsampleConstants.m_OutputWidth, g_DownsampleConstants.m_OutputHeight), 0);
     g_HZBMipOut[coord] = value;
 }
