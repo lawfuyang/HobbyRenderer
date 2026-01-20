@@ -285,4 +285,6 @@ void CommonResources::Shutdown()
     PointClamp = nullptr;
     LinearWrap = nullptr;
     LinearClamp = nullptr;
+    MaxReductionClamp = nullptr;
+    MinReductionClamp = nullptr;
 }
