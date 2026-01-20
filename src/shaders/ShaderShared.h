@@ -129,10 +129,8 @@ struct HZBConstants
 
 struct DownsampleConstants
 {
-  uint m_InputMip;
-  uint m_OutputMip;
-  uint m_Width;
-  uint m_Height;
+  uint m_OutputWidth;
+  uint m_OutputHeight;
 };
 
 #ifdef __cplusplus

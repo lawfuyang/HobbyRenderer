@@ -60,18 +60,16 @@ bool CommonResources::Initialize()
         desc.setMaxAnisotropy(16.0f);
         AnisotropicWrap = createSampler("AnisotropicWrap", desc);
     }
-
-    // Create reduction samplers for HZB occlusion culling
     {
         nvrhi::SamplerDesc desc;
-        desc.setAllFilters(false); // Point sampling
+        desc.setAllFilters(true);
         desc.setAllAddressModes(nvrhi::SamplerAddressMode::ClampToEdge);
         desc.reductionType = nvrhi::SamplerReductionType::Maximum;
         MaxReductionClamp = createSampler("MaxReductionClamp", desc);
     }
     {
         nvrhi::SamplerDesc desc;
-        desc.setAllFilters(false); // Point sampling
+        desc.setAllFilters(true);
         desc.setAllAddressModes(nvrhi::SamplerAddressMode::ClampToEdge);
         desc.reductionType = nvrhi::SamplerReductionType::Minimum;
         MinReductionClamp = createSampler("MinReductionClamp", desc);

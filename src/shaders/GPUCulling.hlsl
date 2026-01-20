@@ -27,7 +27,7 @@ RWStructuredBuffer<uint> g_OccludedIndices : register(u2);
 RWStructuredBuffer<uint> g_OccludedCount : register(u3);
 
 // HZB textures for occlusion culling
-Texture2DArray<float> g_HZB : register(t1);
+Texture2D<float> g_HZB : register(t1);
 SamplerState g_HZBMaxSampler : register(s0);
 
 bool FrustumAABBTest(Vector3 min, Vector3 max, Vector4 planes[5], Matrix view)
@@ -130,7 +130,7 @@ bool OcclusionAABBTest(Vector3 aabbMin, Vector3 aabbMax, Matrix viewProj)
     // Sample HZB at center using max reduction sampler
     float centerX = (minX + maxX) * 0.5f;
     float centerY = (minY + maxY) * 0.5f;
-    float hzbDepth = g_HZB.SampleLevel(g_HZBMaxSampler, float3(centerX / g_Culling.m_HZBWidth, centerY / g_Culling.m_HZBHeight, mipLevel), 0);
+    float hzbDepth = g_HZB.SampleLevel(g_HZBMaxSampler, float2(centerX / g_Culling.m_HZBWidth, centerY / g_Culling.m_HZBHeight), mipLevel);
 
     // If the closest point of our AABB is behind the farthest point in HZB, it's occluded
     return minDepth <= hzbDepth;

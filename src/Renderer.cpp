@@ -1027,14 +1027,14 @@ bool Renderer::CreateHZBTextures()
     nvrhi::TextureDesc hzbDesc;
     hzbDesc.width = hzbWidth;
     hzbDesc.height = hzbHeight;
-    hzbDesc.arraySize = mipLevels;
-    hzbDesc.mipLevels = 1;
+    hzbDesc.arraySize = 1;
+    hzbDesc.mipLevels = mipLevels;
     hzbDesc.format = nvrhi::Format::R32_FLOAT;
     hzbDesc.debugName = "HZB";
     hzbDesc.isRenderTarget = false;
     hzbDesc.isUAV = true;
     hzbDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-    hzbDesc.dimension = nvrhi::TextureDimension::Texture2DArray;
+    hzbDesc.dimension = nvrhi::TextureDimension::Texture2D;
 
     m_HZBTexture = m_NvrhiDevice->createTexture(hzbDesc);
     if (!m_HZBTexture)
@@ -1048,7 +1048,7 @@ bool Renderer::CreateHZBTextures()
     cmd->clearTextureFloat(m_HZBTexture, nvrhi::AllSubresources, nvrhi::Color{ DEPTH_FAR, 0.0f, 0.0f, 0.0f });
     SubmitCommandList(cmd);
 
-    SDL_Log("[Init] Created HZB textures (%ux%u, %u slices)", hzbWidth, hzbHeight, mipLevels);
+    SDL_Log("[Init] Created HZB texture (%ux%u, %u mips)", hzbWidth, hzbHeight, mipLevels);
     return true;
 }
 
