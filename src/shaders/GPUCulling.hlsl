@@ -172,7 +172,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	PerInstanceData inst = g_InstanceData[actualInstanceIndex];
 
-    // Frustum culling (only in Phase 1)
+    // Frustum culling
     if (g_Culling.m_EnableFrustumCulling && !FrustumAABBTest(inst.m_Min, inst.m_Max, g_Culling.m_FrustumPlanes, g_Culling.m_View))
         return;
 

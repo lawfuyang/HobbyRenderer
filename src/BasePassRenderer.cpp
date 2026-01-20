@@ -17,9 +17,74 @@ private:
     nvrhi::PipelineStatisticsQueryHandle m_PipelineQueries[2];
 
     void GenerateHZBMips(nvrhi::CommandListHandle commandList);
+    void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, uint32_t numPrimitives,
+                                 nvrhi::BufferHandle visibleIndirectBuffer, nvrhi::BufferHandle visibleCountBuffer,
+                                 nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, int phase);
 };
 
 REGISTER_RENDERER(BasePassRenderer);
+
+void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, uint32_t numPrimitives,
+                                                nvrhi::BufferHandle visibleIndirectBuffer, nvrhi::BufferHandle visibleCountBuffer,
+                                                nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, int phase)
+{
+    Renderer* renderer = Renderer::GetInstance();
+
+    SCOPED_COMMAND_LIST_MARKER(commandList, phase == 0 ? "Occlusion Culling Phase 1" : "Occlusion Culling Phase 2");
+
+    if (phase == 1)
+    {
+        // Clear HZB to far plane for 2nd phase testing (0.0 for reversed-Z)
+        commandList->clearTextureFloat(renderer->m_HZBTexture, nvrhi::AllSubresources, Renderer::DEPTH_FAR);
+
+        // generate HZB mips for Phase 2 testing
+        GenerateHZBMips(commandList);
+
+        // Clear visible count buffer for Phase 2
+        commandList->clearBufferUInt(visibleCountBuffer, 0);
+    }
+
+    nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), phase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
+    nvrhi::BufferHandle cullCB = renderer->m_NvrhiDevice->createBuffer(cullCBD);
+    renderer->m_RHI.SetDebugName(cullCB, phase == 0 ? "CullingCB" : "CullingCB_Phase2");
+
+    CullingConstants cullData;
+    cullData.m_NumPrimitives = numPrimitives;
+    memcpy(cullData.m_FrustumPlanes, frustumPlanes, std::size(cullData.m_FrustumPlanes) * sizeof(Vector4));
+    cullData.m_View = view;
+    cullData.m_ViewProj = viewProj;
+    cullData.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
+    cullData.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
+    cullData.m_HZBWidth = renderer->m_HZBTexture->getDesc().width;
+    cullData.m_HZBHeight = renderer->m_HZBTexture->getDesc().height;
+    cullData.m_Phase = phase;
+    commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
+
+    nvrhi::BindingSetDesc cullBset;
+    cullBset.bindings =
+    {
+        nvrhi::BindingSetItem::ConstantBuffer(0, cullCB),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
+        nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, visibleCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, occludedIndicesBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(3, occludedCountBuffer),
+        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MaxReductionClamp)
+    };
+    nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset, nvrhi::ShaderType::Compute);
+    nvrhi::BindingSetHandle cullBindingSet = renderer->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
+
+    nvrhi::ComputeState cullState;
+    cullState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_Culling_CSMain"), cullLayout);
+    cullState.bindings = { cullBindingSet };
+
+    commandList->setComputeState(cullState);
+    uint32_t dispatchX = DivideAndRoundUp(numPrimitives, 64);
+    commandList->dispatch(dispatchX, 1, 1);
+
+    // TODO: indirect for phase 2
+}
 
 bool BasePassRenderer::Initialize()
 {
@@ -149,48 +214,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     commandList->clearBufferUInt(occludedCountBuffer, 0);
 
     // ===== PHASE 1: Coarse culling against previous frame HZB =====
-    {
-        SCOPED_COMMAND_LIST_MARKER(commandList, "Occlusion Culling Phase 1");
-
-        nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), "CullingCB", 1);
-        nvrhi::BufferHandle cullCB = renderer->m_NvrhiDevice->createBuffer(cullCBD);
-        renderer->m_RHI.SetDebugName(cullCB, "CullingCB");
-
-        CullingConstants cullData;
-        cullData.m_NumPrimitives = numPrimitives;
-        memcpy(cullData.m_FrustumPlanes, frustumPlanes, sizeof(frustumPlanes));
-        cullData.m_View = view;
-        cullData.m_ViewProj = viewProj;
-        cullData.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
-        cullData.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
-        cullData.m_HZBWidth = renderer->m_HZBTexture->getDesc().width;
-        cullData.m_HZBHeight = renderer->m_HZBTexture->getDesc().height;
-        cullData.m_Phase = 0; // Phase 1
-        commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
-
-        nvrhi::BindingSetDesc cullBset;
-        cullBset.bindings =
-        {
-            nvrhi::BindingSetItem::ConstantBuffer(0, cullCB),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleIndirectBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, visibleCountBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, occludedIndicesBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(3, occludedCountBuffer),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MaxReductionClamp)
-        };
-        nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset, nvrhi::ShaderType::Compute);
-        nvrhi::BindingSetHandle cullBindingSet = renderer->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
-
-        nvrhi::ComputeState cullState;
-        cullState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_Culling_CSMain"), cullLayout);
-        cullState.bindings = { cullBindingSet };
-
-        commandList->setComputeState(cullState);
-        uint32_t dispatchX = DivideAndRoundUp(numPrimitives, 64);
-        commandList->dispatch(dispatchX, 1, 1);
-    }
+    PerformOcclusionCulling(commandList, frustumPlanes, view, viewProj, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 0);
 
     // ===== PHASE 1 RENDER: Full render for visible instances =====
     if (renderer->m_EnableOcclusionCulling && !renderer->m_FreezeCullingCamera)
@@ -270,56 +294,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     // ===== PHASE 2: Test occluded instances against new HZB =====
     if (renderer->m_EnableOcclusionCulling && !renderer->m_FreezeCullingCamera)
     {
-        SCOPED_COMMAND_LIST_MARKER(commandList, "Occlusion Culling Phase 2");
-
-        // Clear HZB to far plane for 2nd phase testing (0.0 for reversed-Z)
-        commandList->clearTextureFloat(renderer->m_HZBTexture, nvrhi::AllSubresources, Renderer::DEPTH_FAR);
-
-        // generate HZB mips for Phase 2 testing
-        GenerateHZBMips(commandList);
-
-        // Clear visible count buffer for Phase 2
-        commandList->clearBufferUInt(visibleCountBuffer, 0);
-
-        // Create constant buffer for Phase 2 culling
-        nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), "CullingCB_Phase2", 1);
-        nvrhi::BufferHandle cullCB = renderer->m_NvrhiDevice->createBuffer(cullCBD);
-        renderer->m_RHI.SetDebugName(cullCB, "CullingCB_Phase2");
-
-        CullingConstants cullData;
-        cullData.m_NumPrimitives = numPrimitives; // Process all, but shader will check if they were occluded
-        memcpy(cullData.m_FrustumPlanes, frustumPlanes, sizeof(frustumPlanes));
-        cullData.m_View = view;
-        cullData.m_ViewProj = viewProj;
-        cullData.m_EnableFrustumCulling = 0; // No frustum culling in Phase 2
-        cullData.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
-        cullData.m_HZBWidth = renderer->m_HZBTexture->getDesc().width;
-        cullData.m_HZBHeight = renderer->m_HZBTexture->getDesc().height;
-        cullData.m_Phase = 1; // Phase 2
-        commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
-
-        nvrhi::BindingSetDesc cullBset;
-        cullBset.bindings =
-        {
-            nvrhi::BindingSetItem::ConstantBuffer(0, cullCB),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleIndirectBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, visibleCountBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, occludedIndicesBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(3, occludedCountBuffer),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MaxReductionClamp)
-        };
-        nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset, nvrhi::ShaderType::Compute);
-        nvrhi::BindingSetHandle cullBindingSet = renderer->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
-
-        nvrhi::ComputeState cullState;
-        cullState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_Culling_CSMain"), cullLayout);
-        cullState.bindings = { cullBindingSet };
-
-        commandList->setComputeState(cullState);
-        uint32_t dispatchX = DivideAndRoundUp(numPrimitives, 64);
-        commandList->dispatch(dispatchX, 1, 1);
+        PerformOcclusionCulling(commandList, frustumPlanes, view, viewProj, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 1);
     }
 
     // ===== PHASE 2 RENDER: Full render for remaining visible instances =====
