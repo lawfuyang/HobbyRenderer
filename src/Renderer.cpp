@@ -480,12 +480,12 @@ void Renderer::Run()
     SDL_Log("[Run ] Entering main loop");
 
     constexpr uint32_t kTargetFPS = 200;
-    constexpr uint32_t kFrameDurationMs = SDL_MS_PER_SECOND / kTargetFPS;
+    constexpr uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / kTargetFPS;
 
     bool running = true;
     while (running)
     {
-        const uint64_t frameStart = SDL_GetTicks();
+        const uint64_t frameStart = SDL_GetTicksNS();
 
         if (!m_RHI.AcquireNextSwapchainImage(&m_CurrentSwapchainImage))
         {
@@ -552,19 +552,19 @@ void Renderer::Run()
             break;
         }
 
-        const uint64_t workTime = SDL_GetTicks() - frameStart;
+        const uint64_t workTimeNs = SDL_GetTicksNS() - frameStart;
 
         // Sleep to maintain target framerate (if needed)
-        if (workTime < kFrameDurationMs)
+        if (workTimeNs < kFrameDurationNs)
         {
-            SDL_Delay(static_cast<uint32_t>(kFrameDurationMs - workTime));
+            SDL_Delay(static_cast<uint32_t>(SDL_NS_TO_MS(kFrameDurationNs  - workTimeNs)));
         }
 
         // Recompute total frame time (including any sleep) so reported FPS matches ImGui's DeltaTime
-        const uint64_t totalFrameTime = SDL_GetTicks() - frameStart;
+        const uint64_t totalFrameTime = SDL_GetTicksNS() - frameStart;
 
         // Calculate frame time (ms) and FPS
-        m_FrameTime = static_cast<double>(totalFrameTime);
+        m_FrameTime = SDL_NS_TO_MS(static_cast<double>(totalFrameTime));
         if (m_FrameTime > 0.0)
             m_FPS = 1000.0 / m_FrameTime;
 
