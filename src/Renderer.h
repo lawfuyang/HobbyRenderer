@@ -244,3 +244,21 @@ private:
 
     static Renderer* s_Instance;
 };
+
+struct ScopedCommandListMarker
+{
+    ScopedCommandListMarker(nvrhi::CommandListHandle commandList, std::string_view markerName)
+        : m_CommandList(commandList)
+    {
+        SDL_assert(m_CommandList && "ScopedCommandListMarker: commandList is null");
+        m_CommandList->beginMarker(markerName.data());
+    }
+
+    ~ScopedCommandListMarker()
+    {
+        m_CommandList->endMarker();
+    }
+
+    nvrhi::CommandListHandle m_CommandList;
+};
+#define SCOPED_COMMAND_LIST_MARKER(cmdList, name) ScopedCommandListMarker scopedMarker##__LINE__(cmdList, name);
