@@ -30,6 +30,8 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
                                                 nvrhi::BufferHandle visibleIndirectBuffer, nvrhi::BufferHandle visibleCountBuffer,
                                                 nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, int phase)
 {
+    PROFILE_FUNCTION();
+
     Renderer* renderer = Renderer::GetInstance();
 
     SCOPED_COMMAND_LIST_MARKER(commandList, phase == 0 ? "Occlusion Culling Phase 1" : "Occlusion Culling Phase 2");
@@ -108,6 +110,8 @@ void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumP
 
 void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int phase, nvrhi::BufferHandle indirectBuffer, nvrhi::BufferHandle countBuffer, const Matrix& viewProj, const Vector3& camPos)
 {
+    PROFILE_FUNCTION();
+
     Renderer* renderer = Renderer::GetInstance();
 
     const char* markerName = (phase == 0) ? "Base Pass Render - Visible Instances" : "Base Pass Render - Occlusion Tested Instances";
@@ -332,6 +336,8 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 
 void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
 {
+    PROFILE_FUNCTION();
+
     Renderer* renderer = Renderer::GetInstance();
 
     if (!renderer->m_EnableOcclusionCulling || renderer->m_FreezeCullingCamera)
@@ -379,6 +385,8 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     uint32_t numMips = renderer->m_HZBTexture->getDesc().mipLevels;
     for (uint32_t mip = 1; mip < numMips; ++mip)
     {
+        PROFILE_SCOPED("HZB Downsample Mip");
+
         uint32_t inputWidth = renderer->m_HZBTexture->getDesc().width >> (mip - 1);
         uint32_t inputHeight = renderer->m_HZBTexture->getDesc().height >> (mip - 1);
         uint32_t outputWidth = renderer->m_HZBTexture->getDesc().width >> mip;

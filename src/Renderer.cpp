@@ -368,6 +368,10 @@ bool Renderer::Initialize()
 {
     ScopedTimerLog initScope{"[Timing] Init phase:"};
 
+    MicroProfileOnThreadCreate("Main");
+	MicroProfileSetEnableAllGroups(true);
+	MicroProfileSetForceMetaCounters(true);
+
     InitSDL();
 
     m_Window = CreateWindowScaled();
@@ -485,6 +489,7 @@ void Renderer::Run()
     bool running = true;
     while (running)
     {
+        PROFILE_SCOPED("Frame");
         const uint64_t frameStart = SDL_GetTicksNS();
 
         if (!m_RHI.AcquireNextSwapchainImage(&m_CurrentSwapchainImage))
@@ -517,6 +522,7 @@ void Renderer::Run()
         #define ADD_RENDER_PASS(rendererName) \
         { \
             extern IRenderer* rendererName; \
+            PROFILE_SCOPED(rendererName->GetName()) \
             int readIndex = m_FrameNumber % 2; \
             int writeIndex = (m_FrameNumber + 1) % 2; \
             if (m_NvrhiDevice->pollTimerQuery(rendererName->m_GPUQueries[readIndex])) \
@@ -557,6 +563,7 @@ void Renderer::Run()
         // Sleep to maintain target framerate (if needed)
         if (workTimeNs < kFrameDurationNs)
         {
+            PROFILE_SCOPED("Sleep");
             SDL_Delay(static_cast<uint32_t>(SDL_NS_TO_MS(kFrameDurationNs  - workTimeNs)));
         }
 
@@ -576,6 +583,8 @@ void Renderer::Run()
 void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
+
+    MicroProfileShutdown();
 
     SDL_assert(m_PendingCommandLists.empty() && "Pending command lists should be empty on device destruction");
     m_PendingCommandLists.clear();
@@ -916,6 +925,8 @@ void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
 
 void Renderer::ExecutePendingCommandLists()
 {
+    PROFILE_FUNCTION();
+
     if (!m_PendingCommandLists.empty())
     {
         std::vector<nvrhi::ICommandList*> rawLists;
@@ -929,6 +940,7 @@ void Renderer::ExecutePendingCommandLists()
         m_PendingCommandLists.clear();
     }
 
+    PROFILE_SCOPED("NVRHI GarbageCollection");
     m_NvrhiDevice->runGarbageCollection();
 }
 

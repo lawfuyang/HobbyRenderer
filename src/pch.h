@@ -39,6 +39,8 @@
 
 #include <dxgiformat.h>
 
+#include "../external/microprofile/microprofile.h"
+
 using Vector = DirectX::XMVECTOR;
 using Matrix = DirectX::XMFLOAT4X4;
 
@@ -61,3 +63,6 @@ using OBB = DirectX::BoundingOrientedBox;
 using Frustum = DirectX::BoundingFrustum;
 
 #define SDL_LOG_ASSERT_FAIL(assertMsg, logFmt, ...) do { SDL_Log(logFmt, ##__VA_ARGS__); SDL_assert(false && assertMsg); } while(0)
+
+#define PROFILE_SCOPED(NAME) MICROPROFILE_SCOPEI("", NAME, MP_AUTO);
+#define PROFILE_FUNCTION() MICROPROFILE_SCOPEI("", __FUNCTION__, MP_AUTO);

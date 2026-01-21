@@ -65,7 +65,8 @@ void ImGuiLayer::UpdateFrame()
 
     if (ImGui::Begin("Property Grid", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Checkbox("Show Demo Window", &s_ShowDemoWindow);
+        //ImGui::Checkbox("Show Demo Window", &s_ShowDemoWindow);
+
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {
@@ -143,8 +144,14 @@ void ImGuiLayer::UpdateFrame()
         }
 
         // Timings
-        if (ImGui::TreeNode("Timings"))
+        if (ImGui::TreeNode("Profiler"))
         {
+            if (ImGui::Button("Profiler Dump"))
+            {
+                const std::string dumpPath = (std::filesystem::path{ SDL_GetBasePath() } / "profiler_dump.html").string();
+                MicroProfileDumpFileImmediately(dumpPath.c_str(), nullptr, nullptr);
+            }
+
             if (ImGui::BeginTable("TimingsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Pass");

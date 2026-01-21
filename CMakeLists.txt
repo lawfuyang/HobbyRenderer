@@ -181,6 +181,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan-Headers)
 # Link meshoptimizer
 target_link_libraries(${PROJECT_NAME} PRIVATE meshoptimizer)
 
+# Link Microprofile
+target_link_libraries(${PROJECT_NAME} PRIVATE microprofile)
+target_compile_definitions(microprofile PUBLIC MICROPROFILE_USE_CONFIG=0)
+
 # cgltf Include
 target_include_directories(${PROJECT_NAME} PRIVATE "${CGLTF_SRC_DIR}")
 
