@@ -20,7 +20,8 @@ private:
     void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5]);
     void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, uint32_t numPrimitives,
                                  nvrhi::BufferHandle visibleIndirectBuffer, nvrhi::BufferHandle visibleCountBuffer,
-                                 nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, int phase);
+                                 nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, 
+                                 nvrhi::BufferHandle occludedIndirectBuffer, int phase);
     void RenderInstances(nvrhi::CommandListHandle commandList, int phase, nvrhi::BufferHandle indirectBuffer, nvrhi::BufferHandle countBuffer, const Matrix& viewProj, const Vector3& camPos);
 };
 
@@ -28,7 +29,8 @@ REGISTER_RENDERER(BasePassRenderer);
 
 void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, uint32_t numPrimitives,
                                                 nvrhi::BufferHandle visibleIndirectBuffer, nvrhi::BufferHandle visibleCountBuffer,
-                                                nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, int phase)
+                                                nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer,
+                                                nvrhi::BufferHandle occludedIndirectBuffer, int phase)
 {
     PROFILE_FUNCTION();
 
@@ -36,7 +38,13 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
 
     nvrhi::utils::ScopedMarker commandListMarker{ commandList, phase == 0 ? "Occlusion Culling Phase 1" : "Occlusion Culling Phase 2" };
 
-    if (phase == 1)
+    if (phase == 0)
+    {
+        // Clear visible and occluded count buffers for Phase 1
+        commandList->clearBufferUInt(visibleCountBuffer, 0);
+        commandList->clearBufferUInt(occludedCountBuffer, 0);
+    }
+    else if (phase == 1)
     {
         // Clear HZB to far plane for 2nd phase testing (0.0 for reversed-Z)
         commandList->clearTextureFloat(renderer->m_HZBTexture, nvrhi::AllSubresources, Renderer::DEPTH_FAR);
@@ -74,6 +82,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, visibleCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(2, occludedIndicesBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(3, occludedCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, occludedIndirectBuffer),
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
     };
     nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset, nvrhi::ShaderType::Compute);
@@ -84,10 +93,26 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     cullState.bindings = { cullBindingSet };
 
     commandList->setComputeState(cullState);
-    uint32_t dispatchX = DivideAndRoundUp(numPrimitives, 64);
-    commandList->dispatch(dispatchX, 1, 1);
+    if (phase == 0)
+    {
+        uint32_t dispatchX = DivideAndRoundUp(numPrimitives, 64);
+        commandList->dispatch(dispatchX, 1, 1);
 
-    // TODO: indirect for phase 2
+        nvrhi::utils::ScopedMarker phase2Marker{ commandList, "Occlusion Culling Phase 2 - Build Indirect" };
+
+        // Build indirect for Phase 2
+        nvrhi::ComputeState buildIndirectState;
+        buildIndirectState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_BuildIndirect_CSMain"), cullLayout);
+        buildIndirectState.bindings = { cullBindingSet };
+        commandList->setComputeState(buildIndirectState);
+        commandList->dispatch(1, 1, 1);
+    }
+    else
+    {
+        cullState.indirectParams = occludedIndirectBuffer;
+        commandList->setComputeState(cullState);
+        commandList->dispatchIndirect(0);
+    }
 }
 
 void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5])
@@ -268,6 +293,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     nvrhi::BufferHandle visibleCountBuffer;
     nvrhi::BufferHandle occludedIndicesBuffer;
     nvrhi::BufferHandle occludedCountBuffer;
+    nvrhi::BufferHandle occludedIndirectBuffer;
 
     // Create buffers for visible instances (Phase 1 + Phase 2 results)
     nvrhi::BufferDesc visibleIndirectBufDesc = nvrhi::BufferDesc()
@@ -309,12 +335,22 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     occludedCountBuffer = renderer->m_NvrhiDevice->createBuffer(occludedCountBufDesc);
     renderer->m_RHI.SetDebugName(occludedCountBuffer, "OccludedCount");
 
+    nvrhi::BufferDesc occludedIndirectBufDesc = nvrhi::BufferDesc()
+        .setByteSize(sizeof(DispatchIndirectArguments))
+        .setStructStride(sizeof(DispatchIndirectArguments))
+        .setIsDrawIndirectArgs(true)
+        .setCanHaveUAVs(true)
+        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+        .setKeepInitialState(true);
+    occludedIndirectBuffer = renderer->m_NvrhiDevice->createBuffer(occludedIndirectBufDesc);
+    renderer->m_RHI.SetDebugName(occludedIndirectBuffer, "OccludedIndirectBuffer");
+
     // Clear count buffers
     commandList->clearBufferUInt(visibleCountBuffer, 0);
     commandList->clearBufferUInt(occludedCountBuffer, 0);
 
     // ===== PHASE 1: Coarse culling against previous frame HZB =====
-    PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 0);
+    PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, occludedIndirectBuffer, 0);
 
     if (renderer->m_EnableOcclusionCulling && !renderer->m_FreezeCullingCamera)
     {
@@ -322,7 +358,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         RenderInstances(commandList, 0, visibleIndirectBuffer, visibleCountBuffer, viewProj, camPos);
 
         // ===== PHASE 2: Test occluded instances against new HZB =====
-        PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 1);
+        PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, occludedIndirectBuffer, 1);
     }
 
     // ===== PHASE 2 RENDER: Full render for remaining visible instances =====

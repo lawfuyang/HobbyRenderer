@@ -101,6 +101,13 @@ struct DrawIndexedIndirectArguments
   uint m_StartInstanceLocation;
 };
 
+struct DispatchIndirectArguments
+{
+  uint m_ThreadGroupCountX;
+  uint m_ThreadGroupCountY;
+  uint m_ThreadGroupCountZ;
+};
+
 struct CullingConstants
 {
   Vector4 m_FrustumPlanes[5];

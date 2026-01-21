@@ -26,6 +26,7 @@ RWStructuredBuffer<DrawIndexedIndirectArguments> g_VisibleArgs : register(u0);
 RWStructuredBuffer<uint> g_VisibleCount : register(u1);
 RWStructuredBuffer<uint> g_OccludedIndices : register(u2);
 RWStructuredBuffer<uint> g_OccludedCount : register(u3);
+RWStructuredBuffer<DispatchIndirectArguments> g_DispatchIndirectArgs : register(u4);
 SamplerState g_MinReductionSampler : register(s0);
 
 bool FrustumAABBTest(float3 min, float3 max, float4 planes[5], float4x4 view)
@@ -233,4 +234,12 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             g_VisibleArgs[visibleIndex] = args;
         }
     }
+}
+
+[numthreads(1, 1, 1)]
+void BuildIndirect_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    g_DispatchIndirectArgs[0].m_ThreadGroupCountX = (g_OccludedCount[0] + 63) / 64;
+    g_DispatchIndirectArgs[0].m_ThreadGroupCountY = 1;
+    g_DispatchIndirectArgs[0].m_ThreadGroupCountZ = 1;
 }
