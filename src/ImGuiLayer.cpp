@@ -67,6 +67,9 @@ void ImGuiLayer::UpdateFrame()
     {
         //ImGui::Checkbox("Show Demo Window", &s_ShowDemoWindow);
 
+        // Target FPS control
+        ImGui::DragInt("Target FPS", (int*)&renderer->m_TargetFPS, 1.0f, 10, 200);
+
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {

@@ -186,6 +186,9 @@ struct Renderer
     double m_FrameTime = 0.0;
     double m_FPS       = 0.0;
 
+    // Target FPS for frame rate limiting
+    uint32_t m_TargetFPS = 200;
+
     // Main view pipeline statistics
     nvrhi::PipelineStatistics m_MainViewPipelineStatistics;
 

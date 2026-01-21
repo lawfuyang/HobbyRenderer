@@ -486,13 +486,11 @@ void Renderer::Run()
 
     SDL_Log("[Run ] Entering main loop");
 
-    constexpr uint32_t kTargetFPS = 200;
-    constexpr uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / kTargetFPS;
-
     while (m_Running)
     {
         PROFILE_SCOPED("Frame");
         const uint64_t frameStart = SDL_GetTicksNS();
+        const uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / m_TargetFPS;
 
         if (!m_RHI.AcquireNextSwapchainImage(&m_CurrentSwapchainImage))
         {
