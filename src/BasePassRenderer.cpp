@@ -17,6 +17,7 @@ private:
     nvrhi::PipelineStatisticsQueryHandle m_PipelineQueries[2];
 
     void GenerateHZBMips(nvrhi::CommandListHandle commandList);
+    void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5]);
     void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, uint32_t numPrimitives,
                                  nvrhi::BufferHandle visibleIndirectBuffer, nvrhi::BufferHandle visibleCountBuffer,
                                  nvrhi::BufferHandle occludedIndicesBuffer, nvrhi::BufferHandle occludedCountBuffer, int phase);
@@ -85,6 +86,24 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     commandList->dispatch(dispatchX, 1, 1);
 
     // TODO: indirect for phase 2
+}
+
+void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5])
+{
+    float xScale = fabs(proj._11);
+    float yScale = fabs(proj._22);
+    float nearZ = proj._43;
+
+    DirectX::XMVECTOR planes[5];
+    planes[0] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(-1.0f, 0.0f, 1.0f / xScale, 0.0f));
+    planes[1] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(1.0f, 0.0f, 1.0f / xScale, 0.0f));
+    planes[2] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(0.0f, -1.0f, 1.0f / yScale, 0.0f));
+    planes[3] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(0.0f, 1.0f, 1.0f / yScale, 0.0f));
+    planes[4] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, nearZ));
+
+    for (int i = 0; i < 5; i++) {
+        DirectX::XMStoreFloat4(&frustumPlanes[i], planes[i]);
+    }
 }
 
 void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int phase, nvrhi::BufferHandle indirectBuffer, nvrhi::BufferHandle countBuffer, const Matrix& viewProj, const Vector3& camPos)
@@ -215,6 +234,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     // ============================================================================
     Camera* cam = &renderer->m_Camera;
     Matrix viewProj = cam->GetViewProjMatrix();
+    Matrix viewProjForCulling = viewProj;
     Matrix view = cam->GetViewMatrix();
     if (renderer->m_FreezeCullingCamera)
     {
@@ -224,20 +244,20 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     Vector3 camPos = renderer->m_Camera.GetPosition();
 
     // Compute frustum planes in LH view space
-    float xScale = fabs(proj._11);
-    float yScale = fabs(proj._22);
-    float nearZ = proj._43;
-
-    DirectX::XMVECTOR planes[5];
-    planes[0] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(-1.0f, 0.0f, 1.0f / xScale, 0.0f));
-    planes[1] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(1.0f, 0.0f, 1.0f / xScale, 0.0f));
-    planes[2] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(0.0f, -1.0f, 1.0f / yScale, 0.0f));
-    planes[3] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(0.0f, 1.0f, 1.0f / yScale, 0.0f));
-    planes[4] = DirectX::XMPlaneNormalize(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, nearZ));
-
     Vector4 frustumPlanes[5];
-    for (int i = 0; i < 5; i++) {
-        DirectX::XMStoreFloat4(&frustumPlanes[i], planes[i]);
+    if (renderer->m_FreezeCullingCamera)
+    {
+        // viewProj = view * proj
+        DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_FrozenCullingViewMatrix);
+        DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
+        DirectX::XMStoreFloat4x4(&viewProjForCulling, v * p);
+
+        // Compute frustum planes in LH view space from frozen projection matrix
+        ComputeFrustumPlanes(proj, frustumPlanes);
+    }
+    else
+    {
+        ComputeFrustumPlanes(proj, frustumPlanes);
     }
 
     nvrhi::BufferHandle visibleIndirectBuffer;
@@ -290,7 +310,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     commandList->clearBufferUInt(occludedCountBuffer, 0);
 
     // ===== PHASE 1: Coarse culling against previous frame HZB =====
-    PerformOcclusionCulling(commandList, frustumPlanes, view, viewProj, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 0);
+    PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 0);
 
     if (renderer->m_EnableOcclusionCulling && !renderer->m_FreezeCullingCamera)
     {
@@ -298,7 +318,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         RenderInstances(commandList, 0, visibleIndirectBuffer, visibleCountBuffer, viewProj, camPos);
 
         // ===== PHASE 2: Test occluded instances against new HZB =====
-        PerformOcclusionCulling(commandList, frustumPlanes, view, viewProj, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 1);
+        PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, numPrimitives, visibleIndirectBuffer, visibleCountBuffer, occludedIndicesBuffer, occludedCountBuffer, 1);
     }
 
     // ===== PHASE 2 RENDER: Full render for remaining visible instances =====
