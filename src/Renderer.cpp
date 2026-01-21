@@ -403,6 +403,9 @@ bool Renderer::Initialize()
         return false;
     }
 
+    // Start garbage collection thread
+    m_GarbageCollectionThread = std::thread(&Renderer::GarbageCollectionThreadFunc, this);
+
     if (!CommonResources::GetInstance().Initialize())
     {
         SDL_Log("[Init] Failed to initialize common resources");
@@ -486,8 +489,7 @@ void Renderer::Run()
     constexpr uint32_t kTargetFPS = 200;
     constexpr uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / kTargetFPS;
 
-    bool running = true;
-    while (running)
+    while (m_Running)
     {
         PROFILE_SCOPED("Frame");
         const uint64_t frameStart = SDL_GetTicksNS();
@@ -498,6 +500,8 @@ void Renderer::Run()
             break;
         }
 
+        m_GCCondition.notify_one();
+
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -507,7 +511,7 @@ void Renderer::Run()
             if (event.type == SDL_EVENT_QUIT)
             {
                 SDL_Log("[Run ] Received quit event");
-                running = false;
+                m_Running = false;
                 break;
             }            
         }
@@ -583,6 +587,9 @@ void Renderer::Run()
 void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
+
+    m_GCCondition.notify_one();
+    m_GarbageCollectionThread.join();
 
     MicroProfileShutdown();
 
@@ -939,9 +946,6 @@ void Renderer::ExecutePendingCommandLists()
         m_NvrhiDevice->executeCommandLists(rawLists.data(), rawLists.size());
         m_PendingCommandLists.clear();
     }
-
-    PROFILE_SCOPED("NVRHI GarbageCollection");
-    m_NvrhiDevice->runGarbageCollection();
 }
 
 bool Renderer::CreateSwapchainTextures()
@@ -1094,6 +1098,20 @@ nvrhi::ComputePipelineHandle Renderer::GetOrCreateComputePipeline(nvrhi::ShaderH
     }
 
     return pipeline;
+}
+
+void Renderer::GarbageCollectionThreadFunc()
+{
+    MicroProfileOnThreadCreate("GarbageCollector");
+
+    while (m_Running)
+    {
+        std::unique_lock<std::mutex> lock(m_GCMutex);
+        m_GCCondition.wait(lock);
+
+        PROFILE_SCOPED("GarbageCollectionThread");
+        m_NvrhiDevice->runGarbageCollection();
+    }
 }
 
 int main(int argc, char* argv[])
