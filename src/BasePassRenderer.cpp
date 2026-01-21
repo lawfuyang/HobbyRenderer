@@ -46,9 +46,6 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     }
     else if (phase == 1)
     {
-        // Clear HZB to far plane for 2nd phase testing (0.0 for reversed-Z)
-        commandList->clearTextureFloat(renderer->m_HZBTexture, nvrhi::AllSubresources, Renderer::DEPTH_FAR);
-
         // generate HZB mips for Phase 2 testing
         GenerateHZBMips(commandList);
 
