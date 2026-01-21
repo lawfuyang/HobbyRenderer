@@ -10,3 +10,6 @@
 [submodule "external/meshoptimizer"]
 	path = external/meshoptimizer
 	url = https://github.com/zeux/meshoptimizer
+[submodule "external/microprofile"]
+	path = external/microprofile
+	url = https://github.com/jonasmr/microprofile
