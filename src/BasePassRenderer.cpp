@@ -156,10 +156,10 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int
     commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
     state.indirectParams = indirectBuffer;
-    state.indirectCountParams = countBuffer;
+    state.indirectCountBuffer = countBuffer;
     commandList->setGraphicsState(state);
 
-    commandList->drawIndexedIndirect(0, (uint32_t)renderer->m_Scene.m_InstanceData.size());
+    commandList->drawIndexedIndirectCount(0, 0, (uint32_t)renderer->m_Scene.m_InstanceData.size());
 }
 
 bool BasePassRenderer::Initialize()
