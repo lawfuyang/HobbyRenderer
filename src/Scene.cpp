@@ -375,11 +375,12 @@ static void ProcessLights(cgltf_data* data, Scene& scene)
 	}
 }
 
-static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<VertexInput>& outVertices, std::vector<uint32_t>& outIndices)
+static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<Vertex>& outVertices, std::vector<uint32_t>& outIndices)
 {
 	SCOPED_TIMER("[Scene] Meshes");
 	outVertices.clear();
 	outIndices.clear();
+	scene.m_MeshData.clear();
 
 	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 	{
@@ -426,7 +427,7 @@ static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<VertexInpu
 
 			for (cgltf_size v = 0; v < vertCount; ++v)
 			{
-				VertexInput vx{};
+				Vertex vx{};
 				float pos[4] = { 0,0,0,0 };
 				cgltf_size posComps = cgltf_num_components(posAcc->type);
 				cgltf_accessor_read_float(posAcc, v, pos, posComps);
@@ -467,6 +468,14 @@ static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<VertexInpu
 			}
 
 			p.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) : -1;
+
+			// Extract MeshData
+			p.m_MeshDataIndex = (uint32_t)scene.m_MeshData.size();
+			MeshData md;
+			md.m_IndexOffset = p.m_IndexOffset;
+			md.m_IndexCount = p.m_IndexCount;
+			scene.m_MeshData.push_back(md);
+
 			mesh.m_Primitives.push_back(p);
 		}
 
@@ -631,19 +640,19 @@ static void SetupDirectionalLightAndCamera(Scene& scene, Renderer* renderer)
 	}
 }
 
-static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<VertexInput>& allVertices, const std::vector<uint32_t>& allIndices)
+static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<Vertex>& allVertices, const std::vector<uint32_t>& allIndices)
 {
 	SCOPED_TIMER("[Scene] GPU Upload");
 
-	const size_t vbytes = allVertices.size() * sizeof(VertexInput);
+	const size_t vbytes = allVertices.size() * sizeof(Vertex);
 	const size_t ibytes = allIndices.size() * sizeof(uint32_t);
 
 	if (vbytes > 0)
 	{
 		nvrhi::BufferDesc desc{};
 		desc.byteSize = (uint32_t)vbytes;
-		desc.isVertexBuffer = true;
-		desc.initialState = nvrhi::ResourceStates::VertexBuffer;
+		desc.structStride = sizeof(Vertex);
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		scene.m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
 		renderer->m_RHI.SetDebugName(scene.m_VertexBuffer, "Scene_VertexBuffer");
@@ -667,6 +676,21 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 			cmd->writeBuffer(scene.m_VertexBuffer, allVertices.data(), vbytes, 0);
 		if (scene.m_IndexBuffer && ibytes > 0)
 			cmd->writeBuffer(scene.m_IndexBuffer, allIndices.data(), ibytes, 0);
+	}
+
+	// Create mesh data buffer
+	if (!scene.m_MeshData.empty())
+	{
+		nvrhi::BufferDesc desc{};
+		desc.byteSize = (uint32_t)(scene.m_MeshData.size() * sizeof(MeshData));
+		desc.structStride = sizeof(MeshData);
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		scene.m_MeshDataBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(scene.m_MeshDataBuffer, "Scene_MeshDataBuffer");
+
+		ScopedCommandList cmd{ "Upload Mesh Data" };
+		cmd->writeBuffer(scene.m_MeshDataBuffer, scene.m_MeshData.data(), scene.m_MeshData.size() * sizeof(MeshData), 0);
 	}
 
 	// Create instance data buffer
@@ -746,7 +770,7 @@ bool Scene::LoadScene()
 	ProcessCameras(data, *this);
 	ProcessLights(data, *this);
 
-	std::vector<VertexInput> allVertices;
+	std::vector<Vertex> allVertices;
 	std::vector<uint32_t> allIndices;
 	ProcessMeshes(data, *this, allVertices, allIndices);
 
@@ -763,8 +787,7 @@ bool Scene::LoadScene()
 			PerInstanceData inst{};
 			inst.m_World = node.m_WorldTransform;
 			inst.m_MaterialIndex = prim.m_MaterialIndex;
-			inst.m_IndexOffset = prim.m_IndexOffset;
-			inst.m_IndexCount = prim.m_IndexCount;
+			inst.m_MeshDataIndex = prim.m_MeshDataIndex;
 			// Use precomputed bounding AABB
 			inst.m_Min = node.m_AabbMin;
 			inst.m_Max = node.m_AabbMax;
@@ -789,11 +812,13 @@ void Scene::Shutdown()
 	m_IndexBuffer = nullptr;
 	m_MaterialConstantsBuffer = nullptr;
 	m_InstanceDataBuffer = nullptr;
+	m_MeshDataBuffer = nullptr;
 
 	// Clear CPU-side containers
 	m_Meshes.clear();
 	m_Nodes.clear();
 	m_Materials.clear();
+	m_MeshData.clear();
 	for (auto& tex : m_Textures)
 	{
 		tex.m_Handle = nullptr;

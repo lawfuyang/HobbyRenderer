@@ -30,21 +30,12 @@ struct ImGuiPushConstants
 
 // Forward-lighting specific shared types.
 // Vertex input: provide simple C++ and HLSL variants
-#ifdef __cplusplus
-struct VertexInput
+struct Vertex
 {
   Vector3 m_Pos;
   Vector3 m_Normal;
   Vector2 m_Uv;
 };
-#else
-struct VertexInput
-{
-  float3 m_Pos : POSITION;
-  float3 m_Normal : NORMAL;
-  float2 m_Uv : TEXCOORD0;
-};
-#endif
 
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
@@ -70,14 +61,19 @@ struct MaterialConstants
   Vector3 m_Padding;
 };
 
+struct MeshData
+{
+  uint32_t m_IndexOffset;
+  uint32_t m_IndexCount;
+};
+
 // Per-instance data for instanced rendering
 struct PerInstanceData
 {
   Matrix m_World;
   uint32_t m_MaterialIndex;
-  uint32_t m_IndexOffset;
-  uint32_t m_IndexCount;
-  uint32_t padding0;
+  uint32_t m_MeshDataIndex;
+  Vector2U padding0;
   Vector3 m_Min;
   uint32_t padding1;
   Vector3 m_Max;

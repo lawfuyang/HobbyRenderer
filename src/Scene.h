@@ -17,6 +17,7 @@ public:
         uint32_t m_IndexOffset = 0;
         uint32_t m_IndexCount = 0;
         int m_MaterialIndex = -1;
+        uint32_t m_MeshDataIndex = 0;
     };
 
     struct Mesh
@@ -118,9 +119,11 @@ public:
     nvrhi::BufferHandle m_VertexBuffer;
     nvrhi::BufferHandle m_IndexBuffer;
     nvrhi::BufferHandle m_MaterialConstantsBuffer;
+    nvrhi::BufferHandle m_MeshDataBuffer;
 
     // GPU buffers for instances
     std::vector<PerInstanceData> m_InstanceData;
+    std::vector<MeshData> m_MeshData;
     nvrhi::BufferHandle m_InstanceDataBuffer;
 
     // Load the scene from the path configured in `Config::Get().m_GltfScene`.

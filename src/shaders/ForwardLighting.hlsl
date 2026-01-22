@@ -7,6 +7,7 @@ cbuffer PerFrameCB : register(b0, space1)
 
 StructuredBuffer<PerInstanceData> g_Instances : register(t0, space1);
 StructuredBuffer<MaterialConstants> g_Materials : register(t1, space1);
+StructuredBuffer<Vertex> g_Vertices : register(t2, space1);
 
 SamplerState g_SamplerAnisoClamp : register(s0, space1);
 SamplerState g_SamplerAnisoWrap  : register(s1, space1);
@@ -30,18 +31,19 @@ struct VSOut
     nointerpolation uint instanceID : TEXCOORD2;
 };
 
-VSOut VSMain(VertexInput input, uint instanceID : SV_StartInstanceLocation)
+VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLocation)
 {
     PerInstanceData inst = g_Instances[instanceID];
+    Vertex v = g_Vertices[vertexID];
     VSOut o;
-    float4 worldPos = mul(float4(input.m_Pos, 1.0f), inst.m_World);
+    float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
     o.Position = mul(worldPos, perFrame.m_ViewProj);
 
     // Alien math to calculate the normal in world space, without inverse-transposing the world matrix
     float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(inst.m_World);
 
-    o.normal = normalize(mul(input.m_Normal, adjugateWorldMatrix));
-    o.uv = input.m_Uv;
+    o.normal = normalize(mul(v.m_Normal, adjugateWorldMatrix));
+    o.uv = v.m_Uv;
     o.worldPos = worldPos.xyz;
     o.instanceID = instanceID;
     return o;

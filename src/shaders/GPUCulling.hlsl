@@ -22,6 +22,7 @@ cbuffer CullingCB : register(b0)
 
 StructuredBuffer<PerInstanceData> g_InstanceData : register(t0);
 Texture2D<float> g_HZB : register(t1);
+StructuredBuffer<MeshData> g_MeshData : register(t2);
 RWStructuredBuffer<DrawIndexedIndirectArguments> g_VisibleArgs : register(u0);
 RWStructuredBuffer<uint> g_VisibleCount : register(u1);
 RWStructuredBuffer<uint> g_OccludedIndices : register(u2);
@@ -178,6 +179,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	}
 
 	PerInstanceData inst = g_InstanceData[actualInstanceIndex];
+    MeshData mesh = g_MeshData[inst.m_MeshDataIndex];
 
     // Frustum culling
     if (g_Culling.m_EnableFrustumCulling && !FrustumAABBTest(inst.m_Min, inst.m_Max, g_Culling.m_FrustumPlanes, g_Culling.m_View))
@@ -190,46 +192,30 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         isVisible = OcclusionAABBTest(inst.m_Min, inst.m_Max, g_Culling.m_ViewProj, uint2(g_Culling.m_HZBWidth, g_Culling.m_HZBHeight));
     }
 
+    // Phase 1: Store visible instances for rendering, occluded indices for Phase 2
+    if (isVisible)
+    {
+        uint visibleIndex;
+        InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
+
+        DrawIndexedIndirectArguments args;
+        args.m_IndexCount = mesh.m_IndexCount;
+        args.m_InstanceCount = 1;
+        args.m_StartIndexLocation = mesh.m_IndexOffset;
+        args.m_BaseVertexLocation = 0;
+        args.m_StartInstanceLocation = actualInstanceIndex;
+
+        g_VisibleArgs[visibleIndex] = args;
+    }
+
     if (g_Culling.m_Phase == 0)
     {
         // Phase 1: Store visible instances for rendering, occluded indices for Phase 2
-        if (isVisible)
-        {
-            uint visibleIndex;
-            InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
-
-            DrawIndexedIndirectArguments args;
-            args.m_IndexCount = inst.m_IndexCount;
-            args.m_InstanceCount = 1;
-            args.m_StartIndexLocation = inst.m_IndexOffset;
-            args.m_BaseVertexLocation = 0;
-            args.m_StartInstanceLocation = actualInstanceIndex;
-
-            g_VisibleArgs[visibleIndex] = args;
-        }
-        else
+        if (!isVisible)
         {
             uint occludedIndex;
             InterlockedAdd(g_OccludedCount[0], 1, occludedIndex);
             g_OccludedIndices[occludedIndex] = actualInstanceIndex;
-        }
-    }
-    else
-    {
-        // Phase 2: Only process instances that were occluded in Phase 1
-        if (isVisible)
-        {
-            uint visibleIndex;
-            InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
-
-            DrawIndexedIndirectArguments args;
-            args.m_IndexCount = inst.m_IndexCount;
-            args.m_InstanceCount = 1;
-            args.m_StartIndexLocation = inst.m_IndexOffset;
-            args.m_BaseVertexLocation = 0;
-            args.m_StartInstanceLocation = actualInstanceIndex;
-
-            g_VisibleArgs[visibleIndex] = args;
         }
     }
 }

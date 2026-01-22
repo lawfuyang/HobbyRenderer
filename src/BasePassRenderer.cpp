@@ -24,7 +24,6 @@ public:
     const char* GetName() const override { return "BasePass"; }
 
 private:
-    nvrhi::InputLayoutHandle m_InputLayout;
     nvrhi::PipelineStatisticsQueryHandle m_PipelineQueries[2];
 
     void GenerateHZBMips(nvrhi::CommandListHandle commandList);
@@ -86,6 +85,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::ConstantBuffer(0, cullCB),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
         nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_MeshDataBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(0, visibleIndirectBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, visibleCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(2, occludedIndicesBuffer),
@@ -157,7 +157,6 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int
     nvrhi::GraphicsPipelineDesc pipelineDesc;
     pipelineDesc.VS = renderer->GetShaderHandle("ForwardLighting_VSMain");
     pipelineDesc.PS = renderer->GetShaderHandle("ForwardLighting_PSMain");
-    pipelineDesc.inputLayout = m_InputLayout;
     pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
     pipelineDesc.renderState.rasterState = CommonResources::GetInstance().RasterCullBack;
     pipelineDesc.renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetOpaque;
@@ -168,7 +167,6 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int
     fbInfo.setDepthFormat(nvrhi::Format::D32);
     state.framebuffer = framebuffer;
 
-    state.vertexBuffers = { nvrhi::VertexBufferBinding{ renderer->m_Scene.m_VertexBuffer, 0, 0 } };
     state.indexBuffer = nvrhi::IndexBufferBinding{
         renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
 
@@ -192,6 +190,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int
         nvrhi::BindingSetItem::ConstantBuffer(0, perFrameCB),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(1, renderer->m_Scene.m_MaterialConstantsBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_VertexBuffer),
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().AnisotropicClamp),
         nvrhi::BindingSetItem::Sampler(1, CommonResources::GetInstance().AnisotropicWrap)
     };
@@ -221,21 +220,6 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, int
 bool BasePassRenderer::Initialize()
 {
     Renderer* renderer = Renderer::GetInstance();
-
-    // Create input layout matching shared VertexInput (pos, normal, uv)
-    nvrhi::VertexAttributeDesc attributes[] = {
-        { "POSITION", nvrhi::Format::RGB32_FLOAT,  1, 0, offsetof(VertexInput, m_Pos),    sizeof(VertexInput), false },
-        { "NORMAL",   nvrhi::Format::RGB32_FLOAT,  1, 0, offsetof(VertexInput, m_Normal), sizeof(VertexInput), false },
-        { "TEXCOORD0",nvrhi::Format::RG32_FLOAT,   1, 0, offsetof(VertexInput, m_Uv),     sizeof(VertexInput), false },
-    };
-
-    // Create input layout (vertexShader parameter unused for Vulkan backend)
-    m_InputLayout = renderer->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
-    if (!m_InputLayout)
-    {
-        SDL_LOG_ASSERT_FAIL("ImGui input layout creation failed", "[BasePass] Failed to create input layout");
-        return false;
-    }
 
     // Create pipeline statistics queries for double buffering
     m_PipelineQueries[0] = renderer->m_NvrhiDevice->createPipelineStatisticsQuery();
