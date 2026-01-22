@@ -1,6 +1,3 @@
-#define FFX_STATIC
-#define FFX_HLSL
-
 typedef uint   FfxUInt32;
 typedef uint2  FfxUInt32x2;
 typedef uint3  FfxUInt32x3;
@@ -11,15 +8,6 @@ typedef float  FfxFloat32;
 typedef float2 FfxFloat32x2;
 typedef float3 FfxFloat32x3;
 typedef float4 FfxFloat32x4;
-
-#define FFX_GROUP_MEMORY_BARRIER GroupMemoryBarrierWithGroupSync()
-#define ffxMax max
-#define ffxMin min
-
-// SPD HLSL Specifics
-#ifndef FFX_SPD_NO_WAVE_OPERATIONS
-    #define FFX_SPD_MAX_MIPS 12
-#endif
 
 FfxUInt32 ffxBitfieldExtract(FfxUInt32 src, FfxUInt32 off, FfxUInt32 bits)
 {
@@ -147,6 +135,7 @@ void SpdResetAtomicCounter(FfxUInt32 slice)
 }
 
 #define FFX_GPU
+#define FFX_GROUP_MEMORY_BARRIER GroupMemoryBarrierWithGroupSync()
 #include "ffx_spd.h"
 
 [numthreads(256, 1, 1)]
