@@ -66,7 +66,7 @@ namespace
             return {};
         }
 
-        std::streamsize size = file.tellg();
+        const std::streamsize size = file.tellg();
         file.seekg(0, std::ios::beg);
 
         std::vector<uint8_t> buffer(static_cast<size_t>(size));
@@ -116,8 +116,8 @@ namespace
                 continue;
 
             // Trim leading/trailing whitespace
-            size_t start = line.find_first_not_of(" \t\r\n");
-            size_t end = line.find_last_not_of(" \t\r\n");
+            const size_t start = line.find_first_not_of(" \t\r\n");
+            const size_t end = line.find_last_not_of(" \t\r\n");
             if (start == std::string::npos)
                 continue;
 
@@ -293,7 +293,7 @@ bool Renderer::LoadShaders()
         SDL_Log("[Init] Failed to get base path");
         return false;
     }
-    std::filesystem::path exeDir = basePathCStr;
+    const std::filesystem::path exeDir = basePathCStr;
 
     // Parse shaders.cfg to get list of shaders to load
     const std::filesystem::path configPath = exeDir / ".." / "src" / "shaders" / "shaders.cfg";
@@ -308,10 +308,10 @@ bool Renderer::LoadShaders()
     for (const ShaderMetadata& metadata : shaderMetadata)
     {
         // Determine output filename based on ShaderMake naming convention
-        std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata.sourcePath, std::string_view{metadata.entryPoint});
+        const std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata.sourcePath, std::string_view{metadata.entryPoint});
 
         // Read the compiled binary
-        std::vector<uint8_t> binary = ReadBinaryFile(outputPath);
+        const std::vector<uint8_t> binary = ReadBinaryFile(outputPath);
         if (binary.empty())
         {
             SDL_Log("[Init] Failed to load compiled shader: %s", outputPath.generic_string().c_str());
@@ -325,7 +325,7 @@ bool Renderer::LoadShaders()
         desc.debugName = outputPath.generic_string();
 
         // Create shader handle
-        nvrhi::ShaderHandle handle = m_NvrhiDevice->createShader(desc, binary.data(), binary.size());
+        const nvrhi::ShaderHandle handle = m_NvrhiDevice->createShader(desc, binary.data(), binary.size());
         if (!handle)
         {
             SDL_Log("[Init] Failed to create shader handle: %s", outputPath.generic_string().c_str());
@@ -333,7 +333,7 @@ bool Renderer::LoadShaders()
         }
 
         // Keyed by output stem (e.g., "imgui_VSMain") for easy retrieval
-        std::string key = outputPath.stem().string();
+        const std::string key = outputPath.stem().string();
         m_ShaderCache[key] = handle;
         SDL_Log("[Init] Loaded shader: %s (key=%s)", outputPath.generic_string().c_str(), key.c_str());
     }
@@ -529,8 +529,8 @@ void Renderer::Run()
         { \
             extern IRenderer* rendererName; \
             PROFILE_SCOPED(rendererName->GetName()) \
-            int readIndex = m_FrameNumber % 2; \
-            int writeIndex = (m_FrameNumber + 1) % 2; \
+            const int readIndex = m_FrameNumber % 2; \
+            const int writeIndex = (m_FrameNumber + 1) % 2; \
             if (m_NvrhiDevice->pollTimerQuery(rendererName->m_GPUQueries[readIndex])) \
             { \
                 rendererName->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_NvrhiDevice->getTimerQueryTime(rendererName->m_GPUQueries[readIndex])); \
@@ -771,7 +771,7 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
     });
 
     // Hash and lookup in cache
-    size_t h = HashBindingLayoutDesc(layoutDesc);
+    const size_t h = HashBindingLayoutDesc(layoutDesc);
     auto cacheIt = m_BindingLayoutCache.find(h);
     if (cacheIt != m_BindingLayoutCache.end())
     {
@@ -791,7 +791,7 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
 nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindlessLayout(const nvrhi::BindlessLayoutDesc& desc)
 {
     // Hash and lookup in cache
-    size_t h = HashBindlessLayoutDesc(desc);
+    const size_t h = HashBindlessLayoutDesc(desc);
     auto cacheIt = m_BindingLayoutCache.find(h);
     if (cacheIt != m_BindingLayoutCache.end())
     {
@@ -843,9 +843,9 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
         return UINT32_MAX;
     }
 
-    uint32_t index = m_NextTextureIndex++;
+    const uint32_t index = m_NextTextureIndex++;
     
-    nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
+    const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
     if (!m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
     {
         SDL_LOG_ASSERT_FAIL("Failed to register texture in global descriptor table", "[Renderer] Failed to register texture at index %u", index);
@@ -860,8 +860,8 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
 {
     // Hash relevant pipeline properties: VS/PS shader handles, input layout pointer,
     // primitive type and framebuffer color formats (first format).
-    nvrhi::ShaderHandle vs = pipelineDesc.VS;
-    nvrhi::ShaderHandle ps = pipelineDesc.PS;
+    const nvrhi::ShaderHandle vs = pipelineDesc.VS;
+    const nvrhi::ShaderHandle ps = pipelineDesc.PS;
 
     size_t h = 1469598103934665603ull;
     h = h * 1099511628211u + std::hash<const void*>()(vs.Get());
@@ -870,9 +870,7 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
     h = h * 1099511628211u + std::hash<int>()(static_cast<int>(pipelineDesc.primType));
 
     // Include first color format from fbInfo if present
-    nvrhi::Format colorFormat = nvrhi::Format::UNKNOWN;
-    if (!fbInfo.colorFormats.empty())
-        colorFormat = fbInfo.colorFormats[0];
+    const nvrhi::Format colorFormat = (!fbInfo.colorFormats.empty()) ? fbInfo.colorFormats[0] : nvrhi::Format::UNKNOWN;
     h = h * 1099511628211u + std::hash<int>()(static_cast<int>(colorFormat));
 
     // Include binding layouts handles in hash (pipeline layout depends on these)
@@ -906,8 +904,7 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerNam
     }
     else
     {
-        nvrhi::CommandListParameters params{};
-        params.queueType = nvrhi::CommandQueue::Graphics;
+        const nvrhi::CommandListParameters params{.queueType = nvrhi::CommandQueue::Graphics};
         handle = m_NvrhiDevice->createCommandList(params);
     }
 
