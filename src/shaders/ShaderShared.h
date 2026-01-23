@@ -50,15 +50,18 @@ struct ForwardLightingPerFrameData
 struct MaterialConstants
 {
   Vector4 m_BaseColor;
+  Vector4 m_EmissiveFactor; // rgb: emissive factor, a: unused
   Vector2 m_RoughnessMetallic; // x: roughness, y: metallic
   uint32_t m_TextureFlags;
   uint32_t m_AlbedoTextureIndex;
   uint32_t m_NormalTextureIndex;
   uint32_t m_RoughnessMetallicTextureIndex;
+  uint32_t m_EmissiveTextureIndex;
   uint32_t m_AlbedoSamplerIndex;
   uint32_t m_NormalSamplerIndex;
   uint32_t m_RoughnessSamplerIndex;
-  Vector3 m_Padding;
+  uint32_t m_EmissiveSamplerIndex;
+  uint32_t pad0;
 };
 
 struct MeshData
@@ -150,6 +153,7 @@ static const float PI = 3.14159265359f;
 #define TEXFLAG_ALBEDO (1u << 0)
 #define TEXFLAG_NORMAL (1u << 1)
 #define TEXFLAG_ROUGHNESS_METALLIC (1u << 2)
+#define TEXFLAG_EMISSIVE (1u << 3)
 
 // Default texture indices for bindless access
 #define DEFAULT_TEXTURE_BLACK 0

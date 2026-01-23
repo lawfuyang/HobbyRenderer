@@ -52,15 +52,18 @@ public:
     {
         std::string m_Name;
         Vector4 m_BaseColorFactor = Vector4{1.0f, 1.0f, 1.0f, 1.0f};
+        Vector3 m_EmissiveFactor = Vector3{0.0f, 0.0f, 0.0f};
         int m_BaseColorTexture = -1; // index into m_Textures
         int m_NormalTexture = -1;
         int m_MetallicRoughnessTexture = -1;
+        int m_EmissiveTexture = -1;
         float m_RoughnessFactor = 1.0f;
         float m_MetallicFactor = 0.0f;
         // Bindless indices
         uint32_t m_AlbedoTextureIndex = 1; // DEFAULT_TEXTURE_WHITE
         uint32_t m_NormalTextureIndex = 3; // DEFAULT_TEXTURE_NORMAL
         uint32_t m_RoughnessMetallicTextureIndex = 4; // DEFAULT_TEXTURE_PBR
+        uint32_t m_EmissiveTextureIndex = 0; // DEFAULT_TEXTURE_BLACK
     };
 
     struct Texture

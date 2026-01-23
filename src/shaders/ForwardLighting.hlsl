@@ -167,6 +167,11 @@ float4 PSMain(VSOut input) : SV_TARGET
         ? SampleBindlessTexture(mat.m_NormalTextureIndex, mat.m_NormalSamplerIndex, input.uv)
         : float4(0.5f, 0.5f, 1.0f, 0.0f);
 
+    bool hasEmissive = (mat.m_TextureFlags & TEXFLAG_EMISSIVE) != 0;
+    float4 emissiveSample = hasEmissive
+        ? SampleBindlessTexture(mat.m_EmissiveTextureIndex, mat.m_EmissiveSamplerIndex, input.uv)
+        : float4(1.0f, 1.0f, 1.0f, 1.0f);
+
     // Normal (from normal map when available)
     float3 N;
     if (hasNormal)
@@ -237,6 +242,14 @@ float4 PSMain(VSOut input) : SV_TARGET
     float3 radiance = float3(perFrame.m_LightIntensity, perFrame.m_LightIntensity, perFrame.m_LightIntensity);
     float3 ambient = (1.0f - NdotL) * baseColor * 0.03f; // IBL fallback
     float3 color = ambient + (diffuse + spec) * radiance * NdotL;
+
+    // Emissive
+    float3 emissive = mat.m_EmissiveFactor.xyz;
+    if (hasEmissive)
+    {
+        emissive *= emissiveSample.xyz;
+    }
+    color += emissive;
 
     return float4(color, alpha);
 }

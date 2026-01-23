@@ -181,6 +181,10 @@ static void ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene)
 		}
 
 		SetTextureAndSampler(data->materials[i].normal_texture.texture, scene.m_Materials.back().m_NormalTexture, samplerForImageIsWrap, data);
+		SetTextureAndSampler(data->materials[i].emissive_texture.texture, scene.m_Materials.back().m_EmissiveTexture, samplerForImageIsWrap, data);
+		scene.m_Materials.back().m_EmissiveFactor.x = data->materials[i].emissive_factor[0];
+		scene.m_Materials.back().m_EmissiveFactor.y = data->materials[i].emissive_factor[1];
+		scene.m_Materials.back().m_EmissiveFactor.z = data->materials[i].emissive_factor[2];
 	}
 
 	// Images -> textures (URI only)
@@ -265,6 +269,8 @@ static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 			mat.m_NormalTextureIndex = scene.m_Textures[mat.m_NormalTexture].m_BindlessIndex;
 		if (mat.m_MetallicRoughnessTexture != -1)
 			mat.m_RoughnessMetallicTextureIndex = scene.m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
+		if (mat.m_EmissiveTexture != -1)
+			mat.m_EmissiveTextureIndex = scene.m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
 	}
 
 	std::vector<MaterialConstants> materialConstants;
@@ -273,14 +279,17 @@ static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 	{
 		MaterialConstants mc{};
 		mc.m_BaseColor = mat.m_BaseColorFactor;
+		mc.m_EmissiveFactor = Vector4{ mat.m_EmissiveFactor.x, mat.m_EmissiveFactor.y, mat.m_EmissiveFactor.z, 1.0f };
 		mc.m_RoughnessMetallic = Vector2{ mat.m_RoughnessFactor, mat.m_MetallicFactor };
 		mc.m_TextureFlags = 0;
 		if (mat.m_BaseColorTexture != -1) mc.m_TextureFlags |= TEXFLAG_ALBEDO;
 		if (mat.m_NormalTexture != -1) mc.m_TextureFlags |= TEXFLAG_NORMAL;
 		if (mat.m_MetallicRoughnessTexture != -1) mc.m_TextureFlags |= TEXFLAG_ROUGHNESS_METALLIC;
+		if (mat.m_EmissiveTexture != -1) mc.m_TextureFlags |= TEXFLAG_EMISSIVE;
 		mc.m_AlbedoTextureIndex = mat.m_AlbedoTextureIndex;
 		mc.m_NormalTextureIndex = mat.m_NormalTextureIndex;
 		mc.m_RoughnessMetallicTextureIndex = mat.m_RoughnessMetallicTextureIndex;
+		mc.m_EmissiveTextureIndex = mat.m_EmissiveTextureIndex;
 		// Per-texture sampler indices (do not assume they are the same)
 		if (mat.m_BaseColorTexture != -1)
 			mc.m_AlbedoSamplerIndex = (uint32_t)scene.m_Textures[mat.m_BaseColorTexture].m_Sampler;
@@ -296,6 +305,11 @@ static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 			mc.m_RoughnessSamplerIndex = (uint32_t)scene.m_Textures[mat.m_MetallicRoughnessTexture].m_Sampler;
 		else
 			mc.m_RoughnessSamplerIndex = (uint32_t)Scene::Texture::Wrap;
+
+		if (mat.m_EmissiveTexture != -1)
+			mc.m_EmissiveSamplerIndex = (uint32_t)scene.m_Textures[mat.m_EmissiveTexture].m_Sampler;
+		else
+			mc.m_EmissiveSamplerIndex = (uint32_t)Scene::Texture::Wrap;
 		materialConstants.push_back(mc);
 	}
 
