@@ -585,6 +585,8 @@ void Renderer::Run()
 
         // Increment frame number for double buffering
         m_FrameNumber++;
+
+        MicroProfileFlip(nullptr);
     }
 }
 
