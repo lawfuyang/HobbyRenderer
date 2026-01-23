@@ -16,6 +16,8 @@ public:
         uint32_t m_VertexCount = 0;
         uint32_t m_IndexOffset = 0;
         uint32_t m_IndexCount = 0;
+        uint32_t m_MeshletOffset = 0;
+        uint32_t m_MeshletCount = 0;
         int m_MaterialIndex = -1;
         uint32_t m_MeshDataIndex = 0;
     };
@@ -120,10 +122,16 @@ public:
     nvrhi::BufferHandle m_IndexBuffer;
     nvrhi::BufferHandle m_MaterialConstantsBuffer;
     nvrhi::BufferHandle m_MeshDataBuffer;
+    nvrhi::BufferHandle m_MeshletBuffer;
+    nvrhi::BufferHandle m_MeshletVerticesBuffer;
+    nvrhi::BufferHandle m_MeshletTrianglesBuffer;
 
     // GPU buffers for instances
     std::vector<PerInstanceData> m_InstanceData;
     std::vector<MeshData> m_MeshData;
+    std::vector<Meshlet> m_Meshlets;
+    std::vector<uint32_t> m_MeshletVertices;
+    std::vector<uint8_t> m_MeshletTriangles;
     nvrhi::BufferHandle m_InstanceDataBuffer;
 
     // Load the scene from the path configured in `Config::Get().m_GltfScene`.

@@ -65,6 +65,18 @@ struct MeshData
 {
   uint32_t m_IndexOffset;
   uint32_t m_IndexCount;
+  uint32_t m_MeshletOffset;
+  uint32_t m_MeshletCount;
+};
+
+struct Meshlet
+{
+  Vector3 m_Center;
+  float m_Radius;
+  uint32_t m_VertexOffset;
+  uint32_t m_TriangleOffset;
+  uint32_t m_ConeAxisAndCutoff;
+  uint32_t pad0;
 };
 
 // Per-instance data for instanced rendering

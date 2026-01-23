@@ -370,6 +370,9 @@ static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<Vertex>& o
 	outVertices.clear();
 	outIndices.clear();
 	scene.m_MeshData.clear();
+	scene.m_Meshlets.clear();
+	scene.m_MeshletVertices.clear();
+	scene.m_MeshletTriangles.clear();
 
 	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 	{
@@ -448,6 +451,84 @@ static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<Vertex>& o
 				}
 			}
 
+			// Generate meshlets
+			if (p.m_IndexCount > 0)
+			{
+				const size_t max_vertices = 64;
+				const size_t max_triangles = 124;
+				const float cone_weight = 0.0f;
+
+				// We need indices relative to primitive's vertex start
+				std::vector<uint32_t> localIndices(p.m_IndexCount);
+				for (uint32_t i = 0; i < p.m_IndexCount; ++i)
+				{
+					localIndices[i] = outIndices[p.m_IndexOffset + i] - p.m_VertexOffset;
+				}
+
+				size_t max_meshlets = meshopt_buildMeshletsBound(p.m_IndexCount, max_vertices, max_triangles);
+				std::vector<meshopt_Meshlet> localMeshlets(max_meshlets);
+				std::vector<unsigned int> meshlet_vertices(max_meshlets * max_vertices);
+				std::vector<unsigned char> meshlet_triangles(max_meshlets * max_triangles * 3);
+
+				size_t meshlet_count = meshopt_buildMeshlets(localMeshlets.data(), meshlet_vertices.data(), meshlet_triangles.data(),
+					localIndices.data(), p.m_IndexCount, &outVertices[p.m_VertexOffset].m_Pos.x, p.m_VertexCount, sizeof(Vertex),
+					max_vertices, max_triangles, cone_weight);
+
+				localMeshlets.resize(meshlet_count);
+
+				p.m_MeshletOffset = (uint32_t)scene.m_Meshlets.size();
+				p.m_MeshletCount = (uint32_t)meshlet_count;
+
+				for (size_t i = 0; i < meshlet_count; ++i)
+				{
+					const meshopt_Meshlet& m = localMeshlets[i];
+
+					// Optimization
+					meshopt_optimizeMeshlet(&meshlet_vertices[m.vertex_offset], &meshlet_triangles[m.triangle_offset], m.triangle_count, m.vertex_count);
+
+					// Bounds
+					meshopt_Bounds bounds = meshopt_computeMeshletBounds(&meshlet_vertices[m.vertex_offset], &meshlet_triangles[m.triangle_offset],
+						m.triangle_count, &outVertices[p.m_VertexOffset].m_Pos.x, p.m_VertexCount, sizeof(Vertex));
+
+					SDL_assert(m.vertex_count <= UINT8_MAX);
+					SDL_assert(m.triangle_count <= UINT8_MAX);
+					SDL_assert(bounds.cone_cutoff_s8 <= (UINT8_MAX / 2));
+
+					Meshlet gpuMeshlet;
+					gpuMeshlet.m_VertexOffset = (uint32_t)(scene.m_MeshletVertices.size());
+					gpuMeshlet.m_TriangleOffset = (uint32_t)(scene.m_MeshletTriangles.size());
+
+					gpuMeshlet.m_Center = { bounds.center[0], bounds.center[1], bounds.center[2] };
+					gpuMeshlet.m_Radius = bounds.radius;
+
+					const uint32_t packedAxisX = (uint32_t)((bounds.cone_axis[0] + 1.0f) * 0.5f * UINT8_MAX);
+					const uint32_t packedAxisY = (uint32_t)((bounds.cone_axis[1] + 1.0f) * 0.5f * UINT8_MAX);
+					const uint32_t packedAxisZ = (uint32_t)((bounds.cone_axis[2] + 1.0f) * 0.5f * UINT8_MAX);
+					const uint32_t packedCutoff = (uint32_t)(bounds.cone_cutoff_s8 * 2);
+
+					SDL_assert(packedAxisX <= UINT8_MAX);
+					SDL_assert(packedAxisY <= UINT8_MAX);
+					SDL_assert(packedAxisZ <= UINT8_MAX);
+					SDL_assert(packedCutoff <= UINT8_MAX);
+
+					gpuMeshlet.m_ConeAxisAndCutoff = packedAxisX | (packedAxisY << 8) | (packedAxisZ << 16) | (packedCutoff << 24);
+
+					// Add vertices (adjust to global offset)
+					for (uint32_t v = 0; v < m.vertex_count; ++v)
+					{
+						scene.m_MeshletVertices.push_back(meshlet_vertices[m.vertex_offset + v] + p.m_VertexOffset);
+					}
+
+					// Add triangles
+					for (uint32_t t = 0; t < m.triangle_count * 3; ++t)
+					{
+						scene.m_MeshletTriangles.push_back(meshlet_triangles[m.triangle_offset + t]);
+					}
+
+					scene.m_Meshlets.push_back(gpuMeshlet);
+				}
+			}
+
 			p.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) : -1;
 
 			// Extract MeshData
@@ -457,7 +538,11 @@ static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<Vertex>& o
 			MeshData md;
 			md.m_IndexOffset = p.m_IndexOffset;
 			md.m_IndexCount = p.m_IndexCount;
+			md.m_MeshletOffset = p.m_MeshletOffset;
+			md.m_MeshletCount = p.m_MeshletCount;
 			scene.m_MeshData.push_back(md);
+
+			SDL_Log("  Primitive %zu: %u verts, %u indices -> %u meshlets", pi, p.m_VertexCount, p.m_IndexCount, p.m_MeshletCount);
 		}
 
 		Sphere s;
@@ -473,8 +558,18 @@ static void ProcessMeshes(cgltf_data* data, Scene& scene, std::vector<Vertex>& o
 		mesh.m_Center = s.Center;
 		mesh.m_Radius = s.Radius;
 
+		SDL_Log("[Scene] Mesh %zu [%s]: %zu primitives", mi, cgMesh.name ? cgMesh.name : "unnamed", cgMesh.primitives_count);
 		scene.m_Meshes.push_back(std::move(mesh));
 	}
+
+	SDL_Log("[Scene] ProcessMeshes completed:\n"
+		"  Vertices:          %zu\n"
+		"  Indices:           %zu\n"
+		"  Meshlets:          %zu\n"
+		"  Meshlet Vertices:  %zu\n"
+		"  Meshlet Triangles: %zu",
+		outVertices.size(), outIndices.size(), scene.m_Meshlets.size(), 
+		scene.m_MeshletVertices.size(), scene.m_MeshletTriangles.size() / 3);
 }
 
 static void ProcessNodesAndHierarchy(cgltf_data* data, Scene& scene)
@@ -665,6 +760,49 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		cmd->writeBuffer(scene.m_MeshDataBuffer, scene.m_MeshData.data(), scene.m_MeshData.size() * sizeof(MeshData), 0);
 	}
 
+	// Create meshlet buffers
+	if (!scene.m_Meshlets.empty())
+	{
+		nvrhi::BufferDesc desc{};
+		desc.byteSize = (uint32_t)(scene.m_Meshlets.size() * sizeof(Meshlet));
+		desc.structStride = sizeof(Meshlet);
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		scene.m_MeshletBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(scene.m_MeshletBuffer, "Scene_MeshletBuffer");
+
+		ScopedCommandList cmd{ "Upload Meshlets" };
+		cmd->writeBuffer(scene.m_MeshletBuffer, scene.m_Meshlets.data(), scene.m_Meshlets.size() * sizeof(Meshlet), 0);
+	}
+
+	if (!scene.m_MeshletVertices.empty())
+	{
+		nvrhi::BufferDesc desc{};
+		desc.byteSize = (uint32_t)(scene.m_MeshletVertices.size() * sizeof(uint32_t));
+		desc.structStride = sizeof(uint32_t);
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		scene.m_MeshletVerticesBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(scene.m_MeshletVerticesBuffer, "Scene_MeshletVerticesBuffer");
+
+		ScopedCommandList cmd{ "Upload Meshlet Vertices" };
+		cmd->writeBuffer(scene.m_MeshletVerticesBuffer, scene.m_MeshletVertices.data(), scene.m_MeshletVertices.size() * sizeof(uint32_t), 0);
+	}
+
+	if (!scene.m_MeshletTriangles.empty())
+	{
+		nvrhi::BufferDesc desc{};
+		desc.byteSize = (uint32_t)(scene.m_MeshletTriangles.size() * sizeof(uint8_t));
+		desc.structStride = sizeof(uint8_t);
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		scene.m_MeshletTrianglesBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		renderer->m_RHI.SetDebugName(scene.m_MeshletTrianglesBuffer, "Scene_MeshletTrianglesBuffer");
+
+		ScopedCommandList cmd{ "Upload Meshlet Triangles" };
+		cmd->writeBuffer(scene.m_MeshletTrianglesBuffer, scene.m_MeshletTriangles.data(), scene.m_MeshletTriangles.size() * sizeof(uint8_t), 0);
+	}
+
 	// Create instance data buffer
 	if (!scene.m_InstanceData.empty())
 	{
@@ -784,12 +922,18 @@ void Scene::Shutdown()
 	m_MaterialConstantsBuffer = nullptr;
 	m_InstanceDataBuffer = nullptr;
 	m_MeshDataBuffer = nullptr;
+	m_MeshletBuffer = nullptr;
+	m_MeshletVerticesBuffer = nullptr;
+	m_MeshletTrianglesBuffer = nullptr;
 
 	// Clear CPU-side containers
 	m_Meshes.clear();
 	m_Nodes.clear();
 	m_Materials.clear();
 	m_MeshData.clear();
+	m_Meshlets.clear();
+	m_MeshletVertices.clear();
+	m_MeshletTriangles.clear();
 	for (auto& tex : m_Textures)
 	{
 		tex.m_Handle = nullptr;
