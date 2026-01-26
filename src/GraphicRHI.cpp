@@ -410,30 +410,29 @@ bool GraphicRHI::CreateLogicalDevice()
 
     // Optional NVRHI-compatible device extensions for future-proofing
     const std::vector<const char*> optionalDeviceExtensions = {
-        // Core graphics extensions
+        // everything in nvrhi
+        VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME,
+        VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
+        VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+        VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_EXT_MESH_SHADER_EXTENSION_NAME,
+        //VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME,
+        //VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
+        //VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME,
+        //VK_NV_RAY_TRACING_LINEAR_SWEPT_SPHERES_EXTENSION_NAME,
+
+        // everything else i had to add manually
         VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
         VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
-        
-        // Ray tracing extensions and their dependencies
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
-        VK_KHR_RAY_QUERY_EXTENSION_NAME,
-        VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME,
-        
-        // Advanced rendering
-        VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
         VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
-        VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME,
-        VK_NV_MESH_SHADER_EXTENSION_NAME,
-        
-        // Debug extensions
-        VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
-        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-        
-        // Descriptor extensions
-        VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
     };
 
     // Filter to only supported extensions
@@ -453,6 +452,8 @@ bool GraphicRHI::CreateLogicalDevice()
     deviceFeatures.shaderInt64 = VK_TRUE;
 
     vk::PhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures{};
+    meshShaderFeatures.taskShader = VK_TRUE;
+    meshShaderFeatures.meshShader = VK_TRUE;
     meshShaderFeatures.meshShaderQueries = VK_TRUE;
 
     // Enable Vulkan 1.3 features
