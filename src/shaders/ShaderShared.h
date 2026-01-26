@@ -53,11 +53,12 @@ struct ForwardLightingPerFrameData
   Matrix m_View;
   Vector4 m_FrustumPlanes[5];
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
+  Vector4 m_CullingCameraPos; // xyz: culling camera position
   Vector3 m_LightDirection;
   float m_LightIntensity;
   uint32_t m_DebugMode;
   uint32_t m_EnableFrustumCulling;
-  uint32_t pad1;
+  uint32_t m_EnableConeCulling;
   uint32_t pad2;
 };
 

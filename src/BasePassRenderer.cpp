@@ -209,10 +209,19 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     cb.m_View = view;
     memcpy(cb.m_FrustumPlanes, frustumPlanes, sizeof(Vector4) * 5);
     cb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 0.0f };
+
+    Vector3 cullingCamPos = camPos;
+    if (renderer->m_FreezeCullingCamera)
+    {
+        cullingCamPos = renderer->m_FrozenCullingCameraPos;
+    }
+    cb.m_CullingCameraPos = Vector4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f };
+
     cb.m_LightDirection = renderer->m_Scene.GetDirectionalLightDirection();
     cb.m_LightIntensity = renderer->m_Scene.m_DirectionalLight.intensity / 10000.0f;
     cb.m_DebugMode = (uint32_t)renderer->m_DebugMode;
     cb.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
+    cb.m_EnableConeCulling = renderer->m_EnableConeCulling ? 1 : 0;
     commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
     if (renderer->m_UseMeshletRendering)

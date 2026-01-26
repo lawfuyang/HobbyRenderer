@@ -339,6 +339,26 @@ void ASMain(
         {
             bVisible = true;
         }
+
+        if (bVisible && g_PerFrame.m_EnableConeCulling)
+        {
+            uint packedCone = m.m_ConeAxisAndCutoff;
+            float3 coneAxis;
+            coneAxis.x = (float(packedCone & 0xFF) / 255.0f) * 2.0f - 1.0f;
+            coneAxis.y = (float((packedCone >> 8) & 0xFF) / 255.0f) * 2.0f - 1.0f;
+            coneAxis.z = (float((packedCone >> 16) & 0xFF) / 255.0f) * 2.0f - 1.0f;
+            float coneCutoff = float((packedCone >> 24) & 0xFF) / 254.0f;
+
+            float3x3 normalMatrix = MakeAdjugateMatrix(inst.m_World);
+            float3 worldConeAxis = normalize(mul(coneAxis, normalMatrix));
+            float3 dir = worldCenter.xyz - g_PerFrame.m_CullingCameraPos.xyz;
+            float d = length(dir);
+
+            if (dot(worldConeAxis, dir) >= coneCutoff * d + worldRadius)
+            {
+                bVisible = false;
+            }
+        }
     }
 
     if (bVisible)

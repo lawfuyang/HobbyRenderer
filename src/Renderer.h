@@ -205,11 +205,17 @@ struct Renderer
     // Frustum culling enable flag
     bool m_EnableFrustumCulling = true;
 
+    // Cone culling enable flag
+    bool m_EnableConeCulling = true;
+
     // Freeze culling camera flag
     bool m_FreezeCullingCamera = false;
 
     // Frozen culling view matrix
     Matrix m_FrozenCullingViewMatrix;
+
+    // Frozen culling camera position
+    Vector3 m_FrozenCullingCameraPos;
 
     // Occlusion culling enable flag
     bool m_EnableOcclusionCulling = true;

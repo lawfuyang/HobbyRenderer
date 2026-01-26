@@ -152,6 +152,7 @@ void ImGuiLayer::UpdateFrame()
         if (ImGui::TreeNode("Culling"))
         {
             ImGui::Checkbox("Enable Frustum Culling", &renderer->m_EnableFrustumCulling);
+            ImGui::Checkbox("Enable Cone Culling", &renderer->m_EnableConeCulling);
             ImGui::Checkbox("Enable Occlusion Culling", &renderer->m_EnableOcclusionCulling);
 
             bool prevFreeze = renderer->m_FreezeCullingCamera;
@@ -159,6 +160,7 @@ void ImGuiLayer::UpdateFrame()
             if (!prevFreeze && renderer->m_FreezeCullingCamera)
             {
                 renderer->m_FrozenCullingViewMatrix = renderer->m_Camera.GetViewMatrix();
+                renderer->m_FrozenCullingCameraPos = renderer->m_Camera.GetPosition();
             }
 
             ImGui::TreePop();
