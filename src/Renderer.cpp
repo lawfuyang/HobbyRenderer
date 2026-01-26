@@ -476,6 +476,9 @@ bool Renderer::Initialize()
         renderer->m_GPUQueries[1] = m_NvrhiDevice->createTimerQuery();
     }
 
+    m_GPUQueries[0] = m_NvrhiDevice->createTimerQuery();
+    m_GPUQueries[1] = m_NvrhiDevice->createTimerQuery();
+
     // Load scene (if configured) after all renderer resources are ready
     if (!m_Scene.LoadScene())
     {
@@ -536,13 +539,25 @@ void Renderer::Run()
         // Update camera (camera retrieves frame time internally)
         m_Camera.Update();
 
+        const int readIndex = m_FrameNumber % 2;
+        const int writeIndex = (m_FrameNumber + 1) % 2;
+
+        if (m_NvrhiDevice->pollTimerQuery(m_GPUQueries[readIndex]))
+        {
+            m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_NvrhiDevice->getTimerQueryTime(m_GPUQueries[readIndex]));
+            m_NvrhiDevice->resetTimerQuery(m_GPUQueries[readIndex]);
+        }
+
+        {
+            ScopedCommandList cmd{ "GPU Frame Begin" };
+            cmd->beginTimerQuery(m_GPUQueries[writeIndex]);
+        }
+
         // define macro for render pass below
         #define ADD_RENDER_PASS(rendererName) \
         { \
             extern IRenderer* rendererName; \
             PROFILE_SCOPED(rendererName->GetName()) \
-            const int readIndex = m_FrameNumber % 2; \
-            const int writeIndex = (m_FrameNumber + 1) % 2; \
             if (m_NvrhiDevice->pollTimerQuery(rendererName->m_GPUQueries[readIndex])) \
             { \
                 rendererName->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_NvrhiDevice->getTimerQueryTime(rendererName->m_GPUQueries[readIndex])); \
@@ -561,6 +576,11 @@ void Renderer::Run()
         ADD_RENDER_PASS(g_ImGuiRenderer);
 
         #undef ADD_RENDER_PASS
+
+        {
+            ScopedCommandList cmd{ "GPU Frame End" };
+            cmd->endTimerQuery(m_GPUQueries[writeIndex]);
+        }
 
         // Wait for GPU to finish all work before presenting
         {
@@ -628,6 +648,9 @@ void Renderer::Shutdown()
 
     // Free renderer instances
     m_Renderers.clear();
+
+    m_GPUQueries[0] = nullptr;
+    m_GPUQueries[1] = nullptr;
 
     m_BindingLayoutCache.clear();
     m_GraphicsPipelineCache.clear();

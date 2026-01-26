@@ -190,6 +190,7 @@ struct Renderer
 
     // Performance metrics
     double m_FrameTime = 0.0;
+    double m_GPUTime   = 0.0;
     double m_FPS       = 0.0;
 
     // Target FPS for frame rate limiting
@@ -254,6 +255,9 @@ private:
     nvrhi::DescriptorTableHandle m_GlobalTextureDescriptorTable;
     nvrhi::BindingLayoutHandle m_GlobalTextureBindingLayout;
     uint32_t m_NextTextureIndex = 0;
+
+    // GPU Timing
+    nvrhi::TimerQueryHandle m_GPUQueries[2];
 
     // Device / swapchain helpers
     bool CreateNvrhiDevice();
