@@ -219,6 +219,9 @@ struct Renderer
     // Use meshlet rendering path
     bool m_UseMeshletRendering = false;
 
+    // Debug mode for forward lighting
+    int m_DebugMode = 0;
+
     // SPD Atomic Counter for HZB
     nvrhi::BufferHandle m_SPDAtomicCounter;
 

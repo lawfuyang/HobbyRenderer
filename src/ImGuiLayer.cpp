@@ -74,6 +74,19 @@ void ImGuiLayer::UpdateFrame()
 
         ImGui::Checkbox("Enable Meshlet Rendering", &renderer->m_UseMeshletRendering);
 
+        // Debug mode dropdown
+        const char* debugModes[] = {
+            "None",
+            "Instances",
+            "Meshlets",
+            "World Normals",
+            "Albedo",
+            "Roughness",
+            "Metallic",
+            "Emissive"
+        };
+        ImGui::Combo("Debug Mode", &renderer->m_DebugMode, debugModes, IM_ARRAYSIZE(debugModes));
+
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {

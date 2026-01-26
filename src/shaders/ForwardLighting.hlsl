@@ -37,6 +37,7 @@ struct VSOut
     float2 uv : TEXCOORD0;
     float3 worldPos : TEXCOORD1;
     nointerpolation uint instanceID : TEXCOORD2;
+    nointerpolation uint meshletID : TEXCOORD3;
 };
 
 VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLocation)
@@ -54,6 +55,7 @@ VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLoca
     o.uv = v.m_Uv;
     o.worldPos = worldPos.xyz;
     o.instanceID = instanceID;
+    o.meshletID = 0xFFFFFFFF;
     return o;
 }
 
@@ -151,6 +153,17 @@ float4 SampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv)
         return tex.Sample(g_SamplerAnisoClamp, uv);
     else
         return tex.Sample(g_SamplerAnisoWrap, uv);
+}
+
+float3 HashColor(uint id)
+{
+    uint h = id * 0x27D4EB2Du;
+    h = h ^ (h >> 15);
+    h = h * 0x85EBCA6Bu;
+    h = h ^ (h >> 13);
+    h = h * 0xC2B2AE35u;
+    h = h ^ (h >> 16);
+    return float3((h & 0xFF) / 255.0f, ((h >> 8) & 0xFF) / 255.0f, ((h >> 16) & 0xFF) / 255.0f);
 }
 
 float4 PSMain(VSOut input) : SV_TARGET
@@ -259,6 +272,25 @@ float4 PSMain(VSOut input) : SV_TARGET
     }
     color += emissive;
 
+    // Debug visualizations
+    if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)
+    {
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_INSTANCES)
+            return float4(HashColor(input.instanceID), 1.0f);
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_MESHLETS)
+            return float4(HashColor(input.meshletID), 1.0f);
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_WORLD_NORMALS)
+            return float4(N, 1.0f);
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_ALBEDO)
+            return float4(baseColor, 1.0f);
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_ROUGHNESS)
+            return float4(roughness.xxx, 1.0f);
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_METALLIC)
+            return float4(metallic.xxx, 1.0f);
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_EMISSIVE)
+            return float4(emissive, 1.0f);
+    }
+
     return float4(color, alpha);
 }
 
@@ -329,6 +361,7 @@ void MSMain(
         vout[outputIdx].uv = v.m_Uv;
         vout[outputIdx].worldPos = worldPos.xyz;
         vout[outputIdx].instanceID = g_PerDraw.m_InstanceIndex;
+        vout[outputIdx].meshletID = meshletIndex;
     }
     
     if (outputIdx < m.m_TriangleCount)

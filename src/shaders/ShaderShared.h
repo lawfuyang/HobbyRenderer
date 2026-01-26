@@ -28,6 +28,15 @@ struct ImGuiPushConstants
 
 // Forward lighting related shared types
 
+#define DEBUG_MODE_NONE 0
+#define DEBUG_MODE_INSTANCES 1
+#define DEBUG_MODE_MESHLETS 2
+#define DEBUG_MODE_WORLD_NORMALS 3
+#define DEBUG_MODE_ALBEDO 4
+#define DEBUG_MODE_ROUGHNESS 5
+#define DEBUG_MODE_METALLIC 6
+#define DEBUG_MODE_EMISSIVE 7
+
 // Forward-lighting specific shared types.
 // Vertex input: provide simple C++ and HLSL variants
 struct Vertex
@@ -44,6 +53,10 @@ struct ForwardLightingPerFrameData
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
   Vector3 m_LightDirection;
   float m_LightIntensity;
+  uint32_t m_DebugMode;
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
 };
 
 struct ForwardLightingPerDrawData
