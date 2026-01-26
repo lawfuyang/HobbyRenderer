@@ -31,6 +31,17 @@ float3x3 MakeAdjugateMatrix(float4x4 m)
 	);
 }
 
+float GetMaxScale(float4x4 m)
+{
+    return max(length(m[0].xyz), max(length(m[1].xyz), length(m[2].xyz)));
+}
+
+float3 TransformNormal(float3 normal, float4x4 worldMatrix)
+{
+    float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(worldMatrix);
+    return normalize(mul(normal, adjugateWorldMatrix));
+}
+
 struct VSOut
 {
     float4 Position : SV_POSITION;
@@ -41,23 +52,25 @@ struct VSOut
     nointerpolation uint meshletID : TEXCOORD3;
 };
 
-VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLocation)
+VSOut PrepareVSOut(Vertex v, PerInstanceData inst, uint instanceID, uint meshletID)
 {
-    PerInstanceData inst = g_Instances[instanceID];
-    Vertex v = g_Vertices[vertexID];
     VSOut o;
     float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
     o.Position = mul(worldPos, g_PerFrame.m_ViewProj);
 
-    // Alien math to calculate the normal in world space, without inverse-transposing the world matrix
-    float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(inst.m_World);
-
-    o.normal = normalize(mul(v.m_Normal, adjugateWorldMatrix));
+    o.normal = TransformNormal(v.m_Normal, inst.m_World);
     o.uv = v.m_Uv;
     o.worldPos = worldPos.xyz;
     o.instanceID = instanceID;
-    o.meshletID = 0xFFFFFFFF;
+    o.meshletID = meshletID;
     return o;
+}
+
+VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLocation)
+{
+    PerInstanceData inst = g_Instances[instanceID];
+    Vertex v = g_Vertices[vertexID];
+    return PrepareVSOut(v, inst, instanceID, 0xFFFFFFFF);
 }
 
 struct MeshPayload
@@ -89,12 +102,7 @@ void ASMain(
         float3 viewCenter = mul(worldCenter, g_PerFrame.m_View).xyz;
 
         // Approximate world-space radius using max scale from world matrix
-        float3 scale;
-        scale.x = length(inst.m_World[0].xyz);
-        scale.y = length(inst.m_World[1].xyz);
-        scale.z = length(inst.m_World[2].xyz);
-        float maxScale = max(scale.x, max(scale.y, scale.z));
-        float worldRadius = m.m_Radius * maxScale;
+        float worldRadius = m.m_Radius * GetMaxScale(inst.m_World);
 
         if (g_PerFrame.m_EnableFrustumCulling)
         {
@@ -114,8 +122,7 @@ void ASMain(
             coneAxis.z = (float((packedCone >> 16) & 0xFF) / 255.0f) * 2.0f - 1.0f;
             float coneCutoff = float((packedCone >> 24) & 0xFF) / 254.0f;
 
-            float3x3 normalMatrix = MakeAdjugateMatrix(inst.m_World);
-            float3 worldConeAxis = normalize(mul(coneAxis, normalMatrix));
+            float3 worldConeAxis = TransformNormal(coneAxis, inst.m_World);
             float3 dir = worldCenter.xyz - g_PerFrame.m_CullingCameraPos.xyz;
             float d = length(dir);
 
@@ -161,16 +168,7 @@ void MSMain(
         Vertex v = g_Vertices[vertexIndex];
         
         PerInstanceData inst = g_Instances[g_PerDraw.m_InstanceIndex];
-        
-        float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
-        vout[outputIdx].Position = mul(worldPos, g_PerFrame.m_ViewProj);
-
-        float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(inst.m_World);
-        vout[outputIdx].normal = normalize(mul(v.m_Normal, adjugateWorldMatrix));
-        vout[outputIdx].uv = v.m_Uv;
-        vout[outputIdx].worldPos = worldPos.xyz;
-        vout[outputIdx].instanceID = g_PerDraw.m_InstanceIndex;
-        vout[outputIdx].meshletID = meshletIndex;
+        vout[outputIdx] = PrepareVSOut(v, inst, g_PerDraw.m_InstanceIndex, meshletIndex);
     }
     
     if (outputIdx < m.m_TriangleCount)
