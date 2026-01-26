@@ -60,6 +60,126 @@ VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLoca
     return o;
 }
 
+struct MeshPayload
+{
+    uint m_MeshletIndices[kAmplificationShaderThreadGroupSize];
+};
+
+groupshared MeshPayload s_Payload;
+
+[numthreads(kAmplificationShaderThreadGroupSize, 1, 1)]
+void ASMain(
+    uint3 dispatchThreadID : SV_DispatchThreadID,
+    uint3 groupThreadID : SV_GroupThreadID,
+    uint3 groupId : SV_GroupID,
+    uint groupIndex : SV_GroupIndex
+)
+{
+    bool bVisible = false;
+
+    uint meshletIndex = dispatchThreadID.x;
+    if (meshletIndex < g_PerDraw.m_MeshletCount)
+    {
+        uint absoluteMeshletIndex = g_PerDraw.m_MeshletOffset + meshletIndex;
+        Meshlet m = g_Meshlets[absoluteMeshletIndex];
+        PerInstanceData inst = g_Instances[g_PerDraw.m_InstanceIndex];
+
+        // Transform meshlet sphere to world space, then to view space
+        float4 worldCenter = mul(float4(m.m_Center, 1.0f), inst.m_World);
+        float3 viewCenter = mul(worldCenter, g_PerFrame.m_View).xyz;
+
+        // Approximate world-space radius using max scale from world matrix
+        float3 scale;
+        scale.x = length(inst.m_World[0].xyz);
+        scale.y = length(inst.m_World[1].xyz);
+        scale.z = length(inst.m_World[2].xyz);
+        float maxScale = max(scale.x, max(scale.y, scale.z));
+        float worldRadius = m.m_Radius * maxScale;
+
+        if (g_PerFrame.m_EnableFrustumCulling)
+        {
+            bVisible = FrustumSphereTest(viewCenter, worldRadius, g_PerFrame.m_FrustumPlanes);
+        }
+        else
+        {
+            bVisible = true;
+        }
+
+        if (bVisible && g_PerFrame.m_EnableConeCulling)
+        {
+            uint packedCone = m.m_ConeAxisAndCutoff;
+            float3 coneAxis;
+            coneAxis.x = (float(packedCone & 0xFF) / 255.0f) * 2.0f - 1.0f;
+            coneAxis.y = (float((packedCone >> 8) & 0xFF) / 255.0f) * 2.0f - 1.0f;
+            coneAxis.z = (float((packedCone >> 16) & 0xFF) / 255.0f) * 2.0f - 1.0f;
+            float coneCutoff = float((packedCone >> 24) & 0xFF) / 254.0f;
+
+            float3x3 normalMatrix = MakeAdjugateMatrix(inst.m_World);
+            float3 worldConeAxis = normalize(mul(coneAxis, normalMatrix));
+            float3 dir = worldCenter.xyz - g_PerFrame.m_CullingCameraPos.xyz;
+            float d = length(dir);
+
+            if (dot(worldConeAxis, dir) >= coneCutoff * d + worldRadius)
+            {
+                bVisible = false;
+            }
+        }
+    }
+
+    if (bVisible)
+    {
+        uint payloadIdx = WavePrefixCountBits(bVisible);
+        s_Payload.m_MeshletIndices[payloadIdx] = g_PerDraw.m_MeshletOffset + meshletIndex;
+    }
+
+    uint numVisible = WaveActiveCountBits(bVisible);
+    DispatchMesh(numVisible, 1, 1, s_Payload);
+}
+
+[numthreads(kMaxMeshletTriangles, 1, 1)]
+[outputtopology("triangle")]
+void MSMain(
+    uint3 dispatchThreadID : SV_DispatchThreadID,
+    uint3 groupThreadID : SV_GroupThreadID,
+    uint3 groupId : SV_GroupID,
+    uint groupIndex : SV_GroupIndex,
+    in payload MeshPayload payload,
+    out vertices VSOut vout[kMaxMeshletVertices],
+    out indices uint3 triangles[kMaxMeshletTriangles]
+)
+{
+    uint meshletIndex = payload.m_MeshletIndices[groupId.x];
+    uint outputIdx = groupThreadID.x;
+
+    Meshlet m = g_Meshlets[meshletIndex];
+    
+    SetMeshOutputCounts(m.m_VertexCount, m.m_TriangleCount);
+    
+    if (outputIdx < m.m_VertexCount)
+    {
+        uint vertexIndex = g_MeshletVertices[m.m_VertexOffset + outputIdx];
+        Vertex v = g_Vertices[vertexIndex];
+        
+        PerInstanceData inst = g_Instances[g_PerDraw.m_InstanceIndex];
+        
+        float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
+        vout[outputIdx].Position = mul(worldPos, g_PerFrame.m_ViewProj);
+
+        float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(inst.m_World);
+        vout[outputIdx].normal = normalize(mul(v.m_Normal, adjugateWorldMatrix));
+        vout[outputIdx].uv = v.m_Uv;
+        vout[outputIdx].worldPos = worldPos.xyz;
+        vout[outputIdx].instanceID = g_PerDraw.m_InstanceIndex;
+        vout[outputIdx].meshletID = meshletIndex;
+    }
+    
+    if (outputIdx < m.m_TriangleCount)
+    {
+        uint packedTri = g_MeshletTriangles[m.m_TriangleOffset + outputIdx];
+        triangles[outputIdx] = uint3(packedTri & 0xFF, (packedTri >> 8) & 0xFF, (packedTri >> 16) & 0xFF);
+    }
+}
+
 // Unpacks a 2 channel normal to xyz
 float3 TwoChannelNormalX2(float2 normal)
 {
@@ -293,124 +413,4 @@ float4 PSMain(VSOut input) : SV_TARGET
     }
 
     return float4(color, alpha);
-}
-
-struct MeshPayload
-{
-    uint m_MeshletIndices[kAmplificationShaderThreadGroupSize];
-};
-
-groupshared MeshPayload s_Payload;
-
-[numthreads(kAmplificationShaderThreadGroupSize, 1, 1)]
-void ASMain(
-    uint3 dispatchThreadID : SV_DispatchThreadID,
-    uint3 groupThreadID : SV_GroupThreadID,
-    uint3 groupId : SV_GroupID,
-    uint groupIndex : SV_GroupIndex
-)
-{
-    bool bVisible = false;
-
-    uint meshletIndex = dispatchThreadID.x;
-    if (meshletIndex < g_PerDraw.m_MeshletCount)
-    {
-        uint absoluteMeshletIndex = g_PerDraw.m_MeshletOffset + meshletIndex;
-        Meshlet m = g_Meshlets[absoluteMeshletIndex];
-        PerInstanceData inst = g_Instances[g_PerDraw.m_InstanceIndex];
-
-        // Transform meshlet sphere to world space, then to view space
-        float4 worldCenter = mul(float4(m.m_Center, 1.0f), inst.m_World);
-        float3 viewCenter = mul(worldCenter, g_PerFrame.m_View).xyz;
-
-        // Approximate world-space radius using max scale from world matrix
-        float3 scale;
-        scale.x = length(inst.m_World[0].xyz);
-        scale.y = length(inst.m_World[1].xyz);
-        scale.z = length(inst.m_World[2].xyz);
-        float maxScale = max(scale.x, max(scale.y, scale.z));
-        float worldRadius = m.m_Radius * maxScale;
-
-        if (g_PerFrame.m_EnableFrustumCulling)
-        {
-            bVisible = FrustumSphereTest(viewCenter, worldRadius, g_PerFrame.m_FrustumPlanes);
-        }
-        else
-        {
-            bVisible = true;
-        }
-
-        if (bVisible && g_PerFrame.m_EnableConeCulling)
-        {
-            uint packedCone = m.m_ConeAxisAndCutoff;
-            float3 coneAxis;
-            coneAxis.x = (float(packedCone & 0xFF) / 255.0f) * 2.0f - 1.0f;
-            coneAxis.y = (float((packedCone >> 8) & 0xFF) / 255.0f) * 2.0f - 1.0f;
-            coneAxis.z = (float((packedCone >> 16) & 0xFF) / 255.0f) * 2.0f - 1.0f;
-            float coneCutoff = float((packedCone >> 24) & 0xFF) / 254.0f;
-
-            float3x3 normalMatrix = MakeAdjugateMatrix(inst.m_World);
-            float3 worldConeAxis = normalize(mul(coneAxis, normalMatrix));
-            float3 dir = worldCenter.xyz - g_PerFrame.m_CullingCameraPos.xyz;
-            float d = length(dir);
-
-            if (dot(worldConeAxis, dir) >= coneCutoff * d + worldRadius)
-            {
-                bVisible = false;
-            }
-        }
-    }
-
-    if (bVisible)
-    {
-        uint payloadIdx = WavePrefixCountBits(bVisible);
-        s_Payload.m_MeshletIndices[payloadIdx] = g_PerDraw.m_MeshletOffset + meshletIndex;
-    }
-
-    uint numVisible = WaveActiveCountBits(bVisible);
-    DispatchMesh(numVisible, 1, 1, s_Payload);
-}
-
-[numthreads(kMaxMeshletTriangles, 1, 1)]
-[outputtopology("triangle")]
-void MSMain(
-    uint3 dispatchThreadID : SV_DispatchThreadID,
-    uint3 groupThreadID : SV_GroupThreadID,
-    uint3 groupId : SV_GroupID,
-    uint groupIndex : SV_GroupIndex,
-    in payload MeshPayload payload,
-    out vertices VSOut vout[kMaxMeshletVertices],
-    out indices uint3 triangles[kMaxMeshletTriangles]
-)
-{
-    uint meshletIndex = payload.m_MeshletIndices[groupId.x];
-    uint outputIdx = groupThreadID.x;
-
-    Meshlet m = g_Meshlets[meshletIndex];
-    
-    SetMeshOutputCounts(m.m_VertexCount, m.m_TriangleCount);
-    
-    if (outputIdx < m.m_VertexCount)
-    {
-        uint vertexIndex = g_MeshletVertices[m.m_VertexOffset + outputIdx];
-        Vertex v = g_Vertices[vertexIndex];
-        
-        PerInstanceData inst = g_Instances[g_PerDraw.m_InstanceIndex];
-        
-        float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
-        vout[outputIdx].Position = mul(worldPos, g_PerFrame.m_ViewProj);
-
-        float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(inst.m_World);
-        vout[outputIdx].normal = normalize(mul(v.m_Normal, adjugateWorldMatrix));
-        vout[outputIdx].uv = v.m_Uv;
-        vout[outputIdx].worldPos = worldPos.xyz;
-        vout[outputIdx].instanceID = g_PerDraw.m_InstanceIndex;
-        vout[outputIdx].meshletID = meshletIndex;
-    }
-    
-    if (outputIdx < m.m_TriangleCount)
-    {
-        uint packedTri = g_MeshletTriangles[m.m_TriangleOffset + outputIdx];
-        triangles[outputIdx] = uint3(packedTri & 0xFF, (packedTri >> 8) & 0xFF, (packedTri >> 16) & 0xFF);
-    }
 }
