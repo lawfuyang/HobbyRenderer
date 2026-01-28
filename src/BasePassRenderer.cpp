@@ -449,9 +449,6 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         return;
     }
 
-    // ============================================================================
-    // Pipeline Statistics Query
-    // ============================================================================
     const int readIndex = renderer->m_FrameNumber % 2;
     const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
     if (renderer->m_RHI->m_NvrhiDevice->pollPipelineStatisticsQuery(m_PipelineQueries[readIndex]))
@@ -461,9 +458,6 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     }
     commandList->beginPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
 
-    // ============================================================================
-    // 2-Phase Occlusion Culling
-    // ============================================================================
     Camera* const cam = &renderer->m_Camera;
     const Matrix viewProj = cam->GetViewProjMatrix();
     Matrix viewProjForCulling = viewProj;
@@ -475,6 +469,18 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     }
     const Matrix proj = cam->GetProjMatrix();
     const Vector3 camPos = renderer->m_Camera.GetPosition();
+
+    // Compute frustum planes
+    Vector4 frustumPlanes[5];
+    ComputeFrustumPlanes(proj, frustumPlanes);
+
+    if (renderer->m_FreezeCullingCamera)
+    {
+        // viewProj = view * proj
+        const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_FrozenCullingViewMatrix);
+        const DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
+        DirectX::XMStoreFloat4x4(&viewProjForCulling, v * p);
+    }
 
     // Allocate buffers once. Primitives/meshlet counts are static for this scene.
     if (!m_VisibleIndirectBuffer)
@@ -530,23 +536,6 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     if (renderer->m_UseMeshletRendering)
     {
         commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
-    }
-
-    // Compute frustum planes in LH view space
-    Vector4 frustumPlanes[5];
-    if (renderer->m_FreezeCullingCamera)
-    {
-        // viewProj = view * proj
-        const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_FrozenCullingViewMatrix);
-        const DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
-        DirectX::XMStoreFloat4x4(&viewProjForCulling, v * p);
-
-        // Compute frustum planes in LH view space from frozen projection matrix
-        ComputeFrustumPlanes(proj, frustumPlanes);
-    }
-    else
-    {
-        ComputeFrustumPlanes(proj, frustumPlanes);
     }
 
     // ===== PHASE 1: Coarse culling against previous frame HZB =====
