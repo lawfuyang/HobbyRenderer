@@ -159,12 +159,9 @@ struct Renderer
     // ============================================================================
 
     SDL_Window* m_Window = nullptr;
-    GraphicRHI m_RHI{};
-    nvrhi::DeviceHandle m_NvrhiDevice;
+    std::unique_ptr<GraphicRHI> m_RHI;
 
-    // Swapchain textures
-    nvrhi::TextureHandle m_SwapchainTextures[GraphicRHI::SwapchainImageCount] = {};
-    uint32_t m_CurrentSwapchainImage = 0;
+    uint32_t m_CurrentSwapchainImageIdx = 0;
 
     // Depth buffer for main framebuffer
     nvrhi::TextureHandle m_DepthTexture;
@@ -265,12 +262,8 @@ private:
     // GPU Timing
     nvrhi::TimerQueryHandle m_GPUQueries[2];
 
-    // Device / swapchain helpers
-    bool CreateNvrhiDevice();
-    bool CreateSwapchainTextures();
-    void DestroySwapchainTextures();
-    bool CreateHZBTextures();
-    void DestroyHZBTextures();
+    bool CreateDepthTextures();
+    void DestroyDepthTextures();
 
     // Shader loading
     bool LoadShaders();

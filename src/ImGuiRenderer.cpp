@@ -57,7 +57,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
     // Framebuffer Setup
     // ============================================================================
     nvrhi::TextureHandle renderTarget = renderer->GetCurrentBackBufferTexture();
-    nvrhi::FramebufferHandle framebuffer = renderer->m_NvrhiDevice->createFramebuffer(
+    nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
         nvrhi::FramebufferDesc().addColorAttachment(renderTarget));
 
     // ============================================================================
@@ -84,7 +84,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
         bufferDesc.initialState = nvrhi::ResourceStates::VertexBuffer;
         bufferDesc.keepInitialState = true;
 
-        m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(bufferDesc);
+        m_VertexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(bufferDesc);
         m_VertexBufferSize = (uint32_t)vertex_size;
     }
 
@@ -105,7 +105,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
         bufferDesc.initialState = nvrhi::ResourceStates::IndexBuffer;
         bufferDesc.keepInitialState = true;
 
-        m_IndexBuffer = renderer->m_NvrhiDevice->createBuffer(bufferDesc);
+        m_IndexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(bufferDesc);
         m_IndexBufferSize = (uint32_t)index_size;
     }
 
@@ -145,7 +145,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
     pipelineDesc.renderState.depthStencilState = CommonResources::GetInstance().DepthDisabled;
 
     nvrhi::FramebufferInfoEx fbInfo;
-    fbInfo.colorFormats = { renderer->m_RHI.VkFormatToNvrhiFormat(renderer->m_RHI.m_SwapchainFormat) };
+    fbInfo.colorFormats = { renderer->m_RHI->m_SwapchainFormat };
     state.framebuffer = framebuffer;
 
     // ============================================================================
@@ -164,7 +164,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
         bindingSetDesc, nvrhi::ShaderType::All);
     pipelineDesc.bindingLayouts = { layoutForSet };
 
-    nvrhi::BindingSetHandle bindingSet = renderer->m_NvrhiDevice->createBindingSet(bindingSetDesc, layoutForSet);
+    nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bindingSetDesc, layoutForSet);
     state.bindings = { bindingSet };
 
     // Setup vertex and index buffers
@@ -276,7 +276,7 @@ bool ImGuiRenderer::CreateDeviceObjects()
         };
 
         // Note: vertexShader parameter is only used by DX11 backend, unused in Vulkan
-        m_InputLayout = renderer->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
+        m_InputLayout = renderer->m_RHI->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
         
         if (!m_InputLayout)
         {
@@ -303,7 +303,7 @@ bool ImGuiRenderer::CreateDeviceObjects()
         textureDesc.isUAV = false;
         textureDesc.debugName = "ImGui Font Texture";
 
-        m_FontTexture = renderer->m_NvrhiDevice->createTexture(textureDesc);
+        m_FontTexture = renderer->m_RHI->m_NvrhiDevice->createTexture(textureDesc);
         
         if (!m_FontTexture)
         {

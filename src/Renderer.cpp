@@ -25,37 +25,6 @@ REGISTER_RENDERER(ClearRenderer);
 
 namespace
 {
-    class NvrhiErrorCallback : public nvrhi::IMessageCallback
-    {
-    public:
-        void message(nvrhi::MessageSeverity severity, const char* messageText) override
-        {
-            const char* severityStr = "Unknown";
-            switch (severity)
-            {
-                case nvrhi::MessageSeverity::Info:
-                    severityStr = "Info";
-                    break;
-                case nvrhi::MessageSeverity::Warning:
-                    severityStr = "Warning";
-                    break;
-                case nvrhi::MessageSeverity::Error:
-                    severityStr = "Error";
-                    break;
-                case nvrhi::MessageSeverity::Fatal:
-                    severityStr = "Fatal";
-                    break;
-            }
-            SDL_Log("[NVRHI %s] %s", severityStr, messageText);
-
-            // Assert on warning and above
-            if (severity >= nvrhi::MessageSeverity::Warning)
-            {
-                SDL_assert(false && messageText);
-            }
-        }
-    };
-
     // Read a binary file into memory
     std::vector<uint8_t> ReadBinaryFile(const std::filesystem::path& path)
     {
@@ -337,7 +306,7 @@ bool Renderer::LoadShaders()
         desc.debugName = outputPath.generic_string();
 
         // Create shader handle
-        const nvrhi::ShaderHandle handle = m_NvrhiDevice->createShader(desc, binary.data(), binary.size());
+        const nvrhi::ShaderHandle handle = m_RHI->m_NvrhiDevice->createShader(desc, binary.data(), binary.size());
         if (!handle)
         {
             SDL_Log("[Init] Failed to create shader handle: %s", outputPath.generic_string().c_str());
@@ -373,7 +342,7 @@ nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
 
 nvrhi::TextureHandle Renderer::GetCurrentBackBufferTexture() const
 {
-    return m_SwapchainTextures[m_CurrentSwapchainImage];
+    return m_RHI->m_NvrhiSwapchainTextures[m_CurrentSwapchainImageIdx];
 }
 
 bool Renderer::Initialize()
@@ -393,23 +362,20 @@ bool Renderer::Initialize()
         return false;
     }
 
-    if (!m_RHI.Initialize(m_Window))
+    m_RHI = CreateGraphicRHI(Config::Get().m_GraphicsAPI);
+    if (!m_RHI->Initialize(m_Window))
     {
         Shutdown();
         return false;
     }
+
+    SDL_assert(m_RHI->m_NvrhiDevice && "NVRHI device is null after RHI initialization");
 
     int windowWidth = 0;
     int windowHeight = 0;
     SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
 
-    if (!m_RHI.CreateSwapchain(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight)))
-    {
-        Shutdown();
-        return false;
-    }
-
-    if (!CreateNvrhiDevice())
+    if (!m_RHI->CreateSwapchain(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight)))
     {
         Shutdown();
         return false;
@@ -437,13 +403,7 @@ bool Renderer::Initialize()
         return false;
     }
 
-    if (!CreateSwapchainTextures())
-    {
-        Shutdown();
-        return false;
-    }
-
-    if (!CreateHZBTextures())
+    if (!CreateDepthTextures())
     {
         Shutdown();
         return false;
@@ -472,12 +432,12 @@ bool Renderer::Initialize()
             return false;
         }
         m_Renderers.push_back(renderer);
-        renderer->m_GPUQueries[0] = m_NvrhiDevice->createTimerQuery();
-        renderer->m_GPUQueries[1] = m_NvrhiDevice->createTimerQuery();
+        renderer->m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
+        renderer->m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
     }
 
-    m_GPUQueries[0] = m_NvrhiDevice->createTimerQuery();
-    m_GPUQueries[1] = m_NvrhiDevice->createTimerQuery();
+    m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
+    m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
 
     // Load scene (if configured) after all renderer resources are ready
     if (!m_Scene.LoadScene())
@@ -504,7 +464,7 @@ void Renderer::Run()
         const uint64_t frameStart = SDL_GetTicksNS();
         const uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / m_TargetFPS;
 
-        if (!m_RHI.AcquireNextSwapchainImage(&m_CurrentSwapchainImage))
+        if (!m_RHI->AcquireNextSwapchainImage(&m_CurrentSwapchainImageIdx))
         {
             SDL_LOG_ASSERT_FAIL("AcquireNextSwapchainImage failed", "[Run ] AcquireNextSwapchainImage failed");
             break;
@@ -530,7 +490,7 @@ void Renderer::Run()
 
         {
             PROFILE_SCOPED("Garbage Collection");
-            m_NvrhiDevice->runGarbageCollection();
+            m_RHI->m_NvrhiDevice->runGarbageCollection();
         }
 
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)
@@ -542,10 +502,10 @@ void Renderer::Run()
         const int readIndex = m_FrameNumber % 2;
         const int writeIndex = (m_FrameNumber + 1) % 2;
 
-        if (m_NvrhiDevice->pollTimerQuery(m_GPUQueries[readIndex]))
+        if (m_RHI->m_NvrhiDevice->pollTimerQuery(m_GPUQueries[readIndex]))
         {
-            m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_NvrhiDevice->getTimerQueryTime(m_GPUQueries[readIndex]));
-            m_NvrhiDevice->resetTimerQuery(m_GPUQueries[readIndex]);
+            m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(m_GPUQueries[readIndex]));
+            m_RHI->m_NvrhiDevice->resetTimerQuery(m_GPUQueries[readIndex]);
         }
 
         {
@@ -558,10 +518,10 @@ void Renderer::Run()
         { \
             extern IRenderer* rendererName; \
             PROFILE_SCOPED(rendererName->GetName()) \
-            if (m_NvrhiDevice->pollTimerQuery(rendererName->m_GPUQueries[readIndex])) \
+            if (m_RHI->m_NvrhiDevice->pollTimerQuery(rendererName->m_GPUQueries[readIndex])) \
             { \
-                rendererName->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_NvrhiDevice->getTimerQueryTime(rendererName->m_GPUQueries[readIndex])); \
-                m_NvrhiDevice->resetTimerQuery(rendererName->m_GPUQueries[readIndex]); \
+                rendererName->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(rendererName->m_GPUQueries[readIndex])); \
+                m_RHI->m_NvrhiDevice->resetTimerQuery(rendererName->m_GPUQueries[readIndex]); \
             } \
             SimpleTimer cpuTimer; \
             ScopedCommandList cmd{ rendererName->GetName() }; \
@@ -585,14 +545,14 @@ void Renderer::Run()
         // Wait for GPU to finish all work before presenting
         {
             PROFILE_SCOPED("WaitForIdle");
-            m_NvrhiDevice->waitForIdle();
+            m_RHI->m_NvrhiDevice->waitForIdle();
         }
 
         // Execute any queued GPU work in submission order
         ExecutePendingCommandLists();
 
         // Present swapchain
-        if (!m_RHI.PresentSwapchain(m_CurrentSwapchainImage))
+        if (!m_RHI->PresentSwapchain(m_CurrentSwapchainImageIdx))
         {
             SDL_LOG_ASSERT_FAIL("PresentSwapchain failed", "[Run ] PresentSwapchain failed");
             break;
@@ -632,8 +592,8 @@ void Renderer::Shutdown()
     m_PendingCommandLists.clear();
     m_CommandListFreeList.clear();
 
-    m_NvrhiDevice->waitForIdle();
-    m_NvrhiDevice->runGarbageCollection();
+    m_RHI->m_NvrhiDevice->waitForIdle();
+    m_RHI->m_NvrhiDevice->runGarbageCollection();
 
     m_ImGuiLayer.Shutdown();
     CommonResources::GetInstance().Shutdown();
@@ -658,14 +618,12 @@ void Renderer::Shutdown()
     m_MeshletPipelineCache.clear();
 
     UnloadShaders();
-    DestroyHZBTextures();
-    DestroySwapchainTextures();
+    DestroyDepthTextures();
 
-    m_NvrhiDevice->waitForIdle();
-    m_NvrhiDevice->runGarbageCollection();
-    m_NvrhiDevice = nullptr;
+    m_RHI->m_NvrhiDevice->waitForIdle();
+    m_RHI->m_NvrhiDevice->runGarbageCollection();
 
-    m_RHI.Shutdown();
+    m_RHI->Shutdown();
 
     if (m_Window)
     {
@@ -685,46 +643,6 @@ void Renderer::SetCameraFromSceneCamera(const Scene::Camera& sceneCam)
         m_Camera.SetFromMatrix(worldTransform);
         m_Camera.SetProjection(sceneCam.m_Projection);
     }
-}
-
-bool Renderer::CreateNvrhiDevice()
-{
-    SDL_Log("[Init] Creating NVRHI Vulkan device");
-
-    static NvrhiErrorCallback errorCallback;
-
-    nvrhi::vulkan::DeviceDesc deviceDesc;
-    deviceDesc.errorCB = &errorCallback;
-    deviceDesc.instance = static_cast<VkInstance>(m_RHI.m_Instance);
-    deviceDesc.physicalDevice = m_RHI.m_PhysicalDevice;
-    deviceDesc.device = m_RHI.m_Device;
-    deviceDesc.graphicsQueue = m_RHI.m_GraphicsQueue;
-    deviceDesc.graphicsQueueIndex = m_RHI.m_GraphicsQueueFamily;
-    
-    // Provide instance and device extensions for NVRHI to query support
-    deviceDesc.instanceExtensions = const_cast<const char**>(m_RHI.GetInstanceExtensions().data());
-    deviceDesc.numInstanceExtensions = m_RHI.GetInstanceExtensions().size();
-    deviceDesc.deviceExtensions = const_cast<const char**>(m_RHI.GetDeviceExtensions().data());
-    deviceDesc.numDeviceExtensions = m_RHI.GetDeviceExtensions().size();
-
-    m_NvrhiDevice = nvrhi::vulkan::createDevice(deviceDesc);
-    if (!m_NvrhiDevice)
-    {
-        SDL_LOG_ASSERT_FAIL("Failed to create NVRHI device", "[Init] Failed to create NVRHI device");
-        return false;
-    }
-
-    SDL_Log("[Init] NVRHI Vulkan device created successfully");
-
-    // Wrap with validation layer if enabled
-    if (Config::Get().m_EnableValidation)
-    {
-        SDL_Log("[Init] Wrapping device with NVRHI validation layer");
-        m_NvrhiDevice = nvrhi::validation::createValidationLayer(m_NvrhiDevice);
-        SDL_Log("[Init] NVRHI validation layer enabled");
-    }
-
-    return true;
 }
 
 // Hash helper for BindingLayoutDesc
@@ -815,7 +733,7 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
     }
 
     // Not found - create it and cache it
-    nvrhi::BindingLayoutHandle handle = m_NvrhiDevice->createBindingLayout(layoutDesc);
+    nvrhi::BindingLayoutHandle handle = m_RHI->m_NvrhiDevice->createBindingLayout(layoutDesc);
     if (handle)
     {
         m_BindingLayoutCache.emplace(h, handle);
@@ -835,7 +753,7 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindlessLayout(const nvrhi::Bind
     }
 
     // Not found - create it and cache it
-    nvrhi::BindingLayoutHandle handle = m_NvrhiDevice->createBindlessLayout(desc);
+    nvrhi::BindingLayoutHandle handle = m_RHI->m_NvrhiDevice->createBindlessLayout(desc);
     if (handle)
     {
         m_BindingLayoutCache.emplace(h, handle);
@@ -860,7 +778,7 @@ bool Renderer::InitializeGlobalBindlessTextures()
     }
 
     // Create descriptor table
-    m_GlobalTextureDescriptorTable = m_NvrhiDevice->createDescriptorTable(m_GlobalTextureBindingLayout);
+    m_GlobalTextureDescriptorTable = m_RHI->m_NvrhiDevice->createDescriptorTable(m_GlobalTextureBindingLayout);
     if (!m_GlobalTextureDescriptorTable)
     {
         SDL_LOG_ASSERT_FAIL("Failed to create global texture descriptor table", "[Renderer] Failed to create global texture descriptor table");
@@ -882,7 +800,7 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
     const uint32_t index = m_NextTextureIndex++;
     
     const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
-    if (!m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
+    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
     {
         SDL_LOG_ASSERT_FAIL("Failed to register texture in global descriptor table", "[Renderer] Failed to register texture at index %u", index);
         return UINT32_MAX;
@@ -920,7 +838,7 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
         return it->second;
 
     // Create pipeline and cache it
-    nvrhi::GraphicsPipelineHandle pipeline = m_NvrhiDevice->createGraphicsPipeline(pipelineDesc, fbInfo);
+    nvrhi::GraphicsPipelineHandle pipeline = m_RHI->m_NvrhiDevice->createGraphicsPipeline(pipelineDesc, fbInfo);
     SDL_assert(pipeline && "Failed to create graphics pipeline");
     if (pipeline)
     {
@@ -958,7 +876,7 @@ nvrhi::MeshletPipelineHandle Renderer::GetOrCreateMeshletPipeline(const nvrhi::M
         return it->second;
 
     // Create pipeline and cache it
-    nvrhi::MeshletPipelineHandle pipeline = m_NvrhiDevice->createMeshletPipeline(pipelineDesc, fbInfo);
+    nvrhi::MeshletPipelineHandle pipeline = m_RHI->m_NvrhiDevice->createMeshletPipeline(pipelineDesc, fbInfo);
     SDL_assert(pipeline && "Failed to create meshlet pipeline");
     if (pipeline)
     {
@@ -979,7 +897,7 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerNam
     else
     {
         const nvrhi::CommandListParameters params{.queueType = nvrhi::CommandQueue::Graphics};
-        handle = m_NvrhiDevice->createCommandList(params);
+        handle = m_RHI->m_NvrhiDevice->createCommandList(params);
     }
 
     SDL_assert(handle && "Failed to acquire command list");
@@ -1012,90 +930,40 @@ void Renderer::ExecutePendingCommandLists()
             rawLists.push_back(handle.Get());
         }
 
-        m_NvrhiDevice->executeCommandLists(rawLists.data(), rawLists.size());
+        m_RHI->m_NvrhiDevice->executeCommandLists(rawLists.data(), rawLists.size());
         m_PendingCommandLists.clear();
     }
 }
 
-bool Renderer::CreateSwapchainTextures()
+bool Renderer::CreateDepthTextures()
 {
-    SDL_Log("[Init] Creating NVRHI swap chain texture handles");
-
-    // Convert VkFormat to nvrhi::Format
-    const nvrhi::Format nvrhiFormat = GraphicRHI::VkFormatToNvrhiFormat(m_RHI.m_SwapchainFormat);
-    if (nvrhiFormat == nvrhi::Format::UNKNOWN)
-    {
-        SDL_LOG_ASSERT_FAIL("Unsupported swapchain format", "[Init] Unsupported swapchain format: %d", m_RHI.m_SwapchainFormat);
-        return false;
-    }
-
-    for (size_t i = 0; i < GraphicRHI::SwapchainImageCount; ++i)
-    {
-        nvrhi::TextureDesc textureDesc;
-        textureDesc.width = m_RHI.m_SwapchainExtent.width;
-        textureDesc.height = m_RHI.m_SwapchainExtent.height;
-        textureDesc.format = nvrhiFormat;
-        textureDesc.debugName = "SwapchainImage_" + std::to_string(i);
-        textureDesc.isRenderTarget = true;
-        textureDesc.isUAV = false;
-        textureDesc.initialState = nvrhi::ResourceStates::Present;
-        textureDesc.keepInitialState = true;
-
-        nvrhi::TextureHandle texture = m_NvrhiDevice->createHandleForNativeTexture(
-            nvrhi::ObjectTypes::VK_Image,
-            nvrhi::Object(m_RHI.m_SwapchainImages[i]),
-            textureDesc
-        );
-
-        if (!texture)
-        {
-            SDL_LOG_ASSERT_FAIL("Failed to create NVRHI texture handle", "[Init] Failed to create NVRHI texture handle for swap chain image %zu", i);
-            return false;
-        }
-
-        m_SwapchainTextures[i] = texture;
-    }
+    SDL_Log("[Init] Creating Depth textures");
 
     // Create a depth texture for the main framebuffer
     nvrhi::TextureDesc depthDesc;
-    depthDesc.width = m_RHI.m_SwapchainExtent.width;
-    depthDesc.height = m_RHI.m_SwapchainExtent.height;
+    depthDesc.width = m_RHI->m_SwapchainExtent.x;
+    depthDesc.height = m_RHI->m_SwapchainExtent.y;
     depthDesc.format = nvrhi::Format::D32;
     depthDesc.debugName = "DepthBuffer";
     depthDesc.isRenderTarget = true;
     depthDesc.isUAV = false;
     depthDesc.initialState = nvrhi::ResourceStates::DepthWrite;
 
-    m_DepthTexture = m_NvrhiDevice->createTexture(depthDesc);
+    m_DepthTexture = m_RHI->m_NvrhiDevice->createTexture(depthDesc);
     if (!m_DepthTexture)
     {
         SDL_LOG_ASSERT_FAIL("Failed to create depth texture", "[Init] Failed to create depth texture");
         return false;
     }
 
-    SDL_Log("[Init] Created %u NVRHI swap chain texture handles", GraphicRHI::SwapchainImageCount);
-    return true;
-}
-
-void Renderer::DestroySwapchainTextures()
-{
-    SDL_Log("[Shutdown] Destroying swap chain texture handles");
-    for (size_t i = 0; i < GraphicRHI::SwapchainImageCount; ++i)
-    {
-        m_SwapchainTextures[i] = nullptr;
-    }
-    m_DepthTexture = nullptr;
-}
-
-bool Renderer::CreateHZBTextures()
-{
-    SDL_Log("[Init] Creating HZB textures");
-
     // Calculate HZB resolution - use next lower power of 2 for each dimension
-    uint32_t hzbWidth = NextLowerPow2(m_RHI.m_SwapchainExtent.width);
-    uint32_t hzbHeight = NextLowerPow2(m_RHI.m_SwapchainExtent.height);
-    hzbWidth = hzbWidth > m_RHI.m_SwapchainExtent.width ? hzbWidth >> 1 : hzbWidth;
-    hzbHeight = hzbHeight > m_RHI.m_SwapchainExtent.height ? hzbHeight >> 1 : hzbHeight;
+    uint32_t sw = m_RHI->m_SwapchainExtent.x;
+    uint32_t sh = m_RHI->m_SwapchainExtent.y;
+
+    uint32_t hzbWidth = NextLowerPow2(sw);
+    uint32_t hzbHeight = NextLowerPow2(sh);
+    hzbWidth = hzbWidth > sw ? hzbWidth >> 1 : hzbWidth;
+    hzbHeight = hzbHeight > sh ? hzbHeight >> 1 : hzbHeight;
 
     // Calculate number of mip levels
     uint32_t maxDim = std::max(hzbWidth, hzbHeight);
@@ -1118,7 +986,7 @@ bool Renderer::CreateHZBTextures()
     hzbDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
     hzbDesc.dimension = nvrhi::TextureDimension::Texture2D;
 
-    m_HZBTexture = m_NvrhiDevice->createTexture(hzbDesc);
+    m_HZBTexture = m_RHI->m_NvrhiDevice->createTexture(hzbDesc);
     if (!m_HZBTexture)
     {
         SDL_LOG_ASSERT_FAIL("Failed to create HZB texture", "[Init] Failed to create HZB texture");
@@ -1132,7 +1000,7 @@ bool Renderer::CreateHZBTextures()
     counterDesc.canHaveUAVs = true;
     counterDesc.debugName = "SPD Atomic Counter";
     counterDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-    m_SPDAtomicCounter = m_NvrhiDevice->createBuffer(counterDesc);
+    m_SPDAtomicCounter = m_RHI->m_NvrhiDevice->createBuffer(counterDesc);
 
     ScopedCommandList cmd{ "HZB_Clear" };
     cmd->clearTextureFloat(m_HZBTexture, nvrhi::AllSubresources, DEPTH_FAR);
@@ -1141,9 +1009,11 @@ bool Renderer::CreateHZBTextures()
     return true;
 }
 
-void Renderer::DestroyHZBTextures()
+void Renderer::DestroyDepthTextures()
 {
-    SDL_Log("[Shutdown] Destroying HZB textures");
+    SDL_Log("[Shutdown] Destroying Depth textures");
+
+    m_DepthTexture = nullptr;
     m_HZBTexture = nullptr;
     m_SPDAtomicCounter = nullptr;
 }
@@ -1164,7 +1034,7 @@ nvrhi::ComputePipelineHandle Renderer::GetOrCreateComputePipeline(nvrhi::ShaderH
     nvrhi::ComputePipelineDesc desc;
     desc.CS = shader;
     desc.bindingLayouts = { bindingLayout };
-    nvrhi::ComputePipelineHandle pipeline = m_NvrhiDevice->createComputePipeline(desc);
+    nvrhi::ComputePipelineHandle pipeline = m_RHI->m_NvrhiDevice->createComputePipeline(desc);
     SDL_assert(pipeline && "Failed to create compute pipeline");
     if (pipeline)
     {

@@ -7,7 +7,7 @@
 bool CommonResources::Initialize()
 {
     Renderer* renderer = Renderer::GetInstance();
-    nvrhi::IDevice* device = renderer->m_NvrhiDevice;
+    nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
     nvrhi::GraphicsAPI api = device->getGraphicsAPI();
 
     // Helper lambda to create samplers with error checking

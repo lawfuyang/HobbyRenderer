@@ -236,7 +236,7 @@ static void LoadTexturesFromImages(Scene& scene, const cgltf_data* data, const s
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = tex.m_Uri.c_str();
-		tex.m_Handle = renderer->m_NvrhiDevice->createTexture(desc);
+		tex.m_Handle = renderer->m_RHI->m_NvrhiDevice->createTexture(desc);
 		if (!tex.m_Handle)
 		{
 			SDL_LOG_ASSERT_FAIL("Texture creation failed", "[Scene] GPU texture creation failed for %s", tex.m_Uri.c_str());
@@ -321,7 +321,7 @@ static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
 			.setDebugName("MaterialConstantsBuffer");
-		scene.m_MaterialConstantsBuffer = renderer->m_NvrhiDevice->createBuffer(matBufDesc);
+		scene.m_MaterialConstantsBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(matBufDesc);
 
 		ScopedCommandList cmd{ "Upload MaterialConstants" };
 		cmd->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(MaterialConstants));
@@ -742,7 +742,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_VertexBuffer";
-		scene.m_VertexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_VertexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 	}
 
 	if (ibytes > 0)
@@ -753,7 +753,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::IndexBuffer;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_IndexBuffer";
-		scene.m_IndexBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_IndexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 	}
 
 	if (scene.m_VertexBuffer || scene.m_IndexBuffer)
@@ -774,7 +774,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshDataBuffer";
-		scene.m_MeshDataBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshDataBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		ScopedCommandList cmd{ "Upload Mesh Data" };
 		cmd->writeBuffer(scene.m_MeshDataBuffer, scene.m_MeshData.data(), scene.m_MeshData.size() * sizeof(MeshData), 0);
@@ -789,7 +789,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshletBuffer";
-		scene.m_MeshletBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshletBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		ScopedCommandList cmd{ "Upload Meshlets" };
 		cmd->writeBuffer(scene.m_MeshletBuffer, scene.m_Meshlets.data(), scene.m_Meshlets.size() * sizeof(Meshlet), 0);
@@ -803,7 +803,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshletVerticesBuffer";
-		scene.m_MeshletVerticesBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshletVerticesBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		ScopedCommandList cmd{ "Upload Meshlet Vertices" };
 		cmd->writeBuffer(scene.m_MeshletVerticesBuffer, scene.m_MeshletVertices.data(), scene.m_MeshletVertices.size() * sizeof(uint32_t), 0);
@@ -817,7 +817,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshletTrianglesBuffer";
-		scene.m_MeshletTrianglesBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshletTrianglesBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		ScopedCommandList cmd{ "Upload Meshlet Triangles" };
 		cmd->writeBuffer(scene.m_MeshletTrianglesBuffer, scene.m_MeshletTriangles.data(), scene.m_MeshletTriangles.size() * sizeof(uint32_t), 0);
@@ -832,7 +832,7 @@ static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const st
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_InstanceDataBuffer";
-		scene.m_InstanceDataBuffer = renderer->m_NvrhiDevice->createBuffer(desc);
+		scene.m_InstanceDataBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 	}
 
 	// Upload instance data

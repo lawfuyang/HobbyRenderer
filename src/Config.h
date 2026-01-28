@@ -5,6 +5,7 @@
 struct Config
 {
     // Graphics settings
+    nvrhi::GraphicsAPI m_GraphicsAPI = nvrhi::GraphicsAPI::VULKAN;
     bool m_EnableValidation = false;
     bool m_EnableGPUAssistedValidation = false;
     // Path to a glTF scene to load (empty = none)

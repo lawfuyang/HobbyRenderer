@@ -73,7 +73,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     }
 
     const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), phase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
-    const nvrhi::BufferHandle cullCB = renderer->m_NvrhiDevice->createBuffer(cullCBD);
+    const nvrhi::BufferHandle cullCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cullCBD);
 
     CullingConstants cullData;
     cullData.m_NumPrimitives = numPrimitives;
@@ -108,7 +108,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
     };
     const nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset, nvrhi::ShaderType::Compute);
-    const nvrhi::BindingSetHandle cullBindingSet = renderer->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
+    const nvrhi::BindingSetHandle cullBindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
 
     nvrhi::ComputeState cullState;
     cullState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_Culling_CSMain"), cullLayout);
@@ -165,15 +165,15 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     const char* const markerName = (phase == 0) ? "Base Pass Render - Visible Instances" : "Base Pass Render - Occlusion Tested Instances";
     nvrhi::utils::ScopedMarker commandListMarker(commandList, markerName);
 
-    const nvrhi::FramebufferHandle framebuffer = renderer->m_NvrhiDevice->createFramebuffer(
+    const nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
         nvrhi::FramebufferDesc().addColorAttachment(renderer->GetCurrentBackBufferTexture()).setDepthAttachment(renderer->m_DepthTexture));
 
     nvrhi::FramebufferInfoEx fbInfo;
-    fbInfo.colorFormats = { renderer->m_RHI.VkFormatToNvrhiFormat(renderer->m_RHI.m_SwapchainFormat) };
+    fbInfo.colorFormats = { renderer->m_RHI->m_SwapchainFormat };
     fbInfo.setDepthFormat(nvrhi::Format::D32);
 
-    const uint32_t w = renderer->m_RHI.m_SwapchainExtent.width;
-    const uint32_t h = renderer->m_RHI.m_SwapchainExtent.height;
+    const uint32_t w = renderer->m_RHI->m_SwapchainExtent.x;
+    const uint32_t h = renderer->m_RHI->m_SwapchainExtent.y;
 
     nvrhi::ViewportState viewportState;
     viewportState.viewports.push_back(nvrhi::Viewport(0.0f, (float)w, 0.0f, (float)h, 0.0f, 1.0f));
@@ -185,7 +185,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
 
     const nvrhi::BufferDesc cbd = nvrhi::utils::CreateVolatileConstantBufferDesc(
         (uint32_t)sizeof(ForwardLightingPerFrameData), "PerFrameCB", 1);
-    const nvrhi::BufferHandle perFrameCB = renderer->m_NvrhiDevice->createBuffer(cbd);
+    const nvrhi::BufferHandle perFrameCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cbd);
 
     nvrhi::BindingSetDesc bset;
     bset.bindings =
@@ -205,7 +205,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         nvrhi::BindingSetItem::Sampler(2, CommonResources::GetInstance().MinReductionClamp)
     };
     const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, nvrhi::ShaderType::All);
-    const nvrhi::BindingSetHandle bindingSet = renderer->m_NvrhiDevice->createBindingSet(bset, layout);
+    const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
     ForwardLightingPerFrameData cb{};
     cb.m_ViewProj = viewProj;
@@ -300,7 +300,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
         nvrhi::utils::ScopedMarker hzbFromDepthMarker{ commandList, "HZB From Depth" };
 
         const nvrhi::BufferDesc hzbFromDepthCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(HZBFromDepthConstants), "HZBFromDepthCB", 1);
-        const nvrhi::BufferHandle hzbFromDepthCB = renderer->m_NvrhiDevice->createBuffer(hzbFromDepthCBD);
+        const nvrhi::BufferHandle hzbFromDepthCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(hzbFromDepthCBD);
 
         HZBFromDepthConstants hzbFromDepthData;
         hzbFromDepthData.m_Width = renderer->m_HZBTexture->getDesc().width;
@@ -316,7 +316,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
             nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
         };
         const nvrhi::BindingLayoutHandle hzbFromDepthLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(hzbFromDepthBset, nvrhi::ShaderType::Compute);
-        const nvrhi::BindingSetHandle hzbFromDepthBindingSet = renderer->m_NvrhiDevice->createBindingSet(hzbFromDepthBset, hzbFromDepthLayout);
+        const nvrhi::BindingSetHandle hzbFromDepthBindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(hzbFromDepthBset, hzbFromDepthLayout);
 
         nvrhi::ComputeState hzbFromDepthState;
         hzbFromDepthState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("HZBFromDepth_HZBFromDepth_CSMain"), hzbFromDepthLayout);
@@ -353,7 +353,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     spdData.m_WorkGroupOffset.y = workGroupOffset[1];
 
     const nvrhi::BufferDesc spdCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(spdData), "SpdCB", 1);
-    const nvrhi::BufferHandle spdCB = renderer->m_NvrhiDevice->createBuffer(spdCBD);
+    const nvrhi::BufferHandle spdCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(spdCBD);
     commandList->writeBuffer(spdCB, &spdData, sizeof(spdData), 0);
 
     // Clear atomic counter
@@ -378,7 +378,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     spdBset.bindings.push_back(nvrhi::BindingSetItem::StructuredBuffer_UAV(12, renderer->m_SPDAtomicCounter));
 
     const nvrhi::BindingLayoutHandle spdLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(spdBset, nvrhi::ShaderType::Compute);
-    const nvrhi::BindingSetHandle spdBindingSet = renderer->m_NvrhiDevice->createBindingSet(spdBset, spdLayout);
+    const nvrhi::BindingSetHandle spdBindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(spdBset, spdLayout);
 
     nvrhi::ComputeState spdState;
     spdState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("HZBDownsampleSPD_HZBDownsampleSPD_CSMain"), spdLayout);
@@ -393,8 +393,8 @@ bool BasePassRenderer::Initialize()
     Renderer* renderer = Renderer::GetInstance();
 
     // Create pipeline statistics queries for double buffering
-    m_PipelineQueries[0] = renderer->m_NvrhiDevice->createPipelineStatisticsQuery();
-    m_PipelineQueries[1] = renderer->m_NvrhiDevice->createPipelineStatisticsQuery();
+    m_PipelineQueries[0] = renderer->m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
+    m_PipelineQueries[1] = renderer->m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
 
     // Create constant-sized buffers
     const nvrhi::BufferDesc visibleCountBufDesc = nvrhi::BufferDesc()
@@ -405,7 +405,7 @@ bool BasePassRenderer::Initialize()
         .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
         .setKeepInitialState(true)
         .setDebugName("VisibleCount");
-    m_VisibleCountBuffer = renderer->m_NvrhiDevice->createBuffer(visibleCountBufDesc);
+    m_VisibleCountBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(visibleCountBufDesc);
 
     const nvrhi::BufferDesc occludedCountBufDesc = nvrhi::BufferDesc()
         .setByteSize(sizeof(uint32_t))
@@ -414,7 +414,7 @@ bool BasePassRenderer::Initialize()
         .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
         .setKeepInitialState(true)
         .setDebugName("OccludedCount");
-    m_OccludedCountBuffer = renderer->m_NvrhiDevice->createBuffer(occludedCountBufDesc);
+    m_OccludedCountBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(occludedCountBufDesc);
 
     const nvrhi::BufferDesc occludedIndirectBufDesc = nvrhi::BufferDesc()
         .setByteSize(sizeof(DispatchIndirectArguments))
@@ -424,7 +424,7 @@ bool BasePassRenderer::Initialize()
         .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
         .setKeepInitialState(true)
         .setDebugName("OccludedIndirectBuffer");
-    m_OccludedIndirectBuffer = renderer->m_NvrhiDevice->createBuffer(occludedIndirectBufDesc);
+    m_OccludedIndirectBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(occludedIndirectBufDesc);
 
     const nvrhi::BufferDesc meshletJobCountBufDesc = nvrhi::BufferDesc()
         .setByteSize(sizeof(uint32_t))
@@ -434,7 +434,7 @@ bool BasePassRenderer::Initialize()
         .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
         .setKeepInitialState(true)
         .setDebugName("MeshletJobCount");
-    m_MeshletJobCountBuffer = renderer->m_NvrhiDevice->createBuffer(meshletJobCountBufDesc);
+    m_MeshletJobCountBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletJobCountBufDesc);
 
     return true;
 }
@@ -454,10 +454,10 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     // ============================================================================
     const int readIndex = renderer->m_FrameNumber % 2;
     const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
-    if (renderer->m_NvrhiDevice->pollPipelineStatisticsQuery(m_PipelineQueries[readIndex]))
+    if (renderer->m_RHI->m_NvrhiDevice->pollPipelineStatisticsQuery(m_PipelineQueries[readIndex]))
     {
-        renderer->m_MainViewPipelineStatistics = renderer->m_NvrhiDevice->getPipelineStatistics(m_PipelineQueries[readIndex]);
-        renderer->m_NvrhiDevice->resetPipelineStatisticsQuery(m_PipelineQueries[readIndex]);
+        renderer->m_MainViewPipelineStatistics = renderer->m_RHI->m_NvrhiDevice->getPipelineStatistics(m_PipelineQueries[readIndex]);
+        renderer->m_RHI->m_NvrhiDevice->resetPipelineStatisticsQuery(m_PipelineQueries[readIndex]);
     }
     commandList->beginPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
 
@@ -487,7 +487,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
             .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
             .setKeepInitialState(true)
             .setDebugName("VisibleIndirectBuffer");
-        m_VisibleIndirectBuffer = renderer->m_NvrhiDevice->createBuffer(visibleIndirectBufDesc);
+        m_VisibleIndirectBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(visibleIndirectBufDesc);
 
         const nvrhi::BufferDesc occludedIndicesBufDesc = nvrhi::BufferDesc()
             .setByteSize(numPrimitives * sizeof(uint32_t))
@@ -496,7 +496,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
             .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
             .setKeepInitialState(true)
             .setDebugName("OccludedIndices");
-        m_OccludedIndicesBuffer = renderer->m_NvrhiDevice->createBuffer(occludedIndicesBufDesc);
+        m_OccludedIndicesBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(occludedIndicesBufDesc);
     }
 
     if (!m_MeshletIndirectBuffer)
@@ -509,7 +509,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
             .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
             .setKeepInitialState(true)
             .setDebugName("MeshletIndirectBuffer");
-        m_MeshletIndirectBuffer = renderer->m_NvrhiDevice->createBuffer(meshletIndirectBufDesc);
+        m_MeshletIndirectBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletIndirectBufDesc);
     }
 
     if (!m_MeshletJobBuffer)
@@ -521,7 +521,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
             .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
             .setKeepInitialState(true)
             .setDebugName("MeshletJobBuffer");
-        m_MeshletJobBuffer = renderer->m_NvrhiDevice->createBuffer(meshletJobBufDesc);
+        m_MeshletJobBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletJobBufDesc);
     }
 
     // Clear count buffers
