@@ -275,28 +275,38 @@ static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sc
 			continue;
 		}
 
-		std::string fullPath = (sceneDir / tex.m_Uri).string();
-		cgltf_decode_uri(fullPath.data());
+		std::string decodedUri = tex.m_Uri;
+		cgltf_decode_uri(decodedUri.data());
+		decodedUri = decodedUri.c_str();
+
+		std::filesystem::path fullPath = sceneDir / decodedUri;
+
+		// DDS Prioritization: check for .dds version first
+		std::filesystem::path ddsPath = fullPath;
+		ddsPath.replace_extension(".dds");
+		if (std::filesystem::exists(ddsPath))
+		{
+			fullPath = ddsPath;
+		}
 
 		if (!std::filesystem::exists(fullPath))
 		{
-			SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.c_str());
+			SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.string().c_str());
 			continue;
 		}
 
 		nvrhi::TextureDesc desc;
 		std::vector<uint8_t> imgData;
-		LoadSTBITexture(fullPath, desc, imgData);
-		if (imgData.empty())
+		if (!LoadTexture(fullPath.string(), desc, imgData))
 		{
-			SDL_LOG_ASSERT_FAIL("Texture loading failed", "[Scene] Texture loading failed for %s", tex.m_Uri.c_str());
+			SDL_LOG_ASSERT_FAIL("Texture loading failed", "[Scene] Texture loading failed for %s", fullPath.string().c_str());
 			continue;
 		}
 
 		desc.isShaderResource = true;
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
-		desc.debugName = tex.m_Uri.c_str();
+		desc.debugName = fullPath.string();
 		tex.m_Handle = renderer->m_RHI->m_NvrhiDevice->createTexture(desc);
 		if (!tex.m_Handle)
 		{
@@ -305,10 +315,33 @@ static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sc
 		}
 
 		ScopedCommandList cmd{ "Upload Texture" };
-		const size_t bytesPerPixel = nvrhi::getFormatInfo(desc.format).bytesPerBlock;
-		const size_t rowPitch = (size_t)desc.width * bytesPerPixel;
-		const size_t depthPitch = rowPitch * (size_t)desc.height;
-		cmd->writeTexture(tex.m_Handle, 0, 0, imgData.data(), rowPitch, depthPitch);
+		const nvrhi::FormatInfo& info = nvrhi::getFormatInfo(desc.format);
+		size_t offset = 0;
+		for (uint32_t arraySlice = 0; arraySlice < desc.arraySize; ++arraySlice)
+		{
+			for (uint32_t mipLevel = 0; mipLevel < desc.mipLevels; ++mipLevel)
+			{
+				uint32_t mipWidth = std::max(1u, desc.width >> mipLevel);
+				uint32_t mipHeight = std::max(1u, desc.height >> mipLevel);
+				uint32_t mipDepth = std::max(1u, desc.depth >> mipLevel);
+
+				uint32_t widthInBlocks = (mipWidth + info.blockSize - 1) / info.blockSize;
+				uint32_t heightInBlocks = (mipHeight + info.blockSize - 1) / info.blockSize;
+
+				size_t rowPitch = (size_t)widthInBlocks * info.bytesPerBlock;
+				size_t slicePitch = (size_t)heightInBlocks * rowPitch;
+				size_t subresourceSize = slicePitch * mipDepth;
+
+				if (offset + subresourceSize > imgData.size())
+				{
+					SDL_Log("[Scene] Data overflow for texture %s at mip %u", fullPath.string().c_str(), mipLevel);
+					break;
+				}
+
+				cmd->writeTexture(tex.m_Handle, arraySlice, mipLevel, imgData.data() + offset, rowPitch, slicePitch);
+				offset += subresourceSize;
+			}
+		}
 
 		tex.m_BindlessIndex = renderer->RegisterTexture(tex.m_Handle);
 		if (tex.m_BindlessIndex == UINT32_MAX)

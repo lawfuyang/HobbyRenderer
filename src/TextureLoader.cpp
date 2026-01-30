@@ -221,3 +221,23 @@ void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::v
 
     stbi_image_free(img);
 }
+
+bool LoadTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::vector<uint8_t>& data)
+{
+    std::filesystem::path path(filePath);
+    std::string extension = path.extension().string();
+    for (char& c : extension) c = (char)std::tolower(c);
+
+    if (extension == ".dds")
+    {
+        LoadDDSTexture(filePath, desc, data);
+        return !data.empty();
+    }
+    else
+    {
+        LoadSTBITexture(filePath, desc, data);
+        return !data.empty();
+    }
+
+    return false;
+}
