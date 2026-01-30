@@ -317,10 +317,13 @@ float4 PSMain(VSOut input) : SV_TARGET
 
     // Alpha test (discard) as early as possible
     float alpha = hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
+    
+#if ALPHA_TEST
     if (mat.m_AlphaMode == ALPHA_MODE_MASK && alpha < mat.m_AlphaCutoff)
     {
         discard;
     }
+#endif
 
     bool hasORM = (mat.m_TextureFlags & TEXFLAG_ROUGHNESS_METALLIC) != 0;
     float4 ormSample = hasORM

@@ -54,14 +54,43 @@ namespace
     {
         std::filesystem::path sourcePath;
         std::string entryPoint;
+        std::string suffix;
+        std::vector<std::string> defines;
         nvrhi::ShaderType shaderType = nvrhi::ShaderType::None;
     };
 
-    // ShaderMake naming: <sourcefile_without_ext>_<EntryPoint>.spirv
-    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& exeDir, const std::filesystem::path& sourcePath, std::string_view entryPoint)
+    uint32_t HashToUint(size_t hash)
     {
-        std::filesystem::path filename = sourcePath.stem();
-        std::string outName = filename.string() + "_" + std::string(entryPoint) + ".spirv";
+        return uint32_t(hash ^ (hash >> 32));
+    }
+
+    // ShaderMake naming: <sourcefile_without_ext>_<EntryPoint><Suffix>[_<Hash>].spirv
+    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& exeDir, const ShaderMetadata& metadata)
+    {
+        std::filesystem::path filename = metadata.sourcePath.stem();
+        std::string outName = filename.string() + "_" + metadata.entryPoint + metadata.suffix;
+
+        if (!metadata.defines.empty())
+        {
+            std::vector<std::string> sortedDefines = metadata.defines;
+            std::stable_sort(sortedDefines.begin(), sortedDefines.end());
+
+            std::string combinedDefines;
+            for (const auto& d : sortedDefines)
+            {
+                if (!combinedDefines.empty()) combinedDefines += " ";
+                combinedDefines += d;
+            }
+
+            const size_t hash = std::hash<std::string>()(combinedDefines);
+            const uint32_t permutationHash = HashToUint(hash);
+
+            std::stringstream ss;
+            ss << "_" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << permutationHash;
+            outName += ss.str();
+        }
+
+        outName += ".spirv";
         return exeDir / "shaders" / outName;
     }
 
@@ -125,6 +154,15 @@ namespace
                 else if (token == "-E" || token == "--entryPoint")
                 {
                     iss >> metadata.entryPoint;
+                }
+                else if (token == "-s" || token == "--outputSuffix")
+                {
+                    iss >> metadata.suffix;
+                }
+                else if (token == "-D" || token == "--define")
+                {
+                    iss >> token;
+                    metadata.defines.push_back(token);
                 }
             }
 
@@ -289,7 +327,7 @@ bool Renderer::LoadShaders()
     for (const ShaderMetadata& metadata : shaderMetadata)
     {
         // Determine output filename based on ShaderMake naming convention
-        const std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata.sourcePath, std::string_view{metadata.entryPoint});
+        const std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata);
 
         // Read the compiled binary
         const std::vector<uint8_t> binary = ReadBinaryFile(outputPath);
@@ -313,8 +351,8 @@ bool Renderer::LoadShaders()
             return false;
         }
 
-        // Keyed by output stem (e.g., "imgui_VSMain") for easy retrieval
-        const std::string key = outputPath.stem().string();
+        // Keyed by logical name (e.g., "ForwardLighting_PSMain_AlphaTest") for easy retrieval
+        const std::string key = metadata.sourcePath.stem().string() + "_" + metadata.entryPoint + metadata.suffix;
         m_ShaderCache[key] = handle;
         SDL_Log("[Init] Loaded shader: %s (key=%s)", outputPath.generic_string().c_str(), key.c_str());
     }

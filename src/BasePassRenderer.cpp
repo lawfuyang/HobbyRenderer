@@ -46,7 +46,7 @@ private:
         Matrix m_ViewProj;
         uint32_t m_NumInstances;
         int m_CullingPhase;
-        bool m_bIsTransparentPass;
+        uint32_t m_AlphaMode;
         const char* m_BucketName;
     };
 
@@ -256,7 +256,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     nvrhi::RenderState renderState;
     renderState.rasterState = CommonResources::GetInstance().RasterCullBack;
     
-    if (args.m_bIsTransparentPass)
+    if (args.m_AlphaMode == ALPHA_MODE_BLEND)
     {
         renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetAlpha;
         renderState.depthStencilState = CommonResources::GetInstance().DepthRead;
@@ -267,12 +267,15 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         renderState.depthStencilState = CommonResources::GetInstance().DepthReadWrite;
     }
 
+    const bool bUseAlphaTest = (args.m_AlphaMode == ALPHA_MODE_MASK);
+    const char* psName = bUseAlphaTest ? "ForwardLighting_PSMain_AlphaTest" : "ForwardLighting_PSMain";
+
     if (renderer->m_UseMeshletRendering)
     {
         nvrhi::MeshletPipelineDesc meshPipelineDesc;
         meshPipelineDesc.AS = renderer->GetShaderHandle("ForwardLighting_ASMain");
         meshPipelineDesc.MS = renderer->GetShaderHandle("ForwardLighting_MSMain");
-        meshPipelineDesc.PS = renderer->GetShaderHandle("ForwardLighting_PSMain");
+        meshPipelineDesc.PS = renderer->GetShaderHandle(psName);
         meshPipelineDesc.renderState = renderState;
         meshPipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
 
@@ -293,7 +296,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     {
         nvrhi::GraphicsPipelineDesc pipelineDesc;
         pipelineDesc.VS = renderer->GetShaderHandle("ForwardLighting_VSMain");
-        pipelineDesc.PS = renderer->GetShaderHandle("ForwardLighting_PSMain");
+        pipelineDesc.PS = renderer->GetShaderHandle(psName);
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
         pipelineDesc.renderState = renderState;
         pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
@@ -591,20 +594,20 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     renderingArgs.m_View = view;
     renderingArgs.m_ViewProj = viewProjForCulling;
 
-    auto SetupArgs = [&](uint32_t numInstances, uint32_t baseIdx, const char* name, int phase, bool transparent)
+    auto SetupArgs = [&](uint32_t numInstances, uint32_t baseIdx, const char* name, int phase, uint32_t alphaMode)
     {
         renderingArgs.m_NumInstances = numInstances;
         renderingArgs.m_InstanceBaseIndex = baseIdx;
         renderingArgs.m_BucketName = name;
         renderingArgs.m_CullingPhase = phase;
-        renderingArgs.m_bIsTransparentPass = transparent;
+        renderingArgs.m_AlphaMode = alphaMode;
     };
 
     // --- PHASE 1: Opaque rendering (test against previous frame HZB) ---
     if (numOpaque > 0)
     {
         ClearAllCounters();
-        SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque", 0, false);
+        SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque", 0, ALPHA_MODE_OPAQUE);
         PerformOcclusionCulling(commandList, renderingArgs);
         RenderInstances(commandList, renderingArgs);
     }
@@ -619,7 +622,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         // 1. Opaque Phase 2 (Occluded instances re-test)
         if (numOpaque > 0)
         {
-            SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque (Occluded)", 1, false);
+            SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque (Occluded)", 1, ALPHA_MODE_OPAQUE);
             
             // PerformOcclusionCulling(Phase 1) clears visible count internally
             PerformOcclusionCulling(commandList, renderingArgs);
@@ -630,7 +633,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         if (numMasked > 0)
         {
             ClearVisibleCounters();
-            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked", 0, false);
+            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked", 0, ALPHA_MODE_MASK);
 
             PerformOcclusionCulling(commandList, renderingArgs);
             RenderInstances(commandList, renderingArgs);
@@ -643,7 +646,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         if (numTransparent > 0)
         {
             ClearVisibleCounters();
-            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent", 0, true);
+            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent", 0, ALPHA_MODE_BLEND);
 
             PerformOcclusionCulling(commandList, renderingArgs);
             RenderInstances(commandList, renderingArgs);
@@ -655,7 +658,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         if (numMasked > 0)
         {
             ClearVisibleCounters();
-            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked (No Occlusion)", 0, false);
+            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked (No Occlusion)", 0, ALPHA_MODE_MASK);
 
             PerformOcclusionCulling(commandList, renderingArgs);
             RenderInstances(commandList, renderingArgs);
@@ -663,7 +666,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         if (numTransparent > 0)
         {
             ClearVisibleCounters();
-            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent (No Occlusion)", 0, true);
+            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent (No Occlusion)", 0, ALPHA_MODE_BLEND);
 
             PerformOcclusionCulling(commandList, renderingArgs);
             RenderInstances(commandList, renderingArgs);
