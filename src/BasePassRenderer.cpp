@@ -38,31 +38,42 @@ private:
     nvrhi::BufferHandle m_OccludedCountBuffer;
     nvrhi::BufferHandle m_OccludedIndirectBuffer;
 
+    struct BasePassRenderingArgs
+    {
+        uint32_t m_InstanceBaseIndex;
+        const Vector4* m_FrustumPlanes;
+        Matrix m_View;
+        Matrix m_ViewProj;
+        uint32_t m_NumInstances;
+        int m_CullingPhase;
+        bool m_bIsTransparentPass;
+        const char* m_BucketName;
+    };
+
     void GenerateHZBMips(nvrhi::CommandListHandle commandList);
     void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5]);
-    void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, const Matrix& proj, uint32_t numPrimitives, int phase);
-    void RenderInstances(nvrhi::CommandListHandle commandList, int phase, const Matrix& viewProj, const Matrix& view, const Matrix& proj, const Vector4 frustumPlanes[5], const Vector3& camPos);
+    void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args);
+    void RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args);
 };
 
 REGISTER_RENDERER(BasePassRenderer);
 
-void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const Vector4 frustumPlanes[5], const Matrix& view, const Matrix& viewProj, const Matrix& proj, const uint32_t numPrimitives, const int phase)
+void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args)
 {
     PROFILE_FUNCTION();
 
     Renderer* renderer = Renderer::GetInstance();
 
-    nvrhi::utils::ScopedMarker commandListMarker{ commandList, phase == 0 ? "Occlusion Culling Phase 1" : "Occlusion Culling Phase 2" };
+    char marker[256];
+    sprintf(marker, "Occlusion Culling Phase %d - %s", args.m_CullingPhase + 1, args.m_BucketName);
+    nvrhi::utils::ScopedMarker commandListMarker{ commandList, marker };
 
-    if (phase == 0)
+    if (args.m_CullingPhase == 0)
     {
         // No-op clearing, done in Render()
     }
-    else if (phase == 1)
+    else if (args.m_CullingPhase == 1)
     {
-        // generate HZB mips for Phase 2 testing
-        GenerateHZBMips(commandList);
-
         // Clear visible count buffer for Phase 2
         commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
 
@@ -72,23 +83,28 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         }
     }
 
-    const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), phase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
+    const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), args.m_CullingPhase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
     const nvrhi::BufferHandle cullCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cullCBD);
 
+    const Matrix& projectionMatrix = renderer->m_Camera.GetProjMatrix();
+
     CullingConstants cullData;
-    cullData.m_NumPrimitives = numPrimitives;
-    memcpy(cullData.m_FrustumPlanes, frustumPlanes, std::size(cullData.m_FrustumPlanes) * sizeof(Vector4));
-    cullData.m_View = view;
-    cullData.m_ViewProj = viewProj;
+    cullData.m_NumPrimitives = args.m_NumInstances;
+    memcpy(cullData.m_FrustumPlanes, args.m_FrustumPlanes, 5 * sizeof(Vector4));
+    cullData.m_View = args.m_View;
+    cullData.m_ViewProj = args.m_ViewProj;
     cullData.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
     cullData.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
     cullData.m_HZBWidth = renderer->m_HZBTexture->getDesc().width;
     cullData.m_HZBHeight = renderer->m_HZBTexture->getDesc().height;
-    cullData.m_Phase = phase;
+    cullData.m_Phase = args.m_CullingPhase;
     cullData.m_UseMeshletRendering = renderer->m_UseMeshletRendering ? 1 : 0;
-    cullData.m_P00 = proj.m[0][0];
-    cullData.m_P11 = proj.m[1][1];
+    cullData.m_P00 = projectionMatrix.m[0][0];
+    cullData.m_P11 = projectionMatrix.m[1][1];
     cullData.m_ForcedLOD = renderer->m_ForcedLOD;
+    cullData.m_InstanceBaseIndex = args.m_InstanceBaseIndex;
+    cullData.m_BucketIndex = 0; // Fixed at 0
+    cullData.m_BucketVisibleOffset = 0; // Fixed at 0
     commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
     nvrhi::BindingSetDesc cullBset;
@@ -116,9 +132,9 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     cullState.bindings = { cullBindingSet };
 
     commandList->setComputeState(cullState);
-    if (phase == 0)
+    if (args.m_CullingPhase == 0)
     {
-        const uint32_t dispatchX = DivideAndRoundUp(numPrimitives, kThreadsPerGroup);
+        const uint32_t dispatchX = DivideAndRoundUp(args.m_NumInstances, kThreadsPerGroup);
         commandList->dispatch(dispatchX, 1, 1);
     }
     else
@@ -157,14 +173,15 @@ void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumP
     }
 }
 
-void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, const int phase, const Matrix& viewProj, const Matrix& view, const Matrix& proj, const Vector4 frustumPlanes[5], const Vector3& camPos)
+void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args)
 {
     PROFILE_FUNCTION();
 
     Renderer* renderer = Renderer::GetInstance();
 
-    const char* const markerName = (phase == 0) ? "Base Pass Render - Visible Instances" : "Base Pass Render - Occlusion Tested Instances";
-    nvrhi::utils::ScopedMarker commandListMarker(commandList, markerName);
+    char marker[256];
+    sprintf(marker, "Base Pass Render (Phase %d) - %s", args.m_CullingPhase + 1, args.m_BucketName);
+    nvrhi::utils::ScopedMarker commandListMarker(commandList, marker);
 
     const nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
         nvrhi::FramebufferDesc().addColorAttachment(renderer->GetCurrentBackBufferTexture()).setDepthAttachment(renderer->m_DepthTexture));
@@ -208,10 +225,13 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, nvrhi::ShaderType::All);
     const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
+    Vector3 camPos = renderer->m_Camera.GetPosition();
+    const Matrix& projectionMatrix = renderer->m_Camera.GetProjMatrix();
+
     ForwardLightingPerFrameData cb{};
-    cb.m_ViewProj = viewProj;
-    cb.m_View = view;
-    memcpy(cb.m_FrustumPlanes, frustumPlanes, sizeof(Vector4) * 5);
+    cb.m_ViewProj = args.m_ViewProj;
+    cb.m_View = args.m_View;
+    memcpy(cb.m_FrustumPlanes, args.m_FrustumPlanes, sizeof(Vector4) * 5);
     cb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 0.0f };
 
     Vector3 cullingCamPos = camPos;
@@ -229,14 +249,23 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     cb.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
     cb.m_HZBWidth = (uint32_t)renderer->m_HZBTexture->getDesc().width;
     cb.m_HZBHeight = (uint32_t)renderer->m_HZBTexture->getDesc().height;
-    cb.m_P00 = proj._11;
-    cb.m_P11 = proj._22;
+    cb.m_P00 = projectionMatrix.m[0][0];
+    cb.m_P11 = projectionMatrix.m[1][1];
     commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
     nvrhi::RenderState renderState;
     renderState.rasterState = CommonResources::GetInstance().RasterCullBack;
-    renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetOpaque;
-    renderState.depthStencilState = CommonResources::GetInstance().DepthReadWrite;
+    
+    if (args.m_bIsTransparentPass)
+    {
+        renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetAlpha;
+        renderState.depthStencilState = CommonResources::GetInstance().DepthRead;
+    }
+    else
+    {
+        renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetOpaque;
+        renderState.depthStencilState = CommonResources::GetInstance().DepthReadWrite;
+    }
 
     if (renderer->m_UseMeshletRendering)
     {
@@ -258,7 +287,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         meshState.indirectCountBuffer = m_MeshletJobCountBuffer;
 
         commandList->setMeshletState(meshState);
-        commandList->dispatchMeshIndirectCount(0, 0, (uint32_t)renderer->m_Scene.m_InstanceData.size());
+        commandList->dispatchMeshIndirectCount(0, 0, args.m_NumInstances);
     }
     else
     {
@@ -279,7 +308,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         state.indirectCountBuffer = m_VisibleCountBuffer;
         commandList->setGraphicsState(state);
 
-        commandList->drawIndexedIndirectCount(0, 0, (uint32_t)renderer->m_Scene.m_InstanceData.size());
+        commandList->drawIndexedIndirectCount(0, 0, args.m_NumInstances);
     }
 }
 
@@ -459,7 +488,7 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     }
     commandList->beginPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
 
-    Camera* const cam = &renderer->m_Camera;
+    Camera* cam = &renderer->m_Camera;
     const Matrix viewProj = cam->GetViewProjMatrix();
     Matrix viewProjForCulling = viewProj;
     const Matrix origView = cam->GetViewMatrix();
@@ -468,15 +497,20 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
     {
         view = renderer->m_FrozenCullingViewMatrix;
     }
-    const Matrix proj = cam->GetProjMatrix();
     const Vector3 camPos = renderer->m_Camera.GetPosition();
+
+    const uint32_t numOpaque = renderer->m_Scene.m_OpaqueBucket.m_Count;
+    const uint32_t numMasked = renderer->m_Scene.m_MaskedBucket.m_Count;
+    const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
 
     // Compute frustum planes
     Vector4 frustumPlanes[5];
-    ComputeFrustumPlanes(proj, frustumPlanes);
+    ComputeFrustumPlanes(cam->GetProjMatrix(), frustumPlanes);
 
     if (renderer->m_FreezeCullingCamera)
     {
+        const Matrix proj = cam->GetProjMatrix();
+
         // viewProj = view * proj
         const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_FrozenCullingViewMatrix);
         const DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
@@ -531,31 +565,110 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
         m_MeshletJobBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletJobBufDesc);
     }
 
-    // Clear count buffers
-    commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
-    commandList->clearBufferUInt(m_OccludedCountBuffer, 0);
-    if (renderer->m_UseMeshletRendering)
+    auto ClearVisibleCounters = [&]
     {
-        commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
+        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear Visible Counters" };
+        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
+        if (renderer->m_UseMeshletRendering)
+        {
+            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
+        }
+    };
+
+    auto ClearAllCounters = [&]
+    {
+        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear All Counters" };
+        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
+        commandList->clearBufferUInt(m_OccludedCountBuffer, 0);
+        if (renderer->m_UseMeshletRendering)
+        {
+            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
+        }
+    };
+
+    BasePassRenderingArgs renderingArgs;
+    renderingArgs.m_FrustumPlanes = frustumPlanes;
+    renderingArgs.m_View = view;
+    renderingArgs.m_ViewProj = viewProjForCulling;
+
+    auto SetupArgs = [&](uint32_t numInstances, uint32_t baseIdx, const char* name, int phase, bool transparent)
+    {
+        renderingArgs.m_NumInstances = numInstances;
+        renderingArgs.m_InstanceBaseIndex = baseIdx;
+        renderingArgs.m_BucketName = name;
+        renderingArgs.m_CullingPhase = phase;
+        renderingArgs.m_bIsTransparentPass = transparent;
+    };
+
+    // --- PHASE 1: Opaque rendering (test against previous frame HZB) ---
+    if (numOpaque > 0)
+    {
+        ClearAllCounters();
+        SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque", 0, false);
+        PerformOcclusionCulling(commandList, renderingArgs);
+        RenderInstances(commandList, renderingArgs);
     }
 
-    // ===== PHASE 1: Coarse culling against previous frame HZB =====
-    PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, proj, numPrimitives, 0);
-
-    if (renderer->m_EnableOcclusionCulling && !renderer->m_FreezeCullingCamera)
+    if (renderer->m_EnableOcclusionCulling)
     {
-        // ===== PHASE 1 RENDER: Full render for visible instances =====
-        RenderInstances(commandList, 0, viewProj, view, proj, frustumPlanes, camPos);
+        // --- Generate HZB from Phase 1 Opaque depths ---
+        GenerateHZBMips(commandList);
 
-        // ===== PHASE 2: Test occluded instances against new HZB =====
-        PerformOcclusionCulling(commandList, frustumPlanes, view, viewProjForCulling, proj, numPrimitives, 1);
+        // --- PHASE 2: Previously occluded opaque + Masked + Transparent (test against new HZB) ---
+        
+        // 1. Opaque Phase 2 (Occluded instances re-test)
+        if (numOpaque > 0)
+        {
+            SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque (Occluded)", 1, false);
+            
+            // PerformOcclusionCulling(Phase 1) clears visible count internally
+            PerformOcclusionCulling(commandList, renderingArgs);
+            RenderInstances(commandList, renderingArgs);
+        }
+
+        // 2. Masked (All instances test against new HZB)
+        if (numMasked > 0)
+        {
+            ClearVisibleCounters();
+            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked", 0, false);
+
+            PerformOcclusionCulling(commandList, renderingArgs);
+            RenderInstances(commandList, renderingArgs);
+        }
+
+        // --- Generate final HZB including Opaque P2 and Masked depths ---
+        GenerateHZBMips(commandList);
+
+        // 3. Transparent (All instances test against latest HZB)
+        if (numTransparent > 0)
+        {
+            ClearVisibleCounters();
+            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent", 0, true);
+
+            PerformOcclusionCulling(commandList, renderingArgs);
+            RenderInstances(commandList, renderingArgs);
+        }
     }
+    else
+    {
+        // Occlusion off: Render remaining buckets
+        if (numMasked > 0)
+        {
+            ClearVisibleCounters();
+            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked (No Occlusion)", 0, false);
 
-    // ===== PHASE 2 RENDER: Full render for remaining visible instances =====
-    RenderInstances(commandList, 1, viewProj, view, proj, frustumPlanes, camPos);
+            PerformOcclusionCulling(commandList, renderingArgs);
+            RenderInstances(commandList, renderingArgs);
+        }
+        if (numTransparent > 0)
+        {
+            ClearVisibleCounters();
+            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent (No Occlusion)", 0, true);
+
+            PerformOcclusionCulling(commandList, renderingArgs);
+            RenderInstances(commandList, renderingArgs);
+        }
+    }
 
     commandList->endPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
-
-    // generate HZB mips for next frame
-    GenerateHZBMips(commandList);
 }

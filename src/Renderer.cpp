@@ -810,28 +810,74 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
     return index;
 }
 
-nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi::GraphicsPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo)
+void Renderer::HashPipelineCommonState(size_t& h, const nvrhi::RenderState& renderState, const nvrhi::FramebufferInfoEx& fbInfo, const nvrhi::BindingLayoutVector& bindingLayouts)
 {
-    // Hash relevant pipeline properties: VS/PS shader handles, input layout pointer,
-    // primitive type and framebuffer color formats (first format).
-    const nvrhi::ShaderHandle vs = pipelineDesc.VS;
-    const nvrhi::ShaderHandle ps = pipelineDesc.PS;
+    // Raster State
+    const auto& rs = renderState.rasterState;
+    h = h * 1099511628211u + std::hash<int>()((int)rs.fillMode);
+    h = h * 1099511628211u + std::hash<int>()((int)rs.cullMode);
+    h = h * 1099511628211u + std::hash<bool>()(rs.frontCounterClockwise);
+    h = h * 1099511628211u + std::hash<int>()(rs.depthBias);
+    h = h * 1099511628211u + std::hash<float>()(rs.slopeScaledDepthBias);
+    h = h * 1099511628211u + std::hash<bool>()(rs.depthClipEnable);
+    h = h * 1099511628211u + std::hash<bool>()(rs.scissorEnable);
+    h = h * 1099511628211u + std::hash<bool>()(rs.multisampleEnable);
+    h = h * 1099511628211u + std::hash<bool>()(rs.conservativeRasterEnable);
 
-    size_t h = 1469598103934665603ull;
-    h = h * 1099511628211u + std::hash<const void*>()(vs.Get());
-    h = h * 1099511628211u + std::hash<const void*>()(ps.Get());
-    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.inputLayout.Get());
-    h = h * 1099511628211u + std::hash<int>()(static_cast<int>(pipelineDesc.primType));
+    // Depth Stencil State
+    const auto& dss = renderState.depthStencilState;
+    h = h * 1099511628211u + std::hash<bool>()(dss.depthTestEnable);
+    h = h * 1099511628211u + std::hash<bool>()(dss.depthWriteEnable);
+    h = h * 1099511628211u + std::hash<int>()((int)dss.depthFunc);
+    h = h * 1099511628211u + std::hash<bool>()(dss.stencilEnable);
+    h = h * 1099511628211u + std::hash<uint32_t>()(dss.stencilReadMask);
+    h = h * 1099511628211u + std::hash<uint32_t>()(dss.stencilWriteMask);
 
-    // Include first color format from fbInfo if present
-    const nvrhi::Format colorFormat = (!fbInfo.colorFormats.empty()) ? fbInfo.colorFormats[0] : nvrhi::Format::UNKNOWN;
-    h = h * 1099511628211u + std::hash<int>()(static_cast<int>(colorFormat));
+    // Blend State
+    const auto& bs = renderState.blendState;
+    h = h * 1099511628211u + std::hash<bool>()(bs.alphaToCoverageEnable);
+    for (const auto& target : bs.targets)
+    {
+        h = h * 1099511628211u + std::hash<bool>()(target.blendEnable);
+        h = h * 1099511628211u + std::hash<int>()((int)target.srcBlend);
+        h = h * 1099511628211u + std::hash<int>()((int)target.destBlend);
+        h = h * 1099511628211u + std::hash<int>()((int)target.blendOp);
+        h = h * 1099511628211u + std::hash<int>()((int)target.srcBlendAlpha);
+        h = h * 1099511628211u + std::hash<int>()((int)target.destBlendAlpha);
+        h = h * 1099511628211u + std::hash<int>()((int)target.blendOpAlpha);
+        h = h * 1099511628211u + std::hash<int>()((int)target.colorWriteMask);
+    }
 
-    // Include binding layouts handles in hash (pipeline layout depends on these)
-    for (const nvrhi::BindingLayoutHandle& bl : pipelineDesc.bindingLayouts)
+    // Framebuffer Info
+    h = h * 1099511628211u + std::hash<int>()((int)fbInfo.depthFormat);
+    for (auto format : fbInfo.colorFormats)
+    {
+        h = h * 1099511628211u + std::hash<int>()((int)format);
+    }
+    h = h * 1099511628211u + std::hash<uint32_t>()(fbInfo.sampleCount);
+
+    // Binding Layouts
+    for (const nvrhi::BindingLayoutHandle& bl : bindingLayouts)
     {
         h = h * 1099511628211u + std::hash<const void*>()(bl.Get());
     }
+}
+
+nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi::GraphicsPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo)
+{
+    // Hash shaders and input-related properties
+    size_t h = 1469598103934665603ull;
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.VS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.PS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.HS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.DS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.GS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.inputLayout.Get());
+    h = h * 1099511628211u + std::hash<int>()(static_cast<int>(pipelineDesc.primType));
+    h = h * 1099511628211u + std::hash<uint32_t>()(pipelineDesc.patchControlPoints);
+
+    // Hash common state: RenderState, FramebufferInfo, BindingLayouts
+    HashPipelineCommonState(h, pipelineDesc.renderState, fbInfo, pipelineDesc.bindingLayouts);
 
     auto it = m_GraphicsPipelineCache.find(h);
     if (it != m_GraphicsPipelineCache.end())
@@ -850,26 +896,15 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
 
 nvrhi::MeshletPipelineHandle Renderer::GetOrCreateMeshletPipeline(const nvrhi::MeshletPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo)
 {
-    // Hash relevant pipeline properties: AS/MS/PS shader handles,
-    // and framebuffer color formats (first format).
-    const nvrhi::ShaderHandle as = pipelineDesc.AS;
-    const nvrhi::ShaderHandle ms = pipelineDesc.MS;
-    const nvrhi::ShaderHandle ps = pipelineDesc.PS;
-
+    // Hash shaders and meshlet-specific properties
     size_t h = 1469598103934665603ull;
-    h = h * 1099511628211u + std::hash<const void*>()(as.Get());
-    h = h * 1099511628211u + std::hash<const void*>()(ms.Get());
-    h = h * 1099511628211u + std::hash<const void*>()(ps.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.AS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.MS.Get());
+    h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.PS.Get());
+    h = h * 1099511628211u + std::hash<int>()(static_cast<int>(pipelineDesc.primType));
 
-    // Include first color format from fbInfo if present
-    const nvrhi::Format colorFormat = (!fbInfo.colorFormats.empty()) ? fbInfo.colorFormats[0] : nvrhi::Format::UNKNOWN;
-    h = h * 1099511628211u + std::hash<int>()(static_cast<int>(colorFormat));
-
-    // Include binding layouts handles in hash (pipeline layout depends on these)
-    for (const nvrhi::BindingLayoutHandle& bl : pipelineDesc.bindingLayouts)
-    {
-        h = h * 1099511628211u + std::hash<const void*>()(bl.Get());
-    }
+    // Hash common state: RenderState, FramebufferInfo, BindingLayouts
+    HashPipelineCommonState(h, pipelineDesc.renderState, fbInfo, pipelineDesc.bindingLayouts);
 
     auto it = m_MeshletPipelineCache.find(h);
     if (it != m_MeshletPipelineCache.end())

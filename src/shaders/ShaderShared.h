@@ -70,6 +70,10 @@ struct ForwardLightingPerFrameData
 };
 
 // Material constants (persistent, per-material data)
+#define ALPHA_MODE_OPAQUE 0
+#define ALPHA_MODE_MASK 1
+#define ALPHA_MODE_BLEND 2
+
 struct MaterialConstants
 {
   Vector4 m_BaseColor;
@@ -84,7 +88,9 @@ struct MaterialConstants
   uint32_t m_NormalSamplerIndex;
   uint32_t m_RoughnessSamplerIndex;
   uint32_t m_EmissiveSamplerIndex;
-  uint32_t pad0;
+  uint32_t m_AlphaMode;
+  float m_AlphaCutoff;
+  uint32_t pad0[2];
 };
 
 struct MeshData
@@ -158,7 +164,10 @@ struct CullingConstants
   float m_P00;
   float m_P11;
   int m_ForcedLOD; // -1 for auto, 0+ for forced
-  uint32_t pad0[3];
+  uint32_t m_InstanceBaseIndex;
+  uint32_t m_BucketIndex;
+  uint32_t m_BucketVisibleOffset;
+  uint32_t pad0;
 };
 
 struct HZBFromDepthConstants

@@ -41,7 +41,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	if (instanceIndex >= g_Culling.m_NumPrimitives)
 		return;
 
-	uint actualInstanceIndex = instanceIndex;
+	uint actualInstanceIndex = instanceIndex + g_Culling.m_InstanceBaseIndex;
 	if (g_Culling.m_Phase == 1)
 	{
 		// Phase 2: Only process instances that were occluded in Phase 1

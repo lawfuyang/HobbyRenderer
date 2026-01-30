@@ -268,6 +268,12 @@ private:
     bool CreateDepthTextures();
     void DestroyDepthTextures();
 
+    // Helper for hashing pipeline state
+    void HashPipelineCommonState(size_t& h, 
+                                 const nvrhi::RenderState& renderState, 
+                                 const nvrhi::FramebufferInfoEx& fbInfo, 
+                                 const nvrhi::BindingLayoutVector& bindingLayouts);
+
     // Shader loading
     bool LoadShaders();
     void UnloadShaders();

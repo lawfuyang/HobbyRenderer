@@ -315,6 +315,13 @@ float4 PSMain(VSOut input) : SV_TARGET
         ? SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, input.uv)
         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
+    // Alpha test (discard) as early as possible
+    float alpha = hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
+    if (mat.m_AlphaMode == ALPHA_MODE_MASK && alpha < mat.m_AlphaCutoff)
+    {
+        discard;
+    }
+
     bool hasORM = (mat.m_TextureFlags & TEXFLAG_ROUGHNESS_METALLIC) != 0;
     float4 ormSample = hasORM
         ? SampleBindlessTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex, input.uv)
@@ -355,19 +362,8 @@ float4 PSMain(VSOut input) : SV_TARGET
     float VdotH = saturate(dot(V, H));
     float LdotV = saturate(dot(L, V));
 
-    // Base color and alpha
-    float3 baseColor;
-    float alpha;
-    if (hasAlbedo)
-    {
-        baseColor = albedoSample.xyz * mat.m_BaseColor.xyz;
-        alpha = albedoSample.w * mat.m_BaseColor.w;
-    }
-    else
-    {
-        baseColor = mat.m_BaseColor.xyz;
-        alpha = mat.m_BaseColor.w;
-    }
+    // Base color
+    float3 baseColor = hasAlbedo ? (albedoSample.xyz * mat.m_BaseColor.xyz) : mat.m_BaseColor.xyz;
 
     // Material properties (roughness, metallic)
     float roughness = mat.m_RoughnessMetallic.x;

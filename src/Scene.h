@@ -61,6 +61,8 @@ public:
         uint32_t m_NormalTextureIndex = DEFAULT_TEXTURE_NORMAL;
         uint32_t m_RoughnessMetallicTextureIndex = DEFAULT_TEXTURE_PBR;
         uint32_t m_EmissiveTextureIndex = DEFAULT_TEXTURE_BLACK;
+        uint32_t m_AlphaMode = ALPHA_MODE_OPAQUE;
+        float m_AlphaCutoff = 0.5f;
     };
 
     struct Texture
@@ -114,6 +116,15 @@ public:
     std::vector<Light> m_Lights;
 
     DirectionalLight m_DirectionalLight;
+
+    struct BucketInfo
+    {
+        uint32_t m_BaseIndex;
+        uint32_t m_Count;
+    };
+    BucketInfo m_OpaqueBucket;
+    BucketInfo m_MaskedBucket;
+    BucketInfo m_TransparentBucket;
 
     // GPU buffers created for the scene
     nvrhi::BufferHandle m_VertexBuffer;

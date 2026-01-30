@@ -600,6 +600,7 @@ public:
         vulkan13Features.pNext = &meshShaderFeatures;
         vulkan13Features.dynamicRendering = VK_TRUE;
         vulkan13Features.synchronization2 = VK_TRUE;
+        vulkan13Features.shaderDemoteToHelperInvocation = VK_TRUE;
 
         // Enable mutable descriptor type features (VK_EXT_mutable_descriptor_type)
         vk::PhysicalDeviceMutableDescriptorTypeFeaturesEXT mutableDescriptorFeatures{};

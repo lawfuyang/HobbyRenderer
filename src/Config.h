@@ -12,6 +12,8 @@ struct Config
     std::string m_GltfScene = "";
     // Skip loading textures from glTF
     bool m_SkipTextures = false;
+    // Skip loading/saving scene cache
+    bool m_SkipCache = false;
 
     // Add more configuration options here as needed
     // int renderWidth = 1920;

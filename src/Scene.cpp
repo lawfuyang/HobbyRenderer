@@ -232,6 +232,20 @@ static void ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene)
 		scene.m_Materials.back().m_EmissiveFactor.x = data->materials[i].emissive_factor[0];
 		scene.m_Materials.back().m_EmissiveFactor.y = data->materials[i].emissive_factor[1];
 		scene.m_Materials.back().m_EmissiveFactor.z = data->materials[i].emissive_factor[2];
+
+		if (data->materials[i].alpha_mode == cgltf_alpha_mode_mask)
+		{
+			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_MASK;
+			scene.m_Materials.back().m_AlphaCutoff = data->materials[i].alpha_cutoff;
+		}
+		else if (data->materials[i].alpha_mode == cgltf_alpha_mode_blend)
+		{
+			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_BLEND;
+		}
+		else
+		{
+			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_OPAQUE;
+		}
 	}
 
 	// Images -> textures (URI only)
@@ -318,6 +332,9 @@ static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 			mat.m_RoughnessMetallicTextureIndex = scene.m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
 		if (mat.m_EmissiveTexture != -1)
 			mat.m_EmissiveTextureIndex = scene.m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
+		
+		// Map alpha mode
+		// Already mapped during loading
 	}
 
 	std::vector<MaterialConstants> materialConstants;
@@ -337,6 +354,8 @@ static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 		mc.m_NormalTextureIndex = mat.m_NormalTextureIndex;
 		mc.m_RoughnessMetallicTextureIndex = mat.m_RoughnessMetallicTextureIndex;
 		mc.m_EmissiveTextureIndex = mat.m_EmissiveTextureIndex;
+		mc.m_AlphaMode = mat.m_AlphaMode;
+		mc.m_AlphaCutoff = mat.m_AlphaCutoff;
 		// Per-texture sampler indices (do not assume they are the same)
 		if (mat.m_BaseColorTexture != -1)
 			mc.m_AlbedoSamplerIndex = (uint32_t)scene.m_Textures[mat.m_BaseColorTexture].m_Sampler;
@@ -976,7 +995,7 @@ bool Scene::LoadScene()
 	SCOPED_TIMER("[Scene] LoadScene Total");
 
 	bool loadedFromCache = false;
-	if (std::filesystem::exists(cachePath))
+	if (!Config::Get().m_SkipCache && std::filesystem::exists(cachePath))
 	{
 		const std::filesystem::file_time_type gltfTime = std::filesystem::last_write_time(gltfPath);
 		const std::filesystem::file_time_type cacheTime = std::filesystem::last_write_time(cachePath);
@@ -1037,8 +1056,12 @@ bool Scene::LoadScene()
 		ProcessMeshes(data, *this, allVertices, allIndices);
 		ProcessNodesAndHierarchy(data, *this);
 
-		// Fill instance data
+		// Bucketize and fill instance data
 		m_InstanceData.clear();
+		std::vector<PerInstanceData> opaqueInstances;
+		std::vector<PerInstanceData> maskedInstances;
+		std::vector<PerInstanceData> transparentInstances;
+
 		for (const Scene::Node& node : m_Nodes)
 		{
 			if (node.m_MeshIndex < 0) continue;
@@ -1051,12 +1074,32 @@ bool Scene::LoadScene()
 				inst.m_MeshDataIndex = prim.m_MeshDataIndex;
 				inst.m_Center = node.m_Center;
 				inst.m_Radius = node.m_Radius;
-				m_InstanceData.push_back(inst);
+
+				uint32_t alphaMode = m_Materials[prim.m_MaterialIndex].m_AlphaMode;
+				if (alphaMode == ALPHA_MODE_OPAQUE)
+					opaqueInstances.push_back(inst);
+				else if (alphaMode == ALPHA_MODE_MASK)
+					maskedInstances.push_back(inst);
+				else
+					transparentInstances.push_back(inst);
 			}
 		}
 
-		SDL_Log("[Scene] Saving binary cache: %s", cachePath.string().c_str());
-		SaveToCache(cachePath.string(), allVertices, allIndices);
+		m_OpaqueBucket = { 0, (uint32_t)opaqueInstances.size() };
+		m_MaskedBucket = { (uint32_t)opaqueInstances.size(), (uint32_t)maskedInstances.size() };
+		m_TransparentBucket = { (uint32_t)(opaqueInstances.size() + maskedInstances.size()), (uint32_t)transparentInstances.size() };
+
+		m_InstanceData.insert(m_InstanceData.end(), opaqueInstances.begin(), opaqueInstances.end());
+		m_InstanceData.insert(m_InstanceData.end(), maskedInstances.begin(), maskedInstances.end());
+		m_InstanceData.insert(m_InstanceData.end(), transparentInstances.begin(), transparentInstances.end());
+
+		SDL_Log("[Scene] Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
+
+		if (!Config::Get().m_SkipCache)
+		{
+			SDL_Log("[Scene] Saving binary cache: %s", cachePath.string().c_str());
+			SaveToCache(cachePath.string(), allVertices, allIndices);
+		}
 
 		cgltf_free(data);
 	}
@@ -1102,7 +1145,7 @@ void Scene::Shutdown()
 }
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 1;
+static constexpr uint32_t kSceneCacheVersion = 2;
 
 bool Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>& allVertices, const std::vector<uint32_t>& allIndices)
 {
@@ -1111,6 +1154,11 @@ bool Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 
 	WritePOD(os, kSceneCacheMagic);
 	WritePOD(os, kSceneCacheVersion);
+
+	// Buckets
+	WritePOD(os, m_OpaqueBucket);
+	WritePOD(os, m_MaskedBucket);
+	WritePOD(os, m_TransparentBucket);
 
 	// Meshes
 	WritePOD(os, m_Meshes.size());
@@ -1154,6 +1202,8 @@ bool Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 		WritePOD(os, mat.m_NormalTextureIndex);
 		WritePOD(os, mat.m_RoughnessMetallicTextureIndex);
 		WritePOD(os, mat.m_EmissiveTextureIndex);
+		WritePOD(os, mat.m_AlphaMode);
+		WritePOD(os, mat.m_AlphaCutoff);
 	}
 
 	// Textures
@@ -1216,6 +1266,11 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 		return false;
 	}
 
+	// Buckets
+	ReadPOD(is, m_OpaqueBucket);
+	ReadPOD(is, m_MaskedBucket);
+	ReadPOD(is, m_TransparentBucket);
+
 	// Meshes
 	size_t meshCount;
 	ReadPOD(is, meshCount);
@@ -1264,6 +1319,8 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 		ReadPOD(is, mat.m_NormalTextureIndex);
 		ReadPOD(is, mat.m_RoughnessMetallicTextureIndex);
 		ReadPOD(is, mat.m_EmissiveTextureIndex);
+		ReadPOD(is, mat.m_AlphaMode);
+		ReadPOD(is, mat.m_AlphaCutoff);
 	}
 
 	// Textures
