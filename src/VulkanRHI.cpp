@@ -1,40 +1,9 @@
+#include "pch.h"
 #include "GraphicRHI.h"
 #include "Config.h"
 #include <nvrhi/vulkan.h>
 #include <nvrhi/validation.h>
 #include <nvrhi/utils.h>
-
-class NvrhiErrorCallback : public nvrhi::IMessageCallback
-{
-public:
-    void message(nvrhi::MessageSeverity severity, const char* messageText) override
-    {
-        const char* severityStr = "Unknown";
-        switch (severity)
-        {
-        case nvrhi::MessageSeverity::Info:
-            severityStr = "Info";
-            break;
-        case nvrhi::MessageSeverity::Warning:
-            severityStr = "Warning";
-            break;
-        case nvrhi::MessageSeverity::Error:
-            severityStr = "Error";
-            break;
-        case nvrhi::MessageSeverity::Fatal:
-            severityStr = "Fatal";
-            break;
-        }
-        SDL_Log("[NVRHI %s] %s", severityStr, messageText);
-
-        // Assert on warning and above
-        if (severity >= nvrhi::MessageSeverity::Warning)
-        {
-            SDL_assert(false && messageText);
-        }
-    }
-};
-static NvrhiErrorCallback gs_NvrhiCallback;
 
 // Define the Vulkan dynamic dispatcher - this needs to occur in exactly one cpp file in the program.
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -650,14 +619,14 @@ public:
 
         // Create NVRHI device
         nvrhi::vulkan::DeviceDesc deviceDesc;
-        deviceDesc.errorCB = &gs_NvrhiCallback;
+        deviceDesc.errorCB = &GraphicRHI::ms_NvrhiCallback;
         deviceDesc.instance = m_Instance;
         deviceDesc.physicalDevice = m_PhysicalDevice;
         deviceDesc.device = m_Device;
         deviceDesc.graphicsQueue = m_GraphicsQueue;
         deviceDesc.graphicsQueueIndex = m_GraphicsQueueFamily;
 
-        // Provide instance and device extensions for NVRHI to query support
+            // Provide instance and device extensions for NVRHI to query support
         deviceDesc.instanceExtensions = const_cast<const char**>(m_InstanceExtensions.data());
         deviceDesc.numInstanceExtensions = m_InstanceExtensions.size();
         deviceDesc.deviceExtensions = const_cast<const char**>(m_DeviceExtensions.data());
@@ -909,7 +878,7 @@ public:
         }
     }
 
-        const char* PhysicalDeviceTypeString(vk::PhysicalDeviceType type)
+    const char* PhysicalDeviceTypeString(vk::PhysicalDeviceType type)
     {
         switch (type)
         {
@@ -1067,23 +1036,7 @@ public:
     std::vector<const char*> m_DeviceExtensions;
 };
 
-class D3D12GraphicRHI : public GraphicRHI
+std::unique_ptr<GraphicRHI> CreateVulkanGraphicRHI()
 {
-public:
-    bool Initialize(SDL_Window* window) override { nvrhi::utils::NotImplemented(); return false; }
-    void Shutdown() override { nvrhi::utils::NotImplemented(); }
-    bool CreateSwapchain(uint32_t width, uint32_t height) override { nvrhi::utils::NotImplemented(); return false; }
-    bool AcquireNextSwapchainImage(uint32_t* outImageIndex) override { nvrhi::utils::NotImplemented(); return false; }
-    bool PresentSwapchain(uint32_t imageIndex) override { nvrhi::utils::NotImplemented(); return false; }
-    nvrhi::GraphicsAPI GetGraphicsAPI() const override { return nvrhi::GraphicsAPI::D3D12; }
-};
-
-std::unique_ptr<GraphicRHI> CreateGraphicRHI(nvrhi::GraphicsAPI api)
-{
-    if (api == nvrhi::GraphicsAPI::D3D12)
-    {
-        return std::make_unique<D3D12GraphicRHI>();
-    }
     return std::make_unique<VulkanGraphicRHI>();
 }
-
