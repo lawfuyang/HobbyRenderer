@@ -65,7 +65,7 @@ namespace
     }
 
     // ShaderMake naming: <sourcefile_without_ext>_<EntryPoint><Suffix>[_<Hash>].spirv
-    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& exeDir, const ShaderMetadata& metadata)
+    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& exeDir, const ShaderMetadata& metadata, nvrhi::GraphicsAPI api)
     {
         std::filesystem::path filename = metadata.sourcePath.stem();
         std::string outName = filename.string() + "_" + metadata.entryPoint + metadata.suffix;
@@ -90,8 +90,16 @@ namespace
             outName += ss.str();
         }
 
-        outName += ".spirv";
-        return exeDir / "shaders" / outName;
+        std::string subDir = "spirv";
+        std::string extension = ".spirv";
+
+        if (api == nvrhi::GraphicsAPI::D3D12)
+        {
+            subDir = "dxil";
+            extension = ".dxil";
+        }
+
+        return exeDir / "shaders" / subDir / (outName + extension);
     }
 
     // Parse shaders.cfg to extract shader entries
@@ -327,7 +335,7 @@ bool Renderer::LoadShaders()
     for (const ShaderMetadata& metadata : shaderMetadata)
     {
         // Determine output filename based on ShaderMake naming convention
-        const std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata);
+        const std::filesystem::path outputPath = GetShaderOutputPath(exeDir, metadata, m_RHI->GetGraphicsAPI());
 
         // Read the compiled binary
         const std::vector<uint8_t> binary = ReadBinaryFile(outputPath);

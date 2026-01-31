@@ -18,6 +18,26 @@
   typedef float4 Vector4;
   typedef row_major float4x4 Matrix; // Ensure HLSL uses row-major layout to match DirectX::XMFLOAT4X4 on CPU
   typedef float4 Color;
+
+  // Shader macros for cross-platform compatibility
+  #if defined(SPIRV)
+      #define DRAW_INDEX_ARG_COMMA , [[vk::builtin("DrawIndex")]] uint drawIndex : DRAW_INDEX
+      #define GET_DRAW_INDEX() drawIndex
+      #define PUSH_CONSTANT [[vk::push_constant]]
+  #elif defined(DXIL)
+      // DrawID is bound to b255 in space0 for D3D12 when useDrawIndex is enabled in the pipeline.
+      cbuffer DrawIDCB : register(b255)
+      {
+          uint g_DrawID;
+      };
+      #define DRAW_INDEX_ARG_COMMA 
+      #define GET_DRAW_INDEX() g_DrawID
+      #define PUSH_CONSTANT 
+  #else
+      #define DRAW_INDEX_ARG_COMMA , uint drawIndex : DRAW_INDEX
+      #define GET_DRAW_INDEX() drawIndex
+      #define PUSH_CONSTANT 
+  #endif
 #endif
 
 struct ImGuiPushConstants

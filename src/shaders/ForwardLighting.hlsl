@@ -83,11 +83,11 @@ void ASMain(
     uint3 dispatchThreadID : SV_DispatchThreadID,
     uint3 groupThreadID : SV_GroupThreadID,
     uint3 groupId : SV_GroupID,
-    uint groupIndex : SV_GroupIndex,
-    [[vk::builtin("DrawIndex")]] uint drawIndex : DRAW_INDEX
+    uint groupIndex : SV_GroupIndex
+    DRAW_INDEX_ARG_COMMA
 )
 {
-    MeshletJob job = g_MeshletJobs[drawIndex];
+    MeshletJob job = g_MeshletJobs[GET_DRAW_INDEX()];
     uint instanceIndex = job.m_InstanceIndex;
     uint lodIndex = job.m_LODIndex;
     uint meshletOffset = groupId.x * kThreadsPerGroup;

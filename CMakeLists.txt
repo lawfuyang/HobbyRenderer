@@ -117,7 +117,7 @@ set(DXC_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/dxc")
 set(DXC_EXE "${DXC_INSTALL_DIR}/bin/x64/dxc.exe")
 set(NVRHI_WITH_VULKAN ON CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
-set(NVRHI_WITH_DX12 OFF CACHE BOOL "" FORCE)
+set(NVRHI_WITH_DX12 ON CACHE BOOL "" FORCE)
 
 add_subdirectory(external/nvrhi)
 add_subdirectory(external/meshoptimizer)
@@ -176,6 +176,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE SDL3)
 # Link NVRHI
 target_link_libraries(${PROJECT_NAME} PRIVATE nvrhi)
 target_link_libraries(${PROJECT_NAME} PRIVATE nvrhi_vk)
+target_link_libraries(${PROJECT_NAME} PRIVATE nvrhi_d3d12)
 target_link_libraries(${PROJECT_NAME} PRIVATE Vulkan-Headers)
 
 # Link meshoptimizer
@@ -205,8 +206,10 @@ set(SHADERMAKE_FIND_DXC OFF)
 add_subdirectory(external/ShaderMake)
 
 set(SHADER_CONFIG       ${CMAKE_SOURCE_DIR}/src/shaders/shaders.cfg)
-set(SHADER_OUTPUT_DIR   ${CMAKE_SOURCE_DIR}/bin/shaders)
-file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
+set(SHADER_OUTPUT_DIR_SPIRV ${CMAKE_SOURCE_DIR}/bin/shaders/spirv)
+set(SHADER_OUTPUT_DIR_DXIL  ${CMAKE_SOURCE_DIR}/bin/shaders/dxil)
+file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR_SPIRV})
+file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR_DXIL})
 
 # Resolve ShaderMake executable path per configuration when possible
 if(TARGET ShaderMake)
@@ -215,13 +218,15 @@ else()
     set(SHADERMAKE_PATH_GENEX ${SHADERMAKE_PATH})
 endif()
 
-# Custom target to compile shaders offline with ShaderMake (SPIR-V output for Vulkan)
+# Custom target to compile shaders offline with ShaderMake
 add_custom_target(build_shaders
+    # SPIR-V output for Vulkan
     COMMAND ${SHADERMAKE_PATH_GENEX}
             -p SPIRV
             --binary
+            -D SPIRV
             -c "${SHADER_CONFIG}"
-            -o "${SHADER_OUTPUT_DIR}"
+            -o "${SHADER_OUTPUT_DIR_SPIRV}"
             --compiler "${DXC_EXE}"
             --shaderModel 6_8
             --hlsl2021
@@ -230,8 +235,22 @@ add_custom_target(build_shaders
             --include "${CMAKE_SOURCE_DIR}/src/shaders"
             --relaxedInclude "pch.h"
             --verbose
+
+    # DXIL output for D3D12
+    COMMAND ${SHADERMAKE_PATH_GENEX}
+            -p DXIL
+            --binary
+            -D DXIL
+            -c "${SHADER_CONFIG}"
+            -o "${SHADER_OUTPUT_DIR_DXIL}"
+            --compiler "${DXC_EXE}"
+            --shaderModel 6_8
+            --hlsl2021
+            --include "${CMAKE_SOURCE_DIR}/src/shaders"
+            --relaxedInclude "pch.h"
+            --verbose
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Compiling HLSL shaders to SPIR-V for Vulkan via ShaderMake"
+    COMMENT "Compiling HLSL shaders to SPIR-V (Vulkan) and DXIL (D3D12) via ShaderMake"
 )
 
 # Ensure ShaderMake is built before running the shader compilation target

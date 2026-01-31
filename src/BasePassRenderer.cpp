@@ -283,6 +283,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         meshPipelineDesc.PS = renderer->GetShaderHandle(psName);
         meshPipelineDesc.renderState = renderState;
         meshPipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
+        meshPipelineDesc.useDrawIndex = true;
 
         const nvrhi::MeshletPipelineHandle meshPipeline = renderer->GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
 
@@ -305,6 +306,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
         pipelineDesc.renderState = renderState;
         pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
+        pipelineDesc.useDrawIndex = true;
 
         nvrhi::GraphicsState state;
         state.framebuffer = framebuffer;

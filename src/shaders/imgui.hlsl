@@ -9,7 +9,7 @@
 #include "ShaderShared.h"
 
 // Instantiate the push-constant variable used by the ImGui shaders
-[[vk::push_constant]]
+PUSH_CONSTANT
 ImGuiPushConstants pushConstants;
 
 struct VSInput
