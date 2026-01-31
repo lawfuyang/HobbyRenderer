@@ -339,18 +339,14 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     {
         nvrhi::utils::ScopedMarker hzbFromDepthMarker{ commandList, "HZB From Depth" };
 
-        const nvrhi::BufferDesc hzbFromDepthCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(HZBFromDepthConstants), "HZBFromDepthCB", 1);
-        const nvrhi::BufferHandle hzbFromDepthCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(hzbFromDepthCBD);
-
         HZBFromDepthConstants hzbFromDepthData;
         hzbFromDepthData.m_Width = renderer->m_HZBTexture->getDesc().width;
         hzbFromDepthData.m_Height = renderer->m_HZBTexture->getDesc().height;
-        commandList->writeBuffer(hzbFromDepthCB, &hzbFromDepthData, sizeof(hzbFromDepthData), 0);
 
         nvrhi::BindingSetDesc hzbFromDepthBset;
         hzbFromDepthBset.bindings =
         {
-            nvrhi::BindingSetItem::ConstantBuffer(0, hzbFromDepthCB),
+            nvrhi::BindingSetItem::PushConstants(0, sizeof(HZBFromDepthConstants)),
             nvrhi::BindingSetItem::Texture_SRV(0, renderer->m_DepthTexture),
             nvrhi::BindingSetItem::Texture_UAV(0, renderer->m_HZBTexture,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
             nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
@@ -363,6 +359,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
         hzbFromDepthState.bindings = { hzbFromDepthBindingSet };
 
         commandList->setComputeState(hzbFromDepthState);
+        commandList->setPushConstants(&hzbFromDepthData, sizeof(hzbFromDepthData));
         const uint32_t dispatchX = DivideAndRoundUp(hzbFromDepthData.m_Width, 8);
         const uint32_t dispatchY = DivideAndRoundUp(hzbFromDepthData.m_Height, 8);
         commandList->dispatch(dispatchX, dispatchY, 1);
@@ -392,15 +389,11 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     spdData.m_WorkGroupOffset.x = workGroupOffset[0];
     spdData.m_WorkGroupOffset.y = workGroupOffset[1];
 
-    const nvrhi::BufferDesc spdCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(spdData), "SpdCB", 1);
-    const nvrhi::BufferHandle spdCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(spdCBD);
-    commandList->writeBuffer(spdCB, &spdData, sizeof(spdData), 0);
-
     // Clear atomic counter
     commandList->clearBufferUInt(renderer->m_SPDAtomicCounter, 0);
 
     nvrhi::BindingSetDesc spdBset;
-    spdBset.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(0, spdCB));
+    spdBset.bindings.push_back(nvrhi::BindingSetItem::PushConstants(0, sizeof(SpdConstants)));
     spdBset.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(0, renderer->m_HZBTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{ 0, 1, 0, 1 }));
 
     // Bind mips 1..N to UAV slots 0..N-1
@@ -425,6 +418,7 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     spdState.bindings = { spdBindingSet };
 
     commandList->setComputeState(spdState);
+    commandList->setPushConstants(&spdData, sizeof(spdData));
     commandList->dispatch(dispatchThreadGroupCountXY[0], dispatchThreadGroupCountXY[1], 1);
 }
 

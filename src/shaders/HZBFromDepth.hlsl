@@ -1,9 +1,7 @@
 #include "ShaderShared.h"
 
-cbuffer HZBFromDepthCB : register(b0)
-{
-    HZBFromDepthConstants g_HZBFromDepthConstants;
-};
+PUSH_CONSTANT
+HZBFromDepthConstants g_HZBFromDepthConstants;
 
 Texture2D<float> g_DepthBuffer : register(t0);
 SamplerState g_MinReductionSampler : register(s0);

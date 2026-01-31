@@ -47,10 +47,8 @@ FfxUInt32x2 ffxRemapForWaveReduction(FfxUInt32 a)
     return FfxUInt32x2(ffxBitfieldInsertMask(ffxBitfieldExtract(a, 2u, 3u), a, 1u), ffxBitfieldInsertMask(ffxBitfieldExtract(a, 3u, 3u), ffxBitfieldExtract(a, 1u, 2u), 2u));
 }
 
-cbuffer SpdConstants : register(b0)
-{
-    SpdConstants g_SpdConstants;
-};
+PUSH_CONSTANT
+SpdConstants g_SpdConstants;
 
 // Resource boundaries for HZB
 Texture2D<float> g_HZBMip0 : register(t0);

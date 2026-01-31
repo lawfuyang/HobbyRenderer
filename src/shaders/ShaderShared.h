@@ -196,13 +196,6 @@ struct HZBFromDepthConstants
   uint32_t m_Height;
 };
 
-struct HZBConstants
-{
-  uint32_t m_NumMips;
-  uint32_t m_BaseWidth;
-  uint32_t m_BaseHeight;
-};
-
 struct SpdConstants
 {
   uint32_t m_Mips;
