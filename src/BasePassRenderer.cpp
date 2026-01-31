@@ -245,7 +245,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     cb.m_LightIntensity = renderer->m_Scene.m_DirectionalLight.intensity / 10000.0f;
     cb.m_DebugMode = (uint32_t)renderer->m_DebugMode;
     cb.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
-    cb.m_EnableConeCulling = renderer->m_EnableConeCulling ? 1 : 0;
+    cb.m_EnableConeCulling = (renderer->m_EnableConeCulling && args.m_AlphaMode == ALPHA_MODE_OPAQUE) ? 1 : 0;
     cb.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
     cb.m_HZBWidth = (uint32_t)renderer->m_HZBTexture->getDesc().width;
     cb.m_HZBHeight = (uint32_t)renderer->m_HZBTexture->getDesc().height;
