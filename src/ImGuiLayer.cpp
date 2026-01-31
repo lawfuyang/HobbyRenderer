@@ -110,6 +110,15 @@ void ImGuiLayer::UpdateFrame()
 
         ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
 
+        if (ImGui::TreeNode("Scene Stats"))
+        {
+            ImGui::Text("Total Instances: %zu", renderer->m_Scene.m_InstanceData.size());
+            ImGui::Text("Opaque:      %u", renderer->m_Scene.m_OpaqueBucket.m_Count);
+            ImGui::Text("Masked:      %u", renderer->m_Scene.m_MaskedBucket.m_Count);
+            ImGui::Text("Transparent: %u", renderer->m_Scene.m_TransparentBucket.m_Count);
+            ImGui::TreePop();
+        }
+
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {
