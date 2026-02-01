@@ -271,8 +271,8 @@ bool ImGuiRenderer::CreateDeviceObjects()
     {
         nvrhi::VertexAttributeDesc attributes[] = {
         	{ "POSITION", nvrhi::Format::RG32_FLOAT,  1, 0, offsetof(ImDrawVert,pos), sizeof(ImDrawVert), false },
-        	{ "TEXCOORD0", nvrhi::Format::RG32_FLOAT,  1, 0, offsetof(ImDrawVert,uv),  sizeof(ImDrawVert), false },
-        	{ "COLOR0",    nvrhi::Format::RGBA8_UNORM, 1, 0, offsetof(ImDrawVert,col), sizeof(ImDrawVert), false },
+        	{ "TEXCOORD", nvrhi::Format::RG32_FLOAT,  1, 0, offsetof(ImDrawVert,uv),  sizeof(ImDrawVert), false },
+        	{ "COLOR",    nvrhi::Format::RGBA8_UNORM, 1, 0, offsetof(ImDrawVert,col), sizeof(ImDrawVert), false },
         };
 
         // Note: vertexShader parameter is only used by DX11 backend, unused in Vulkan
