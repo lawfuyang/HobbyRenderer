@@ -284,13 +284,15 @@ static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sc
 
 	SCOPED_TIMER("[Scene] LoadTextures");
 
-	for (size_t ti = 0; ti < scene.m_Textures.size(); ++ti)
+	const uint32_t threadCount = renderer->m_TaskScheduler->GetThreadCount();
+	std::vector<ScopedCommandList> threadCommandLists(threadCount);
+
+	renderer->m_TaskScheduler->ParallelFor(static_cast<uint32_t>(scene.m_Textures.size()), [&](uint32_t i, uint32_t threadIndex)
 	{
-		Scene::Texture& tex = scene.m_Textures[ti];
+		Scene::Texture& tex = scene.m_Textures[i];
 		if (tex.m_Uri.empty())
 		{
-			SDL_Log("[Scene] Texture %zu has no URI, skipping (embedded images not yet supported)", ti);
-			continue;
+			SDL_LOG_ASSERT_FAIL("Texture URI missing", "[Scene] Texture %u has no URI, skipping (embedded images not yet supported)", i);
 		}
 
 		std::string decodedUri = tex.m_Uri;
@@ -310,29 +312,23 @@ static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sc
 		if (!std::filesystem::exists(fullPath))
 		{
 			SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.string().c_str());
-			continue;
 		}
 
 		nvrhi::TextureDesc desc;
 		std::unique_ptr<ITextureDataReader> imgData;
 		if (!LoadTexture(fullPath.string(), desc, imgData))
 		{
-			SDL_LOG_ASSERT_FAIL("Texture loading failed", "[Scene] Texture loading failed for %s", fullPath.string().c_str());
-			continue;
+			SDL_LOG_ASSERT_FAIL("Texture load failed", "[Scene] Failed to load texture: %s", fullPath.string().c_str());
 		}
 
 		desc.isShaderResource = true;
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = fullPath.string();
+		
 		tex.m_Handle = renderer->m_RHI->m_NvrhiDevice->createTexture(desc);
-		if (!tex.m_Handle)
-		{
-			SDL_LOG_ASSERT_FAIL("Texture creation failed", "[Scene] GPU texture creation failed for %s", tex.m_Uri.c_str());
-			continue;
-		}
 
-		ScopedCommandList cmd{ "Upload Texture" };
+		nvrhi::CommandListHandle& cmd = threadCommandLists[threadIndex];
 		const nvrhi::FormatInfo& info = nvrhi::getFormatInfo(desc.format);
 		size_t offset = 0;
 		for (uint32_t arraySlice = 0; arraySlice < desc.arraySize; ++arraySlice)
@@ -352,19 +348,23 @@ static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sc
 
 				if (offset + subresourceSize > imgData->GetSize())
 				{
-					SDL_Log("[Scene] Data overflow for texture %s at mip %u", fullPath.string().c_str(), mipLevel);
-					break;
+					SDL_LOG_ASSERT_FAIL("Texture data overflow", "[Scene] Data overflow for texture %s at mip %u", fullPath.string().c_str(), mipLevel);
 				}
 
 				cmd->writeTexture(tex.m_Handle, arraySlice, mipLevel, static_cast<const uint8_t*>(imgData->GetData()) + offset, rowPitch, slicePitch);
 				offset += subresourceSize;
 			}
 		}
+	});
 
-		tex.m_BindlessIndex = renderer->RegisterTexture(tex.m_Handle);
-		if (tex.m_BindlessIndex == UINT32_MAX)
+	for (size_t ti = 0; ti < scene.m_Textures.size(); ++ti)
+	{
+		SDL_assert(scene.m_Textures[ti].m_Handle);
+
+		scene.m_Textures[ti].m_BindlessIndex = renderer->RegisterTexture(scene.m_Textures[ti].m_Handle);
+		if (scene.m_Textures[ti].m_BindlessIndex == UINT32_MAX)
 		{
-			SDL_LOG_ASSERT_FAIL("Bindless texture registration failed", "[Scene] Bindless texture registration failed for %s", tex.m_Uri.c_str());
+			SDL_LOG_ASSERT_FAIL("Bindless texture registration failed", "[Scene] Bindless texture registration failed for %s", scene.m_Textures[ti].m_Uri.c_str());
 		}
 	}
 }

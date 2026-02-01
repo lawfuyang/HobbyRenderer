@@ -399,6 +399,8 @@ bool Renderer::Initialize()
 	MicroProfileSetEnableAllGroups(true);
 	MicroProfileSetForceMetaCounters(true);
 
+    m_TaskScheduler = std::make_unique<TaskScheduler>();
+
     InitSDL();
 
     m_Window = CreateWindowScaled();
@@ -1000,7 +1002,7 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerNam
     }
     else
     {
-        const nvrhi::CommandListParameters params{.queueType = nvrhi::CommandQueue::Graphics};
+        const nvrhi::CommandListParameters params{.enableImmediateExecution = false, .queueType = nvrhi::CommandQueue::Graphics};
         handle = m_RHI->m_NvrhiDevice->createCommandList(params);
     }
 

@@ -10,6 +10,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <memory>
+#include "TaskScheduler.h"
 
 class IRenderer
 {
@@ -173,6 +175,9 @@ struct Renderer
     // ImGui state
     ImGuiLayer m_ImGuiLayer;
 
+    // Parallel processing
+    std::unique_ptr<TaskScheduler> m_TaskScheduler;
+
     // Scene
     Scene m_Scene;
 
@@ -288,7 +293,7 @@ private:
 class ScopedCommandList
 {
 public:
-    ScopedCommandList(std::string_view markerName)
+    ScopedCommandList(std::string_view markerName = "ScopedCommandList")
         : m_CommandList(Renderer::GetInstance()->AcquireCommandList(markerName))
     {
     }
