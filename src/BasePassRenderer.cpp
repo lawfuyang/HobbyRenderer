@@ -103,8 +103,6 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     cullData.m_P11 = projectionMatrix.m[1][1];
     cullData.m_ForcedLOD = renderer->m_ForcedLOD;
     cullData.m_InstanceBaseIndex = args.m_InstanceBaseIndex;
-    cullData.m_BucketIndex = 0; // Fixed at 0
-    cullData.m_BucketVisibleOffset = 0; // Fixed at 0
     commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
     nvrhi::BindingSetDesc cullBset;

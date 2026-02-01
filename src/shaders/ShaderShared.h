@@ -185,9 +185,6 @@ struct CullingConstants
   float m_P11;
   int m_ForcedLOD; // -1 for auto, 0+ for forced
   uint32_t m_InstanceBaseIndex;
-  uint32_t m_BucketIndex;
-  uint32_t m_BucketVisibleOffset;
-  uint32_t pad0;
 };
 
 struct HZBFromDepthConstants
