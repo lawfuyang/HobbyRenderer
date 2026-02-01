@@ -579,6 +579,8 @@ static void ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<Vert
 	scene.m_Meshlets.clear();
 	scene.m_MeshletVertices.clear();
 	scene.m_MeshletTriangles.clear();
+	
+	// NOTE: no multi-threading here because performance is worse. not sure why
 
 	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 	{
