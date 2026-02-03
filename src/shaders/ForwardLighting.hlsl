@@ -284,7 +284,7 @@ float OrenNayar(float NdotL, float NdotV, float LdotV, float a2, float albedo)
 // Helper function to sample from bindless textures using a sampler index.
 float4 SampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv)
 {
-    Texture2D tex = ResourceDescriptorHeap[textureIndex];
+    Texture2D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
     
     // Sample once using branch-based selection to avoid sampler-typed phi nodes.
     if (samplerIndex == SAMPLER_CLAMP_INDEX)
