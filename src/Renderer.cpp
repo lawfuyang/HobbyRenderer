@@ -942,45 +942,78 @@ nvrhi::MeshletPipelineHandle Renderer::GetOrCreateMeshletPipeline(const nvrhi::M
     return pipeline;
 }
 
-void Renderer::DrawFullScreenPass(
-    nvrhi::CommandListHandle commandList,
-    const nvrhi::FramebufferHandle& framebuffer,
-    nvrhi::ShaderHandle pixelShader,
-    const nvrhi::BindingSetVector& bindings,
-    const void* pushConstants,
-    size_t pushConstantsSize)
+void Renderer::AddFullScreenPass(const RenderPassParams& params)
 {
+    PROFILE_SCOPED(params.shaderName.data());
+    nvrhi::utils::ScopedMarker scopedMarker{ params.commandList, params.shaderName.data() };
+
     nvrhi::MeshletPipelineDesc desc;
     desc.MS = GetShaderHandle("FullScreen_MSMain");
-    desc.PS = pixelShader;
+    desc.PS = GetShaderHandle(params.shaderName);
 
-    for (const nvrhi::BindingSetHandle& bindingSet : bindings) {
-        desc.bindingLayouts.push_back(bindingSet->getLayout());
-    }
+    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc);
+    const nvrhi::BindingSetHandle bindingSet = m_RHI->m_NvrhiDevice->createBindingSet(params.bindingSetDesc, layout);
+
+    desc.bindingLayouts.push_back(layout);
 
     desc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
     desc.renderState.depthStencilState.depthTestEnable = false;
     desc.renderState.depthStencilState.depthWriteEnable = false;
 
-    nvrhi::MeshletPipelineHandle pipeline = GetOrCreateMeshletPipeline(desc, framebuffer->getFramebufferInfo());
+    nvrhi::MeshletPipelineHandle pipeline = GetOrCreateMeshletPipeline(desc, params.framebuffer->getFramebufferInfo());
 
     nvrhi::MeshletState state;
     state.pipeline = pipeline;
-    state.bindings = bindings;
-    state.framebuffer = framebuffer;
+    state.bindings = { bindingSet };
+    state.framebuffer = params.framebuffer;
 
-    const nvrhi::FramebufferDesc& fbDesc = framebuffer->getDesc();
+    const nvrhi::FramebufferDesc& fbDesc = params.framebuffer->getDesc();
     uint32_t width = fbDesc.colorAttachments[0].texture->getDesc().width;
     uint32_t height = fbDesc.colorAttachments[0].texture->getDesc().height;
 
     state.viewport.viewports.push_back(nvrhi::Viewport(0, (float)width, 0, (float)height, 0, 1));
     state.viewport.scissorRects.push_back(nvrhi::Rect(0, (int)width, 0, (int)height));
 
-    commandList->setMeshletState(state);
-    if (pushConstants && pushConstantsSize > 0) {
-        commandList->setPushConstants(pushConstants, pushConstantsSize);
+    params.commandList->setMeshletState(state);
+    if (params.pushConstants && params.pushConstantsSize > 0)
+    {
+        params.commandList->setPushConstants(params.pushConstants, params.pushConstantsSize);
     }
-    commandList->dispatchMesh(1, 1, 1);
+    params.commandList->dispatchMesh(1, 1, 1);
+}
+
+void Renderer::AddComputePass(const RenderPassParams& params)
+{
+    PROFILE_SCOPED(params.shaderName.data());
+    nvrhi::utils::ScopedMarker scopedMarker{ params.commandList, params.shaderName.data() };
+
+    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc);
+    const nvrhi::BindingSetHandle bindingSet = m_RHI->m_NvrhiDevice->createBindingSet(params.bindingSetDesc, layout);
+
+    nvrhi::ComputeState state;
+    state.pipeline = GetOrCreateComputePipeline(GetShaderHandle(params.shaderName), layout);
+    state.bindings = { bindingSet };
+
+    if (params.dispatchParams.indirectBuffer)
+    {
+        state.indirectParams = params.dispatchParams.indirectBuffer;
+    }
+
+    params.commandList->setComputeState(state);
+
+    if (params.pushConstants && params.pushConstantsSize > 0)
+    {
+        params.commandList->setPushConstants(params.pushConstants, params.pushConstantsSize);
+    }
+
+    if (!params.dispatchParams.indirectBuffer)
+    {
+        params.commandList->dispatch(params.dispatchParams.x, params.dispatchParams.y, params.dispatchParams.z);
+    }
+    else
+    {
+        params.commandList->dispatchIndirect(params.dispatchParams.indirectOffsetBytes);
+    }
 }
 
 nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerName)

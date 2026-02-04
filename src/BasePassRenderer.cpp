@@ -122,34 +122,38 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_MeshletIndirectBuffer),
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
     };
-    const nvrhi::BindingLayoutHandle cullLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(cullBset);
-    const nvrhi::BindingSetHandle cullBindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(cullBset, cullLayout);
 
-    nvrhi::ComputeState cullState;
-    cullState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_Culling_CSMain"), cullLayout);
-    cullState.bindings = { cullBindingSet };
-
-    commandList->setComputeState(cullState);
     if (args.m_CullingPhase == 0)
     {
         const uint32_t dispatchX = DivideAndRoundUp(args.m_NumInstances, kThreadsPerGroup);
-        commandList->dispatch(dispatchX, 1, 1);
+        Renderer::RenderPassParams params;
+        params.commandList = commandList;
+        params.shaderName = "GPUCulling_Culling_CSMain";
+        params.bindingSetDesc = cullBset;
+        params.dispatchParams = { .x = dispatchX, .y = 1, .z = 1 };
+        renderer->AddComputePass(params);
     }
     else
     {
-        cullState.indirectParams = m_OccludedIndirectBuffer;
-        commandList->setComputeState(cullState);
-        commandList->dispatchIndirect(0);
+        Renderer::RenderPassParams params;
+        params.commandList = commandList;
+        params.shaderName = "GPUCulling_Culling_CSMain";
+        params.bindingSetDesc = cullBset;
+        params.dispatchParams = { .indirectBuffer = m_OccludedIndirectBuffer, .indirectOffsetBytes = 0 };
+        renderer->AddComputePass(params);
     }
 
     nvrhi::utils::ScopedMarker buildIndirectMarker{ commandList, "Build Indirect Arguments" };
 
     // Build indirect for Phase 2 culling and/or meshlet rendering
-    nvrhi::ComputeState buildIndirectState;
-    buildIndirectState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("GPUCulling_BuildIndirect_CSMain"), cullLayout);
-    buildIndirectState.bindings = { cullBindingSet };
-    commandList->setComputeState(buildIndirectState);
-    commandList->dispatch(1, 1, 1);
+    {
+        Renderer::RenderPassParams params;
+        params.commandList = commandList;
+        params.shaderName = "GPUCulling_BuildIndirect_CSMain";
+        params.bindingSetDesc = cullBset;
+        params.dispatchParams = { .x = 1, .y = 1, .z = 1 };
+        renderer->AddComputePass(params);
+    }
 }
 
 void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5])
@@ -355,18 +359,18 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
             nvrhi::BindingSetItem::Texture_UAV(0, renderer->m_HZBTexture,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
             nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
         };
-        const nvrhi::BindingLayoutHandle hzbFromDepthLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(hzbFromDepthBset);
-        const nvrhi::BindingSetHandle hzbFromDepthBindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(hzbFromDepthBset, hzbFromDepthLayout);
 
-        nvrhi::ComputeState hzbFromDepthState;
-        hzbFromDepthState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("HZBFromDepth_HZBFromDepth_CSMain"), hzbFromDepthLayout);
-        hzbFromDepthState.bindings = { hzbFromDepthBindingSet };
-
-        commandList->setComputeState(hzbFromDepthState);
-        commandList->setPushConstants(&hzbFromDepthData, sizeof(hzbFromDepthData));
         const uint32_t dispatchX = DivideAndRoundUp(hzbFromDepthData.m_Width, 8);
         const uint32_t dispatchY = DivideAndRoundUp(hzbFromDepthData.m_Height, 8);
-        commandList->dispatch(dispatchX, dispatchY, 1);
+
+        Renderer::RenderPassParams params;
+        params.commandList = commandList;
+        params.shaderName = "HZBFromDepth_HZBFromDepth_CSMain";
+        params.bindingSetDesc = hzbFromDepthBset;
+        params.dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 };
+        params.pushConstants = &hzbFromDepthData;
+        params.pushConstantsSize = sizeof(hzbFromDepthData);
+        renderer->AddComputePass(params);
     }
 
     // Generate HZB mips using SPD downsample
@@ -414,16 +418,16 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     // Atomic counter always at slot 12
     spdBset.bindings.push_back(nvrhi::BindingSetItem::StructuredBuffer_UAV(12, renderer->m_SPDAtomicCounter));
 
-    const nvrhi::BindingLayoutHandle spdLayout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(spdBset);
-    const nvrhi::BindingSetHandle spdBindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(spdBset, spdLayout);
+    Renderer::RenderPassParams params{
+        .commandList = commandList,
+        .shaderName = "HZBDownsampleSPD_HZBDownsampleSPD_CSMain",
+        .bindingSetDesc = spdBset,
+        .pushConstants = &spdData,
+        .pushConstantsSize = sizeof(spdData),
+        .dispatchParams = { .x = dispatchThreadGroupCountXY[0], .y = dispatchThreadGroupCountXY[1], .z = 1 }
+    };
 
-    nvrhi::ComputeState spdState;
-    spdState.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("HZBDownsampleSPD_HZBDownsampleSPD_CSMain"), spdLayout);
-    spdState.bindings = { spdBindingSet };
-
-    commandList->setComputeState(spdState);
-    commandList->setPushConstants(&spdData, sizeof(spdData));
-    commandList->dispatch(dispatchThreadGroupCountXY[0], dispatchThreadGroupCountXY[1], 1);
+    renderer->AddComputePass(params);
 }
 
 void BasePassRenderer::Initialize()

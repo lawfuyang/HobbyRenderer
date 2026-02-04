@@ -44,18 +44,20 @@ public:
                 nvrhi::BindingSetItem::Texture_SRV(0, renderer->m_HDRColorTexture),
                 nvrhi::BindingSetItem::StructuredBuffer_UAV(0, renderer->m_LuminanceHistogram)
             };
-            nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
-            nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
-            nvrhi::ComputeState state;
-            state.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("LuminanceHistogram_LuminanceHistogram_CSMain"), layout);
-            state.bindings = { bindingSet };
-
-            commandList->setComputeState(state);
-            commandList->setPushConstants(&consts, sizeof(consts));
             const uint32_t dispatchX = DivideAndRoundUp(consts.m_Width, 16);
             const uint32_t dispatchY = DivideAndRoundUp(consts.m_Height, 16);
-            commandList->dispatch(dispatchX, dispatchY, 1);
+
+            Renderer::RenderPassParams params{
+                .commandList = commandList,
+                .shaderName = "LuminanceHistogram_LuminanceHistogram_CSMain",
+                .bindingSetDesc = bset,
+                .pushConstants = &consts,
+                .pushConstantsSize = sizeof(consts),
+                .dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 }
+            };
+
+            renderer->AddComputePass(params);
         }
 
         // 2. Exposure Adaptation Pass
@@ -76,16 +78,17 @@ public:
                 nvrhi::BindingSetItem::StructuredBuffer_UAV(0, renderer->m_ExposureBuffer),
                 nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_LuminanceHistogram)
             };
-            nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
-            nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
-            nvrhi::ComputeState state;
-            state.pipeline = renderer->GetOrCreateComputePipeline(renderer->GetShaderHandle("ExposureAdaptation_ExposureAdaptation_CSMain"), layout);
-            state.bindings = { bindingSet };
+            Renderer::RenderPassParams params{
+                .commandList = commandList,
+                .shaderName = "ExposureAdaptation_ExposureAdaptation_CSMain",
+                .bindingSetDesc = bset,
+                .pushConstants = &consts,
+                .pushConstantsSize = sizeof(consts),
+                .dispatchParams = { .x = 1, .y = 1, .z = 1 }
+            };
 
-            commandList->setComputeState(state);
-            commandList->setPushConstants(&consts, sizeof(consts));
-            commandList->dispatch(1, 1, 1);
+            renderer->AddComputePass(params);
         }
 
         // 3. Tonemapping Pass
@@ -102,21 +105,21 @@ public:
                 nvrhi::BindingSetItem::Texture_SRV(0, renderer->m_HDRColorTexture),
                 nvrhi::BindingSetItem::StructuredBuffer_SRV(1, renderer->m_ExposureBuffer)
             };
-            nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
-            nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
             nvrhi::FramebufferDesc fbDesc;
             fbDesc.addColorAttachment(renderer->GetCurrentBackBufferTexture());
             nvrhi::FramebufferHandle fb = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
 
-            renderer->DrawFullScreenPass(
-                commandList,
-                fb,
-                renderer->GetShaderHandle("Tonemap_Tonemap_PSMain"),
-                { bindingSet },
-                &consts,
-                sizeof(consts)
-            );
+            Renderer::RenderPassParams params{
+                .commandList = commandList,
+                .shaderName = "Tonemap_Tonemap_PSMain",
+                .bindingSetDesc = bset,
+                .pushConstants = &consts,
+                .pushConstantsSize = sizeof(consts),
+                .framebuffer = fb
+            };
+
+            renderer->AddFullScreenPass(params);
         }
     }
 

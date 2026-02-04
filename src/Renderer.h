@@ -100,12 +100,33 @@ struct Renderer
     void DrawFullScreenPass(
         nvrhi::CommandListHandle commandList,
         const nvrhi::FramebufferHandle& framebuffer,
-        nvrhi::ShaderHandle pixelShader,
-        const nvrhi::BindingSetVector& bindings = {},
+        std::string_view shaderName,
+        const nvrhi::BindingSetDesc& bindingSetDesc,
         const void* pushConstants = nullptr,
         size_t pushConstantsSize = 0);
 
-    // Shaders
+    struct ComputeDispatchParams
+    {
+        uint32_t x = 0, y = 0, z = 0; // For direct dispatch
+        nvrhi::BufferHandle indirectBuffer = nullptr; // For indirect dispatch (if not null, dispatch is indirect)
+        uint32_t indirectOffsetBytes = 0; // For indirect dispatch
+    };
+
+    struct RenderPassParams
+    {
+        nvrhi::CommandListHandle commandList;
+        std::string_view shaderName;
+        nvrhi::BindingSetDesc bindingSetDesc;
+        const void* pushConstants = nullptr;
+        size_t pushConstantsSize = 0;
+        // Compute specific
+        ComputeDispatchParams dispatchParams;
+        // Graphics specific
+        nvrhi::FramebufferHandle framebuffer;
+    };
+
+    void AddComputePass(const RenderPassParams& params);
+    void AddFullScreenPass(const RenderPassParams& params);
     nvrhi::ShaderHandle GetShaderHandle(std::string_view name) const;
 
     // Global Bindless Texture System
