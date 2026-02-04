@@ -252,17 +252,18 @@ static void ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene)
 		else
 		{
 			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_OPAQUE;
+
+			if (data->materials[i].double_sided)
+			{
+				scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_MASK;
+				scene.m_Materials.back().m_AlphaCutoff = 0; // treat as alpha mask with cutoff 0
+			}
 		}
 
 		if (data->materials[i].has_transmission)
 		{
 			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_BLEND;
 			scene.m_Materials.back().m_BaseColorFactor.w = 1.0f - data->materials[i].transmission.transmission_factor;
-		}
-
-		if (data->materials[i].double_sided)
-		{
-			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_MASK;
 		}
 	}
 
@@ -1549,7 +1550,7 @@ void Scene::UpdateNodeBoundingSphere(int nodeIndex)
 }
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 6;
+static constexpr uint32_t kSceneCacheVersion = 7;
 
 void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>& allVertices, const std::vector<uint32_t>& allIndices)
 {

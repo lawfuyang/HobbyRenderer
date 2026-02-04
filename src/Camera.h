@@ -25,6 +25,7 @@ public:
     Matrix GetViewMatrix() const;
     Matrix GetProjMatrix() const;
     Matrix GetViewProjMatrix() const;
+    Matrix GetInvViewProjMatrix() const;
 
     // Set camera from world transform matrix (for GLTF cameras)
     void SetFromMatrix(const Matrix& worldTransform);

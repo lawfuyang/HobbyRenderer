@@ -19,6 +19,12 @@ public:
 
         // Clear depth for reversed-Z (clear to 0.0f, no stencil)
         commandList->clearDepthStencilTexture(renderer->m_DepthTexture, nvrhi::AllSubresources, true, Renderer::DEPTH_FAR, false, 0);
+
+        // clear gbuffers
+        commandList->clearTextureFloat(renderer->m_GBufferAlbedo, nvrhi::AllSubresources, nvrhi::Color{});
+        commandList->clearTextureFloat(renderer->m_GBufferNormals, nvrhi::AllSubresources, nvrhi::Color{});
+        commandList->clearTextureFloat(renderer->m_GBufferORM, nvrhi::AllSubresources, nvrhi::Color{});
+        commandList->clearTextureFloat(renderer->m_GBufferEmissive, nvrhi::AllSubresources, nvrhi::Color{});
     }
     const char* GetName() const override { return "Clear"; }
 };
@@ -435,6 +441,7 @@ void Renderer::Initialize()
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
     CreateDepthTextures();
+    CreateGBufferResources();
     CreateHDRResources();
     LoadShaders();
 
@@ -552,6 +559,8 @@ void Renderer::Run()
 
         ADD_RENDER_PASS(g_ClearRenderer);
         ADD_RENDER_PASS(g_BasePassRenderer);
+        ADD_RENDER_PASS(g_DeferredRenderer);
+        ADD_RENDER_PASS(g_TransparentPassRenderer);
         ADD_RENDER_PASS(g_HDRRenderer);
         ADD_RENDER_PASS(g_ImGuiRenderer);
 
@@ -621,6 +630,7 @@ void Renderer::Shutdown()
     m_Scene.Shutdown();
 
     DestroyDepthTextures();
+    DestroyGBufferResources();
     DestroyHDRResources();
 
     // Free renderer instances
@@ -1173,6 +1183,53 @@ void Renderer::DestroyDepthTextures()
     m_DepthTexture = nullptr;
     m_HZBTexture = nullptr;
     m_SPDAtomicCounter = nullptr;
+}
+
+void Renderer::CreateGBufferResources()
+{
+    SDL_Log("[Init] Creating G-Buffer resources");
+
+    nvrhi::TextureDesc desc;
+    desc.width = m_RHI->m_SwapchainExtent.x;
+    desc.height = m_RHI->m_SwapchainExtent.y;
+    desc.isRenderTarget = true;
+    desc.initialState = nvrhi::ResourceStates::RenderTarget;
+    desc.setClearValue(nvrhi::Color{});
+
+    // Albedo: RGBA8
+    desc.format = nvrhi::Format::RGBA8_UNORM;
+    desc.debugName = "GBufferAlbedo";
+    m_GBufferAlbedo = m_RHI->m_NvrhiDevice->createTexture(desc);
+
+    // Normals: RG16_FLOAT (for octahedral encoding)
+    desc.format = nvrhi::Format::RG16_FLOAT;
+    desc.debugName = "GBufferNormals";
+    m_GBufferNormals = m_RHI->m_NvrhiDevice->createTexture(desc);
+
+    // ORM: RGBA8 (Occlusion, Roughness, Metallic)
+    desc.format = nvrhi::Format::RGBA8_UNORM;
+    desc.debugName = "GBufferORM";
+    m_GBufferORM = m_RHI->m_NvrhiDevice->createTexture(desc);
+
+    // Emissive: RGBA8
+    desc.format = nvrhi::Format::RGBA8_UNORM;
+    desc.debugName = "GBufferEmissive";
+    m_GBufferEmissive = m_RHI->m_NvrhiDevice->createTexture(desc);
+
+    if (!m_GBufferAlbedo || !m_GBufferNormals || !m_GBufferORM || !m_GBufferEmissive)
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to create G-Buffer textures", "[Init] Failed to create G-Buffer textures");
+    }
+}
+
+void Renderer::DestroyGBufferResources()
+{
+    SDL_Log("[Shutdown] Destroying G-Buffer resources");
+
+    m_GBufferAlbedo = nullptr;
+    m_GBufferNormals = nullptr;
+    m_GBufferORM = nullptr;
+    m_GBufferEmissive = nullptr;
 }
 
 void Renderer::CreateHDRResources()

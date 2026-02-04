@@ -1,5 +1,6 @@
 #include "ShaderShared.h"
 #include "Culling.h"
+#include "CommonLighting.hlsli"
 
 cbuffer PerFrameCB : register(b0, space1)
 {
@@ -220,67 +221,6 @@ float3x3 CalculateTBNWithoutTangent(float3 p, float3 n, float2 uv)
     return float3x3(normalize(T), normalize(B), n);
 }
 
-// 0.08 is a max F0 we define for dielectrics which matches with Crystalware and gems (0.05 - 0.08)
-// This means we cannot represent Diamond-like surfaces as they have an F0 of 0.1 - 0.2
-float DielectricSpecularToF0(float specular)
-{
-    return 0.08f * specular;
-}
-
-//Note from Filament: vec3 f0 = 0.16 * reflectance * reflectance * (1.0 - metallic) + baseColor * metallic;
-// F0 is the base specular reflectance of a surface
-// For dielectrics, this is monochromatic commonly between 0.02 (water) and 0.08 (gems) and derived from a separate specular value
-// For conductors, this is based on the base color we provided
-float3 ComputeF0(float specular, float3 baseColor, float metalness)
-{
-    return lerp(DielectricSpecularToF0(specular).xxx, baseColor, metalness);
-}
-
-float3 ComputeF0(float3 baseColor, float metalness)
-{
-    const float kMaterialSpecular = 0.5f;
-    return lerp(DielectricSpecularToF0(kMaterialSpecular).xxx, baseColor, metalness);
-}
-
-// [Schlick 1994, "An Inexpensive BRDF Model for Physically-Based Rendering"]
-float3 F_Schlick(float3 f0, float VdotH)
-{
-    float Fc = pow(1.0f - VdotH, 5.0f);
-    return Fc + (1.0f - Fc) * f0;
-}
-
-// GGX / Trowbridge-Reitz
-// Note the division by PI here
-// [Walter et al. 2007, "Microfacet models for refraction through rough surfaces"]
-float D_GGX(float a2, float NdotH)
-{
-    float d = (NdotH * a2 - NdotH) * NdotH + 1;
-    return a2 / (PI * d * d);
-}
-
-// Appoximation of joint Smith term for GGX
-// Returned value is G2 / (4 * NdotL * NdotV). So predivided by specular BRDF denominator
-// [Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"]
-float Vis_SmithJointApprox(float a2, float NdotV, float NdotL)
-{
-    float Vis_SmithV = NdotL * (NdotV * (1 - a2) + a2);
-    float Vis_SmithL = NdotV * (NdotL * (1 - a2) + a2);
-    return 0.5 * rcp(Vis_SmithV + Vis_SmithL);
-}
-
-// Oren-Nayar diffuse model returning the scalar BRDF multiplier
-// https://mimosa-pudica.net/improved-oren-nayar.html
-float OrenNayar(float NdotL, float NdotV, float LdotV, float a2, float albedo)
-{
-  float s = LdotV - NdotL * NdotV;
-  float t = lerp(1.0, max(NdotL, NdotV), step(0.0, s));
-
-  float A = 1.0 + a2 * (albedo / (a2 + 0.13) + 0.5 / (a2 + 0.33));
-  float B = 0.45 * a2 / (a2 + 0.09);
-
-  return albedo * max(0.0, NdotL) * (A + B * s / t) / PI;
-}
-
 // Helper function to sample from bindless textures using a sampler index.
 float4 SampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv)
 {
@@ -304,7 +244,59 @@ float3 HashColor(uint id)
     return float3((h & 0xFF) / 255.0f, ((h >> 8) & 0xFF) / 255.0f, ((h >> 16) & 0xFF) / 255.0f);
 }
 
-float4 PSMain(VSOut input) : SV_TARGET
+struct GBufferOut
+{
+    float4 Albedo   : SV_TARGET0;
+    float2 Normal   : SV_TARGET1;
+    float4 ORM      : SV_TARGET2;
+    float4 Emissive : SV_TARGET3;
+};
+
+float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIndex)
+{
+    if (debugMode == DEBUG_MODE_INSTANCES)
+    {
+        // Color by instance ID
+        return float3(
+            frac(instanceID * 0.1f),
+            frac(instanceID * 0.2f),
+            frac(instanceID * 0.3f)
+        );
+    }
+    else if (debugMode == DEBUG_MODE_MESHLETS)
+    {
+        // Color by meshlet ID
+        return float3(
+            frac(meshletID * 0.1f),
+            frac(meshletID * 0.2f),
+            frac(meshletID * 0.3f)
+        );
+    }
+    else if (debugMode == DEBUG_MODE_LOD)
+    {
+        float3 lodColors[MAX_LOD_COUNT] = {
+            float3(0.0, 1.0, 0.0), // 0: Green
+            float3(1.0, 0.0, 0.0), // 1: Red
+            float3(0.0, 1.0, 1.0), // 2: Cyan
+            float3(1.0, 0.0, 1.0), // 3: Magenta
+            float3(1.0, 1.0, 0.0), // 4: Yellow
+            float3(0.0, 0.0, 1.0), // 5: Blue
+            float3(0.5, 0.0, 0.0), // 6: Dark Red
+            float3(0.0, 0.5, 0.0)  // 7: Dark Green
+        };
+        
+        return lodColors[lodIndex];
+    }
+    return float3(0.0f, 0.0f, 0.0f); // Should not reach here
+}
+
+#if defined(FORWARD_TRANSPARENT)
+float4 Forward_PSMain(VSOut input) : SV_TARGET
+#elif defined(ALPHA_TEST)
+GBufferOut GBuffer_PSMain_AlphaTest(VSOut input)
+#else
+GBufferOut GBuffer_PSMain(VSOut input)
+#endif
 {
     // Instance + material
     PerInstanceData inst = g_Instances[input.instanceID];
@@ -319,7 +311,7 @@ float4 PSMain(VSOut input) : SV_TARGET
     // Alpha test (discard) as early as possible
     float alpha = hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
     
-#if ALPHA_TEST
+#if defined(ALPHA_TEST)
     if (mat.m_AlphaMode == ALPHA_MODE_MASK && alpha < mat.m_AlphaCutoff)
     {
         discard;
@@ -329,7 +321,7 @@ float4 PSMain(VSOut input) : SV_TARGET
     bool hasORM = (mat.m_TextureFlags & TEXFLAG_ROUGHNESS_METALLIC) != 0;
     float4 ormSample = hasORM
         ? SampleBindlessTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex, input.uv)
-        : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 0.0f, 0.0f);
+        : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 1.0f, 0.0f); // R=occ, G=rough, B=metal
 
     bool hasNormal = (mat.m_TextureFlags & TEXFLAG_NORMAL) != 0;
     float4 nmSample = hasNormal
@@ -354,73 +346,20 @@ float4 PSMain(VSOut input) : SV_TARGET
         N = normalize(input.normal);
     }
 
-    // View / light directions
-    float3 V = normalize(g_PerFrame.m_CameraPos.xyz - input.worldPos);
-    float3 L = g_PerFrame.m_LightDirection;
-    float3 H = normalize(V + L);
-
-    // Dot products
-    float NdotL = saturate(dot(N, L));
-    float NdotV = saturate(dot(N, V));
-    float NdotH = saturate(dot(N, H));
-    float VdotH = saturate(dot(V, H));
-    float LdotV = saturate(dot(L, V));
-
     // Base color
     float3 baseColor = hasAlbedo ? (albedoSample.xyz * mat.m_BaseColor.xyz) : mat.m_BaseColor.xyz;
 
     // Material properties (roughness, metallic)
     float roughness = mat.m_RoughnessMetallic.x;
     float metallic = mat.m_RoughnessMetallic.y;
+    float occlusion = 1.0f;
     if (hasORM)
     {
         // ORM texture layout: R = occlusion, G = roughness, B = metallic
+        occlusion = ormSample.x;
         roughness = ormSample.y;
         metallic = ormSample.z;
     }
-
-    // Derived values
-    float a = roughness * roughness;
-    float a2 = clamp(a * a, 0.0001f, 1.0f);
-
-    // Diffuse (Oren-Nayar)
-    float oren = OrenNayar(NdotL, NdotV, LdotV, a2, 1.0f);
-    float3 diffuse = oren * (1.0f - metallic) * baseColor;
-
-    // Specular
-    const float materialSpecular = 0.5f;
-    float3 specularColor = ComputeF0(materialSpecular, baseColor, metallic);
-
-    float D = D_GGX(a2, NdotH);
-    float Vis = Vis_SmithJointApprox(a2, NdotV, NdotL);
-    float3 F = F_Schlick(specularColor, VdotH);
-    float3 spec = (D * Vis) * F;
-
-    // Lighting and ambient
-    float3 radiance = float3(g_PerFrame.m_LightIntensity, g_PerFrame.m_LightIntensity, g_PerFrame.m_LightIntensity);
-    
-    // Raytraced shadows
-    float shadow = 1.0f;
-    if (g_PerFrame.m_EnableRTShadows != 0)
-    {
-        RayDesc ray;
-        ray.Origin = input.worldPos + N * 0.001f;
-        ray.Direction = L;
-        ray.TMin = 0.0f;
-        ray.TMax = 10000.0f;
-
-        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-        q.TraceRayInline(g_SceneAS, RAY_FLAG_NONE, 0xFF, ray);
-        q.Proceed();
-
-        if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-        {
-            shadow = 0.0f;
-        }
-    }
-
-    float3 ambient = (1.0f - (g_PerFrame.m_EnableRTShadows ? shadow : 0.0f)) * baseColor * 0.03f; // hack
-    float3 color = ambient + (diffuse + spec) * radiance * NdotL * shadow;
 
     // Emissive
     float3 emissive = mat.m_EmissiveFactor.xyz;
@@ -428,40 +367,71 @@ float4 PSMain(VSOut input) : SV_TARGET
     {
         emissive *= emissiveSample.xyz;
     }
-    color += emissive;
+
+#if defined(FORWARD_TRANSPARENT)
+    // Simple forward lighting for transparency
+    float3 V = normalize(g_PerFrame.m_CameraPos.xyz - input.worldPos);
+    float3 L = g_PerFrame.m_LightDirection;
+    float3 H = normalize(V + L);
+
+    float NdotL = saturate(dot(N, L));
+    float NdotV = saturate(dot(N, V));
+    float NdotH = saturate(dot(N, H));
+    float VdotH = saturate(dot(V, H));
+    float LdotV = saturate(dot(L, V));
+
+    float a2 = clamp(roughness * roughness * roughness * roughness, 0.0001f, 1.0f);
+    float oren = OrenNayar(NdotL, NdotV, LdotV, a2, 1.0f);
+    float3 diffuse = oren * (1.0f - metallic) * baseColor;
+
+    float3 specularColor = ComputeF0(0.5f, baseColor, metallic);
+    float D = D_GGX(a2, NdotH);
+    float Vis = Vis_SmithJointApprox(a2, NdotV, NdotL);
+    float3 F = F_Schlick(specularColor, VdotH);
+    float3 spec = (D * Vis) * F;
+
+    float3 radiance = float3(g_PerFrame.m_LightIntensity, g_PerFrame.m_LightIntensity, g_PerFrame.m_LightIntensity);
+    
+    // Transparent objects don't get shadow for now to keep it simple
+    float3 light = (diffuse + spec) * radiance * NdotL;
+    float3 ambient = baseColor * 0.03f * occlusion;
+
+    float3 color = ambient + light + emissive;
 
     // Debug visualizations
     if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)
     {
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_INSTANCES)
-            return float4(HashColor(input.instanceID), 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_MESHLETS)
-            return float4(HashColor(input.meshletID), 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_WORLD_NORMALS)
-            return float4(N, 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_ALBEDO)
-            return float4(baseColor, 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_ROUGHNESS)
-            return float4(roughness.xxx, 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_METALLIC)
-            return float4(metallic.xxx, 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_EMISSIVE)
-            return float4(emissive, 1.0f);
-        if (g_PerFrame.m_DebugMode == DEBUG_MODE_LOD)
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_INSTANCES ||
+            g_PerFrame.m_DebugMode == DEBUG_MODE_MESHLETS ||
+            g_PerFrame.m_DebugMode == DEBUG_MODE_LOD)
         {
-            float3 lodColors[] = {
-                float3(0.0, 1.0, 0.0), // 0: Green
-                float3(1.0, 0.0, 0.0), // 1: Red
-                float3(0.0, 1.0, 1.0), // 2: Cyan
-                float3(1.0, 0.0, 1.0), // 3: Magenta
-                float3(1.0, 1.0, 0.0), // 4: Yellow
-                float3(0.0, 0.0, 1.0), // 5: Blue
-                float3(0.5, 0.0, 0.0), // 6: Dark Red
-                float3(0.0, 0.5, 0.0)  // 7: Dark Green
-            };
-            return float4(lodColors[min(input.lodIndex, 7)], 1.0f);
+            color = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex);
         }
     }
 
     return float4(color, alpha);
+#else
+    GBufferOut output;
+    output.Albedo = float4(baseColor, alpha);
+    output.Normal = EncodeNormal(N);
+    output.ORM = float4(occlusion, roughness, metallic, 0.0f);
+    output.Emissive = float4(emissive, 1.0f);
+    
+    // Debug visualizations
+    if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)
+    {
+        if (g_PerFrame.m_DebugMode == DEBUG_MODE_INSTANCES ||
+            g_PerFrame.m_DebugMode == DEBUG_MODE_MESHLETS ||
+            g_PerFrame.m_DebugMode == DEBUG_MODE_LOD)
+        {
+            float3 debugColor = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex);
+            output.Albedo = float4(debugColor, alpha);
+            output.Normal = float2(0.5f, 0.5f); // Default normal
+            output.ORM = float4(1.0f, 0.5f, 0.0f, 0.0f); // Default ORM
+            output.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f); // No emissive
+        }
+    }
+    
+    return output;
+#endif
 }

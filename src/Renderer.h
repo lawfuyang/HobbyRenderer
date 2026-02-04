@@ -148,6 +148,12 @@ struct Renderer
     // Depth buffer
     nvrhi::TextureHandle m_DepthTexture;
 
+    // G-Buffer resources
+    nvrhi::TextureHandle m_GBufferAlbedo;
+    nvrhi::TextureHandle m_GBufferNormals;
+    nvrhi::TextureHandle m_GBufferORM;
+    nvrhi::TextureHandle m_GBufferEmissive;
+
     // HDR resources
     nvrhi::TextureHandle m_HDRColorTexture;
     nvrhi::BufferHandle m_LuminanceHistogram;
@@ -218,6 +224,8 @@ private:
     // Private methods
     void CreateDepthTextures();
     void DestroyDepthTextures();
+    void CreateGBufferResources();
+    void DestroyGBufferResources();
     void CreateHDRResources();
     void DestroyHDRResources();
     void HashPipelineCommonState(size_t& h, 

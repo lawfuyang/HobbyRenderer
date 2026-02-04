@@ -21,6 +21,7 @@ class BasePassRenderer : public IRenderer
 public:
     void Initialize() override;
     void Render(nvrhi::CommandListHandle commandList) override;
+    void RenderTransparent(nvrhi::CommandListHandle commandList);
     const char* GetName() const override { return "BasePass"; }
 
 private:
@@ -185,11 +186,33 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     sprintf(marker, "Base Pass Render (Phase %d) - %s", args.m_CullingPhase + 1, args.m_BucketName);
     nvrhi::utils::ScopedMarker commandListMarker(commandList, marker);
 
-    const nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
-        nvrhi::FramebufferDesc().addColorAttachment(renderer->m_HDRColorTexture).setDepthAttachment(renderer->m_DepthTexture));
+    const bool bUseAlphaTest = (args.m_AlphaMode == ALPHA_MODE_MASK);
+    const bool bUseAlphaBlend = (args.m_AlphaMode == ALPHA_MODE_BLEND);
+
+    const nvrhi::FramebufferHandle framebuffer = bUseAlphaBlend ? 
+        renderer->m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(renderer->m_HDRColorTexture).setDepthAttachment(renderer->m_DepthTexture)) :
+        renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
+        nvrhi::FramebufferDesc()
+        .addColorAttachment(renderer->m_GBufferAlbedo)
+        .addColorAttachment(renderer->m_GBufferNormals)
+        .addColorAttachment(renderer->m_GBufferORM)
+        .addColorAttachment(renderer->m_GBufferEmissive)
+        .setDepthAttachment(renderer->m_DepthTexture));
 
     nvrhi::FramebufferInfoEx fbInfo;
-    fbInfo.colorFormats = { Renderer::HDR_COLOR_FORMAT };
+    if (bUseAlphaBlend)
+    {
+        fbInfo.colorFormats = { Renderer::HDR_COLOR_FORMAT };
+    }
+    else
+    {
+        fbInfo.colorFormats = { 
+            nvrhi::Format::RGBA8_UNORM, 
+            nvrhi::Format::RG16_FLOAT, 
+            nvrhi::Format::RGBA8_UNORM, 
+            nvrhi::Format::RGBA8_UNORM 
+        };
+    }
     fbInfo.setDepthFormat(nvrhi::Format::D32);
 
     const uint32_t w = renderer->m_RHI->m_SwapchainExtent.x;
@@ -254,7 +277,6 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     cb.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
     cb.m_EnableConeCulling = (renderer->m_EnableConeCulling && args.m_AlphaMode == ALPHA_MODE_OPAQUE) ? 1 : 0;
     cb.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
-    cb.m_EnableRTShadows = (renderer->m_EnableRTShadows && renderer->m_Scene.m_TLAS) ? 1 : 0;
     cb.m_HZBWidth = (uint32_t)renderer->m_HZBTexture->getDesc().width;
     cb.m_HZBHeight = (uint32_t)renderer->m_HZBTexture->getDesc().height;
     cb.m_P00 = projectionMatrix.m[0][0];
@@ -280,14 +302,15 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         renderState.rasterState = CommonResources::GetInstance().RasterCullNone;
     }
 
-    const bool bUseAlphaTest = (args.m_AlphaMode == ALPHA_MODE_MASK);
-    const char* psName = bUseAlphaTest ? "ForwardLighting_PSMain_AlphaTest" : "ForwardLighting_PSMain";
+    const char* psName = bUseAlphaTest ? "BasePass_GBuffer_PSMain_AlphaTest_AlphaTest" : 
+                         bUseAlphaBlend ? "BasePass_Forward_PSMain_Forward_Transparent" : 
+                         "BasePass_GBuffer_PSMain";
 
     if (renderer->m_UseMeshletRendering)
     {
         nvrhi::MeshletPipelineDesc meshPipelineDesc;
-        meshPipelineDesc.AS = renderer->GetShaderHandle("ForwardLighting_ASMain");
-        meshPipelineDesc.MS = renderer->GetShaderHandle("ForwardLighting_MSMain");
+        meshPipelineDesc.AS = renderer->GetShaderHandle("BasePass_ASMain");
+        meshPipelineDesc.MS = renderer->GetShaderHandle("BasePass_MSMain");
         meshPipelineDesc.PS = renderer->GetShaderHandle(psName);
         meshPipelineDesc.renderState = renderState;
         meshPipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
@@ -309,7 +332,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     else
     {
         nvrhi::GraphicsPipelineDesc pipelineDesc;
-        pipelineDesc.VS = renderer->GetShaderHandle("ForwardLighting_VSMain");
+        pipelineDesc.VS = renderer->GetShaderHandle("BasePass_VSMain");
         pipelineDesc.PS = renderer->GetShaderHandle(psName);
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
         pipelineDesc.renderState = renderState;
@@ -511,7 +534,6 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 
     const uint32_t numOpaque = renderer->m_Scene.m_OpaqueBucket.m_Count;
     const uint32_t numMasked = renderer->m_Scene.m_MaskedBucket.m_Count;
-    const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
 
     // Compute frustum planes
     Vector4 frustumPlanes[5];
@@ -648,16 +670,6 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 
         // --- Generate final HZB including Opaque P2 and Masked depths ---
         GenerateHZBMips(commandList);
-
-        // 3. Transparent (All instances test against latest HZB)
-        if (numTransparent > 0)
-        {
-            ClearVisibleCounters();
-            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent", 0, ALPHA_MODE_BLEND);
-
-            PerformOcclusionCulling(commandList, renderingArgs);
-            RenderInstances(commandList, renderingArgs);
-        }
     }
     else
     {
@@ -670,15 +682,63 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
             PerformOcclusionCulling(commandList, renderingArgs);
             RenderInstances(commandList, renderingArgs);
         }
-        if (numTransparent > 0)
-        {
-            ClearVisibleCounters();
-            SetupArgs(numTransparent, renderer->m_Scene.m_TransparentBucket.m_BaseIndex, "Transparent (No Occlusion)", 0, ALPHA_MODE_BLEND);
-
-            PerformOcclusionCulling(commandList, renderingArgs);
-            RenderInstances(commandList, renderingArgs);
-        }
     }
 
     commandList->endPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
 }
+
+void BasePassRenderer::RenderTransparent(nvrhi::CommandListHandle commandList)
+{
+    Renderer* renderer = Renderer::GetInstance();
+    const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
+    if (numTransparent == 0) return;
+
+    Camera* cam = &renderer->m_Camera;
+    const Matrix viewProj = cam->GetViewProjMatrix();
+    const Matrix view = cam->GetViewMatrix();
+
+    // Compute frustum planes
+    Vector4 frustumPlanes[5];
+    ComputeFrustumPlanes(cam->GetProjMatrix(), frustumPlanes);
+
+    auto ClearVisibleCounters = [&]
+    {
+        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear Visible Counters" };
+        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
+        if (renderer->m_UseMeshletRendering)
+        {
+            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
+        }
+    };
+
+    BasePassRenderingArgs renderingArgs;
+    renderingArgs.m_FrustumPlanes = frustumPlanes;
+    renderingArgs.m_View = view;
+    renderingArgs.m_ViewProj = viewProj;
+    renderingArgs.m_NumInstances = numTransparent;
+    renderingArgs.m_InstanceBaseIndex = renderer->m_Scene.m_TransparentBucket.m_BaseIndex;
+    renderingArgs.m_BucketName = "Transparent";
+    renderingArgs.m_AlphaMode = ALPHA_MODE_BLEND;
+    renderingArgs.m_CullingPhase = 0;
+
+    ClearVisibleCounters();
+    PerformOcclusionCulling(commandList, renderingArgs);
+    RenderInstances(commandList, renderingArgs);
+}
+
+class TransparentPassRenderer : public BasePassRenderer
+{
+public:
+    void Initialize() override {}
+    void Render(nvrhi::CommandListHandle commandList) override
+    {
+        extern IRenderer* g_BasePassRenderer;
+        if (g_BasePassRenderer)
+        {
+            static_cast<BasePassRenderer*>(g_BasePassRenderer)->RenderTransparent(commandList);
+        }
+    }
+    const char* GetName() const override { return "TransparentPass"; }
+};
+
+REGISTER_RENDERER(TransparentPassRenderer);

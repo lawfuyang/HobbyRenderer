@@ -85,9 +85,18 @@ struct ForwardLightingPerFrameData
   uint32_t m_EnableOcclusionCulling;
   uint32_t m_HZBWidth;
   uint32_t m_HZBHeight;
-  uint32_t m_EnableRTShadows;
   float m_P00;
   float m_P11;
+};
+
+struct DeferredLightingConstants
+{
+  Matrix m_InvViewProj;
+  Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
+  Vector3 m_LightDirection;
+  float m_LightIntensity;
+  uint32_t m_EnableRTShadows;
+  uint32_t m_DebugMode;
 };
 
 // Material constants (persistent, per-material data)
