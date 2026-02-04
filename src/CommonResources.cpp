@@ -225,6 +225,14 @@ void CommonResources::Initialize()
         // Create dummy UAV texture
         DummyUAVTexture = createDefaultTexture("DummyUAV", nvrhi::Format::R32_FLOAT, true);
 
+        nvrhi::BufferDesc bufferDesc;
+        bufferDesc.byteSize = 4;
+        bufferDesc.structStride = true;
+        bufferDesc.canHaveUAVs = true;
+        bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        bufferDesc.debugName = "DummyUAVBuffer";
+        DummyUAVBuffer = device->createBuffer(bufferDesc);
+
         // Upload texture data using renderer's command list management
         ScopedCommandList commandList{ "CommonResources_DefaultTextures" };
 
@@ -275,6 +283,7 @@ void CommonResources::RegisterDefaultTextures()
 void CommonResources::Shutdown()
 {
     DummyUAVTexture = nullptr;
+    DummyUAVBuffer = nullptr;
     DefaultTexturePBR = nullptr;
     DefaultTextureNormal = nullptr;
     DefaultTextureGray = nullptr;

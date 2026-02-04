@@ -117,7 +117,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_VisibleCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_OccludedIndicesBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_OccludedCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_OccludedIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, args.m_CullingPhase == 0 ? m_OccludedIndirectBuffer : CommonResources::GetInstance().DummyUAVBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_MeshletJobBuffer ? m_MeshletJobBuffer : m_VisibleIndirectBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_MeshletJobCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_MeshletIndirectBuffer),
