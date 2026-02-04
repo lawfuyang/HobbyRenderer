@@ -24,6 +24,7 @@ public:
     // Accessors
     Matrix GetViewMatrix() const;
     Matrix GetProjMatrix() const;
+    Matrix GetInvProjMatrix() const;
     Matrix GetViewProjMatrix() const;
     Matrix GetInvViewProjMatrix() const;
 

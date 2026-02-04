@@ -162,6 +162,17 @@ Matrix Camera::GetProjMatrix() const
     return m;
 }
 
+Matrix Camera::GetInvProjMatrix() const
+{
+    using namespace DirectX;
+    Matrix projM = GetProjMatrix();
+    XMMATRIX proj = XMLoadFloat4x4(&projM);
+    XMMATRIX invProj = XMMatrixInverse(nullptr, proj);
+    Matrix out{};
+    XMStoreFloat4x4(&out, invProj);
+    return out;
+}
+
 Matrix Camera::GetViewProjMatrix() const
 {
     using namespace DirectX;

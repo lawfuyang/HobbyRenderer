@@ -72,44 +72,6 @@ void ImGuiLayer::UpdateFrame()
         // Target FPS control
         ImGui::DragInt("Target FPS", (int*)&renderer->m_TargetFPS, 1.0f, 10, 200);
 
-        ImGui::Checkbox("Enable Meshlet Rendering", &renderer->m_UseMeshletRendering);
-        ImGui::Checkbox("Raytraced Shadows", &renderer->m_EnableRTShadows);
-
-        // Debug mode dropdown
-        const char* debugModes[] = {
-            "None",
-            "Instances",
-            "Meshlets",
-            "World Normals",
-            "Albedo",
-            "Roughness",
-            "Metallic",
-            "Emissive",
-            "LOD"
-        };
-        ImGui::Combo("Debug Mode", &renderer->m_DebugMode, debugModes, IM_ARRAYSIZE(debugModes));
-
-        const char* lodNames[] = {
-            "Auto",
-            "LOD 0",
-            "LOD 1",
-            "LOD 2",
-            "LOD 3",
-            "LOD 4",
-            "LOD 5",
-            "LOD 6",
-            "LOD 7"
-        };
-        int forcedLODIdx = renderer->m_ForcedLOD + 1;
-        if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, MAX_LOD_COUNT))
-        {
-            renderer->m_ForcedLOD = forcedLODIdx - 1;
-        }
-        ImGui::SameLine();
-        ImGui::Text("%s", lodNames[forcedLODIdx]);
-
-        ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
-
         // HDR controls
         if (ImGui::TreeNode("HDR & Exposure"))
         {
@@ -202,6 +164,31 @@ void ImGuiLayer::UpdateFrame()
                 renderer->m_FrozenCullingViewMatrix = renderer->m_Camera.GetViewMatrix();
                 renderer->m_FrozenCullingCameraPos = renderer->m_Camera.GetPosition();
             }
+
+            ImGui::TreePop();
+        }
+
+        // Rendering options
+        if (ImGui::TreeNode("Rendering"))
+        {
+            ImGui::Checkbox("Use Meshlet Rendering", &renderer->m_UseMeshletRendering);
+            ImGui::Checkbox("Enable RT Shadows", &renderer->m_EnableRTShadows);
+
+            static const char* kDebugModes[] = {
+                "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD"
+            };
+            ImGui::Combo("Debug Mode", &renderer->m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
+
+            const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
+            int forcedLODIdx = renderer->m_ForcedLOD + 1;
+            if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, MAX_LOD_COUNT))
+            {
+                renderer->m_ForcedLOD = forcedLODIdx - 1;
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", lodNames[forcedLODIdx]);
+
+            ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
 
             ImGui::TreePop();
         }
