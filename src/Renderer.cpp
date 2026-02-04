@@ -1269,7 +1269,6 @@ void Renderer::CreateSceneResources()
     hdrDesc.format = HDR_COLOR_FORMAT;
     hdrDesc.debugName = "HDRColorTexture";
     hdrDesc.isRenderTarget = true;
-    hdrDesc.isUAV = true;
     hdrDesc.initialState = nvrhi::ResourceStates::RenderTarget;
     hdrDesc.setClearValue(kHDROutputClearColor);
 
