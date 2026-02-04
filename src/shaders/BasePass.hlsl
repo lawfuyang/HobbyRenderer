@@ -358,6 +358,13 @@ GBufferOut GBuffer_PSMain(VSOut input)
 #if defined(FORWARD_TRANSPARENT)
     // Simple forward lighting for transparency
     float3 V = normalize(g_PerFrame.m_CameraPos.xyz - input.worldPos);
+    
+    // Flip normals for backfaces to light them properly
+    if (dot(N, V) < 0.0f)
+    {
+        N = -N;
+    }
+
     float3 L = g_PerFrame.m_LightDirection;
     float3 H = normalize(V + L);
 
@@ -381,9 +388,11 @@ GBufferOut GBuffer_PSMain(VSOut input)
     
     // Transparent objects don't get shadow for now to keep it simple
     float3 light = (diffuse + spec) * radiance * NdotL;
-    float3 ambient = baseColor * 0.03f * occlusion;
 
-    float3 color = ambient + light + emissive;
+    float3 color =  light + emissive;
+
+    // hack ambient until we have restir gi
+    color += baseColor * 0.03f;
 
     // Debug visualizations
     if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)

@@ -284,7 +284,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
     nvrhi::RenderState renderState;
-    renderState.rasterState = CommonResources::GetInstance().RasterCullBack;
+    renderState.rasterState = CommonResources::GetInstance().RasterCullNone; // just treat everything as double-sided for simplicity
     
     if (args.m_AlphaMode == ALPHA_MODE_BLEND)
     {
@@ -295,11 +295,6 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
     {
         renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetOpaque;
         renderState.depthStencilState = CommonResources::GetInstance().DepthReadWrite;
-    }
-
-    if (args.m_AlphaMode != ALPHA_MODE_OPAQUE)
-    {
-        renderState.rasterState = CommonResources::GetInstance().RasterCullNone;
     }
 
     const char* psName = bUseAlphaTest ? "BasePass_GBuffer_PSMain_AlphaTest_AlphaTest" : 
