@@ -1,7 +1,7 @@
 #include "Scene.h"
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 7;
+static constexpr uint32_t kSceneCacheVersion = 8;
 
 // --- Binary Serialization Helpers ---
 template<typename T>
@@ -62,22 +62,21 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 	WritePOD(os, kSceneCacheMagic);
 	WritePOD(os, kSceneCacheVersion);
 
-	// Buckets
-	WritePOD(os, m_OpaqueBucket);
-	WritePOD(os, m_MaskedBucket);
-	WritePOD(os, m_TransparentBucket);
-
 	// Meshes
 	WritePOD(os, m_Meshes.size());
 	for (const Scene::Mesh& mesh : m_Meshes)
 	{
-		WriteVector(os, mesh.m_PrimitiveIndices);
+		WritePOD(os, mesh.m_Primitives.size());
+		for (const Scene::Primitive& prim : mesh.m_Primitives)
+		{
+			WritePOD(os, prim.m_VertexOffset);
+			WritePOD(os, prim.m_VertexCount);
+			WritePOD(os, prim.m_MaterialIndex);
+			WritePOD(os, prim.m_MeshDataIndex);
+		}
 		WritePOD(os, mesh.m_Center);
 		WritePOD(os, mesh.m_Radius);
 	}
-
-	// Primitives
-	WriteVector(os, m_Primitives);
 
 	// Nodes
 	WritePOD(os, m_Nodes.size());
@@ -98,7 +97,6 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 		WritePOD(os, node.m_Scale);
 		WritePOD(os, node.m_IsAnimated);
 		WritePOD(os, node.m_IsDynamic);
-		WriteVector(os, node.m_InstanceIndices);
 	}
 
 	// Materials
@@ -155,7 +153,6 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 
 	WritePOD(os, m_DirectionalLight);
 
-	WriteVector(os, m_InstanceData);
 	WriteVector(os, m_MeshData);
 	WriteVector(os, m_Meshlets);
 	WriteVector(os, m_MeshletVertices);
@@ -164,7 +161,6 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 	WriteVector(os, allIndices);
 
 	// animations
-	WriteVector(os, m_DynamicNodeIndices);
 	WritePOD(os, m_Animations.size());
 	for (const Animation& anim : m_Animations)
 	{
@@ -199,26 +195,26 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 		return false;
 	}
 
-	// Buckets
-	ReadPOD(is, m_OpaqueBucket);
-	ReadPOD(is, m_MaskedBucket);
-	ReadPOD(is, m_TransparentBucket);
-
 	// Meshes
 	size_t meshCount;
 	ReadPOD(is, meshCount);
 	m_Meshes.resize(meshCount);
 	for (Scene::Mesh& mesh : m_Meshes)
 	{
-		ReadVector(is, mesh.m_PrimitiveIndices);
+		size_t primCount;
+		ReadPOD(is, primCount);
+		mesh.m_Primitives.resize(primCount);
+		for (Scene::Primitive& prim : mesh.m_Primitives)
+		{
+			ReadPOD(is, prim.m_VertexOffset);
+			ReadPOD(is, prim.m_VertexCount);
+			ReadPOD(is, prim.m_MaterialIndex);
+			ReadPOD(is, prim.m_MeshDataIndex);
+			prim.m_BLAS = nullptr;
+		}
 		ReadPOD(is, mesh.m_Center);
 		ReadPOD(is, mesh.m_Radius);
 	}
-
-	// Primitives
-	ReadVector(is, m_Primitives);
-	for (Primitive& prim : m_Primitives)
-		prim.m_BLAS = nullptr; // Clear AS handles read from disk
 
 	// Nodes
 	size_t nodeCount;
@@ -241,7 +237,6 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 		ReadPOD(is, node.m_Scale);
 		ReadPOD(is, node.m_IsAnimated);
 		ReadPOD(is, node.m_IsDynamic);
-		ReadVector(is, node.m_InstanceIndices);
 	}
 
 	// Materials
@@ -306,7 +301,6 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 
 	ReadPOD(is, m_DirectionalLight);
 
-	ReadVector(is, m_InstanceData);
 	ReadVector(is, m_MeshData);
 	ReadVector(is, m_Meshlets);
 	ReadVector(is, m_MeshletVertices);
@@ -315,7 +309,6 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 	ReadVector(is, allIndices);
 
 	// animations
-	ReadVector(is, m_DynamicNodeIndices);
 	size_t animCount;
 	ReadPOD(is, animCount);
 	m_Animations.resize(animCount);

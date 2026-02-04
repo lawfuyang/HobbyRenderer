@@ -205,12 +205,6 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 		else
 		{
 			scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_OPAQUE;
-
-			if (data->materials[i].double_sided)
-			{
-				scene.m_Materials.back().m_AlphaMode = ALPHA_MODE_MASK;
-				scene.m_Materials.back().m_AlphaCutoff = 0; // treat as alpha mask with cutoff 0
-			}
 		}
 
 		if (data->materials[i].has_transmission)
@@ -337,9 +331,6 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* rend
 			mat.m_RoughnessMetallicTextureIndex = scene.m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
 		if (mat.m_EmissiveTexture != -1)
 			mat.m_EmissiveTextureIndex = scene.m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
-		
-		// Map alpha mode
-		// Already mapped during loading
 	}
 
 	std::vector<MaterialConstants> materialConstants;
@@ -527,14 +518,30 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene)
 void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<Vertex>& outVertices, std::vector<uint32_t>& outIndices)
 {
 	SCOPED_TIMER("[Scene] Meshes");
-	outVertices.clear();
-	outIndices.clear();
-	scene.m_MeshData.clear();
-	scene.m_Meshlets.clear();
-	scene.m_MeshletVertices.clear();
-	scene.m_MeshletTriangles.clear();
+
+	// sanity check: all output arrays should be empty
+	SDL_assert(outVertices.empty());
+	SDL_assert(outIndices.empty());
+	SDL_assert(scene.m_MeshData.empty());
+	SDL_assert(scene.m_Meshlets.empty());
+	SDL_assert(scene.m_MeshletVertices.empty());
+	SDL_assert(scene.m_MeshletTriangles.empty());
 	
 	// NOTE: no multi-threading here because performance is worse. not sure why
+
+	struct FullPrimitive
+	{
+		uint32_t m_VertexOffset = 0;
+		uint32_t m_VertexCount = 0;
+		uint32_t m_LODCount = 0;
+		uint32_t m_IndexOffsets[MAX_LOD_COUNT] = { 0 };
+		uint32_t m_IndexCounts[MAX_LOD_COUNT] = { 0 };
+		uint32_t m_MeshletOffsets[MAX_LOD_COUNT] = { 0 };
+		uint32_t m_MeshletCounts[MAX_LOD_COUNT] = { 0 };
+		float m_LODErrors[MAX_LOD_COUNT] = { 0.0f };
+		int m_MaterialIndex = -1;
+		uint32_t m_MeshDataIndex = 0;
+	};
 
 	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 	{
@@ -545,7 +552,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		for (cgltf_size pi = 0; pi < cgMesh.primitives_count; ++pi)
 		{
 			const cgltf_primitive& prim = cgMesh.primitives[pi];
-			Scene::Primitive p;
+			FullPrimitive p;
 
 			const cgltf_accessor* posAcc = nullptr;
 			const cgltf_accessor* normAcc = nullptr;
@@ -760,8 +767,13 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 
 			// Extract MeshData
 			p.m_MeshDataIndex = (uint32_t)scene.m_MeshData.size();
-			mesh.m_PrimitiveIndices.push_back((uint32_t)scene.m_Primitives.size());
-			scene.m_Primitives.push_back(p);
+			
+			Scene::Primitive minimalPrim;
+			minimalPrim.m_VertexOffset = p.m_VertexOffset;
+			minimalPrim.m_VertexCount = p.m_VertexCount;
+			minimalPrim.m_MaterialIndex = p.m_MaterialIndex;
+			minimalPrim.m_MeshDataIndex = p.m_MeshDataIndex;
+			mesh.m_Primitives.push_back(minimalPrim);
 
 			MeshData md{};
 			md.m_LODCount = p.m_LODCount;
@@ -1111,91 +1123,6 @@ bool SceneLoader::LoadGLTFScene(Scene& scene, const std::string& scenePath, std:
 	ProcessAnimations(data, scene);
 	ProcessMeshes(data, scene, allVertices, allIndices);
 	ProcessNodesAndHierarchy(data, scene);
-
-	// Identify dynamic nodes and sort them topologically
-	std::function<void(int, bool)> IdentifyDynamic = [&](int idx, bool parentDynamic)
-	{
-		Scene::Node& node = scene.m_Nodes[idx];
-		node.m_IsDynamic = node.m_IsAnimated || parentDynamic;
-		if (node.m_IsDynamic)
-		{
-			scene.m_DynamicNodeIndices.push_back(idx);
-		}
-		for (int childIdx : node.m_Children)
-		{
-			IdentifyDynamic(childIdx, node.m_IsDynamic);
-		}
-	};
-
-	for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
-	{
-		if (scene.m_Nodes[i].m_Parent == -1)
-		{
-			IdentifyDynamic(i, false);
-		}
-	}
-
-	// Bucketize and fill instance data
-	scene.m_InstanceData.clear();
-	struct InstInfo { PerInstanceData data; int nodeIdx; };
-	std::vector<InstInfo> opaqueStatic, opaqueDynamic;
-	std::vector<InstInfo> maskedStatic, maskedDynamic;
-	std::vector<InstInfo> transparentStatic, transparentDynamic;
-
-	for (int ni = 0; ni < (int)scene.m_Nodes.size(); ++ni)
-	{
-		const Scene::Node& node = scene.m_Nodes[ni];
-		if (node.m_MeshIndex < 0) continue;
-		const Scene::Mesh& mesh = scene.m_Meshes[node.m_MeshIndex];
-		for (uint32_t primIdx : mesh.m_PrimitiveIndices)
-		{
-			const Scene::Primitive& prim = scene.m_Primitives[primIdx];
-			PerInstanceData inst{};
-			inst.m_World = node.m_WorldTransform;
-			inst.m_MaterialIndex = prim.m_MaterialIndex;
-			inst.m_MeshDataIndex = prim.m_MeshDataIndex;
-			inst.m_Center = node.m_Center;
-			inst.m_Radius = node.m_Radius;
-
-			uint32_t alphaMode = scene.m_Materials[prim.m_MaterialIndex].m_AlphaMode;
-			bool isDynamic = node.m_IsDynamic;
-
-			if (alphaMode == ALPHA_MODE_OPAQUE) {
-				if (isDynamic) opaqueDynamic.push_back({ inst, ni });
-				else opaqueStatic.push_back({ inst, ni });
-			}
-			else if (alphaMode == ALPHA_MODE_MASK) {
-				if (isDynamic) maskedDynamic.push_back({ inst, ni });
-				else maskedStatic.push_back({ inst, ni });
-			}
-			else {
-				if (isDynamic) transparentDynamic.push_back({ inst, ni });
-				else transparentStatic.push_back({ inst, ni });
-			}
-		}
-	}
-
-	scene.m_OpaqueBucket = { 0, (uint32_t)(opaqueStatic.size() + opaqueDynamic.size()) };
-	scene.m_MaskedBucket = { scene.m_OpaqueBucket.m_BaseIndex + scene.m_OpaqueBucket.m_Count, (uint32_t)(maskedStatic.size() + maskedDynamic.size()) };
-	scene.m_TransparentBucket = { scene.m_MaskedBucket.m_BaseIndex + scene.m_MaskedBucket.m_Count, (uint32_t)(transparentStatic.size() + transparentDynamic.size()) };
-
-	auto PushInstances = [&](const std::vector<InstInfo>& infos)
-	{
-		for (const InstInfo& info : infos)
-		{
-			scene.m_Nodes[info.nodeIdx].m_InstanceIndices.push_back((uint32_t)scene.m_InstanceData.size());
-			scene.m_InstanceData.push_back(info.data);
-		}
-	};
-
-	PushInstances(opaqueStatic);
-	PushInstances(opaqueDynamic);
-	PushInstances(maskedStatic);
-	PushInstances(maskedDynamic);
-	PushInstances(transparentStatic);
-	PushInstances(transparentDynamic);
-
-	SDL_Log("[Scene] Instances: Opaque: %u, Masked: %u, Transparent: %u", scene.m_OpaqueBucket.m_Count, scene.m_MaskedBucket.m_Count, scene.m_TransparentBucket.m_Count);
 
 	cgltf_free(data);
 	return true;

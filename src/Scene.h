@@ -14,12 +14,6 @@ public:
     {
         uint32_t m_VertexOffset = 0;
         uint32_t m_VertexCount = 0;
-        uint32_t m_LODCount = 0;
-        uint32_t m_IndexOffsets[MAX_LOD_COUNT] = {0};
-        uint32_t m_IndexCounts[MAX_LOD_COUNT] = {0};
-        uint32_t m_MeshletOffsets[MAX_LOD_COUNT] = {0};
-        uint32_t m_MeshletCounts[MAX_LOD_COUNT] = {0};
-        float m_LODErrors[MAX_LOD_COUNT] = { 0.0f };
         int m_MaterialIndex = -1;
         uint32_t m_MeshDataIndex = 0;
         nvrhi::rt::AccelStructHandle m_BLAS;
@@ -27,7 +21,7 @@ public:
 
     struct Mesh
     {
-        std::vector<uint32_t> m_PrimitiveIndices;
+        std::vector<Primitive> m_Primitives;
         // local sphere
         Vector3 m_Center{};
         float m_Radius{};
@@ -159,7 +153,6 @@ public:
 
     // Public scene storage (instance members)
     std::vector<Mesh> m_Meshes;
-    std::vector<Primitive> m_Primitives;
     std::vector<Node> m_Nodes;
     std::vector<Material> m_Materials;
     std::vector<Texture> m_Textures;
@@ -202,6 +195,10 @@ public:
     // Load the scene from the path configured in `Config::Get().m_GltfScene`.
     // Only mesh vertex/index data and node hierarchy are loaded for now.
     void LoadScene();
+
+    // Rebuilds instance data, buckets, and dynamic node indices.
+    // Called after loading from glTF or Cache.
+    void FinalizeLoadedScene();
 
     void BuildAccelerationStructures();
 

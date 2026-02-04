@@ -47,7 +47,7 @@ void Scene::LoadScene()
 	{
 		if (!SceneLoader::LoadGLTFScene(*this, scenePath, allVertices, allIndices))
 		{
-			return; // Error already logged
+			SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene from glTF: %s", scenePath.c_str());
 		}
 
 		if (!Config::Get().m_SkipCache)
@@ -56,6 +56,8 @@ void Scene::LoadScene()
 			SaveToCache(cachePath.string(), allVertices, allIndices);
 		}
 	}
+
+	FinalizeLoadedScene();
 
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir, renderer);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this, renderer);
@@ -72,39 +74,48 @@ void Scene::BuildAccelerationStructures()
     nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
 	ScopedCommandList commandList{ "Build Scene Accel Structs" };
 
-    // 1. Build BLAS for each primitive
-	for (Primitive& primitive : m_Primitives)
+    // Mapping from MeshDataIndex to Primitive pointer for TLAS build
+    std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
+
+    // 1. Build BLAS for each primitive in each mesh
+	for (Mesh& mesh : m_Meshes)
 	{
-		SDL_assert(!primitive.m_BLAS);
+		for (Primitive& primitive : mesh.m_Primitives)
+		{
+			SDL_assert(!primitive.m_BLAS);
+            meshDataToPrimitive[primitive.m_MeshDataIndex] = &primitive;
 
-		nvrhi::rt::GeometryDesc geometryDesc;
-		nvrhi::rt::GeometryTriangles& geometryTriangle = geometryDesc.geometryData.triangles;
-		geometryTriangle.indexBuffer = m_IndexBuffer;
-		geometryTriangle.vertexBuffer = m_VertexBuffer;
-		geometryTriangle.indexFormat = nvrhi::Format::R32_UINT;
-		geometryTriangle.vertexFormat = nvrhi::Format::RGB32_FLOAT;
-		geometryTriangle.indexOffset = primitive.m_IndexOffsets[0] * nvrhi::getFormatInfo(geometryTriangle.indexFormat).bytesPerBlock;
-		geometryTriangle.vertexOffset = 0; // Indices are already global relative to the start of the vertex buffer
-		geometryTriangle.indexCount =  primitive.m_IndexCounts[0];
-		geometryTriangle.vertexCount = primitive.m_VertexCount;
-		geometryTriangle.vertexStride = sizeof(Vertex);
+			const MeshData& meshData = m_MeshData[primitive.m_MeshDataIndex];
 
-		geometryDesc.flags = nvrhi::rt::GeometryFlags::None; // can't be opaque since we have alpha tested materials that can be applied to this mesh
-		geometryDesc.geometryType = nvrhi::rt::GeometryType::Triangles;
+			nvrhi::rt::GeometryDesc geometryDesc;
+			nvrhi::rt::GeometryTriangles& geometryTriangle = geometryDesc.geometryData.triangles;
+			geometryTriangle.indexBuffer = m_IndexBuffer;
+			geometryTriangle.vertexBuffer = m_VertexBuffer;
+			geometryTriangle.indexFormat = nvrhi::Format::R32_UINT;
+			geometryTriangle.vertexFormat = nvrhi::Format::RGB32_FLOAT;
+			geometryTriangle.indexOffset = meshData.m_IndexOffsets[0] * nvrhi::getFormatInfo(geometryTriangle.indexFormat).bytesPerBlock;
+			geometryTriangle.vertexOffset = 0; // Indices are already global relative to the start of the vertex buffer
+			geometryTriangle.indexCount = meshData.m_IndexCounts[0];
+			geometryTriangle.vertexCount = primitive.m_VertexCount;
+			geometryTriangle.vertexStride = sizeof(Vertex);
 
-		nvrhi::rt::AccelStructDesc blasDesc;
-		blasDesc.bottomLevelGeometries = { geometryDesc };
-		blasDesc.debugName = "BLAS";
-		blasDesc.buildFlags = nvrhi::rt::AccelStructBuildFlags::AllowCompaction | nvrhi::rt::AccelStructBuildFlags::PreferFastTrace;
+			geometryDesc.flags = nvrhi::rt::GeometryFlags::None; // can't be opaque since we have alpha tested materials that can be applied to this mesh
+			geometryDesc.geometryType = nvrhi::rt::GeometryType::Triangles;
 
-		primitive.m_BLAS = device->createAccelStruct(blasDesc);
+			nvrhi::rt::AccelStructDesc blasDesc;
+			blasDesc.bottomLevelGeometries = { geometryDesc };
+			blasDesc.debugName = "BLAS";
+			blasDesc.buildFlags = nvrhi::rt::AccelStructBuildFlags::AllowCompaction | nvrhi::rt::AccelStructBuildFlags::PreferFastTrace;
 
-		nvrhi::utils::BuildBottomLevelAccelStruct(commandList, primitive.m_BLAS, blasDesc);
+			primitive.m_BLAS = device->createAccelStruct(blasDesc);
+
+			nvrhi::utils::BuildBottomLevelAccelStruct(commandList, primitive.m_BLAS, blasDesc);
+		}
 	}
 
 	// 2. Build TLAS for the scene
 	nvrhi::rt::AccelStructDesc tlasDesc;
-    tlasDesc.topLevelMaxInstances =  m_InstanceData.size();
+    tlasDesc.topLevelMaxInstances =  (uint32_t)m_InstanceData.size();
     tlasDesc.debugName = "Scene TLAS";
     tlasDesc.isTopLevel = true;
     m_TLAS = device->createAccelStruct(tlasDesc);
@@ -113,8 +124,8 @@ void Scene::BuildAccelerationStructures()
 	for (uint32_t instanceID = 0; instanceID < m_InstanceData.size(); ++instanceID)
     {
 		const PerInstanceData& instData = m_InstanceData[instanceID];
-		const Primitive& primitive = m_Primitives[instData.m_MeshDataIndex];
-		const uint32_t alphaMode = m_Materials.at(primitive.m_MaterialIndex).m_AlphaMode;
+		Primitive* primitive = meshDataToPrimitive.at(instData.m_MeshDataIndex);
+		const uint32_t alphaMode = m_Materials.at(primitive->m_MaterialIndex).m_AlphaMode;
 
         nvrhi::rt::InstanceDesc& instanceDesc = instances.emplace_back();
 
@@ -133,10 +144,100 @@ void Scene::BuildAccelerationStructures()
         instanceDesc.instanceMask = 1;
         instanceDesc.instanceContributionToHitGroupIndex = 0;
         instanceDesc.flags = instanceFlags;
-        instanceDesc.bottomLevelAS = primitive.m_BLAS;
+        instanceDesc.bottomLevelAS = primitive->m_BLAS;
     }
 
     commandList->buildTopLevelAccelStruct(m_TLAS, instances.data(), (uint32_t)instances.size());
+}
+
+void Scene::FinalizeLoadedScene()
+{
+    SCOPED_TIMER("[Scene] Finalize Scene");
+
+    // 1. Identify dynamic nodes and sort them topologically
+    m_DynamicNodeIndices.clear();
+    std::function<void(int, bool)> IdentifyDynamic = [&](int idx, bool parentDynamic)
+    {
+        Node& node = m_Nodes[idx];
+        node.m_IsDynamic = node.m_IsAnimated || parentDynamic;
+        if (node.m_IsDynamic)
+        {
+            m_DynamicNodeIndices.push_back(idx);
+        }
+        for (int childIdx : node.m_Children)
+        {
+            IdentifyDynamic(childIdx, node.m_IsDynamic);
+        }
+    };
+
+    for (int i = 0; i < (int)m_Nodes.size(); ++i)
+    {
+        if (m_Nodes[i].m_Parent == -1)
+        {
+            IdentifyDynamic(i, false);
+        }
+    }
+
+    // 2. Bucketize and fill instance data
+    m_InstanceData.clear();
+    struct InstInfo { PerInstanceData data; int nodeIdx; };
+    std::vector<InstInfo> opaqueStatic, opaqueDynamic;
+    std::vector<InstInfo> maskedStatic, maskedDynamic;
+    std::vector<InstInfo> transparentStatic, transparentDynamic;
+
+    for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
+    {
+        const Node& node = m_Nodes[ni];
+        if (node.m_MeshIndex < 0) continue;
+        const Mesh& mesh = m_Meshes[node.m_MeshIndex];
+        for (const Primitive& prim : mesh.m_Primitives)
+        {
+            PerInstanceData inst{};
+            inst.m_World = node.m_WorldTransform;
+            inst.m_MaterialIndex = prim.m_MaterialIndex;
+            inst.m_MeshDataIndex = prim.m_MeshDataIndex;
+            inst.m_Center = node.m_Center;
+            inst.m_Radius = node.m_Radius;
+
+            uint32_t alphaMode = m_Materials[prim.m_MaterialIndex].m_AlphaMode;
+            bool isDynamic = node.m_IsDynamic;
+
+            if (alphaMode == ALPHA_MODE_OPAQUE) {
+                if (isDynamic) opaqueDynamic.push_back({ inst, ni });
+                else opaqueStatic.push_back({ inst, ni });
+            }
+            else if (alphaMode == ALPHA_MODE_MASK) {
+                if (isDynamic) maskedDynamic.push_back({ inst, ni });
+                else maskedStatic.push_back({ inst, ni });
+            }
+            else {
+                if (isDynamic) transparentDynamic.push_back({ inst, ni });
+                else transparentStatic.push_back({ inst, ni });
+            }
+        }
+    }
+
+    m_OpaqueBucket = { 0, (uint32_t)(opaqueStatic.size() + opaqueDynamic.size()) };
+    m_MaskedBucket = { m_OpaqueBucket.m_BaseIndex + m_OpaqueBucket.m_Count, (uint32_t)(maskedStatic.size() + maskedDynamic.size()) };
+    m_TransparentBucket = { m_MaskedBucket.m_BaseIndex + m_MaskedBucket.m_Count, (uint32_t)(transparentStatic.size() + transparentDynamic.size()) };
+
+    auto PushInstances = [&](const std::vector<InstInfo>& infos)
+    {
+        for (const InstInfo& info : infos)
+        {
+            m_Nodes[info.nodeIdx].m_InstanceIndices.push_back((uint32_t)m_InstanceData.size());
+            m_InstanceData.push_back(info.data);
+        }
+    };
+
+    PushInstances(opaqueStatic);
+    PushInstances(opaqueDynamic);
+    PushInstances(maskedStatic);
+    PushInstances(maskedDynamic);
+    PushInstances(transparentStatic);
+    PushInstances(transparentDynamic);
+
+    SDL_Log("[Scene] Finalized: Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
 }
 
 void Scene::Update(float deltaTime)
@@ -297,8 +398,9 @@ void Scene::Shutdown()
 	m_Textures.clear();
 	m_Cameras.clear();
 	m_Lights.clear();
+	m_Animations.clear();
+	m_DynamicNodeIndices.clear();
 	m_InstanceData.clear();
-	m_Primitives.clear();
 }
 
 void Scene::UpdateNodeBoundingSphere(int nodeIndex)
