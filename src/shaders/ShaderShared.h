@@ -69,6 +69,26 @@ struct Vertex
   Vector2 m_Uv;
 };
 
+struct VertexQuantized
+{
+  Vector3 m_Pos;
+  uint32_t m_Normal; // 10-10-10-2 snorm
+  uint32_t m_Uv;     // half2
+};
+
+#ifndef __cplusplus
+Vertex UnpackVertex(VertexQuantized vq)
+{
+    Vertex v;
+    v.m_Pos = vq.m_Pos;
+    v.m_Normal.x = float(vq.m_Normal & 1023) / 511.0f - 1.0f;
+    v.m_Normal.y = float((vq.m_Normal >> 10) & 1023) / 511.0f - 1.0f;
+    v.m_Normal.z = float((vq.m_Normal >> 20) & 1023) / 511.0f - 1.0f;
+    v.m_Uv = f16tof32(uint2(vq.m_Uv & 0xFFFF, vq.m_Uv >> 16));
+    return v;
+}
+#endif
+
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
 {

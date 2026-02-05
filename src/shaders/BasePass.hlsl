@@ -10,7 +10,7 @@ cbuffer PerFrameCB : register(b0, space1)
 
 StructuredBuffer<PerInstanceData> g_Instances : register(t0, space1);
 StructuredBuffer<MaterialConstants> g_Materials : register(t1, space1);
-StructuredBuffer<Vertex> g_Vertices : register(t2, space1);
+StructuredBuffer<VertexQuantized> g_Vertices : register(t2, space1);
 StructuredBuffer<Meshlet> g_Meshlets : register(t3, space1);
 StructuredBuffer<uint> g_MeshletVertices : register(t4, space1);
 StructuredBuffer<uint> g_MeshletTriangles : register(t5, space1);
@@ -66,7 +66,7 @@ VSOut PrepareVSOut(Vertex v, PerInstanceData inst, uint instanceID, uint meshlet
 VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLocation)
 {
     PerInstanceData inst = g_Instances[instanceID];
-    Vertex v = g_Vertices[vertexID];
+    Vertex v = UnpackVertex(g_Vertices[vertexID]);
     return PrepareVSOut(v, inst, instanceID, 0xFFFFFFFF, 0);
 }
 
@@ -184,7 +184,7 @@ void MSMain(
     if (outputIdx < m.m_VertexCount)
     {
         uint vertexIndex = g_MeshletVertices[m.m_VertexOffset + outputIdx];
-        Vertex v = g_Vertices[vertexIndex];
+        Vertex v = UnpackVertex(g_Vertices[vertexIndex]);
         
         PerInstanceData inst = g_Instances[instanceIndex];
         vout[outputIdx] = PrepareVSOut(v, inst, instanceIndex, meshletIndex, payload.m_LODIndex);

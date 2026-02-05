@@ -16,7 +16,7 @@ Texture2D<float>  g_Depth            : register(t4, space1);
 RaytracingAccelerationStructure g_SceneAS : register(t5, space1);
 StructuredBuffer<PerInstanceData> g_Instances : register(t10, space1);
 StructuredBuffer<MaterialConstants> g_Materials : register(t11, space1);
-StructuredBuffer<Vertex> g_Vertices : register(t12, space1);
+StructuredBuffer<VertexQuantized> g_Vertices : register(t12, space1);
 StructuredBuffer<MeshData> g_MeshData : register(t13, space1);
 StructuredBuffer<uint> g_Indices : register(t14, space1);
 
@@ -118,9 +118,9 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
                     uint i1 = g_Indices[baseIndex + 3 * primitiveIndex + 1];
                     uint i2 = g_Indices[baseIndex + 3 * primitiveIndex + 2];
 
-                    float2 uv0 = g_Vertices[i0].m_Uv;
-                    float2 uv1 = g_Vertices[i1].m_Uv;
-                    float2 uv2 = g_Vertices[i2].m_Uv;
+                    float2 uv0 = UnpackVertex(g_Vertices[i0]).m_Uv;
+                    float2 uv1 = UnpackVertex(g_Vertices[i1]).m_Uv;
+                    float2 uv2 = UnpackVertex(g_Vertices[i2]).m_Uv;
 
                     float2 uv = uv0 * (1.0f - bary.x - bary.y) + uv1 * bary.x + uv2 * bary.y;
                     

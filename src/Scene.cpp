@@ -19,7 +19,7 @@ void Scene::LoadScene()
 	const std::filesystem::path sceneDir = gltfPath.parent_path();
 
 	Renderer* renderer = Renderer::GetInstance();
-	std::vector<Vertex> allVertices;
+	std::vector<VertexQuantized> allVerticesQuantized;
 	std::vector<uint32_t> allIndices;
 
 	SCOPED_TIMER("[Scene] LoadScene Total");
@@ -32,9 +32,10 @@ void Scene::LoadScene()
 		if (cacheTime > gltfTime)
 		{
 			SDL_Log("[Scene] Loading from binary cache: %s", cachePath.string().c_str());
-			if (LoadFromCache(cachePath.string(), allVertices, allIndices))
+			if (LoadFromCache(cachePath.string(), allIndices))
 			{
 				loadedFromCache = true;
+				allVerticesQuantized = m_VerticesQuantized;
 			}
 			else
 			{
@@ -45,7 +46,7 @@ void Scene::LoadScene()
 
 	if (!loadedFromCache)
 	{
-		if (!SceneLoader::LoadGLTFScene(*this, scenePath, allVertices, allIndices))
+		if (!SceneLoader::LoadGLTFScene(*this, scenePath, allVerticesQuantized, allIndices))
 		{
 			SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene from glTF: %s", scenePath.c_str());
 		}
@@ -53,7 +54,7 @@ void Scene::LoadScene()
 		if (!Config::Get().m_SkipCache)
 		{
 			SDL_Log("[Scene] Saving binary cache: %s", cachePath.string().c_str());
-			SaveToCache(cachePath.string(), allVertices, allIndices);
+			SaveToCache(cachePath.string(), allIndices);
 		}
 	}
 
@@ -62,7 +63,7 @@ void Scene::LoadScene()
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir, renderer);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this, renderer);
 	SceneLoader::SetupDirectionalLightAndCamera(*this, renderer);
-	SceneLoader::CreateAndUploadGpuBuffers(*this, renderer, allVertices, allIndices);
+	SceneLoader::CreateAndUploadGpuBuffers(*this, renderer, allVerticesQuantized, allIndices);
 	BuildAccelerationStructures();
 }
 
@@ -90,14 +91,14 @@ void Scene::BuildAccelerationStructures()
 			nvrhi::rt::GeometryDesc geometryDesc;
 			nvrhi::rt::GeometryTriangles& geometryTriangle = geometryDesc.geometryData.triangles;
 			geometryTriangle.indexBuffer = m_IndexBuffer;
-			geometryTriangle.vertexBuffer = m_VertexBuffer;
+			geometryTriangle.vertexBuffer = m_VertexBufferQuantized;
 			geometryTriangle.indexFormat = nvrhi::Format::R32_UINT;
 			geometryTriangle.vertexFormat = nvrhi::Format::RGB32_FLOAT;
 			geometryTriangle.indexOffset = meshData.m_IndexOffsets[0] * nvrhi::getFormatInfo(geometryTriangle.indexFormat).bytesPerBlock;
 			geometryTriangle.vertexOffset = 0; // Indices are already global relative to the start of the vertex buffer
 			geometryTriangle.indexCount = meshData.m_IndexCounts[0];
 			geometryTriangle.vertexCount = primitive.m_VertexCount;
-			geometryTriangle.vertexStride = sizeof(Vertex);
+			geometryTriangle.vertexStride = sizeof(VertexQuantized);
 
 			geometryDesc.flags = nvrhi::rt::GeometryFlags::None; // can't be opaque since we have alpha tested materials that can be applied to this mesh
 			geometryDesc.geometryType = nvrhi::rt::GeometryType::Triangles;
@@ -373,7 +374,7 @@ void Scene::Update(float deltaTime)
 void Scene::Shutdown()
 {
 	// Release GPU buffer handles so NVRHI can free underlying resources
-	m_VertexBuffer = nullptr;
+	m_VertexBufferQuantized = nullptr;
 	m_IndexBuffer = nullptr;
 	m_MaterialConstantsBuffer = nullptr;
 	m_InstanceDataBuffer = nullptr;

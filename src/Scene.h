@@ -175,7 +175,7 @@ public:
     BucketInfo m_TransparentBucket;
 
     // GPU buffers created for the scene
-    nvrhi::BufferHandle m_VertexBuffer;
+    nvrhi::BufferHandle m_VertexBufferQuantized;
     nvrhi::BufferHandle m_IndexBuffer;
     nvrhi::BufferHandle m_MaterialConstantsBuffer;
     nvrhi::BufferHandle m_MeshDataBuffer;
@@ -189,6 +189,7 @@ public:
     std::vector<Meshlet> m_Meshlets;
     std::vector<uint32_t> m_MeshletVertices;
     std::vector<uint32_t> m_MeshletTriangles;
+    std::vector<VertexQuantized> m_VerticesQuantized;
     nvrhi::BufferHandle m_InstanceDataBuffer;
     nvrhi::rt::AccelStructHandle m_TLAS;
 
@@ -209,8 +210,8 @@ public:
     void Shutdown();
 
     // Binary Scene Cache
-    bool LoadFromCache(const std::string& cachePath, std::vector<Vertex>& allVertices, std::vector<uint32_t>& allIndices);
-    void SaveToCache(const std::string& cachePath, const std::vector<Vertex>& allVertices, const std::vector<uint32_t>& allIndices);
+    bool LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices);
+    void SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices);
 
     // Get directional light direction in world space
     Vector3 GetDirectionalLightDirection() const;

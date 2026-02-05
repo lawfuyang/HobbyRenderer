@@ -1,7 +1,7 @@
 #include "Scene.h"
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 10;
+static constexpr uint32_t kSceneCacheVersion = 12;
 
 // --- Binary Serialization Helpers ---
 template<typename T>
@@ -50,7 +50,7 @@ static void ReadVector(std::istream& is, std::vector<T>& vec)
 		is.read(reinterpret_cast<char*>(vec.data()), size * sizeof(T));
 }
 
-void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>& allVertices, const std::vector<uint32_t>& allIndices)
+void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices)
 {
 	std::ofstream os(cachePath, std::ios::binary);
 	if (!os.is_open())
@@ -157,8 +157,8 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 	WriteVector(os, m_Meshlets);
 	WriteVector(os, m_MeshletVertices);
 	WriteVector(os, m_MeshletTriangles);
-	WriteVector(os, allVertices);
 	WriteVector(os, allIndices);
+	WriteVector(os, m_VerticesQuantized);
 
 	// animations
 	WritePOD(os, m_Animations.size());
@@ -179,7 +179,7 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<Vertex>&
 	}
 }
 
-bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& allVertices, std::vector<uint32_t>& allIndices)
+bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices)
 {
 	std::ifstream is(cachePath, std::ios::binary);
 	if (!is.is_open()) return false;
@@ -305,8 +305,8 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<Vertex>& all
 	ReadVector(is, m_Meshlets);
 	ReadVector(is, m_MeshletVertices);
 	ReadVector(is, m_MeshletTriangles);
-	ReadVector(is, allVertices);
 	ReadVector(is, allIndices);
+	ReadVector(is, m_VerticesQuantized);
 
 	// animations
 	size_t animCount;
