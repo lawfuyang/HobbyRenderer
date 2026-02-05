@@ -183,13 +183,11 @@ public:
     nvrhi::BufferHandle m_MeshletVerticesBuffer;
     nvrhi::BufferHandle m_MeshletTrianglesBuffer;
 
-    // GPU buffers for instances
     std::vector<PerInstanceData> m_InstanceData;
     std::vector<MeshData> m_MeshData;
     std::vector<Meshlet> m_Meshlets;
     std::vector<uint32_t> m_MeshletVertices;
     std::vector<uint32_t> m_MeshletTriangles;
-    std::vector<VertexQuantized> m_VerticesQuantized;
     nvrhi::BufferHandle m_InstanceDataBuffer;
     nvrhi::rt::AccelStructHandle m_TLAS;
 
@@ -210,8 +208,8 @@ public:
     void Shutdown();
 
     // Binary Scene Cache
-    bool LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices);
-    void SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices);
+    bool LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices, std::vector<VertexQuantized>& allVerticesQuantized);
+    void SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices, const std::vector<VertexQuantized>& allVerticesQuantized);
 
     // Get directional light direction in world space
     Vector3 GetDirectionalLightDirection() const;

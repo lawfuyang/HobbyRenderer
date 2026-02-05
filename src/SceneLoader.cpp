@@ -998,7 +998,6 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		scene.m_VertexBufferQuantized = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_VertexBufferQuantized, allVerticesQuantized.data(), vqbytes, 0);
-		scene.m_VerticesQuantized = allVerticesQuantized;
 	}
 
 	// Create index buffer

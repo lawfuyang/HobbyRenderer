@@ -32,10 +32,9 @@ void Scene::LoadScene()
 		if (cacheTime > gltfTime)
 		{
 			SDL_Log("[Scene] Loading from binary cache: %s", cachePath.string().c_str());
-			if (LoadFromCache(cachePath.string(), allIndices))
+			if (LoadFromCache(cachePath.string(), allIndices, allVerticesQuantized))
 			{
 				loadedFromCache = true;
-				allVerticesQuantized = m_VerticesQuantized;
 			}
 			else
 			{
@@ -54,7 +53,7 @@ void Scene::LoadScene()
 		if (!Config::Get().m_SkipCache)
 		{
 			SDL_Log("[Scene] Saving binary cache: %s", cachePath.string().c_str());
-			SaveToCache(cachePath.string(), allIndices);
+			SaveToCache(cachePath.string(), allIndices, allVerticesQuantized);
 		}
 	}
 

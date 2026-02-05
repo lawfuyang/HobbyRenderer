@@ -50,7 +50,7 @@ static void ReadVector(std::istream& is, std::vector<T>& vec)
 		is.read(reinterpret_cast<char*>(vec.data()), size * sizeof(T));
 }
 
-void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices)
+void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices, const std::vector<VertexQuantized>& allVerticesQuantized)
 {
 	std::ofstream os(cachePath, std::ios::binary);
 	if (!os.is_open())
@@ -158,7 +158,7 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t
 	WriteVector(os, m_MeshletVertices);
 	WriteVector(os, m_MeshletTriangles);
 	WriteVector(os, allIndices);
-	WriteVector(os, m_VerticesQuantized);
+	WriteVector(os, allVerticesQuantized);
 
 	// animations
 	WritePOD(os, m_Animations.size());
@@ -179,7 +179,7 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t
 	}
 }
 
-bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices)
+bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices, std::vector<VertexQuantized>& allVerticesQuantized)
 {
 	std::ifstream is(cachePath, std::ios::binary);
 	if (!is.is_open()) return false;
@@ -306,7 +306,7 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& a
 	ReadVector(is, m_MeshletVertices);
 	ReadVector(is, m_MeshletTriangles);
 	ReadVector(is, allIndices);
-	ReadVector(is, m_VerticesQuantized);
+	ReadVector(is, allVerticesQuantized);
 
 	// animations
 	size_t animCount;
