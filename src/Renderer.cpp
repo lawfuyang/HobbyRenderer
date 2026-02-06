@@ -385,11 +385,11 @@ void Renderer::UnloadShaders()
 
 nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
 {
-    std::unordered_map<std::string, nvrhi::ShaderHandle>::const_iterator it = m_ShaderCache.find(std::string{name});
+    std::unordered_map<std::string, nvrhi::ShaderHandle>::const_iterator it = m_ShaderCache.find(name.data());
     if (it != m_ShaderCache.end())
         return it->second;
     
-    SDL_LOG_ASSERT_FAIL("Requested shader not found in cache", "[Error] Shader '%s' not found in cache!", std::string{name}.c_str());
+    SDL_LOG_ASSERT_FAIL("Requested shader not found in cache", "[Error] Shader '%s' not found in cache!", name.data());
     return {};
 }
 
@@ -824,6 +824,8 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
         return UINT32_MAX;
     }
 
+    SINGLE_THREAD_GUARD();
+
     const uint32_t index = m_NextTextureIndex++;
     
     const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
@@ -1081,6 +1083,8 @@ void Renderer::AddComputePass(const RenderPassParams& params)
 
 nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerName)
 {
+    SINGLE_THREAD_GUARD();
+
     nvrhi::CommandListHandle handle;
     if (!m_CommandListFreeList.empty())
     {
@@ -1103,6 +1107,8 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerNam
 
 void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
 {
+    SINGLE_THREAD_GUARD();
+
     SDL_assert(commandList && "Invalid command list submitted");
 
     commandList->endMarker();
@@ -1113,6 +1119,7 @@ void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
 void Renderer::ExecutePendingCommandLists()
 {
     PROFILE_FUNCTION();
+    SINGLE_THREAD_GUARD();
 
     // Wait for GPU to finish all work before presenting
     {

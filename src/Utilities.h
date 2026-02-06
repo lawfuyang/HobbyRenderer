@@ -62,3 +62,22 @@ struct ScopedTimerLog
 };
 
 #define SCOPED_TIMER(labelLiteral) ScopedTimerLog scopedTimer_##__COUNTER__{labelLiteral}
+
+struct SingleThreadGuard
+{
+    std::atomic<int>& count;
+    SingleThreadGuard(std::atomic<int>& c) : count(c)
+    {
+        int expected = 0;
+        if (!count.compare_exchange_strong(expected, 1))
+        {
+            SDL_assert(false && "Multiple threads detected in single-threaded function");
+        }
+    }
+    ~SingleThreadGuard()
+    {
+        count.store(0);
+    }
+};
+
+#define SINGLE_THREAD_GUARD() static std::atomic<int> _stg_count = 0; SingleThreadGuard _stg{ _stg_count }
