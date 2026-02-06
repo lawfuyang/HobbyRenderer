@@ -520,6 +520,8 @@ void Renderer::Run()
                     &m_Scene.m_InstanceData[startIdx],
                     count * sizeof(PerInstanceData),
                     startIdx * sizeof(PerInstanceData));
+
+                m_Scene.UpdateTLAS(cmd);
             }
         }
 

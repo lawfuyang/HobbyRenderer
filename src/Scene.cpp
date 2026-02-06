@@ -118,16 +118,17 @@ void Scene::BuildAccelerationStructures()
     tlasDesc.topLevelMaxInstances =  (uint32_t)m_InstanceData.size();
     tlasDesc.debugName = "Scene TLAS";
     tlasDesc.isTopLevel = true;
+    tlasDesc.buildFlags = nvrhi::rt::AccelStructBuildFlags::AllowUpdate;
     m_TLAS = device->createAccelStruct(tlasDesc);
 
-    std::vector<nvrhi::rt::InstanceDesc> instances;
+	SDL_assert(m_RTInstanceDescs.empty());
 	for (uint32_t instanceID = 0; instanceID < m_InstanceData.size(); ++instanceID)
     {
 		const PerInstanceData& instData = m_InstanceData[instanceID];
 		Primitive* primitive = meshDataToPrimitive.at(instData.m_MeshDataIndex);
 		const uint32_t alphaMode = m_Materials.at(primitive->m_MaterialIndex).m_AlphaMode;
 
-        nvrhi::rt::InstanceDesc& instanceDesc = instances.emplace_back();
+        nvrhi::rt::InstanceDesc& instanceDesc = m_RTInstanceDescs.emplace_back();
 
 		// Copy transform (transpose of row-vector matrix)
 		const Matrix& world = instData.m_World;
@@ -147,7 +148,16 @@ void Scene::BuildAccelerationStructures()
         instanceDesc.bottomLevelAS = primitive->m_BLAS;
     }
 
-    commandList->buildTopLevelAccelStruct(m_TLAS, instances.data(), (uint32_t)instances.size());
+    commandList->buildTopLevelAccelStruct(m_TLAS, m_RTInstanceDescs.data(), (uint32_t)m_RTInstanceDescs.size());
+}
+
+void Scene::UpdateTLAS(nvrhi::ICommandList* commandList)
+{
+    if (!m_TLAS || m_RTInstanceDescs.empty()) return;
+
+	PROFILE_FUNCTION();
+
+    commandList->buildTopLevelAccelStruct(m_TLAS, m_RTInstanceDescs.data(), (uint32_t)m_RTInstanceDescs.size(), nvrhi::rt::AccelStructBuildFlags::PerformUpdate);
 }
 
 void Scene::FinalizeLoadedScene()
@@ -355,6 +365,14 @@ void Scene::Update(float deltaTime)
 
 				m_InstanceDirtyRange.first = std::min(m_InstanceDirtyRange.first, instIdx);
 				m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
+
+				// Update RT instance transform
+				const Matrix& world = node.m_WorldTransform;
+				nvrhi::rt::AffineTransform transform;
+				transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
+				transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;
+				transform[8] = world._13; transform[9] = world._23; transform[10] = world._33; transform[11] = world._43;
+				m_RTInstanceDescs[instIdx].setTransform(transform);
 			}
 		}
 		else
@@ -382,6 +400,7 @@ void Scene::Shutdown()
 	m_MeshletVerticesBuffer = nullptr;
 	m_MeshletTrianglesBuffer = nullptr;
 	m_TLAS = nullptr;
+	m_RTInstanceDescs.clear();
 
 	// Clear CPU-side containers
 	m_Meshes.clear();

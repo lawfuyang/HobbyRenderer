@@ -190,6 +190,7 @@ public:
     std::vector<uint32_t> m_MeshletTriangles;
     nvrhi::BufferHandle m_InstanceDataBuffer;
     nvrhi::rt::AccelStructHandle m_TLAS;
+    std::vector<nvrhi::rt::InstanceDesc> m_RTInstanceDescs;
 
     // Load the scene from the path configured in `Config::Get().m_GltfScene`.
     // Only mesh vertex/index data and node hierarchy are loaded for now.
@@ -200,6 +201,7 @@ public:
     void FinalizeLoadedScene();
 
     void BuildAccelerationStructures();
+    void UpdateTLAS(nvrhi::ICommandList* commandList);
 
     // Per-frame update for animations
     void Update(float deltaTime);
