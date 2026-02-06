@@ -476,12 +476,6 @@ void Renderer::Run()
         const uint64_t frameStart = SDL_GetTicksNS();
         const uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / m_TargetFPS;
 
-        if (!m_RHI->AcquireNextSwapchainImage(&m_CurrentSwapchainImageIdx))
-        {
-            SDL_LOG_ASSERT_FAIL("AcquireNextSwapchainImage failed", "[Run ] AcquireNextSwapchainImage failed");
-            break;
-        }
-
         {
             PROFILE_SCOPED("Event Polling");
 
@@ -500,10 +494,26 @@ void Renderer::Run()
             }
         }
 
+        std::vector<nvrhi::CommandListHandle> frameCommandLists;
+
+        std::atomic<bool> swapChainImageAcquireSuccess = true;
+
+        // Vulkan's implementation can be particularly heavy...
+        if (m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN)
         {
+            m_TaskScheduler->ScheduleTask([this, &swapChainImageAcquireSuccess]() {
+                swapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_CurrentSwapchainImageIdx);
+                });
+        }
+        else
+        {
+            swapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_CurrentSwapchainImageIdx);
+        }
+
+        m_TaskScheduler->ScheduleTask([this]() {
             PROFILE_SCOPED("Garbage Collection");
             m_RHI->m_NvrhiDevice->runGarbageCollection();
-        }
+        });
 
         // Update animations
         if (m_EnableAnimations)
@@ -520,9 +530,11 @@ void Renderer::Run()
                     &m_Scene.m_InstanceData[startIdx],
                     count * sizeof(PerInstanceData),
                     startIdx * sizeof(PerInstanceData));
-
-                m_Scene.UpdateTLAS(cmd);
             }
+
+            nvrhi::CommandListHandle cmd = AcquireCommandList("Update TLAS");
+            frameCommandLists.push_back(cmd);
+            m_TaskScheduler->ScheduleTask([this, cmd]() { m_Scene.UpdateTLAS(cmd); });
         }
 
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)
@@ -541,19 +553,22 @@ void Renderer::Run()
             cmd->beginTimerQuery(m_GPUQueries[writeIndex]);
         }
 
-        // define macro for render pass below
         #define ADD_RENDER_PASS(rendererName) \
         { \
             extern IRenderer* rendererName; \
-            PROFILE_SCOPED(rendererName->GetName()) \
-            rendererName->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(rendererName->m_GPUQueries[readIndex])); \
-            m_RHI->m_NvrhiDevice->resetTimerQuery(rendererName->m_GPUQueries[readIndex]); \
-            SimpleTimer cpuTimer; \
-            ScopedCommandList cmd{ rendererName->GetName() }; \
-            cmd->beginTimerQuery(rendererName->m_GPUQueries[writeIndex]); \
-            rendererName->Render(cmd); \
-            cmd->endTimerQuery(rendererName->m_GPUQueries[writeIndex]); \
-            rendererName->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds()); \
+            IRenderer* pRenderer = rendererName; \
+            nvrhi::CommandListHandle cmd = AcquireCommandList(pRenderer->GetName()); \
+            frameCommandLists.push_back(cmd); \
+            m_TaskScheduler->ScheduleTask([this, pRenderer, cmd, readIndex, writeIndex]() { \
+                PROFILE_SCOPED(pRenderer->GetName()) \
+                pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex])); \
+                m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]); \
+                SimpleTimer cpuTimer; \
+                cmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
+                pRenderer->Render(cmd); \
+                cmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
+                pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds()); \
+            }); \
         }
 
         ADD_RENDER_PASS(g_ClearRenderer);
@@ -565,6 +580,15 @@ void Renderer::Run()
 
         #undef ADD_RENDER_PASS
 
+        // Wait for all render passes to finish recording
+        m_TaskScheduler->ExecuteAllScheduledTasks();
+
+        // Submit in original sequential order
+        for (nvrhi::CommandListHandle& cmd : frameCommandLists)
+        {
+            SubmitCommandList(cmd);
+        }
+
         {
             ScopedCommandList cmd{ "GPU Frame End" };
             cmd->endTimerQuery(m_GPUQueries[writeIndex]);
@@ -574,6 +598,7 @@ void Renderer::Run()
         ExecutePendingCommandLists();
 
         // Present swapchain
+        SDL_assert(swapChainImageAcquireSuccess);
         if (!m_RHI->PresentSwapchain(m_CurrentSwapchainImageIdx))
         {
             SDL_LOG_ASSERT_FAIL("PresentSwapchain failed", "[Run ] PresentSwapchain failed");
@@ -750,6 +775,9 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
 
     // Hash and lookup in cache
     const size_t h = HashBindingLayoutDesc(layoutDesc);
+
+    std::lock_guard<std::mutex> lock(m_CacheMutex);
+
     auto cacheIt = m_BindingLayoutCache.find(h);
     if (cacheIt != m_BindingLayoutCache.end())
     {
@@ -768,12 +796,14 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
 
 nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindlessLayout(const nvrhi::BindlessLayoutDesc& desc)
 {
+    SINGLE_THREAD_GUARD();
+
     // Hash and lookup in cache
     const size_t h = HashBindlessLayoutDesc(desc);
-    auto cacheIt = m_BindingLayoutCache.find(h);
-    if (cacheIt != m_BindingLayoutCache.end())
-    {
-        return cacheIt->second;
+        auto cacheIt = m_BindingLayoutCache.find(h);
+        if (cacheIt != m_BindingLayoutCache.end())
+        {
+            return cacheIt->second;
     }
 
     // Not found - create it and cache it
@@ -908,6 +938,8 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
     // Hash common state: RenderState, FramebufferInfo, BindingLayouts
     HashPipelineCommonState(h, pipelineDesc.renderState, fbInfo, pipelineDesc.bindingLayouts);
 
+    std::lock_guard<std::mutex> lock(m_CacheMutex);
+
     auto it = m_GraphicsPipelineCache.find(h);
     if (it != m_GraphicsPipelineCache.end())
         return it->second;
@@ -935,6 +967,8 @@ nvrhi::MeshletPipelineHandle Renderer::GetOrCreateMeshletPipeline(const nvrhi::M
     // Hash common state: RenderState, FramebufferInfo, BindingLayouts
     HashPipelineCommonState(h, pipelineDesc.renderState, fbInfo, pipelineDesc.bindingLayouts);
 
+    std::lock_guard<std::mutex> lock(m_CacheMutex);
+
     auto it = m_MeshletPipelineCache.find(h);
     if (it != m_MeshletPipelineCache.end())
         return it->second;
@@ -959,6 +993,8 @@ nvrhi::ComputePipelineHandle Renderer::GetOrCreateComputePipeline(nvrhi::ShaderH
     {
         h = h * 1099511628211u + std::hash<const void*>()(layout.Get());
     }
+
+    std::lock_guard<std::mutex> lock(m_CacheMutex);
 
     auto it = m_ComputePipelineCache.find(h);
     if (it != m_ComputePipelineCache.end())
@@ -1086,11 +1122,11 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerNam
     SINGLE_THREAD_GUARD();
 
     nvrhi::CommandListHandle handle;
-    if (!m_CommandListFreeList.empty())
-    {
-        handle = m_CommandListFreeList.back();
-        m_CommandListFreeList.pop_back();
-    }
+            if (!m_CommandListFreeList.empty())
+        {
+            handle = m_CommandListFreeList.back();
+            m_CommandListFreeList.pop_back();
+        }
     else
     {
         const nvrhi::CommandListParameters params{.enableImmediateExecution = false, .queueType = nvrhi::CommandQueue::Graphics};

@@ -209,6 +209,7 @@ private:
     std::vector<nvrhi::CommandListHandle> m_InFlightCommandLists;
 
     // Caches
+    std::mutex m_CacheMutex;
     std::unordered_map<size_t, nvrhi::BindingLayoutHandle> m_BindingLayoutCache;
     std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_GraphicsPipelineCache;
     std::unordered_map<size_t, nvrhi::MeshletPipelineHandle> m_MeshletPipelineCache;
