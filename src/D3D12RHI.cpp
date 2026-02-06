@@ -131,6 +131,13 @@ public:
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
                 infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+
+                // Ignore specific warnings
+                D3D12_MESSAGE_ID deniedMessages[] = { D3D12_MESSAGE_ID_CREATERESOURCE_STATE_IGNORED };
+                D3D12_INFO_QUEUE_FILTER filter = {};
+                filter.DenyList.NumIDs = _countof(deniedMessages);
+                filter.DenyList.pIDList = deniedMessages;
+                infoQueue->AddStorageFilterEntries(&filter);
             }
             else
             {
