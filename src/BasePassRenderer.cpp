@@ -113,14 +113,14 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
         nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_MeshDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_VisibleIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_VisibleIndirectBuffer ? m_VisibleIndirectBuffer : CommonResources::GetInstance().DummyUAVBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_VisibleCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_OccludedIndicesBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_OccludedIndicesBuffer ? m_OccludedIndicesBuffer : CommonResources::GetInstance().DummyUAVBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_OccludedCountBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(4, args.m_CullingPhase == 0 ? m_OccludedIndirectBuffer : CommonResources::GetInstance().DummyUAVBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_MeshletJobBuffer ? m_MeshletJobBuffer : m_VisibleIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_MeshletJobBuffer ? m_MeshletJobBuffer : CommonResources::GetInstance().DummyUAVBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_MeshletJobCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_MeshletIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_MeshletIndirectBuffer ? m_MeshletIndirectBuffer : CommonResources::GetInstance().DummyUAVBuffer),
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
     };
 
@@ -511,11 +511,8 @@ void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
 
     const int readIndex = renderer->m_FrameNumber % 2;
     const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
-    if (renderer->m_RHI->m_NvrhiDevice->pollPipelineStatisticsQuery(m_PipelineQueries[readIndex]))
-    {
-        renderer->m_MainViewPipelineStatistics = renderer->m_RHI->m_NvrhiDevice->getPipelineStatistics(m_PipelineQueries[readIndex]);
-        renderer->m_RHI->m_NvrhiDevice->resetPipelineStatisticsQuery(m_PipelineQueries[readIndex]);
-    }
+    renderer->m_MainViewPipelineStatistics = renderer->m_RHI->m_NvrhiDevice->getPipelineStatistics(m_PipelineQueries[readIndex]);
+    renderer->m_RHI->m_NvrhiDevice->resetPipelineStatisticsQuery(m_PipelineQueries[readIndex]);
     commandList->beginPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
 
     Camera* cam = &renderer->m_Camera;
