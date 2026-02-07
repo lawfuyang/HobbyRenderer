@@ -283,6 +283,7 @@ static const uint32_t kMaxMeshletTriangles = 96;
 #define DEFAULT_TEXTURE_GRAY 2
 #define DEFAULT_TEXTURE_NORMAL 3
 #define DEFAULT_TEXTURE_PBR 4
+#define DEFAULT_TEXTURE_BRDF_LUT 5
 
 #define SAMPLER_CLAMP_INDEX 0
 #define SAMPLER_WRAP_INDEX 1

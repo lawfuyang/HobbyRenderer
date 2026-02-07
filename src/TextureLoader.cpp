@@ -150,6 +150,8 @@ static nvrhi::Format GetFormatFromDDS(const DDS_PIXELFORMAT& pf, bool hasDX10, c
         {
         case DXGI_FORMAT_R8G8B8A8_UNORM: return nvrhi::Format::RGBA8_UNORM;
         case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: return nvrhi::Format::SRGBA8_UNORM;
+        case DXGI_FORMAT_R16G16_FLOAT: return nvrhi::Format::RG16_FLOAT;
+        case DXGI_FORMAT_R16G16_UNORM: return nvrhi::Format::RG16_UNORM;
         case DXGI_FORMAT_BC1_UNORM: return nvrhi::Format::BC1_UNORM;
         case DXGI_FORMAT_BC1_UNORM_SRGB: return nvrhi::Format::BC1_UNORM_SRGB;
         case DXGI_FORMAT_BC2_UNORM: return nvrhi::Format::BC2_UNORM;
@@ -177,7 +179,18 @@ static nvrhi::Format GetFormatFromDDS(const DDS_PIXELFORMAT& pf, bool hasDX10, c
             if (fourCC == DDS_FOURCC_DXT5) return nvrhi::Format::BC3_UNORM; // DXT5
             if (fourCC == DDS_FOURCC_ATI1) return nvrhi::Format::BC4_UNORM; // ATI1
             if (fourCC == DDS_FOURCC_ATI2) return nvrhi::Format::BC5_UNORM; // ATI2
-            SDL_LOG_ASSERT_FAIL("Unsupported FourCC", "Unsupported FourCC");
+
+            // Legacy D3DFMT values
+            if (fourCC == 34)  return nvrhi::Format::RG16_UNORM;
+            if (fourCC == 36)  return nvrhi::Format::RGBA16_UNORM;
+            if (fourCC == 111) return nvrhi::Format::R16_FLOAT;
+            if (fourCC == 112) return nvrhi::Format::RG16_FLOAT;
+            if (fourCC == 113) return nvrhi::Format::RGBA16_FLOAT;
+            if (fourCC == 114) return nvrhi::Format::R32_FLOAT;
+            if (fourCC == 115) return nvrhi::Format::RG32_FLOAT;
+            if (fourCC == 116) return nvrhi::Format::RGBA32_FLOAT;
+
+            SDL_LOG_ASSERT_FAIL("Unsupported FourCC", "Unsupported FourCC: %u", fourCC);
             return nvrhi::Format::UNKNOWN;
         }
         else if (pf.dwFlags & DDS_DDPF_RGB)
