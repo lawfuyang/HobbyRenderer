@@ -124,7 +124,7 @@ void SceneLoader::SetTextureAndSampler(const cgltf_texture* tex, int& textureInd
     }
 }
 
-void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene)
+void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir)
 {
 	SCOPED_TIMER("[Scene] Materials+Images");
 
@@ -209,8 +209,17 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 		if (tex.image)
 		{
 			scene.m_Textures.back().m_Uri = tex.image->uri ? tex.image->uri : std::string();
+
+			std::filesystem::path uriPath(scene.m_Textures.back().m_Uri);
+			std::filesystem::path ddsUri = uriPath;
+			ddsUri.replace_extension(".dds");
+			std::filesystem::path fullDdsPath = sceneDir / ddsUri;
+			if (std::filesystem::exists(fullDdsPath))
+			{
+				scene.m_Textures.back().m_Uri = ddsUri.string();
+			}
 		}
-		
+
 		if (tex.sampler)
 		{
 			const bool isWrap = (tex.sampler->wrap_s == cgltf_wrap_mode_repeat || tex.sampler->wrap_t == cgltf_wrap_mode_repeat);
@@ -233,7 +242,11 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 	SCOPED_TIMER("[Scene] LoadTextures");
 
 	const uint32_t threadCount = renderer->m_TaskScheduler->GetThreadCount();
-	std::vector<ScopedCommandList> threadCommandLists(threadCount);
+	std::vector<nvrhi::CommandListHandle> threadCommandLists(threadCount);
+	for (uint32_t i = 0; i < threadCount; ++i)
+	{
+		threadCommandLists[i] = renderer->AcquireCommandList("Texture Load");
+	}
 
 	renderer->m_TaskScheduler->ParallelFor(static_cast<uint32_t>(scene.m_Textures.size()), [&](uint32_t i, uint32_t threadIndex)
 	{
@@ -248,14 +261,6 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 		decodedUri = decodedUri.c_str();
 
 		std::filesystem::path fullPath = sceneDir / decodedUri;
-
-		// DDS Prioritization: check for .dds version first
-		std::filesystem::path ddsPath = fullPath;
-		ddsPath.replace_extension(".dds");
-		if (std::filesystem::exists(ddsPath))
-		{
-			fullPath = ddsPath;
-		}
 
 		if (!std::filesystem::exists(fullPath))
 		{
@@ -304,6 +309,12 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 			}
 		}
 	});
+
+	for (uint32_t i = 0; i < threadCount; ++i)
+	{
+		// just to queue, close cmd list & end marker
+		ScopedCommandList scopedCmd{ threadCommandLists[i] };
+	}
 
 	for (size_t ti = 0; ti < scene.m_Textures.size(); ++ti)
 	{
@@ -385,8 +396,9 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* rend
 			.setDebugName("MaterialConstantsBuffer");
 		scene.m_MaterialConstantsBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(matBufDesc);
 
-		ScopedCommandList cmd{ "Upload MaterialConstants" };
-		cmd->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(MaterialConstants));
+		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Upload MaterialConstants");
+		ScopedCommandList scopedCmd{ cmd };
+		scopedCmd->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(MaterialConstants));
 	}
 }
 
@@ -981,7 +993,8 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 {
 	SCOPED_TIMER("[Scene] GPU Upload");
 
-	ScopedCommandList cmd{ "Upload Scene Buffers" };
+	nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Upload Scene Buffers");
+	ScopedCommandList scopedCmd{ cmd };
 
 	// Create quantized vertex buffer
 	if (!allVerticesQuantized.empty())
@@ -1144,8 +1157,10 @@ bool SceneLoader::LoadGLTFScene(Scene& scene, const std::string& scenePath, std:
 		return false;
 	}
 
+	const std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
+
 	scene.m_Nodes.resize(data->nodes_count);
-	ProcessMaterialsAndImages(data, scene);
+	ProcessMaterialsAndImages(data, scene, sceneDir);
 	ProcessCameras(data, scene);
 	ProcessLights(data, scene);
 	ProcessAnimations(data, scene);

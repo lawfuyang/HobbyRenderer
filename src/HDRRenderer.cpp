@@ -14,8 +14,9 @@ public:
         Renderer* renderer = Renderer::GetInstance();
 
         float initialExposure = 1.0f;
-        ScopedCommandList cmd{ "Initialize HDR Exposure Buffer" };
-        cmd->writeBuffer(renderer->m_ExposureBuffer, &initialExposure, sizeof(float));
+        nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Initialize HDR Exposure Buffer");
+        ScopedCommandList scopedCmd{ cmd };
+        scopedCmd->writeBuffer(renderer->m_ExposureBuffer, &initialExposure, sizeof(float));
     }
 
     void Render(nvrhi::CommandListHandle commandList) override

@@ -395,7 +395,7 @@ nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
 
 nvrhi::TextureHandle Renderer::GetCurrentBackBufferTexture() const
 {
-    return m_RHI->m_NvrhiSwapchainTextures[m_CurrentSwapchainImageIdx];
+    return m_RHI->m_NvrhiSwapchainTextures[m_SwapChainImageIdx];
 }
 
 void Renderer::Initialize()
@@ -494,20 +494,19 @@ void Renderer::Run()
             }
         }
 
-        std::vector<nvrhi::CommandListHandle> frameCommandLists;
-
-        std::atomic<bool> swapChainImageAcquireSuccess = true;
+        bool bSwapChainImageAcquireSuccess = true;
 
         // Vulkan's implementation can be particularly heavy...
         if (m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN)
         {
-            m_TaskScheduler->ScheduleTask([this, &swapChainImageAcquireSuccess]() {
-                swapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_CurrentSwapchainImageIdx);
-                });
+            m_TaskScheduler->ScheduleTask([this, &bSwapChainImageAcquireSuccess]()
+            {
+                bSwapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_AcquiredSwapchainImageIdx);
+            });
         }
         else
         {
-            swapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_CurrentSwapchainImageIdx);
+            bSwapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_AcquiredSwapchainImageIdx);
         }
 
         m_TaskScheduler->ScheduleTask([this]() {
@@ -523,18 +522,22 @@ void Renderer::Run()
             m_Scene.Update(static_cast<float>(m_FrameTime / 1000.0));
             if (m_Scene.m_InstanceDirtyRange.first <= m_Scene.m_InstanceDirtyRange.second)
             {
-                ScopedCommandList cmd{ "Upload Animated Instances" };
+                nvrhi::CommandListHandle cmd = AcquireCommandList("Upload Animated Instances");
+                ScopedCommandList scopedCmd{ cmd };
                 uint32_t startIdx = m_Scene.m_InstanceDirtyRange.first;
                 uint32_t count = m_Scene.m_InstanceDirtyRange.second - startIdx + 1;
-                cmd->writeBuffer(m_Scene.m_InstanceDataBuffer,
+                scopedCmd->writeBuffer(m_Scene.m_InstanceDataBuffer,
                     &m_Scene.m_InstanceData[startIdx],
                     count * sizeof(PerInstanceData),
                     startIdx * sizeof(PerInstanceData));
             }
 
             nvrhi::CommandListHandle cmd = AcquireCommandList("Update TLAS");
-            frameCommandLists.push_back(cmd);
-            m_TaskScheduler->ScheduleTask([this, cmd]() { m_Scene.UpdateTLAS(cmd); });
+            m_TaskScheduler->ScheduleTask([this, cmd]()
+            {
+                ScopedCommandList scopedCmd{ cmd };
+                m_Scene.UpdateTLAS(scopedCmd);
+            });
         }
 
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)
@@ -546,11 +549,15 @@ void Renderer::Run()
         const int readIndex = m_FrameNumber % 2;
         const int writeIndex = (m_FrameNumber + 1) % 2;
 
+        // GPU query for frame timer is super expensive on the CPU for some reason. i give up using it
+        if constexpr (false)
         {
-            ScopedCommandList cmd{ "GPU Frame Begin" };
+            PROFILE_SCOPED("GPU Frame Start");
+            nvrhi::CommandListHandle cmd = AcquireCommandList("GPU Frame Start");
+            ScopedCommandList scopedCmd{ cmd };
             m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(m_GPUQueries[readIndex]));
             m_RHI->m_NvrhiDevice->resetTimerQuery(m_GPUQueries[readIndex]);
-            cmd->beginTimerQuery(m_GPUQueries[writeIndex]);
+            scopedCmd->beginTimerQuery(m_GPUQueries[writeIndex]);
         }
 
         #define ADD_RENDER_PASS(rendererName) \
@@ -558,15 +565,15 @@ void Renderer::Run()
             extern IRenderer* rendererName; \
             IRenderer* pRenderer = rendererName; \
             nvrhi::CommandListHandle cmd = AcquireCommandList(pRenderer->GetName()); \
-            frameCommandLists.push_back(cmd); \
             m_TaskScheduler->ScheduleTask([this, pRenderer, cmd, readIndex, writeIndex]() { \
                 PROFILE_SCOPED(pRenderer->GetName()) \
+                ScopedCommandList scopedCmd{ cmd }; \
                 pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex])); \
                 m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]); \
                 SimpleTimer cpuTimer; \
-                cmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
-                pRenderer->Render(cmd); \
-                cmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
+                scopedCmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
+                pRenderer->Render(scopedCmd); \
+                scopedCmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
                 pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds()); \
             }); \
         }
@@ -583,27 +590,27 @@ void Renderer::Run()
         // Wait for all render passes to finish recording
         m_TaskScheduler->ExecuteAllScheduledTasks();
 
-        // Submit in original sequential order
-        for (nvrhi::CommandListHandle& cmd : frameCommandLists)
+        // GPU query for frame timer is super expensive on the CPU for some reason. i give up using it
+        if constexpr (false)
         {
-            SubmitCommandList(cmd);
-        }
-
-        {
-            ScopedCommandList cmd{ "GPU Frame End" };
-            cmd->endTimerQuery(m_GPUQueries[writeIndex]);
+            PROFILE_SCOPED("GPU Frame End");
+            nvrhi::CommandListHandle cmd = AcquireCommandList("GPU Frame End");
+            ScopedCommandList scopedCmd{ cmd };
+            scopedCmd->endTimerQuery(m_GPUQueries[writeIndex]);
         }
 
         // Execute any queued GPU work in submission order
         ExecutePendingCommandLists();
 
         // Present swapchain
-        SDL_assert(swapChainImageAcquireSuccess);
-        if (!m_RHI->PresentSwapchain(m_CurrentSwapchainImageIdx))
+        SDL_assert(bSwapChainImageAcquireSuccess);
+        SDL_assert(m_SwapChainImageIdx == m_SwapChainImageIdx);
+        if (!m_RHI->PresentSwapchain(m_SwapChainImageIdx))
         {
             SDL_LOG_ASSERT_FAIL("PresentSwapchain failed", "[Run ] PresentSwapchain failed");
             break;
         }
+        m_SwapChainImageIdx = 1 - m_SwapChainImageIdx;
 
         const uint64_t workTimeNs = SDL_GetTicksNS() - frameStart;
 
@@ -1069,7 +1076,6 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
 
 void Renderer::AddComputePass(const RenderPassParams& params)
 {
-    PROFILE_SCOPED(params.shaderName.data());
     nvrhi::utils::ScopedMarker scopedMarker{ params.commandList, params.shaderName.data() };
 
     nvrhi::BindingLayoutVector layouts;
@@ -1117,19 +1123,19 @@ void Renderer::AddComputePass(const RenderPassParams& params)
     }
 }
 
-nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerName)
+nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerName, bool bImmediatelyQueue)
 {
     SINGLE_THREAD_GUARD();
 
     nvrhi::CommandListHandle handle;
-            if (!m_CommandListFreeList.empty())
-        {
-            handle = m_CommandListFreeList.back();
-            m_CommandListFreeList.pop_back();
-        }
+    if (!m_CommandListFreeList.empty())
+    {
+        handle = m_CommandListFreeList.back();
+        m_CommandListFreeList.pop_back();
+    }
     else
     {
-        const nvrhi::CommandListParameters params{.enableImmediateExecution = false, .queueType = nvrhi::CommandQueue::Graphics};
+        const nvrhi::CommandListParameters params{ .enableImmediateExecution = false, .queueType = nvrhi::CommandQueue::Graphics };
         handle = m_RHI->m_NvrhiDevice->createCommandList(params);
     }
 
@@ -1138,17 +1144,17 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(std::string_view markerNam
     handle->open();
     handle->beginMarker(markerName.data());
 
+    if (bImmediatelyQueue)
+    {
+        QueueCommandList(handle);
+    }
+
     return handle;
 }
 
-void Renderer::SubmitCommandList(const nvrhi::CommandListHandle& commandList)
+void Renderer::QueueCommandList(nvrhi::CommandListHandle commandList)
 {
     SINGLE_THREAD_GUARD();
-
-    SDL_assert(commandList && "Invalid command list submitted");
-
-    commandList->endMarker();
-    commandList->close();
     m_PendingCommandLists.push_back(commandList);
 }
 
@@ -1266,8 +1272,9 @@ void Renderer::CreateSceneResources()
     counterDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
     m_SPDAtomicCounter = m_RHI->m_NvrhiDevice->createBuffer(counterDesc);
 
-    ScopedCommandList cmd{ "HZB_Clear" };
-    cmd->clearTextureFloat(m_HZBTexture, nvrhi::AllSubresources, DEPTH_FAR);
+    nvrhi::CommandListHandle cmd = AcquireCommandList("HZB_Clear");
+    ScopedCommandList scopedCmd{ cmd };
+    scopedCmd->clearTextureFloat(m_HZBTexture, nvrhi::AllSubresources, DEPTH_FAR);
 
     SDL_Log("[Init] Created HZB texture (%ux%u, %u mips)", hzbWidth, hzbHeight, mipLevels);
 

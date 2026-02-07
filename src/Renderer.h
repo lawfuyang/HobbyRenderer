@@ -82,8 +82,8 @@ struct Renderer
     void Shutdown();
 
     // Command List Management
-    nvrhi::CommandListHandle AcquireCommandList(std::string_view markerName);
-    void SubmitCommandList(const nvrhi::CommandListHandle& commandList);
+    nvrhi::CommandListHandle AcquireCommandList(std::string_view markerName, bool bImmediatelyQueue = true);
+    void QueueCommandList(nvrhi::CommandListHandle commandList);
     void ExecutePendingCommandLists();
 
     // Swapchain / Backbuffer
@@ -144,7 +144,8 @@ struct Renderer
     SDL_Window* m_Window = nullptr;
     std::unique_ptr<GraphicRHI> m_RHI;
 
-    uint32_t m_CurrentSwapchainImageIdx = 0;
+    uint32_t m_AcquiredSwapchainImageIdx = 0;
+    uint32_t m_SwapChainImageIdx = 0;
 
     // Depth buffer
     nvrhi::TextureHandle m_DepthTexture;
@@ -237,20 +238,21 @@ private:
 class ScopedCommandList
 {
 public:
-    ScopedCommandList(std::string_view markerName = "ScopedCommandList")
-        : m_CommandList(Renderer::GetInstance()->AcquireCommandList(markerName))
+    ScopedCommandList(const nvrhi::CommandListHandle& commandList)
+        : m_CommandList(commandList)
     {
     }
 
     ~ScopedCommandList()
     {
-        Renderer::GetInstance()->SubmitCommandList(m_CommandList);
+        m_CommandList->endMarker();
+        m_CommandList->close();
     }
 
-    nvrhi::CommandListHandle& operator->() { return m_CommandList; }
-    operator nvrhi::ICommandList*() { return m_CommandList.Get(); }
-    operator nvrhi::CommandListHandle& () { return m_CommandList; }
+    const nvrhi::CommandListHandle& operator->() const { return m_CommandList; }
+    operator nvrhi::ICommandList*() const { return m_CommandList.Get(); }
+    operator const nvrhi::CommandListHandle& () const { return m_CommandList; }
 
 private:
-    nvrhi::CommandListHandle m_CommandList;
+    const nvrhi::CommandListHandle& m_CommandList;
 };

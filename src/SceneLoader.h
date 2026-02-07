@@ -12,7 +12,7 @@ public:
     static bool LoadGLTFScene(Scene& scene, const std::string& scenePath, std::vector<VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices);
 
     // Helper functions for processing GLTF data
-    static void ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene);
+    static void ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir);
     static void ProcessCameras(const cgltf_data* data, Scene& scene);
     static void ProcessLights(const cgltf_data* data, Scene& scene);
     static void ProcessAnimations(const cgltf_data* data, Scene& scene);

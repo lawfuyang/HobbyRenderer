@@ -4,6 +4,47 @@
 
 #include "shaders/ShaderShared.h"
 
+nvrhi::TextureHandle CreateDefaultEnvMap(nvrhi::CommandListHandle cmdList)
+{
+    using namespace DirectX;
+
+    const uint32_t width = 512;  // Equirectangular width
+    const uint32_t height = 256; // Equirectangular height
+    std::vector<uint32_t> data(width * height);  // RGBA8_UNORM: 1 uint32_t per pixel
+
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        float v = static_cast<float>(y) / (height - 1);  // 0 at top, 1 at bottom
+        Vector3 floatA(0.5f, 0.7f, 1.0f);    // Dark blue
+        Vector3 floatB(0.1f, 0.3f, 0.8f); // Light blue    
+        XMVECTOR vecA = XMLoadFloat3(&floatA);
+        XMVECTOR vecB = XMLoadFloat3(&floatB);
+        XMVECTOR vecC = XMVectorLerp(vecA, vecB, v);
+        Vector3 color;
+        XMStoreFloat3(&color, vecC);
+        uint8_t r = static_cast<uint8_t>(color.x * 255.0f);
+        uint8_t g = static_cast<uint8_t>(color.y * 255.0f);
+        uint8_t b = static_cast<uint8_t>(color.z * 255.0f);
+        uint8_t a = 255;  // Alpha
+        uint32_t pixel = (r << 24) | (g << 16) | (b << 8) | a;  // Pack into ABGR (common for RGBA8)
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            size_t index = y * width + x;
+            data[index] = pixel;
+        }
+    }
+
+    nvrhi::TextureDesc desc;
+    desc.width = width;
+    desc.height = height;
+    desc.format = nvrhi::Format::RGBA8_UNORM;
+    desc.initialState = nvrhi::ResourceStates::ShaderResource;
+
+    nvrhi::TextureHandle texture = Renderer::GetInstance()->m_RHI->m_NvrhiDevice->createTexture(desc);
+    cmdList->writeTexture(texture, 0, 0, data.data(), width * sizeof(uint32_t));
+    return texture;
+}
+
 void CommonResources::Initialize()
 {
     Renderer* renderer = Renderer::GetInstance();
@@ -227,14 +268,15 @@ void CommonResources::Initialize()
 
         nvrhi::BufferDesc bufferDesc;
         bufferDesc.byteSize = 4;
-        bufferDesc.structStride = true;
+        bufferDesc.structStride = 4;
         bufferDesc.canHaveUAVs = true;
         bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
         bufferDesc.debugName = "DummyUAVBuffer";
         DummyUAVBuffer = device->createBuffer(bufferDesc);
 
         // Upload texture data using renderer's command list management
-        ScopedCommandList commandList{ "CommonResources_DefaultTextures" };
+        nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("CommonResources_DefaultTextures");
+        ScopedCommandList commandList{ cmd };
 
         // Black texture
         uint32_t blackPixel = 0xFF000000; // RGBA(0,0,0,255)
@@ -255,6 +297,8 @@ void CommonResources::Initialize()
         // PBR texture (ORM: Occlusion=1, Roughness=1, Metallic=0)
         uint32_t pbrPixel = 0xFFFFFF00; // RGBA(0,255,255,255) - R=Metallic(0), G=Roughness(255), B=Occlusion(255), A=255
         commandList->writeTexture(DefaultTexturePBR, 0, 0, &pbrPixel, sizeof(uint32_t), 0);
+
+        DefaultEnvMap = CreateDefaultEnvMap(commandList);
 
         // Note: Default textures are registered later in Renderer::Initialize after bindless system is set up
     }
@@ -297,4 +341,5 @@ void CommonResources::Shutdown()
     LinearClamp = nullptr;
     MaxReductionClamp = nullptr;
     MinReductionClamp = nullptr;
+    DefaultEnvMap = nullptr;
 }

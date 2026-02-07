@@ -72,7 +72,8 @@ void Scene::BuildAccelerationStructures()
 
     Renderer* renderer = Renderer::GetInstance();
     nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
-	ScopedCommandList commandList{ "Build Scene Accel Structs" };
+	nvrhi::CommandListHandle cmd = renderer->AcquireCommandList("Build Scene Accel Structs");
+	ScopedCommandList scopedCmd{ cmd };
 
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build
     std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
@@ -109,7 +110,7 @@ void Scene::BuildAccelerationStructures()
 
 			primitive.m_BLAS = device->createAccelStruct(blasDesc);
 
-			nvrhi::utils::BuildBottomLevelAccelStruct(commandList, primitive.m_BLAS, blasDesc);
+			nvrhi::utils::BuildBottomLevelAccelStruct(scopedCmd, primitive.m_BLAS, blasDesc);
 		}
 	}
 
@@ -148,7 +149,7 @@ void Scene::BuildAccelerationStructures()
         instanceDesc.bottomLevelAS = primitive->m_BLAS;
     }
 
-    commandList->buildTopLevelAccelStruct(m_TLAS, m_RTInstanceDescs.data(), (uint32_t)m_RTInstanceDescs.size());
+    scopedCmd->buildTopLevelAccelStruct(m_TLAS, m_RTInstanceDescs.data(), (uint32_t)m_RTInstanceDescs.size());
 }
 
 void Scene::UpdateTLAS(nvrhi::ICommandList* commandList)
