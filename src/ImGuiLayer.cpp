@@ -72,21 +72,44 @@ void ImGuiLayer::UpdateFrame()
         // Target FPS control
         ImGui::DragInt("Target FPS", (int*)&renderer->m_TargetFPS, 1.0f, 10, 200);
 
-        // HDR controls
-        if (ImGui::TreeNode("HDR & Exposure"))
+        // Rendering options
+        if (ImGui::TreeNode("Rendering"))
         {
+            ImGui::Checkbox("Use Meshlet Rendering", &renderer->m_UseMeshletRendering);
+            ImGui::Checkbox("Enable RT Shadows", &renderer->m_EnableRTShadows);
+            ImGui::Checkbox("Enable IBL", &renderer->m_EnableIBL);
+            ImGui::SliderFloat("IBL Intensity", &renderer->m_IBLIntensity, 0.0f, 10.0f);
+
+            static const char* kDebugModes[] = {
+                "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Irradiance", "Radiance", "IBL"
+            };
+            ImGui::Combo("Debug Mode", &renderer->m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
+
+            const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
+            int forcedLODIdx = renderer->m_ForcedLOD + 1;
+            if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, MAX_LOD_COUNT))
+            {
+                renderer->m_ForcedLOD = forcedLODIdx - 1;
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", lodNames[forcedLODIdx]);
+
+            ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
+
+            // HDR controls
             ImGui::DragFloat("Exposure Key Value", &renderer->m_ExposureKeyValue, 0.01f, 0.0f, 10.0f);
             ImGui::DragFloat("Adaptation Speed", &renderer->m_AdaptationSpeed, 0.01f, 0.0f, 10.0f);
 
             ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("Scene Stats"))
+        // Directional Light controls
+        if (ImGui::TreeNode("Directional Light"))
         {
-            ImGui::Text("Total Instances: %zu", renderer->m_Scene.m_InstanceData.size());
-            ImGui::Text("Opaque:      %u", renderer->m_Scene.m_OpaqueBucket.m_Count);
-            ImGui::Text("Masked:      %u", renderer->m_Scene.m_MaskedBucket.m_Count);
-            ImGui::Text("Transparent: %u", renderer->m_Scene.m_TransparentBucket.m_Count);
+            ImGui::DragFloat("Yaw", &renderer->m_Scene.m_DirectionalLight.yaw, 0.01f, -std::numbers::pi_v<float>, std::numbers::pi_v<float>);
+            ImGui::DragFloat("Pitch", &renderer->m_Scene.m_DirectionalLight.pitch, 0.01f, -std::numbers::pi_v<float> *0.5f, std::numbers::pi_v<float> *0.5f);
+            ImGui::DragFloat("Lux", &renderer->m_Scene.m_DirectionalLight.intensity, 100.0f, 0.0f, 200000.0f);
+
             ImGui::TreePop();
         }
 
@@ -140,16 +163,6 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
-        // Directional Light controls
-        if (ImGui::TreeNode("Directional Light"))
-        {
-            ImGui::DragFloat("Yaw", &renderer->m_Scene.m_DirectionalLight.yaw, 0.01f, -std::numbers::pi_v<float>, std::numbers::pi_v<float>);
-            ImGui::DragFloat("Pitch", &renderer->m_Scene.m_DirectionalLight.pitch, 0.01f, -std::numbers::pi_v<float> * 0.5f, std::numbers::pi_v<float> * 0.5f);
-            ImGui::DragFloat("Lux", &renderer->m_Scene.m_DirectionalLight.intensity, 100.0f, 0.0f, 200000.0f);
-
-            ImGui::TreePop();
-        }
-
         // Culling controls
         if (ImGui::TreeNode("Culling"))
         {
@@ -168,33 +181,6 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
-        // Rendering options
-        if (ImGui::TreeNode("Rendering"))
-        {
-            ImGui::Checkbox("Use Meshlet Rendering", &renderer->m_UseMeshletRendering);
-            ImGui::Checkbox("Enable RT Shadows", &renderer->m_EnableRTShadows);
-            ImGui::Checkbox("Enable IBL", &renderer->m_EnableIBL);
-            ImGui::SliderFloat("IBL Intensity", &renderer->m_IBLIntensity, 0.0f, 10.0f);
-
-            static const char* kDebugModes[] = {
-                "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Irradiance", "Radiance", "IBL"
-            };
-            ImGui::Combo("Debug Mode", &renderer->m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
-
-            const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
-            int forcedLODIdx = renderer->m_ForcedLOD + 1;
-            if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, MAX_LOD_COUNT))
-            {
-                renderer->m_ForcedLOD = forcedLODIdx - 1;
-            }
-            ImGui::SameLine();
-            ImGui::Text("%s", lodNames[forcedLODIdx]);
-
-            ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
-
-            ImGui::TreePop();
-        }
-
         // Timings
         if (ImGui::TreeNode("Profiler"))
         {
@@ -203,6 +189,12 @@ void ImGuiLayer::UpdateFrame()
                 const std::string dumpPath = (std::filesystem::path{ SDL_GetBasePath() } / "profiler_dump.html").string();
                 MicroProfileDumpFileImmediately(dumpPath.c_str(), nullptr, nullptr);
             }
+
+            ImGui::Text("Total Instances: %zu", renderer->m_Scene.m_InstanceData.size());
+            ImGui::Text("Opaque:      %u", renderer->m_Scene.m_OpaqueBucket.m_Count);
+            ImGui::Text("Masked:      %u", renderer->m_Scene.m_MaskedBucket.m_Count);
+            ImGui::Text("Transparent: %u", renderer->m_Scene.m_TransparentBucket.m_Count);
+            ImGui::NewLine();
 
             if (ImGui::BeginTable("TimingsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
