@@ -5,6 +5,7 @@
 #include "ImGuiLayer.h"
 #include "Scene.h"
 #include "Camera.h"
+#include "BasePassCommon.h"
 
 #include <thread>
 #include <atomic>
@@ -196,6 +197,9 @@ struct Renderer
     bool m_EnableOcclusionCulling = true;
     nvrhi::TextureHandle m_HZBTexture;
     nvrhi::BufferHandle m_SPDAtomicCounter;
+
+    // Base pass resources
+    BasePassResources m_BasePassResources;
 
     // Rendering options
     bool m_UseMeshletRendering = true;

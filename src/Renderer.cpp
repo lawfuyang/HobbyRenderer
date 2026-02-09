@@ -440,6 +440,7 @@ void Renderer::Initialize()
     InitializeGlobalBindlessTextures();
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
+    m_BasePassResources.Initialize();
     CreateSceneResources();
     LoadShaders();
 
@@ -461,6 +462,8 @@ void Renderer::Initialize()
 
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
+
+    m_BasePassResources.PostSceneLoad();
 
     // Initialize renderers with scene-dependent resources
     for (const auto& renderer : m_Renderers)
@@ -586,7 +589,11 @@ void Renderer::Run()
         }
 
         ADD_RENDER_PASS(g_ClearRenderer);
-        ADD_RENDER_PASS(g_BasePassRenderer);
+        ADD_RENDER_PASS(g_OpaquePhase1Renderer);
+        ADD_RENDER_PASS(g_HZBGenerator);
+        ADD_RENDER_PASS(g_OpaquePhase2Renderer);
+        ADD_RENDER_PASS(g_MaskedPassRenderer);
+        ADD_RENDER_PASS(g_HZBGeneratorPhase2);
         ADD_RENDER_PASS(g_DeferredRenderer);
         ADD_RENDER_PASS(g_TransparentPassRenderer);
         ADD_RENDER_PASS(g_HDRRenderer);
@@ -658,6 +665,7 @@ void Renderer::Shutdown()
 
     m_ImGuiLayer.Shutdown();
     CommonResources::GetInstance().Shutdown();
+    m_BasePassResources.~BasePassResources(); // explicit destructor call to ensure release of GPU resources
 
     // Shutdown global bindless texture system
     m_GlobalTextureDescriptorTable = nullptr;

@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "CommonResources.h"
+#include "BasePassCommon.h"
 #include "Camera.h"
 #include "Utilities.h"
 
@@ -16,30 +17,14 @@ using FfxUInt32x4 = uint32_t[4];
 #define ffxMin(a, b) std::min(a, b)
 #include "shaders/ffx_spd.h"
 
-class BasePassRenderer : public IRenderer
+class BasePassRendererBase : public IRenderer
 {
 public:
-    void Initialize() override;
-    void PostSceneLoad() override;
-    void Render(nvrhi::CommandListHandle commandList) override;
-    void RenderTransparent(nvrhi::CommandListHandle commandList);
-    const char* GetName() const override { return "BasePass"; }
+    void Initialize() override { }
+    void PostSceneLoad() override { }
+    virtual void Render(nvrhi::CommandListHandle commandList) override = 0;
 
-private:
-    nvrhi::PipelineStatisticsQueryHandle m_PipelineQueries[2];
-
-    // GPU buffers for meshlet rendering
-    nvrhi::BufferHandle m_MeshletJobBuffer;
-    nvrhi::BufferHandle m_MeshletJobCountBuffer;
-    nvrhi::BufferHandle m_MeshletIndirectBuffer;
-
-    // GPU buffers for instance culling
-    nvrhi::BufferHandle m_VisibleIndirectBuffer;
-    nvrhi::BufferHandle m_VisibleCountBuffer;
-    nvrhi::BufferHandle m_OccludedIndicesBuffer;
-    nvrhi::BufferHandle m_OccludedCountBuffer;
-    nvrhi::BufferHandle m_OccludedIndirectBuffer;
-
+protected:
     struct BasePassRenderingArgs
     {
         uint32_t m_InstanceBaseIndex;
@@ -56,15 +41,58 @@ private:
     void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5]);
     void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args);
     void RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args);
+    void PrepareRenderingData(Matrix& outView, Matrix& outViewProjForCulling, Vector4 outFrustumPlanes[5]);
+
+    void ClearVisibleCounters(nvrhi::CommandListHandle commandList)
+    {
+        Renderer* renderer = Renderer::GetInstance();
+        BasePassResources& res = renderer->m_BasePassResources;
+        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear Visible Counters" };
+        commandList->clearBufferUInt(res.m_VisibleCountBuffer, 0);
+        if (renderer->m_UseMeshletRendering)
+        {
+            commandList->clearBufferUInt(res.m_MeshletJobCountBuffer, 0);
+        }
+    }
+
+    void ClearAllCounters(nvrhi::CommandListHandle commandList)
+    {
+        Renderer* renderer = Renderer::GetInstance();
+        BasePassResources& res = renderer->m_BasePassResources;
+        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear All Counters" };
+        commandList->clearBufferUInt(res.m_VisibleCountBuffer, 0);
+        commandList->clearBufferUInt(res.m_OccludedCountBuffer, 0);
+        if (renderer->m_UseMeshletRendering)
+        {
+            commandList->clearBufferUInt(res.m_MeshletJobCountBuffer, 0);
+        }
+    }
 };
 
-REGISTER_RENDERER(BasePassRenderer);
+void BasePassRendererBase::PrepareRenderingData(Matrix& outView, Matrix& outViewProjForCulling, Vector4 outFrustumPlanes[5])
+{
+    Renderer* renderer = Renderer::GetInstance();
+    Camera* cam = &renderer->m_Camera;
+    const Matrix viewProj = cam->GetViewProjMatrix();
+    outView = cam->GetViewMatrix();
+    outViewProjForCulling = viewProj;
+    if (renderer->m_FreezeCullingCamera)
+    {
+        outView = renderer->m_FrozenCullingViewMatrix;
+        const Matrix proj = cam->GetProjMatrix();
+        const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_FrozenCullingViewMatrix);
+        const DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
+        DirectX::XMStoreFloat4x4(&outViewProjForCulling, v * p);
+    }
+    ComputeFrustumPlanes(cam->GetProjMatrix(), outFrustumPlanes);
+}
 
-void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args)
+void BasePassRendererBase::PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args)
 {
     PROFILE_FUNCTION();
 
     Renderer* renderer = Renderer::GetInstance();
+    BasePassResources& res = renderer->m_BasePassResources;
 
     char marker[256];
     sprintf(marker, "Occlusion Culling Phase %d - %s", args.m_CullingPhase + 1, args.m_BucketName);
@@ -77,11 +105,11 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     else if (args.m_CullingPhase == 1)
     {
         // Clear visible count buffer for Phase 2
-        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
+        commandList->clearBufferUInt(res.m_VisibleCountBuffer, 0);
 
         if (renderer->m_UseMeshletRendering)
         {
-            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
+            commandList->clearBufferUInt(res.m_MeshletJobCountBuffer, 0);
         }
     }
 
@@ -114,14 +142,14 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
         nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_MeshDataBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_VisibleIndirectBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_VisibleCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_OccludedIndicesBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_OccludedCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, args.m_CullingPhase == 0 ? m_OccludedIndirectBuffer : CommonResources::GetInstance().DummyUAVBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_MeshletJobBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_MeshletJobCountBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_MeshletIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(0, res.m_VisibleIndirectBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, res.m_VisibleCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(2, res.m_OccludedIndicesBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(3, res.m_OccludedCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(4, args.m_CullingPhase == 0 ? res.m_OccludedIndirectBuffer : CommonResources::GetInstance().DummyUAVBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(5, res.m_MeshletJobBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(6, res.m_MeshletJobCountBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_UAV(7, res.m_MeshletIndirectBuffer),
         nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
     };
 
@@ -141,7 +169,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
         params.commandList = commandList;
         params.shaderName = "GPUCulling_Culling_CSMain";
         params.bindingSetDesc = cullBset;
-        params.dispatchParams = { .indirectBuffer = m_OccludedIndirectBuffer, .indirectOffsetBytes = 0 };
+        params.dispatchParams = { .indirectBuffer = res.m_OccludedIndirectBuffer, .indirectOffsetBytes = 0 };
         renderer->AddComputePass(params);
     }
 
@@ -159,7 +187,7 @@ void BasePassRenderer::PerformOcclusionCulling(nvrhi::CommandListHandle commandL
     }
 }
 
-void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5])
+void BasePassRendererBase::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5])
 {
     const float xScale = fabs(proj._11);
     const float yScale = fabs(proj._22);
@@ -178,11 +206,12 @@ void BasePassRenderer::ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumP
     }
 }
 
-void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args)
+void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args)
 {
     PROFILE_FUNCTION();
 
     Renderer* renderer = Renderer::GetInstance();
+    BasePassResources& res = renderer->m_BasePassResources;
 
     char marker[256];
     sprintf(marker, "Base Pass Render (Phase %d) - %s", args.m_CullingPhase + 1, args.m_BucketName);
@@ -242,7 +271,7 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         nvrhi::BindingSetItem::StructuredBuffer_SRV(3, renderer->m_Scene.m_MeshletBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(4, renderer->m_Scene.m_MeshletVerticesBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(5, renderer->m_Scene.m_MeshletTrianglesBuffer),
-        nvrhi::BindingSetItem::StructuredBuffer_SRV(6, m_MeshletJobBuffer),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(6, res.m_MeshletJobBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(7, renderer->m_Scene.m_MeshDataBuffer),
         nvrhi::BindingSetItem::Texture_SRV(8, renderer->m_HZBTexture),
         nvrhi::BindingSetItem::RayTracingAccelStruct(9, renderer->m_Scene.m_TLAS),
@@ -325,8 +354,8 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         meshState.pipeline = meshPipeline;
         meshState.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
         meshState.viewport = viewportState;
-        meshState.indirectParams = m_MeshletIndirectBuffer;
-        meshState.indirectCountBuffer = m_MeshletJobCountBuffer;
+        meshState.indirectParams = res.m_MeshletIndirectBuffer;
+        meshState.indirectCountBuffer = res.m_MeshletJobCountBuffer;
 
         commandList->setMeshletState(meshState);
         commandList->dispatchMeshIndirectCount(0, 0, args.m_NumInstances);
@@ -347,15 +376,15 @@ void BasePassRenderer::RenderInstances(nvrhi::CommandListHandle commandList, con
         state.indexBuffer = nvrhi::IndexBufferBinding{ renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
         state.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
         state.pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
-        state.indirectParams = m_VisibleIndirectBuffer;
-        state.indirectCountBuffer = m_VisibleCountBuffer;
+        state.indirectParams = res.m_VisibleIndirectBuffer;
+        state.indirectCountBuffer = res.m_VisibleCountBuffer;
         commandList->setGraphicsState(state);
 
         commandList->drawIndexedIndirectCount(0, 0, args.m_NumInstances);
     }
 }
 
-void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
+void BasePassRendererBase::GenerateHZBMips(nvrhi::CommandListHandle commandList)
 {
     PROFILE_FUNCTION();
 
@@ -455,288 +484,161 @@ void BasePassRenderer::GenerateHZBMips(nvrhi::CommandListHandle commandList)
     renderer->AddComputePass(params);
 }
 
-void BasePassRenderer::Initialize()
+class OpaquePhase1Renderer : public BasePassRendererBase
+{
+public:
+    void Render(nvrhi::CommandListHandle commandList) override;
+    const char* GetName() const override { return "OpaquePhase1"; }
+};
+
+void OpaquePhase1Renderer::Render(nvrhi::CommandListHandle commandList)
 {
     Renderer* renderer = Renderer::GetInstance();
+    const uint32_t numOpaque = renderer->m_Scene.m_OpaqueBucket.m_Count;
+    if (numOpaque == 0) return;
 
-    // Create pipeline statistics queries for double buffering
-    m_PipelineQueries[0] = renderer->m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
-    m_PipelineQueries[1] = renderer->m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
+    Matrix view, viewProjForCulling;
+    Vector4 frustumPlanes[5];
+    PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
-    // Create constant-sized buffers
-    const nvrhi::BufferDesc visibleCountBufDesc = nvrhi::BufferDesc()
-        .setByteSize(sizeof(uint32_t))
-        .setStructStride(sizeof(uint32_t))
-        .setCanHaveUAVs(true)
-        .setIsDrawIndirectArgs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("VisibleCount");
-    m_VisibleCountBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(visibleCountBufDesc);
+    ClearAllCounters(commandList);
 
-    const nvrhi::BufferDesc occludedCountBufDesc = nvrhi::BufferDesc()
-        .setByteSize(sizeof(uint32_t))
-        .setStructStride(sizeof(uint32_t))
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("OccludedCount");
-    m_OccludedCountBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(occludedCountBufDesc);
+    BasePassRenderingArgs args;
+    args.m_FrustumPlanes = frustumPlanes;
+    args.m_View = view;
+    args.m_ViewProj = viewProjForCulling;
+    args.m_NumInstances = numOpaque;
+    args.m_InstanceBaseIndex = renderer->m_Scene.m_OpaqueBucket.m_BaseIndex;
+    args.m_BucketName = "Opaque";
+    args.m_CullingPhase = 0;
+    args.m_AlphaMode = ALPHA_MODE_OPAQUE;
 
-    const nvrhi::BufferDesc occludedIndirectBufDesc = nvrhi::BufferDesc()
-        .setByteSize(sizeof(DispatchIndirectArguments))
-        .setStructStride(sizeof(DispatchIndirectArguments))
-        .setIsDrawIndirectArgs(true)
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("OccludedIndirectBuffer");
-    m_OccludedIndirectBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(occludedIndirectBufDesc);
-
-    const nvrhi::BufferDesc meshletJobCountBufDesc = nvrhi::BufferDesc()
-        .setByteSize(sizeof(uint32_t))
-        .setStructStride(sizeof(uint32_t))
-        .setIsDrawIndirectArgs(true)
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("MeshletJobCount");
-    m_MeshletJobCountBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletJobCountBufDesc);
+    PerformOcclusionCulling(commandList, args);
+    RenderInstances(commandList, args);
 }
 
-void BasePassRenderer::PostSceneLoad()
+class HZBGenerator : public BasePassRendererBase
+{
+public:
+    void Render(nvrhi::CommandListHandle commandList) override
+    {
+        GenerateHZBMips(commandList);
+    }
+    const char* GetName() const override { return "HZBGenerator"; }
+};
+
+class OpaquePhase2Renderer : public BasePassRendererBase
+{
+public:
+    void Render(nvrhi::CommandListHandle commandList) override;
+    const char* GetName() const override { return "OpaquePhase2"; }
+};
+
+void OpaquePhase2Renderer::Render(nvrhi::CommandListHandle commandList)
 {
     Renderer* renderer = Renderer::GetInstance();
-
-    uint32_t numPrimitives = (uint32_t)renderer->m_Scene.m_InstanceData.size();
-    numPrimitives = std::max(numPrimitives, 1u); // avoid zero-sized buffers
-
-    // Allocate buffers once. Primitives/meshlet counts are static for this scene.
-    const nvrhi::BufferDesc visibleIndirectBufDesc = nvrhi::BufferDesc()
-        .setByteSize(numPrimitives * sizeof(nvrhi::DrawIndexedIndirectArguments))
-        .setStructStride(sizeof(nvrhi::DrawIndexedIndirectArguments))
-        .setIsDrawIndirectArgs(true)
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("VisibleIndirectBuffer");
-    m_VisibleIndirectBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(visibleIndirectBufDesc);
-
-    const nvrhi::BufferDesc occludedIndicesBufDesc = nvrhi::BufferDesc()
-        .setByteSize(numPrimitives * sizeof(uint32_t))
-        .setStructStride(sizeof(uint32_t))
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("OccludedIndices");
-    m_OccludedIndicesBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(occludedIndicesBufDesc);
-
-    const nvrhi::BufferDesc meshletIndirectBufDesc = nvrhi::BufferDesc()
-        .setByteSize(numPrimitives * sizeof(DispatchIndirectArguments)) // One per potential instance
-        .setStructStride(sizeof(DispatchIndirectArguments))
-        .setIsDrawIndirectArgs(true)
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("MeshletIndirectBuffer");
-    m_MeshletIndirectBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletIndirectBufDesc);
-
-    const nvrhi::BufferDesc meshletJobBufDesc = nvrhi::BufferDesc()
-        .setByteSize(numPrimitives * sizeof(MeshletJob))
-        .setStructStride(sizeof(MeshletJob))
-        .setCanHaveUAVs(true)
-        .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-        .setKeepInitialState(true)
-        .setDebugName("MeshletJobBuffer");
-    m_MeshletJobBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(meshletJobBufDesc);
-}
-
-void BasePassRenderer::Render(nvrhi::CommandListHandle commandList)
-{
-    Renderer* renderer = Renderer::GetInstance();
-
-    const uint32_t numPrimitives = (uint32_t)renderer->m_Scene.m_InstanceData.size();
-    if (numPrimitives == 0)
-    {
-        return;
-    }
-
-    const int readIndex = renderer->m_FrameNumber % 2;
-    const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
-    renderer->m_MainViewPipelineStatistics = renderer->m_RHI->m_NvrhiDevice->getPipelineStatistics(m_PipelineQueries[readIndex]);
-    renderer->m_RHI->m_NvrhiDevice->resetPipelineStatisticsQuery(m_PipelineQueries[readIndex]);
-    commandList->beginPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
-
-    Camera* cam = &renderer->m_Camera;
-    const Matrix viewProj = cam->GetViewProjMatrix();
-    Matrix viewProjForCulling = viewProj;
-    const Matrix origView = cam->GetViewMatrix();
-    Matrix view = origView;
-    if (renderer->m_FreezeCullingCamera)
-    {
-        view = renderer->m_FrozenCullingViewMatrix;
-    }
-    const Vector3 camPos = renderer->m_Camera.GetPosition();
+    if (!renderer->m_EnableOcclusionCulling) return;
 
     const uint32_t numOpaque = renderer->m_Scene.m_OpaqueBucket.m_Count;
-    const uint32_t numMasked = renderer->m_Scene.m_MaskedBucket.m_Count;
+    if (numOpaque == 0) return;
 
-    // Compute frustum planes
+    Matrix view, viewProjForCulling;
     Vector4 frustumPlanes[5];
-    ComputeFrustumPlanes(cam->GetProjMatrix(), frustumPlanes);
+    PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
-    if (renderer->m_FreezeCullingCamera)
-    {
-        const Matrix proj = cam->GetProjMatrix();
+    BasePassRenderingArgs args;
+    args.m_FrustumPlanes = frustumPlanes;
+    args.m_View = view;
+    args.m_ViewProj = viewProjForCulling;
+    args.m_NumInstances = numOpaque;
+    args.m_InstanceBaseIndex = renderer->m_Scene.m_OpaqueBucket.m_BaseIndex;
+    args.m_BucketName = "Opaque (Occluded)";
+    args.m_CullingPhase = 1;
+    args.m_AlphaMode = ALPHA_MODE_OPAQUE;
 
-        // viewProj = view * proj
-        const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_FrozenCullingViewMatrix);
-        const DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
-        DirectX::XMStoreFloat4x4(&viewProjForCulling, v * p);
-    }
-
-    auto ClearVisibleCounters = [&]
-    {
-        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear Visible Counters" };
-        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
-        if (renderer->m_UseMeshletRendering)
-        {
-            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
-        }
-    };
-
-    auto ClearAllCounters = [&]
-    {
-        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear All Counters" };
-        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
-        commandList->clearBufferUInt(m_OccludedCountBuffer, 0);
-        if (renderer->m_UseMeshletRendering)
-        {
-            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
-        }
-    };
-
-    BasePassRenderingArgs renderingArgs;
-    renderingArgs.m_FrustumPlanes = frustumPlanes;
-    renderingArgs.m_View = view;
-    renderingArgs.m_ViewProj = viewProjForCulling;
-
-    auto SetupArgs = [&](uint32_t numInstances, uint32_t baseIdx, const char* name, int phase, uint32_t alphaMode)
-    {
-        renderingArgs.m_NumInstances = numInstances;
-        renderingArgs.m_InstanceBaseIndex = baseIdx;
-        renderingArgs.m_BucketName = name;
-        renderingArgs.m_CullingPhase = phase;
-        renderingArgs.m_AlphaMode = alphaMode;
-    };
-
-    // --- PHASE 1: Opaque rendering (test against previous frame HZB) ---
-    if (numOpaque > 0)
-    {
-        ClearAllCounters();
-        SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque", 0, ALPHA_MODE_OPAQUE);
-        PerformOcclusionCulling(commandList, renderingArgs);
-        RenderInstances(commandList, renderingArgs);
-    }
-
-    if (renderer->m_EnableOcclusionCulling)
-    {
-        // --- Generate HZB from Phase 1 Opaque depths ---
-        GenerateHZBMips(commandList);
-
-        // --- PHASE 2: Previously occluded opaque + Masked + Transparent (test against new HZB) ---
-        
-        // 1. Opaque Phase 2 (Occluded instances re-test)
-        if (numOpaque > 0)
-        {
-            SetupArgs(numOpaque, renderer->m_Scene.m_OpaqueBucket.m_BaseIndex, "Opaque (Occluded)", 1, ALPHA_MODE_OPAQUE);
-            
-            // PerformOcclusionCulling(Phase 1) clears visible count internally
-            PerformOcclusionCulling(commandList, renderingArgs);
-            RenderInstances(commandList, renderingArgs);
-        }
-
-        // 2. Masked (All instances test against new HZB)
-        if (numMasked > 0)
-        {
-            ClearVisibleCounters();
-            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked", 0, ALPHA_MODE_MASK);
-
-            PerformOcclusionCulling(commandList, renderingArgs);
-            RenderInstances(commandList, renderingArgs);
-        }
-
-        // --- Generate final HZB including Opaque P2 and Masked depths ---
-        GenerateHZBMips(commandList);
-    }
-    else
-    {
-        // Occlusion off: Render remaining buckets
-        if (numMasked > 0)
-        {
-            ClearVisibleCounters();
-            SetupArgs(numMasked, renderer->m_Scene.m_MaskedBucket.m_BaseIndex, "Masked (No Occlusion)", 0, ALPHA_MODE_MASK);
-
-            PerformOcclusionCulling(commandList, renderingArgs);
-            RenderInstances(commandList, renderingArgs);
-        }
-    }
-
-    commandList->endPipelineStatisticsQuery(m_PipelineQueries[writeIndex]);
+    PerformOcclusionCulling(commandList, args);
+    RenderInstances(commandList, args);
 }
 
-void BasePassRenderer::RenderTransparent(nvrhi::CommandListHandle commandList)
+class MaskedPassRenderer : public BasePassRendererBase
+{
+public:
+    void Render(nvrhi::CommandListHandle commandList) override;
+    const char* GetName() const override { return "MaskedPass"; }
+};
+
+void MaskedPassRenderer::Render(nvrhi::CommandListHandle commandList)
+{
+    Renderer* renderer = Renderer::GetInstance();
+    const uint32_t numMasked = renderer->m_Scene.m_MaskedBucket.m_Count;
+    if (numMasked == 0) return;
+
+    Matrix view, viewProjForCulling;
+    Vector4 frustumPlanes[5];
+    PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
+
+    ClearVisibleCounters(commandList);
+
+    BasePassRenderingArgs args;
+    args.m_FrustumPlanes = frustumPlanes;
+    args.m_View = view;
+    args.m_ViewProj = viewProjForCulling;
+    args.m_NumInstances = numMasked;
+    args.m_InstanceBaseIndex = renderer->m_Scene.m_MaskedBucket.m_BaseIndex;
+    args.m_BucketName = renderer->m_EnableOcclusionCulling ? "Masked" : "Masked (No Occlusion)";
+    args.m_CullingPhase = 0;
+    args.m_AlphaMode = ALPHA_MODE_MASK;
+
+    PerformOcclusionCulling(commandList, args);
+    RenderInstances(commandList, args);
+}
+
+class HZBGeneratorPhase2 : public BasePassRendererBase
+{
+public:
+    void Render(nvrhi::CommandListHandle commandList) override
+    {
+        GenerateHZBMips(commandList);
+    }
+    const char* GetName() const override { return "HZBGeneratorPhase2"; }
+};
+
+class TransparentPassRenderer : public BasePassRendererBase
+{
+public:
+    void Render(nvrhi::CommandListHandle commandList) override;
+    const char* GetName() const override { return "TransparentPass"; }
+};
+
+void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList)
 {
     Renderer* renderer = Renderer::GetInstance();
     const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
     if (numTransparent == 0) return;
 
-    Camera* cam = &renderer->m_Camera;
-    const Matrix viewProj = cam->GetViewProjMatrix();
-    const Matrix view = cam->GetViewMatrix();
-
-    // Compute frustum planes
+    Matrix view, viewProjForCulling;
     Vector4 frustumPlanes[5];
-    ComputeFrustumPlanes(cam->GetProjMatrix(), frustumPlanes);
+    PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
-    auto ClearVisibleCounters = [&]
-    {
-        nvrhi::utils::ScopedMarker clearMarker{ commandList, "Clear Visible Counters" };
-        commandList->clearBufferUInt(m_VisibleCountBuffer, 0);
-        if (renderer->m_UseMeshletRendering)
-        {
-            commandList->clearBufferUInt(m_MeshletJobCountBuffer, 0);
-        }
-    };
+    ClearVisibleCounters(commandList);
 
-    BasePassRenderingArgs renderingArgs;
-    renderingArgs.m_FrustumPlanes = frustumPlanes;
-    renderingArgs.m_View = view;
-    renderingArgs.m_ViewProj = viewProj;
-    renderingArgs.m_NumInstances = numTransparent;
-    renderingArgs.m_InstanceBaseIndex = renderer->m_Scene.m_TransparentBucket.m_BaseIndex;
-    renderingArgs.m_BucketName = "Transparent";
-    renderingArgs.m_AlphaMode = ALPHA_MODE_BLEND;
-    renderingArgs.m_CullingPhase = 0;
+    BasePassRenderingArgs args;
+    args.m_FrustumPlanes = frustumPlanes;
+    args.m_View = view;
+    args.m_ViewProj = viewProjForCulling;
+    args.m_NumInstances = numTransparent;
+    args.m_InstanceBaseIndex = renderer->m_Scene.m_TransparentBucket.m_BaseIndex;
+    args.m_BucketName = "Transparent";
+    args.m_AlphaMode = ALPHA_MODE_BLEND;
+    args.m_CullingPhase = 0;
 
-    ClearVisibleCounters();
-    PerformOcclusionCulling(commandList, renderingArgs);
-    RenderInstances(commandList, renderingArgs);
+    PerformOcclusionCulling(commandList, args);
+    RenderInstances(commandList, args);
 }
 
-class TransparentPassRenderer : public BasePassRenderer
-{
-public:
-    void Initialize() override {}
-    void Render(nvrhi::CommandListHandle commandList) override
-    {
-        extern IRenderer* g_BasePassRenderer;
-        if (g_BasePassRenderer)
-        {
-            static_cast<BasePassRenderer*>(g_BasePassRenderer)->RenderTransparent(commandList);
-        }
-    }
-    const char* GetName() const override { return "TransparentPass"; }
-};
-
+REGISTER_RENDERER(OpaquePhase1Renderer);
+REGISTER_RENDERER(HZBGenerator);
+REGISTER_RENDERER(OpaquePhase2Renderer);
+REGISTER_RENDERER(MaskedPassRenderer);
+REGISTER_RENDERER(HZBGeneratorPhase2);
 REGISTER_RENDERER(TransparentPassRenderer);
