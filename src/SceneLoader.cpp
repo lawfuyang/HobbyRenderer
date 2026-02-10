@@ -4,11 +4,392 @@
 #include "CommonResources.h"
 #include "Utilities.h"
 #include "TextureLoader.h"
+#include "shaders/ShaderShared.h"
 
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
 
 #include "meshoptimizer.h"
+
+// --- JSON Parsing Helpers (jsmn wrapper) ---
+struct JsonContext
+{
+	const char* json;
+	jsmntok_t* tokens;
+	int numTokens;
+};
+
+static std::string json_get_string(const JsonContext& ctx, int tokenIdx)
+{
+	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_STRING)
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON token for string", "[SceneLoader] Invalid JSON token for string at index %d", tokenIdx);
+	}
+	return std::string(ctx.json + ctx.tokens[tokenIdx].start, ctx.tokens[tokenIdx].end - ctx.tokens[tokenIdx].start);
+}
+
+static float json_get_float(const JsonContext& ctx, int tokenIdx)
+{
+	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_PRIMITIVE)
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON token for float", "[SceneLoader] Invalid JSON token for float at index %d", tokenIdx);
+	}
+	try
+	{
+		return std::stof(std::string(ctx.json + ctx.tokens[tokenIdx].start, ctx.tokens[tokenIdx].end - ctx.tokens[tokenIdx].start));
+	}
+	catch (...)
+	{
+		return 0.0f;
+	}
+}
+
+static bool json_get_bool(const JsonContext& ctx, int tokenIdx)
+{
+	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_PRIMITIVE)
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON token for bool", "[SceneLoader] Invalid JSON token for bool at index %d", tokenIdx);
+	}
+	std::string s(ctx.json + ctx.tokens[tokenIdx].start, ctx.tokens[tokenIdx].end - ctx.tokens[tokenIdx].start);
+	return s == "true";
+}
+
+static Vector3 json_get_vec3(const JsonContext& ctx, int tokenIdx)
+{
+	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_ARRAY || ctx.tokens[tokenIdx].size != 3) 
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON token for vec3", "[SceneLoader] Invalid JSON token for vec3 at index %d", tokenIdx);
+	}
+	return Vector3(json_get_float(ctx, tokenIdx + 1), json_get_float(ctx, tokenIdx + 2), json_get_float(ctx, tokenIdx + 3));
+}
+
+static Quaternion json_get_quat(const JsonContext& ctx, int tokenIdx)
+{
+	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_ARRAY)
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON token for quat", "[SceneLoader] Invalid JSON token for quat at index %d", tokenIdx);
+	}
+
+	// possible to get a single '0' for Rotation type to specify no rotation.
+	if (ctx.tokens[tokenIdx].size == 1)
+	{
+		const float angle = json_get_float(ctx, tokenIdx + 1);
+		SDL_assert(angle == 0.0f);
+
+		return Quaternion{ 0.0f, 0.0f, 0.0f, 1.0f };
+	}
+
+	return Quaternion(json_get_float(ctx, tokenIdx + 1), json_get_float(ctx, tokenIdx + 2), json_get_float(ctx, tokenIdx + 3), json_get_float(ctx, tokenIdx + 4));
+}
+
+static bool json_strcmp(const JsonContext& ctx, int tokenIdx, const char* str)
+{
+	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_STRING)
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON token for string comparison", "[SceneLoader] Invalid JSON token for string comparison at index %d", tokenIdx);
+	}
+	int len = ctx.tokens[tokenIdx].end - ctx.tokens[tokenIdx].start;
+	return (int)strlen(str) == len && strncmp(ctx.json + ctx.tokens[tokenIdx].start, str, len) == 0;
+}
+
+static void LoadAndRegisterEnvMap(const std::string& path, uint32_t index, const char* name)
+{
+	nvrhi::TextureDesc desc;
+	std::unique_ptr<ITextureDataReader> imgData;
+	if (!LoadTexture(path, desc, imgData))
+	{
+		SDL_LOG_ASSERT_FAIL("Failed to load environment map", "[SceneLoader] Failed to load environment map: %s", path.c_str());
+	}
+
+	desc.debugName = path;
+	nvrhi::TextureHandle tex = Renderer::GetInstance()->m_RHI->m_NvrhiDevice->createTexture(desc);
+
+	nvrhi::CommandListHandle cmd = Renderer::GetInstance()->AcquireCommandList(name);
+	ScopedCommandList scopedCmd{ cmd };
+
+	UploadTexture(scopedCmd, tex, desc, imgData->GetData(), imgData->GetSize());
+
+	Renderer::GetInstance()->RegisterTextureAtIndex(index, tex);
+}
+
+bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std::vector<VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices)
+{
+	SCOPED_TIMER("[Scene] LoadJSONScene");
+
+	SDL_Log("[Scene] Starting to load JSON scene: %s", scenePath.c_str());
+
+	std::ifstream file(scenePath, std::ios::ate | std::ios::binary);
+	if (!file.is_open())
+	{
+		SDL_LOG_ASSERT_FAIL("Failed to open JSON scene file", "[Scene] Failed to open JSON scene file: %s", scenePath.c_str());
+		return false;
+	}
+
+	size_t fileSize = (size_t)file.tellg();
+	std::string jsonContent(fileSize, '\0');
+	file.seekg(0);
+	file.read(jsonContent.data(), fileSize);
+	file.close();
+
+	SDL_Log("[Scene] JSON file loaded, size: %zu bytes", fileSize);
+
+	jsmn_parser parser;
+	jsmn_init(&parser);
+	int tokenCount = jsmn_parse(&parser, jsonContent.c_str(), jsonContent.size(), nullptr, 0);
+	if (tokenCount < 0)
+	{
+		SDL_LOG_ASSERT_FAIL("Failed to parse JSON scene file", "[Scene] Failed to parse JSON scene file: %s (error: %d)", scenePath.c_str(), tokenCount);
+		return false;
+	}
+
+	std::vector<jsmntok_t> tokens(tokenCount);
+	jsmn_init(&parser);
+	jsmn_parse(&parser, jsonContent.c_str(), jsonContent.size(), tokens.data(), tokenCount);
+
+	SDL_Log("[Scene] JSON parsed, %d tokens", tokenCount);
+
+	JsonContext ctx{ jsonContent.c_str(), tokens.data(), tokenCount };
+	if (tokens[0].type != JSMN_OBJECT)
+	{
+		SDL_LOG_ASSERT_FAIL("Invalid JSON scene format", "[Scene] Invalid JSON scene format: root should be an object in file %s", scenePath.c_str());
+		return false;
+	}
+
+	int modelsTokenIdx = -1;
+	int graphTokenIdx = -1;
+
+	for (int i = 1; i < tokenCount; )
+	{
+		if (json_strcmp(ctx, i, "models"))
+		{
+			modelsTokenIdx = i + 1;
+			i = cgltf_skip_json(tokens.data(), i + 1);
+		}
+		else if (json_strcmp(ctx, i, "graph"))
+		{
+			graphTokenIdx = i + 1;
+			i = cgltf_skip_json(tokens.data(), i + 1);
+		}
+		else
+		{
+			i = cgltf_skip_json(tokens.data(), i + 1);
+		}
+	}
+
+	std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
+
+	// 1. Load models
+	struct ModelInfo
+	{
+		int nodeOffset;
+		int meshOffset;
+		int cameraOffset;
+		int lightOffset;
+		int materialOffset;
+		int textureOffset;
+	};
+	std::vector<ModelInfo> loadedModels;
+
+	if (modelsTokenIdx != -1 && tokens[modelsTokenIdx].type == JSMN_ARRAY)
+	{
+		int numModels = tokens[modelsTokenIdx].size;
+		SDL_Log("[Scene] Loading %d models", numModels);
+		int currentToken = modelsTokenIdx + 1;
+		for (int m = 0; m < numModels; ++m)
+		{
+			std::string modelRelPath = json_get_string(ctx, currentToken);
+			std::filesystem::path modelFullPath = sceneDir / modelRelPath;
+
+			ModelInfo info;
+			info.nodeOffset = (int)scene.m_Nodes.size();
+			info.meshOffset = (int)scene.m_Meshes.size();
+			info.cameraOffset = (int)scene.m_Cameras.size();
+			info.lightOffset = (int)scene.m_Lights.size();
+			info.materialOffset = (int)scene.m_Materials.size();
+			info.textureOffset = (int)scene.m_Textures.size();
+
+			SDL_Log("[Scene] Loading model: %s", modelRelPath.c_str());
+			if (!LoadGLTFScene(scene, modelFullPath.string(), allVerticesQuantized, allIndices))
+			{
+				SDL_LOG_ASSERT_FAIL("Failed to load model", "[Scene] Failed to load model: %s", modelFullPath.string().c_str());
+			}
+			else
+			{
+				// Adjust URIs of newly added textures to be relative to the JSON scene root
+				std::filesystem::path modelDir = modelFullPath.parent_path();
+				std::filesystem::path relativeModelDir = std::filesystem::relative(modelDir, sceneDir);
+
+				for (size_t i = info.textureOffset; i < scene.m_Textures.size(); ++i)
+				{
+					if (!scene.m_Textures[i].m_Uri.empty())
+					{
+						scene.m_Textures[i].m_Uri = (relativeModelDir / scene.m_Textures[i].m_Uri).generic_string();
+					}
+				}
+
+				loadedModels.push_back(info);
+			}
+
+			currentToken = cgltf_skip_json(tokens.data(), currentToken);
+		}
+	}
+
+	int totalModelNodes = (int)scene.m_Nodes.size();
+
+	// 2. Parse graph and reconstruct unified scene hierarchy
+	if (graphTokenIdx != -1 && tokens[graphTokenIdx].type == JSMN_ARRAY)
+	{
+		// Process graph nodes recursively
+		auto ParseGraphNode = [&](auto self, int tokenIdx, int parentIdx) -> void
+		{
+			if (tokens[tokenIdx].type != JSMN_OBJECT) return;
+
+			int nodeIdx = (int)scene.m_Nodes.size();
+			scene.m_Nodes.emplace_back();
+			Scene::Node& newNode = scene.m_Nodes.back();
+			newNode.m_Parent = parentIdx;
+			if (parentIdx != -1)
+			{
+				scene.m_Nodes[parentIdx].m_Children.push_back(nodeIdx);
+			}
+
+			int modelIdx = -1;
+			int childrenIdx = -1;
+
+			int numKeys = tokens[tokenIdx].size;
+			int t = tokenIdx + 1;
+			for (int k = 0; k < numKeys; ++k)
+			{
+				if (json_strcmp(ctx, t, "name"))
+				{
+					newNode.m_Name = json_get_string(ctx, t + 1);
+				}
+				else if (json_strcmp(ctx, t, "translation"))
+				{
+					newNode.m_Translation = json_get_vec3(ctx, t + 1);
+				}
+				else if (json_strcmp(ctx, t, "rotation"))
+				{
+					newNode.m_Rotation = json_get_quat(ctx, t + 1);
+				}
+				else if (json_strcmp(ctx, t, "scale"))
+				{
+					newNode.m_Scale = json_get_vec3(ctx, t + 1);
+				}
+				else if (json_strcmp(ctx, t, "model"))
+				{
+					modelIdx = (int)json_get_float(ctx, t + 1);
+				}
+				else if (json_strcmp(ctx, t, "children"))
+				{
+					childrenIdx = t + 1;
+				}
+				else if (json_strcmp(ctx, t, "type"))
+				{
+					std::string type = json_get_string(ctx, t + 1);
+					if (type == "EnvironmentLight")
+					{
+						int objToken = tokenIdx;
+						int n = tokens[objToken].size;
+						int ct = objToken + 1;
+						std::string envMapRelPath;
+						for (int ki = 0; ki < n; ++ki)
+						{
+							if (json_strcmp(ctx, ct, "path")) envMapRelPath = json_get_string(ctx, ct + 1);
+							ct = cgltf_skip_json(tokens.data(), ct + 1);
+						}
+
+						if (!envMapRelPath.empty())
+						{
+							std::filesystem::path envMapPath = sceneDir / envMapRelPath;
+							std::string stem = envMapPath.stem().string();
+							std::filesystem::path parent = envMapPath.parent_path();
+
+							scene.m_IrradianceTexture = (parent / (stem + "_irradiance.dds")).string();
+							scene.m_RadianceTexture = (parent / (stem + "_radiance.dds")).string();
+						}
+					}
+				}
+
+				t = cgltf_skip_json(tokens.data(), t + 1);
+			}
+
+			// Update transform
+			const DirectX::XMMATRIX localM = DirectX::XMMatrixScalingFromVector(DirectX::XMLoadFloat3(&newNode.m_Scale)) *
+				DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&newNode.m_Rotation)) *
+				DirectX::XMMatrixTranslationFromVector(DirectX::XMLoadFloat3(&newNode.m_Translation));
+			DirectX::XMStoreFloat4x4(&newNode.m_LocalTransform, localM);
+			newNode.m_WorldTransform = newNode.m_LocalTransform;
+
+			// Parent loaded model roots to this node
+			if (modelIdx >= 0 && modelIdx < (int)loadedModels.size())
+			{
+				const ModelInfo& info = loadedModels[modelIdx];
+				// Roots of a GLTF are nodes with parent -1 in their own range
+				int nextModelNodeOffset = (modelIdx + 1 < (int)loadedModels.size()) ? loadedModels[modelIdx + 1].nodeOffset : totalModelNodes;
+				
+				for (int i = info.nodeOffset; i < nextModelNodeOffset; ++i)
+				{
+					if (scene.m_Nodes[i].m_Parent == -1)
+					{
+						scene.m_Nodes[i].m_Parent = nodeIdx;
+						scene.m_Nodes[nodeIdx].m_Children.push_back(i);
+					}
+				}
+			}
+
+			if (childrenIdx != -1 && tokens[childrenIdx].type == JSMN_ARRAY)
+			{
+				int numChildren = tokens[childrenIdx].size;
+				int ct = childrenIdx + 1;
+				for (int c = 0; c < numChildren; ++c)
+				{
+					self(self, ct, nodeIdx);
+					ct = cgltf_skip_json(tokens.data(), ct);
+				}
+			}
+		};
+
+		int numGraphRoots = tokens[graphTokenIdx].size;
+		SDL_Log("[Scene] Processing graph with %d roots", numGraphRoots);
+		int currentToken = graphTokenIdx + 1;
+		for (int r = 0; r < numGraphRoots; ++r)
+		{
+			ParseGraphNode(ParseGraphNode, currentToken, -1);
+			currentToken = cgltf_skip_json(tokens.data(), currentToken);
+		}
+	}
+
+	// Compute world transforms for all roots
+	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
+	{
+		if (scene.m_Nodes[i].m_Parent == -1)
+		{
+			Matrix identity{};
+			DirectX::XMStoreFloat4x4(&identity, DirectX::XMMatrixIdentity());
+			ComputeWorldTransforms(scene, (int)i, identity);
+		}
+	}
+
+	// Update bounding spheres
+	for (size_t ni = 0; ni < scene.m_Nodes.size(); ++ni)
+	{
+		scene.UpdateNodeBoundingSphere((int)ni);
+	}
+
+	SDL_Log("[Scene] JSON scene loaded successfully");
+	return true;
+}
+
+void SceneLoader::ApplyEnvironmentLights(const Scene& scene)
+{
+	if (scene.m_IrradianceTexture.empty() || scene.m_RadianceTexture.empty())
+	{
+		return;
+	}
+	::LoadAndRegisterEnvMap(scene.m_IrradianceTexture, DEFAULT_TEXTURE_IRRADIANCE, "Upload Env Irradiance");
+	::LoadAndRegisterEnvMap(scene.m_RadianceTexture, DEFAULT_TEXTURE_RADIANCE, "Upload Env Radiance");
+}
 
 const char* SceneLoader::cgltf_result_tostring(cgltf_result result)
 {
@@ -116,15 +497,15 @@ void SceneLoader::ComputeWorldTransforms(Scene& scene, int nodeIndex, const Matr
 }
 
 // --- Helper pieces extracted from Scene::LoadScene for clarity ---
-void SceneLoader::SetTextureAndSampler(const cgltf_texture* tex, int& textureIndex, const cgltf_data* data)
+void SceneLoader::SetTextureAndSampler(const cgltf_texture* tex, int& textureIndex, const cgltf_data* data, int textureOffset)
 {
     if (tex && !Config::Get().m_SkipTextures)
     {
-        textureIndex = static_cast<int>(cgltf_texture_index(data, tex));
+        textureIndex = static_cast<int>(cgltf_texture_index(data, tex)) + textureOffset;
     }
 }
 
-void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir)
+void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Materials+Images");
 
@@ -147,8 +528,8 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 			// Metallic = dielectric approximation
 			scene.m_Materials.back().m_MetallicFactor = std::max(std::max(sg.specular_factor[0], sg.specular_factor[1]), sg.specular_factor[2]);
 
-			SetTextureAndSampler(sg.diffuse_texture.texture, scene.m_Materials.back().m_BaseColorTexture, data);
-			SetTextureAndSampler(sg.specular_glossiness_texture.texture, scene.m_Materials.back().m_MetallicRoughnessTexture, data);
+			SetTextureAndSampler(sg.diffuse_texture.texture, scene.m_Materials.back().m_BaseColorTexture, data, offsets.textureOffset);
+			SetTextureAndSampler(sg.specular_glossiness_texture.texture, scene.m_Materials.back().m_MetallicRoughnessTexture, data, offsets.textureOffset);
 		}
 		else if (data->materials[i].has_pbr_metallic_roughness)
 		{
@@ -156,7 +537,7 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 			scene.m_Materials.back().m_BaseColorFactor.y = pbr.base_color_factor[1];
 			scene.m_Materials.back().m_BaseColorFactor.z = pbr.base_color_factor[2];
 			scene.m_Materials.back().m_BaseColorFactor.w = pbr.base_color_factor[3];
-			SetTextureAndSampler(pbr.base_color_texture.texture, scene.m_Materials.back().m_BaseColorTexture, data);
+			SetTextureAndSampler(pbr.base_color_texture.texture, scene.m_Materials.back().m_BaseColorTexture, data, offsets.textureOffset);
 
 			float metallic = pbr.metallic_factor;
 			if (pbr.metallic_roughness_texture.texture == NULL && metallic == 1.0f)
@@ -164,7 +545,7 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 			scene.m_Materials.back().m_RoughnessFactor = pbr.roughness_factor;
 			scene.m_Materials.back().m_MetallicFactor = metallic;
 
-			SetTextureAndSampler(pbr.metallic_roughness_texture.texture, scene.m_Materials.back().m_MetallicRoughnessTexture, data);
+			SetTextureAndSampler(pbr.metallic_roughness_texture.texture, scene.m_Materials.back().m_MetallicRoughnessTexture, data, offsets.textureOffset);
 		}
 		else
 		{
@@ -174,8 +555,8 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 			scene.m_Materials.back().m_RoughnessFactor = 1.0f;
 		}
 
-		SetTextureAndSampler(data->materials[i].normal_texture.texture, scene.m_Materials.back().m_NormalTexture, data);
-		SetTextureAndSampler(data->materials[i].emissive_texture.texture, scene.m_Materials.back().m_EmissiveTexture, data);
+		SetTextureAndSampler(data->materials[i].normal_texture.texture, scene.m_Materials.back().m_NormalTexture, data, offsets.textureOffset);
+		SetTextureAndSampler(data->materials[i].emissive_texture.texture, scene.m_Materials.back().m_EmissiveTexture, data, offsets.textureOffset);
 		scene.m_Materials.back().m_EmissiveFactor.x = data->materials[i].emissive_factor[0];
 		scene.m_Materials.back().m_EmissiveFactor.y = data->materials[i].emissive_factor[1];
 		scene.m_Materials.back().m_EmissiveFactor.z = data->materials[i].emissive_factor[2];
@@ -274,9 +655,6 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 			SDL_LOG_ASSERT_FAIL("Texture load failed", "[Scene] Failed to load texture: %s", fullPath.string().c_str());
 		}
 
-		desc.isShaderResource = true;
-		desc.initialState = nvrhi::ResourceStates::ShaderResource;
-		desc.keepInitialState = true;
 		desc.debugName = fullPath.string();
 		
 		tex.m_Handle = renderer->m_RHI->m_NvrhiDevice->createTexture(desc);
@@ -377,7 +755,7 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* rend
 	}
 }
 
-void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene)
+void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Cameras");
 	for (cgltf_size i = 0; i < data->cameras_count; ++i)
@@ -404,7 +782,7 @@ void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene)
 	}
 }
 
-void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene)
+void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Lights");
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
@@ -427,7 +805,7 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene)
 	}
 }
 
-void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene)
+void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Animations");
 	for (cgltf_size i = 0; i < data->animations_count; ++i)
@@ -483,7 +861,7 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene)
 
 			Scene::AnimationChannel channel;
 			channel.m_SamplerIndex = (int)cgltf_animation_sampler_index(&cgAnim, cgChannel.sampler);
-			int nodeIdx = (int)cgltf_node_index(data, cgChannel.target_node);
+			int nodeIdx = (int)cgltf_node_index(data, cgChannel.target_node) + offsets.nodeOffset;
 			channel.m_NodeIndex = nodeIdx;
 			scene.m_Nodes[nodeIdx].m_IsAnimated = true;
 
@@ -502,17 +880,9 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene)
 	}
 }
 
-void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices)
+void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Meshes");
-
-	// sanity check: all output arrays should be empty
-	SDL_assert(outVerticesQuantized.empty());
-	SDL_assert(outIndices.empty());
-	SDL_assert(scene.m_MeshData.empty());
-	SDL_assert(scene.m_Meshlets.empty());
-	SDL_assert(scene.m_MeshletVertices.empty());
-	SDL_assert(scene.m_MeshletTriangles.empty());
 	
 	// NOTE: no multi-threading here because performance is worse. not sure why
 
@@ -778,7 +1148,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 				}
 			}
 
-			p.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) : -1;
+			p.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) + offsets.materialOffset : -1;
 
 			// Extract MeshData
 			p.m_MeshDataIndex = (uint32_t)scene.m_MeshData.size();
@@ -835,18 +1205,18 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		scene.m_MeshletVertices.size(), scene.m_MeshletTriangles.size() / 3);
 }
 
-void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene)
+void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Nodes+Hierarchy");
 	std::unordered_map<cgltf_size, int> nodeMap;
 	for (cgltf_size ni = 0; ni < data->nodes_count; ++ni)
 	{
 		const cgltf_node& cn = data->nodes[ni];
-		Scene::Node& node = scene.m_Nodes[ni];
+		Scene::Node& node = scene.m_Nodes[ni + offsets.nodeOffset];
 		node.m_Name = cn.name ? cn.name : std::string();
-		node.m_MeshIndex = cn.mesh ? static_cast<int>(cgltf_mesh_index(data, cn.mesh)) : -1;
-		node.m_CameraIndex = cn.camera ? static_cast<int>(cgltf_camera_index(data, cn.camera)) : -1;
-		node.m_LightIndex = cn.light ? static_cast<int>(cgltf_light_index(data, cn.light)) : -1;
+		node.m_MeshIndex = cn.mesh ? static_cast<int>(cgltf_mesh_index(data, cn.mesh)) + offsets.meshOffset : -1;
+		node.m_CameraIndex = cn.camera ? static_cast<int>(cgltf_camera_index(data, cn.camera)) + offsets.cameraOffset : -1;
+		node.m_LightIndex = cn.light ? static_cast<int>(cgltf_light_index(data, cn.light)) + offsets.lightOffset : -1;
 
 		Matrix localOut{};
 		if (cn.has_matrix)
@@ -880,7 +1250,7 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene)
 		node.m_WorldTransform = node.m_LocalTransform;
 
 		cgltf_size nodeIndex = cgltf_node_index(data, &cn);
-		nodeMap[nodeIndex] = static_cast<int>(ni);
+		nodeMap[nodeIndex] = static_cast<int>(ni) + offsets.nodeOffset;
 	}
 
 	// Build parent/children links
@@ -903,34 +1273,34 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene)
 	}
 
 	// Set node indices in cameras and lights
-	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
+	for (size_t i = 0; i < data->nodes_count; ++i)
 	{
-		const Scene::Node& node = scene.m_Nodes[i];
+		const Scene::Node& node = scene.m_Nodes[i + offsets.nodeOffset];
 		if (node.m_CameraIndex >= 0 && node.m_CameraIndex < static_cast<int>(scene.m_Cameras.size()))
 		{
-			scene.m_Cameras[node.m_CameraIndex].m_NodeIndex = static_cast<int>(i);
+			scene.m_Cameras[node.m_CameraIndex].m_NodeIndex = static_cast<int>(i) + offsets.nodeOffset;
 		}
 		if (node.m_LightIndex >= 0 && node.m_LightIndex < static_cast<int>(scene.m_Lights.size()))
 		{
-			scene.m_Lights[node.m_LightIndex].m_NodeIndex = static_cast<int>(i);
+			scene.m_Lights[node.m_LightIndex].m_NodeIndex = static_cast<int>(i) + offsets.nodeOffset;
 		}
 	}
 
 	// Compute world transforms
-	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
+	for (size_t i = 0; i < data->nodes_count; ++i)
 	{
-		if (scene.m_Nodes[i].m_Parent == -1)
+		if (scene.m_Nodes[i + offsets.nodeOffset].m_Parent == -1)
 		{
 			Matrix identity{};
 			DirectX::XMStoreFloat4x4(&identity, DirectX::XMMatrixIdentity());
-			ComputeWorldTransforms(scene, static_cast<int>(i), identity);
+			ComputeWorldTransforms(scene, static_cast<int>(i) + offsets.nodeOffset, identity);
 		}
 	}
 
 	// Compute per-node bounding spheres by transforming mesh spheres into world space
-	for (size_t ni = 0; ni < scene.m_Nodes.size(); ++ni)
+	for (size_t ni = 0; ni < data->nodes_count; ++ni)
 	{
-		scene.UpdateNodeBoundingSphere(static_cast<int>(ni));
+		scene.UpdateNodeBoundingSphere(static_cast<int>(ni) + offsets.nodeOffset);
 	}
 }
 
@@ -1101,7 +1471,6 @@ bool SceneLoader::LoadGLTFScene(Scene& scene, const std::string& scenePath, std:
 	const cgltf_options options{};
 	cgltf_data* data = nullptr;
 	cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
-	int dummy = 0; // dummy
 	if (res != cgltf_result_success || !data)
 	{
 		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s (result: %s)", scenePath.c_str(), cgltf_result_tostring(res));
@@ -1134,13 +1503,21 @@ bool SceneLoader::LoadGLTFScene(Scene& scene, const std::string& scenePath, std:
 
 	const std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
 
-	scene.m_Nodes.resize(data->nodes_count);
-	ProcessMaterialsAndImages(data, scene, sceneDir);
-	ProcessCameras(data, scene);
-	ProcessLights(data, scene);
-	ProcessAnimations(data, scene);
-	ProcessMeshes(data, scene, allVerticesQuantized, allIndices);
-	ProcessNodesAndHierarchy(data, scene);
+	SceneOffsets offsets;
+	offsets.nodeOffset = (int)scene.m_Nodes.size();
+	offsets.meshOffset = (int)scene.m_Meshes.size();
+	offsets.materialOffset = (int)scene.m_Materials.size();
+	offsets.textureOffset = (int)scene.m_Textures.size();
+	offsets.cameraOffset = (int)scene.m_Cameras.size();
+	offsets.lightOffset = (int)scene.m_Lights.size();
+
+	scene.m_Nodes.resize(offsets.nodeOffset + data->nodes_count);
+	ProcessMaterialsAndImages(data, scene, sceneDir, offsets);
+	ProcessCameras(data, scene, offsets);
+	ProcessLights(data, scene, offsets);
+	ProcessAnimations(data, scene, offsets);
+	ProcessMeshes(data, scene, allVerticesQuantized, allIndices, offsets);
+	ProcessNodesAndHierarchy(data, scene, offsets);
 
 	cgltf_free(data);
 	return true;

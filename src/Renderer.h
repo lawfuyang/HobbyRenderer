@@ -135,6 +135,7 @@ struct Renderer
     // Global Bindless Texture System
     void InitializeGlobalBindlessTextures();
     uint32_t RegisterTexture(nvrhi::TextureHandle texture);
+    bool RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle texture);
     nvrhi::DescriptorTableHandle GetGlobalTextureDescriptorTable() const { return m_GlobalTextureDescriptorTable; }
     nvrhi::BindingLayoutHandle GetGlobalTextureBindingLayout() const { return m_GlobalTextureBindingLayout; }
 
@@ -242,7 +243,7 @@ private:
     // Global bindless texture system
     nvrhi::DescriptorTableHandle m_GlobalTextureDescriptorTable;
     nvrhi::BindingLayoutHandle m_GlobalTextureBindingLayout;
-    uint32_t m_NextTextureIndex = 0;
+    uint32_t m_NextTextureIndex = DEFAULT_TEXTURE_COUNT;
 
     // GPU Timing
     nvrhi::TimerQueryHandle m_GPUQueries[2];

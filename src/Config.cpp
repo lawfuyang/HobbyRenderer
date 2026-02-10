@@ -24,16 +24,16 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_GraphicsAPI = nvrhi::GraphicsAPI::VULKAN;
             SDL_Log("[Config] Vulkan graphics API selected via command line");
         }
-        else if (std::strcmp(arg, "--gltf") == 0)
+        else if (std::strcmp(arg, "--scene") == 0)
         {
             if (i + 1 < argc)
             {
-                s_Instance.m_GltfScene = argv[++i];
-                SDL_Log("[Config] GLTF scene set via command line: %s", s_Instance.m_GltfScene.c_str());
+                s_Instance.m_ScenePath = argv[++i];
+                SDL_Log("[Config] Scene set via command line: %s", s_Instance.m_ScenePath.c_str());
             }
             else
             {
-                SDL_LOG_ASSERT_FAIL("Missing value for --gltf", "[Config] Missing value for --gltf");
+                SDL_LOG_ASSERT_FAIL("Missing value for --scene", "[Config] Missing value for --scene");
             }
         }
         else if (std::strcmp(arg, "--skip-textures") == 0)
@@ -130,8 +130,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --vulkan                       Use Vulkan graphics API");
             SDL_Log("  --execute-per-pass            Execute command lists per pass");
             SDL_Log("  --execute-per-pass-and-wait   Wait for idle after each pass execution");
-            SDL_Log("  --gltf <path>                 Load the specified glTF scene file");
-            SDL_Log("  --skip-textures               Skip loading textures from glTF scene");
+            SDL_Log("  --scene <path>                Load the specified scene file");
+            SDL_Log("  --skip-textures               Skip loading textures from scene");
             SDL_Log("  --skip-cache                  Skip loading/saving scene cache");
             SDL_Log("  --irradiance <path>           Path to irradiance cubemap texture (DDS)");
             SDL_Log("  --radiance <path>             Path to radiance cubemap texture (DDS)");

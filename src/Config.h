@@ -8,9 +8,9 @@ struct Config
     nvrhi::GraphicsAPI m_GraphicsAPI = nvrhi::GraphicsAPI::D3D12;
     bool m_EnableValidation = false;
     bool m_EnableGPUAssistedValidation = false;
-    // Path to a glTF scene to load (empty = none)
-    std::string m_GltfScene = "";
-    // Skip loading textures from glTF
+    // Path to a scene to load (empty = none)
+    std::string m_ScenePath = "";
+    // Skip loading textures from scene
     bool m_SkipTextures = false;
     // Skip loading/saving scene cache
     bool m_SkipCache = false;

@@ -7,16 +7,15 @@
 
 void Scene::LoadScene()
 {
-	const std::string& scenePath = Config::Get().m_GltfScene;
+	const std::string& scenePath = Config::Get().m_ScenePath;
 	if (scenePath.empty())
 	{
-		SDL_Log("[Scene] No glTF scene configured, skipping load");
+		SDL_Log("[Scene] No scene configured, skipping load");
 		return;
 	}
 
-	const std::filesystem::path gltfPath(scenePath);
-	const std::filesystem::path cachePath = gltfPath.parent_path() / (gltfPath.stem().string() + "_cooked.bin");
-	const std::filesystem::path sceneDir = gltfPath.parent_path();
+	const std::filesystem::path sceneFilePath(scenePath);
+	const std::filesystem::path sceneDir = sceneFilePath.parent_path();
 
 	Renderer* renderer = Renderer::GetInstance();
 	std::vector<VertexQuantized> allVerticesQuantized;
@@ -25,33 +24,51 @@ void Scene::LoadScene()
 	SCOPED_TIMER("[Scene] LoadScene Total");
 
 	bool loadedFromCache = false;
-	if (!Config::Get().m_SkipCache && std::filesystem::exists(cachePath))
+	const std::string filename = sceneFilePath.filename().string();
+	const bool bIsSceneJson = filename.size() >= 11 && filename.substr(filename.size() - 11) == ".scene.json";
+
+	if (!Config::Get().m_SkipCache)
 	{
-		const std::filesystem::file_time_type gltfTime = std::filesystem::last_write_time(gltfPath);
-		const std::filesystem::file_time_type cacheTime = std::filesystem::last_write_time(cachePath);
-		if (cacheTime > gltfTime)
+		const std::filesystem::path cachePath = sceneFilePath.parent_path() / (sceneFilePath.stem().string() + "_cooked.bin");
+		if (std::filesystem::exists(cachePath))
 		{
-			SDL_Log("[Scene] Loading from binary cache: %s", cachePath.string().c_str());
-			if (LoadFromCache(cachePath.string(), allIndices, allVerticesQuantized))
+			const std::filesystem::file_time_type sceneTime = std::filesystem::last_write_time(sceneFilePath);
+			const std::filesystem::file_time_type cacheTime = std::filesystem::last_write_time(cachePath);
+			if (cacheTime > sceneTime)
 			{
-				loadedFromCache = true;
-			}
-			else
-			{
-				SDL_Log("[Scene] Cache load failed, falling back to glTF");
+				SDL_Log("[Scene] Loading from binary cache: %s", cachePath.string().c_str());
+				if (LoadFromCache(cachePath.string(), allIndices, allVerticesQuantized))
+				{
+					loadedFromCache = true;
+				}
+				else
+				{
+					SDL_Log("[Scene] Cache load failed, falling back to scene loading");
+				}
 			}
 		}
 	}
 
 	if (!loadedFromCache)
 	{
-		if (!SceneLoader::LoadGLTFScene(*this, scenePath, allVerticesQuantized, allIndices))
+		bool success = false;
+		if (bIsSceneJson)
 		{
-			SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene from glTF: %s", scenePath.c_str());
+			success = SceneLoader::LoadJSONScene(*this, scenePath, allVerticesQuantized, allIndices);
+		}
+		else
+		{
+			success = SceneLoader::LoadGLTFScene(*this, scenePath, allVerticesQuantized, allIndices);
+		}
+
+		if (!success)
+		{
+			SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene: %s", scenePath.c_str());
 		}
 
 		if (!Config::Get().m_SkipCache)
 		{
+			const std::filesystem::path cachePath = sceneFilePath.parent_path() / (sceneFilePath.stem().string() + "_cooked.bin");
 			SDL_Log("[Scene] Saving binary cache: %s", cachePath.string().c_str());
 			SaveToCache(cachePath.string(), allIndices, allVerticesQuantized);
 		}
@@ -60,6 +77,7 @@ void Scene::LoadScene()
 	FinalizeLoadedScene();
 
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir, renderer);
+	SceneLoader::ApplyEnvironmentLights(*this);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this, renderer);
 	SceneLoader::SetupDirectionalLightAndCamera(*this, renderer);
 	SceneLoader::CreateAndUploadGpuBuffers(*this, renderer, allVerticesQuantized, allIndices);

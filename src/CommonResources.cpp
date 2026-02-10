@@ -308,22 +308,14 @@ void CommonResources::RegisterDefaultTextures()
     Renderer* renderer = Renderer::GetInstance();
 
     // Register textures with the global bindless system
-    uint32_t index = renderer->RegisterTexture(DefaultTextureBlack);
-    SDL_assert(index == DEFAULT_TEXTURE_BLACK);
-    index = renderer->RegisterTexture(DefaultTextureWhite);
-    SDL_assert(index == DEFAULT_TEXTURE_WHITE);
-    index = renderer->RegisterTexture(DefaultTextureGray);
-    SDL_assert(index == DEFAULT_TEXTURE_GRAY);
-    index = renderer->RegisterTexture(DefaultTextureNormal);
-    SDL_assert(index == DEFAULT_TEXTURE_NORMAL);
-    index = renderer->RegisterTexture(DefaultTexturePBR);
-    SDL_assert(index == DEFAULT_TEXTURE_PBR);
-    index = renderer->RegisterTexture(BRDF_LUT);
-    SDL_assert(index == DEFAULT_TEXTURE_BRDF_LUT);
-    index = renderer->RegisterTexture(IrradianceTexture);
-    SDL_assert(index == DEFAULT_TEXTURE_IRRADIANCE);
-    index = renderer->RegisterTexture(RadianceTexture);
-    SDL_assert(index == DEFAULT_TEXTURE_RADIANCE);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_BLACK, DefaultTextureBlack);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_WHITE, DefaultTextureWhite);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_GRAY, DefaultTextureGray);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_NORMAL, DefaultTextureNormal);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_PBR, DefaultTexturePBR);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_BRDF_LUT, BRDF_LUT);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_IRRADIANCE, IrradianceTexture);
+    renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_RADIANCE, RadianceTexture);
     SDL_Log("[CommonResources] Default textures registered with bindless system");
 }
 

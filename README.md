@@ -65,15 +65,13 @@ The project automatically downloads and builds the following dependencies:
 ## Usage
 
 ### Command Line Options
-- `--gltf <path>`: Load a glTF scene file
+- `--scene <path>`: Load a scene file
 - `--vulkan`: Select Vulkan graphics API (default: D3D12)
 - `--rhidebug`: Enable Graphic API validation layers
-- `--skip-textures`: Skip loading textures from glTF
-- `--skip-cache`: Skip scene caching
 
 ### Example
 ```bash
-AgenticRenderer.exe --gltf scenes/sponza.gltf --vulkan --rhidebug
+AgenticRenderer.exe --scene scenes/sponza.gltf --vulkan --rhidebug
 ```
 
 ### Controls
@@ -92,6 +90,18 @@ Key shader features:
 
 ## Scene Format Support
 
+This application supports loading scene files in the following formats:
+
+- **glTF (.gltf)**: Standard glTF 2.0 files (text-based only, GLB binary format not supported)
+- **Scene JSON (.scene.json)**: Custom JSON scene format
+
+### Sample Scenes
+
+You can download sample scenes from the following NVIDIA repositories:
+- **[RTXPT-Assets](https://github.com/NVIDIA-RTX/RTXPT-Assets)**: Path tracing sample assets
+- **[RTXDI-Assets](https://github.com/NVIDIA-RTX/RTXDI-Assets)**: RTX Direct Illumination sample assets
+
+### Supported Features
 - **Meshes**: Triangle meshes with vertex quantization
 - **Materials**: PBR materials with albedo, normal, ORM, and emissive textures
 - **Animations**: Static animations with linear/step interpolation

@@ -161,6 +161,9 @@ public:
     std::vector<Animation> m_Animations;
     std::vector<int> m_DynamicNodeIndices; // Topologically sorted
 
+    std::string m_RadianceTexture;
+    std::string m_IrradianceTexture;
+
     DirectionalLight m_DirectionalLight;
 
     std::pair<uint32_t, uint32_t> m_InstanceDirtyRange = { UINT32_MAX, 0 };
@@ -192,7 +195,7 @@ public:
     nvrhi::rt::AccelStructHandle m_TLAS;
     std::vector<nvrhi::rt::InstanceDesc> m_RTInstanceDescs;
 
-    // Load the scene from the path configured in `Config::Get().m_GltfScene`.
+    // Load the scene from the path configured in `Config::Get().m_ScenePath`.
     // Only mesh vertex/index data and node hierarchy are loaded for now.
     void LoadScene();
 

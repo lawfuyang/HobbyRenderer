@@ -579,7 +579,7 @@ void Renderer::Run()
                 ScopedCommandList scopedCmd{ cmd }; \
                 if (m_RHI->m_NvrhiDevice->pollTimerQuery(pRenderer->m_GPUQueries[readIndex])) \
                 { \
-                pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex])); \
+                    pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex])); \
                 } \
                 m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]); \
                 SimpleTimer cpuTimer; \
@@ -882,16 +882,32 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
     SINGLE_THREAD_GUARD();
 
     const uint32_t index = m_NextTextureIndex++;
-    
-    const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
-    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
+    const bool bResult = RegisterTextureAtIndex(index, texture);
+    if (!bResult)
     {
         SDL_LOG_ASSERT_FAIL("Failed to register texture in global descriptor table", "[Renderer] Failed to register texture at index %u", index);
         return UINT32_MAX;
     }
-
-    SDL_Log("[Renderer] Registered texture (%s) at index %u", texture->getDesc().debugName.c_str(), index);
     return index;
+}
+
+bool Renderer::RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle texture)
+{
+    if (!texture || !m_GlobalTextureDescriptorTable)
+    {
+        return false;
+    }
+
+    SINGLE_THREAD_GUARD();
+
+    const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
+    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to register texture in global descriptor table", "[Renderer] Failed to register texture at index %u", index);
+        return false;
+    }
+    SDL_Log("[Renderer] Registered texture (%s) at index %u", texture->getDesc().debugName.c_str(), index);
+    return true;
 }
 
 void Renderer::HashPipelineCommonState(size_t& h, const nvrhi::RenderState& renderState, const nvrhi::FramebufferInfoEx& fbInfo, const nvrhi::BindingLayoutVector& bindingLayouts)
