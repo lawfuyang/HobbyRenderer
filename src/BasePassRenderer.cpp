@@ -24,6 +24,7 @@ protected:
         int m_CullingPhase;
         uint32_t m_AlphaMode;
         const char* m_BucketName;
+        bool m_BackFaceCull = false;
     };
 
     void GenerateHZBMips(nvrhi::CommandListHandle commandList);
@@ -311,7 +312,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
     nvrhi::RenderState renderState;
-    renderState.rasterState = CommonResources::GetInstance().RasterCullNone; // just treat everything as double-sided for simplicity
+    renderState.rasterState = args.m_BackFaceCull ? CommonResources::GetInstance().RasterCullBack : CommonResources::GetInstance().RasterCullNone;
     
     if (args.m_AlphaMode == ALPHA_MODE_BLEND)
     {
@@ -573,6 +574,7 @@ void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList)
     args.m_BucketName = "Transparent";
     args.m_AlphaMode = ALPHA_MODE_BLEND;
     args.m_CullingPhase = 0;
+    args.m_BackFaceCull = true;
 
     PerformOcclusionCulling(commandList, args);
     RenderInstances(commandList, args);

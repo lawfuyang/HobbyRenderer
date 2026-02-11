@@ -428,7 +428,6 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
     float3 color = directLighting.diffuse + directLighting.specular + ibl;
 
-#if defined(FORWARD_TRANSPARENT)
     // Refraction logic
     if (mat.m_TransmissionFactor > 0.0)
     {
@@ -444,7 +443,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         float3 refractedRayExit = input.worldPos + transmissionRay;
 
         // Project to screen space
-        float4 refractClipPos = mul(g_PerFrame.m_ViewProj, float4(refractedRayExit, 1.0));
+        float4 refractClipPos = mul(float4(refractedRayExit, 1.0), g_PerFrame.m_ViewProj);
         float2 refractUV = (refractClipPos.xy / refractClipPos.w) * float2(0.5, -0.5) + 0.5;
 
         // Sample background with roughness-based LOD
@@ -466,10 +465,9 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
         // Blend based on transmission factor (diffuse is replaced)
         color = lerp(color, transmissionLighting, mat.m_TransmissionFactor);
-        
-        color += emissive;
     }
-#endif
+
+    color += emissive;
 
     // Debug visualizations
     if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)
