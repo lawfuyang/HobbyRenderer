@@ -256,9 +256,11 @@ private:
     void HashPipelineCommonState(size_t& h, const nvrhi::RenderState&, const nvrhi::FramebufferInfoEx&, const nvrhi::BindingLayoutVector&);
     void LoadShaders();
     void UnloadShaders();
+    void ReloadShaders();
 
     static Renderer* s_Instance;
     bool m_Running = true;
+    bool m_RequestedShaderReload = false;
 };
 
 class ScopedCommandList

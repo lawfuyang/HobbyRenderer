@@ -395,6 +395,28 @@ void Renderer::UnloadShaders()
     SDL_Log("[Shutdown] Shaders unloaded");
 }
 
+void Renderer::ReloadShaders()
+{
+    SDL_Log("[HotReload] Reloading shaders requested...");
+
+    // Wait for device to be idle before destroying resources that might be in use
+    m_RHI->m_NvrhiDevice->waitForIdle();
+
+    // Clear all caches
+    m_GraphicsPipelineCache.clear();
+    m_MeshletPipelineCache.clear();
+    m_ComputePipelineCache.clear();
+    m_BindingLayoutCache.clear();
+    m_ShaderCache.clear();
+
+    SDL_Log("[HotReload] Caches cleared. Re-loading shaders from disk...");
+
+    LoadShaders();
+
+    SDL_Log("[HotReload] Shader reload complete.");
+    m_RequestedShaderReload = false;
+}
+
 nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
 {
     std::unordered_map<std::string, nvrhi::ShaderHandle>::const_iterator it = m_ShaderCache.find(name.data());
@@ -512,7 +534,20 @@ void Renderer::Run()
                     m_Running = false;
                     break;
                 }
+
+                if (event.type == SDL_EVENT_KEY_DOWN)
+                {
+                    if (event.key.scancode == SDL_SCANCODE_F5)
+                    {
+                        m_RequestedShaderReload = true;
+                    }
+                }
             }
+        }
+
+        if (m_RequestedShaderReload)
+        {
+            ReloadShaders();
         }
 
         bool bSwapChainImageAcquireSuccess = true;
