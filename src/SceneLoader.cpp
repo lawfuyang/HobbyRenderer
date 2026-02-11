@@ -700,7 +700,7 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 
 		if (!std::filesystem::exists(fullPath))
 		{
-			SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.string().c_str());
+				SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.string().c_str());
 		}
 
 		nvrhi::TextureDesc desc;
@@ -943,315 +943,347 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const 
 void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Meshes");
-	
-	// NOTE: no multi-threading here because performance is worse. not sure why
 
-	struct FullPrimitive
+	struct PrimitiveResult
 	{
-		uint32_t m_VertexOffset = 0;
-		uint32_t m_VertexCount = 0;
-		uint32_t m_LODCount = 0;
-		uint32_t m_IndexOffsets[MAX_LOD_COUNT] = { 0 };
-		uint32_t m_IndexCounts[MAX_LOD_COUNT] = { 0 };
-		uint32_t m_MeshletOffsets[MAX_LOD_COUNT] = { 0 };
-		uint32_t m_MeshletCounts[MAX_LOD_COUNT] = { 0 };
-		float m_LODErrors[MAX_LOD_COUNT] = { 0.0f };
-		int m_MaterialIndex = -1;
-		uint32_t m_MeshDataIndex = 0;
+		std::vector<VertexQuantized> vertices;
+		std::vector<uint32_t> indices;
+		std::vector<Meshlet> meshlets;
+		std::vector<uint32_t> meshletVertices;
+		std::vector<uint32_t> meshletTriangles;
+		MeshData meshData;
+		Scene::Primitive minimalPrim;
 	};
 
+	struct MeshResult
+	{
+		std::vector<PrimitiveResult> primitives;
+		std::string name;
+	};
+
+	std::vector<MeshResult> meshResults(data->meshes_count);
+
+	struct PrimitiveJob
+	{
+		uint32_t meshIdx;
+		uint32_t primIdx;
+		const cgltf_primitive* prim;
+	};
+
+	std::vector<PrimitiveJob> jobs;
 	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 	{
-		const cgltf_mesh& cgMesh = data->meshes[mi];
-		Scene::Mesh mesh;
-
-		for (cgltf_size pi = 0; pi < cgMesh.primitives_count; ++pi)
+		meshResults[mi].primitives.resize(data->meshes[mi].primitives_count);
+		meshResults[mi].name = data->meshes[mi].name ? data->meshes[mi].name : "unnamed";
+		for (cgltf_size pi = 0; pi < data->meshes[mi].primitives_count; ++pi)
 		{
-			const cgltf_primitive& prim = cgMesh.primitives[pi];
-			FullPrimitive p;
+			jobs.push_back({ (uint32_t)mi, (uint32_t)pi, &data->meshes[mi].primitives[pi] });
+		}
+	}
 
-			const cgltf_accessor* posAcc = nullptr;
-			const cgltf_accessor* normAcc = nullptr;
-			const cgltf_accessor* uvAcc = nullptr;
+	Renderer* renderer = Renderer::GetInstance();
+	renderer->m_TaskScheduler->ParallelFor((uint32_t)jobs.size(), [&](uint32_t jobIdx, uint32_t threadIndex)
+	{
+		const PrimitiveJob& job = jobs[jobIdx];
+		const cgltf_primitive& prim = *job.prim;
+		PrimitiveResult& res = meshResults[job.meshIdx].primitives[job.primIdx];
 
-			for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai)
+		const cgltf_accessor* posAcc = nullptr;
+		const cgltf_accessor* normAcc = nullptr;
+		const cgltf_accessor* uvAcc = nullptr;
+
+		for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai)
+		{
+			const cgltf_attribute& attr = prim.attributes[ai];
+			if (attr.type == cgltf_attribute_type_position)
+				posAcc = attr.data;
+			else if (attr.type == cgltf_attribute_type_normal)
+				normAcc = attr.data;
+			else if (attr.type == cgltf_attribute_type_texcoord)
+				uvAcc = attr.data;
+		}
+
+		if (!posAcc)
+			return;
+
+		const cgltf_size vertCount = posAcc->count;
+
+		std::vector<Vertex> rawVertices(vertCount);
+		for (cgltf_size v = 0; v < vertCount; ++v)
+		{
+			Vertex vx{};
+			float pos[4] = { 0,0,0,0 };
+			cgltf_size posComps = cgltf_num_components(posAcc->type);
+			cgltf_accessor_read_float(posAcc, v, pos, posComps);
+			vx.m_Pos.x = pos[0]; vx.m_Pos.y = pos[1]; vx.m_Pos.z = pos[2];
+
+			float nrm[4] = { 0,0,0,0 };
+			if (normAcc)
 			{
-				const cgltf_attribute& attr = prim.attributes[ai];
-				if (attr.type == cgltf_attribute_type_position)
-					posAcc = attr.data;
-				else if (attr.type == cgltf_attribute_type_normal)
-					normAcc = attr.data;
-				else if (attr.type == cgltf_attribute_type_texcoord)
-					uvAcc = attr.data;
+				cgltf_size nrmComps = cgltf_num_components(normAcc->type);
+				cgltf_accessor_read_float(normAcc, v, nrm, nrmComps);
 			}
+			vx.m_Normal.x = nrm[0]; vx.m_Normal.y = nrm[1]; vx.m_Normal.z = nrm[2];
 
-			if (!posAcc)
+			float uv[4] = { 0,0,0,0 };
+			if (uvAcc)
 			{
-				SDL_LOG_ASSERT_FAIL("Primitive missing POSITION attribute", "[Scene] Primitive missing POSITION attribute. Is this normal?");
-				continue;
+				cgltf_size uvComps = cgltf_num_components(uvAcc->type);
+				cgltf_accessor_read_float(uvAcc, v, uv, uvComps);
 			}
+			vx.m_Uv.x = uv[0]; vx.m_Uv.y = uv[1];
 
-			const cgltf_size vertCount = posAcc->count;
-			
-			std::vector<Vertex> rawVertices(vertCount);
-			for (cgltf_size v = 0; v < vertCount; ++v)
+			rawVertices[v] = vx;
+		}
+
+		std::vector<uint32_t> rawIndices;
+		if (prim.indices)
+		{
+			rawIndices.resize(prim.indices->count);
+			for (cgltf_size k = 0; k < prim.indices->count; ++k)
 			{
-				Vertex vx{};
-				float pos[4] = { 0,0,0,0 };
-				cgltf_size posComps = cgltf_num_components(posAcc->type);
-				cgltf_accessor_read_float(posAcc, v, pos, posComps);
-				vx.m_Pos.x = pos[0]; vx.m_Pos.y = pos[1]; vx.m_Pos.z = pos[2];
+				rawIndices[k] = static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, k));
+			}
+		}
+		else
+		{
+			rawIndices.resize(vertCount);
+			for (uint32_t k = 0; k < vertCount; ++k) rawIndices[k] = k;
+		}
 
-				float nrm[4] = { 0,0,0,0 };
-				if (normAcc)
+		std::vector<uint32_t> remap(rawIndices.size());
+		size_t uniqueVertices = meshopt_generateVertexRemap(remap.data(), rawIndices.data(), rawIndices.size(), rawVertices.data(), rawVertices.size(), sizeof(Vertex));
+
+		std::vector<Vertex> optimizedVertices(uniqueVertices);
+		std::vector<uint32_t> localIndices(rawIndices.size());
+
+		meshopt_remapVertexBuffer(optimizedVertices.data(), rawVertices.data(), rawVertices.size(), sizeof(Vertex), remap.data());
+		meshopt_remapIndexBuffer(localIndices.data(), rawIndices.data(), rawIndices.size(), remap.data());
+
+		meshopt_optimizeVertexCache(localIndices.data(), localIndices.data(), localIndices.size(), uniqueVertices);
+		meshopt_optimizeVertexFetch(optimizedVertices.data(), localIndices.data(), localIndices.size(), optimizedVertices.data(), uniqueVertices, sizeof(Vertex));
+
+		res.vertices.reserve(uniqueVertices);
+		for (const Vertex& v : optimizedVertices)
+		{
+			VertexQuantized vq{};
+			vq.m_Pos = v.m_Pos;
+			vq.m_Normal = (meshopt_quantizeSnorm(v.m_Normal.x, 10) + 511) |
+				((meshopt_quantizeSnorm(v.m_Normal.y, 10) + 511) << 10) |
+				((meshopt_quantizeSnorm(v.m_Normal.z, 10) + 511) << 20);
+			vq.m_Uv = (meshopt_quantizeHalf(v.m_Uv.x)) |
+				((meshopt_quantizeHalf(v.m_Uv.y)) << 16);
+			res.vertices.push_back(vq);
+		}
+
+		uint32_t baseIndexCount = static_cast<uint32_t>(localIndices.size());
+		if (baseIndexCount > 0)
+		{
+			const size_t max_vertices = kMaxMeshletVertices;
+			const size_t max_triangles = kMaxMeshletTriangles;
+			const float cone_weight = 0.25f;
+
+			const uint32_t kIndexLimitForLODGeneration = 1024;
+			const float kIndexReductionPercentageForLODGeneration = 0.5f;
+			const size_t kMinimumIndicesForLODGeneration = 128;
+
+			const float target_error_hq = 0.01f;
+			const float kMaxErrorForLODGeneration = 0.10f;
+			const float kMinReductionRatio = 0.85f;
+
+			const float attribute_weights[3] = { 1.0f, 1.0f, 1.0f };
+
+			const float simplifyScale = meshopt_simplifyScale(&optimizedVertices[0].m_Pos.x, uniqueVertices, sizeof(Vertex));
+
+			for (uint32_t lod = 0; lod < MAX_LOD_COUNT; ++lod)
+			{
+				std::vector<uint32_t> lodIndices;
+				float lodError = 0.0f;
+
+				if (lod == 0)
 				{
-					cgltf_size nrmComps = cgltf_num_components(normAcc->type);
-					cgltf_accessor_read_float(normAcc, v, nrm, nrmComps);
+					lodIndices = localIndices;
+					lodError = 0.0f;
 				}
-				vx.m_Normal.x = nrm[0]; vx.m_Normal.y = nrm[1]; vx.m_Normal.z = nrm[2];
-
-				float uv[4] = { 0,0,0,0 };
-				if (uvAcc)
+				else
 				{
-					cgltf_size uvComps = cgltf_num_components(uvAcc->type);
-					cgltf_accessor_read_float(uvAcc, v, uv, uvComps);
+					if (baseIndexCount < kIndexLimitForLODGeneration)
+						break;
+
+					size_t target_index_count = size_t(baseIndexCount * pow(kIndexReductionPercentageForLODGeneration, (float)lod));
+					target_index_count = std::max(target_index_count, kMinimumIndicesForLODGeneration);
+
+					if (target_index_count >= res.meshData.m_IndexCounts[lod - 1])
+						break;
+
+					lodIndices.resize(baseIndexCount);
+					size_t new_index_count = meshopt_simplifyWithAttributes(
+						lodIndices.data(),
+						localIndices.data(), baseIndexCount,
+						&optimizedVertices[0].m_Pos.x, uniqueVertices, sizeof(Vertex),
+						&optimizedVertices[0].m_Normal.x, sizeof(Vertex),
+						attribute_weights, 3,
+						nullptr, target_index_count, target_error_hq,
+						meshopt_SimplifySparse,
+						&lodError);
+					lodIndices.resize(new_index_count);
+
+					if (new_index_count < kIndexLimitForLODGeneration)
+						break;
+
+					if (new_index_count >= res.meshData.m_IndexCounts[lod - 1] * kMinReductionRatio || lodError > kMaxErrorForLODGeneration)
+						break;
+
+					meshopt_optimizeVertexCache(lodIndices.data(), lodIndices.data(), lodIndices.size(), uniqueVertices);
 				}
-				vx.m_Uv.x = uv[0]; vx.m_Uv.y = uv[1];
 
-				rawVertices[v] = vx;
-			}
+				res.meshData.m_IndexOffsets[lod] = (uint32_t)res.indices.size();
+				res.meshData.m_IndexCounts[lod] = (uint32_t)lodIndices.size();
+				res.meshData.m_LODErrors[lod] = lodError * simplifyScale;
 
-			std::vector<uint32_t> rawIndices;
-			if (prim.indices)
-			{
-				rawIndices.resize(prim.indices->count);
-				for (cgltf_size k = 0; k < prim.indices->count; ++k)
+				for (uint32_t idx : lodIndices)
 				{
-					rawIndices[k] = static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, k));
+					res.indices.push_back(idx);
 				}
-			}
-			else
-			{
-				rawIndices.resize(vertCount);
-				for (uint32_t k = 0; k < vertCount; ++k) rawIndices[k] = k;
-			}
 
-			// 1. Generate Remap
-			std::vector<uint32_t> remap(rawIndices.size());
-			size_t uniqueVertices = meshopt_generateVertexRemap(remap.data(), rawIndices.data(), rawIndices.size(), rawVertices.data(), rawVertices.size(), sizeof(Vertex));
+				size_t max_meshlets = meshopt_buildMeshletsBound(lodIndices.size(), max_vertices, max_triangles);
+				std::vector<meshopt_Meshlet> localMeshlets(max_meshlets);
+				std::vector<unsigned int> meshlet_vertices(max_meshlets * max_vertices);
+				std::vector<unsigned char> meshlet_triangles(max_meshlets * max_triangles * 3);
 
-			std::vector<Vertex> optimizedVertices(uniqueVertices);
-			std::vector<uint32_t> localIndices(rawIndices.size());
+				const size_t meshlet_count = meshopt_buildMeshlets(localMeshlets.data(), meshlet_vertices.data(), meshlet_triangles.data(),
+					lodIndices.data(), lodIndices.size(), &optimizedVertices[0].m_Pos.x, uniqueVertices, sizeof(Vertex),
+					max_vertices, max_triangles, cone_weight);
 
-			meshopt_remapVertexBuffer(optimizedVertices.data(), rawVertices.data(), rawVertices.size(), sizeof(Vertex), remap.data());
-			meshopt_remapIndexBuffer(localIndices.data(), rawIndices.data(), rawIndices.size(), remap.data());
+				localMeshlets.resize(meshlet_count);
 
-			// 2. Optimize Cache and Fetch
-			meshopt_optimizeVertexCache(localIndices.data(), localIndices.data(), localIndices.size(), uniqueVertices);
-			meshopt_optimizeVertexFetch(optimizedVertices.data(), localIndices.data(), localIndices.size(), optimizedVertices.data(), uniqueVertices, sizeof(Vertex));
+				res.meshData.m_MeshletOffsets[lod] = (uint32_t)res.meshlets.size();
+				res.meshData.m_MeshletCounts[lod] = (uint32_t)meshlet_count;
+				res.meshData.m_LODCount = lod + 1;
 
-			p.m_VertexOffset = static_cast<uint32_t>(outVerticesQuantized.size());
-			p.m_VertexCount = static_cast<uint32_t>(uniqueVertices);
-
-			SDL_Log("[Scene] Processing Mesh %zu, Primitive %zu: %u vertices (optimized from %zu)", mi, pi, p.m_VertexCount, vertCount);
-
-			// 3. Generate Quantized Vertices
-			for (const auto& v : optimizedVertices)
-			{
-				VertexQuantized vq{};
-				vq.m_Pos = v.m_Pos;
-				vq.m_Normal = (meshopt_quantizeSnorm(v.m_Normal.x, 10) + 511) |
-					((meshopt_quantizeSnorm(v.m_Normal.y, 10) + 511) << 10) |
-					((meshopt_quantizeSnorm(v.m_Normal.z, 10) + 511) << 20);
-				vq.m_Uv = (meshopt_quantizeHalf(v.m_Uv.x)) |
-					((meshopt_quantizeHalf(v.m_Uv.y)) << 16);
-				outVerticesQuantized.push_back(vq);
-			}
-
-			uint32_t baseIndexCount = static_cast<uint32_t>(localIndices.size());
-			// Generate meshlets and LODs
-			if (baseIndexCount > 0)
-			{
-				const size_t max_vertices = kMaxMeshletVertices;
-				const size_t max_triangles = kMaxMeshletTriangles;
-				const float cone_weight = 0.25f;
-				
-				const uint32_t kIndexLimitForLODGeneration = 1024;
-				const float kIndexReductionPercentageForLODGeneration = 0.5f;
-				const size_t kMinimumIndicesForLODGeneration = 128;
-
-				const float target_error_hq = 0.01f;     // Conservative HQ error
-				const float kMaxErrorForLODGeneration = 0.10f; // Limit maximum allowed distortion
-				const float kMinReductionRatio = 0.85f;  // Require at least 15% reduction to keep the LOD
-				
-				const float attribute_weights[3] = { 1.0f, 1.0f, 1.0f }; // Normal weights
-
-				const float simplifyScale = meshopt_simplifyScale(&optimizedVertices[0].m_Pos.x, p.m_VertexCount, sizeof(Vertex));
-
-				for (uint32_t lod = 0; lod < MAX_LOD_COUNT; ++lod)
+				for (size_t i = 0; i < meshlet_count; ++i)
 				{
-					std::vector<uint32_t> lodIndices;
-					float lodError = 0.0f;
+					const meshopt_Meshlet& m = localMeshlets[i];
+					meshopt_optimizeMeshlet(&meshlet_vertices[m.vertex_offset], &meshlet_triangles[m.triangle_offset], m.triangle_count, m.vertex_count);
 
-					if (lod == 0)
+					meshopt_Bounds bounds = meshopt_computeMeshletBounds(&meshlet_vertices[m.vertex_offset], &meshlet_triangles[m.triangle_offset],
+						m.triangle_count, &optimizedVertices[0].m_Pos.x, uniqueVertices, sizeof(Vertex));
+
+					Meshlet gpuMeshlet;
+					gpuMeshlet.m_VertexOffset = (uint32_t)(res.meshletVertices.size());
+					gpuMeshlet.m_TriangleOffset = (uint32_t)(res.meshletTriangles.size());
+					gpuMeshlet.m_VertexCount = (uint32_t)m.vertex_count;
+					gpuMeshlet.m_TriangleCount = (uint32_t)m.triangle_count;
+
+					gpuMeshlet.m_CenterRadius[0] = meshopt_quantizeHalf(bounds.center[0]) | (meshopt_quantizeHalf(bounds.center[1]) << 16);
+					gpuMeshlet.m_CenterRadius[1] = meshopt_quantizeHalf(bounds.center[2]) | (meshopt_quantizeHalf(bounds.radius) << 16);
+
+					const uint32_t packedAxisX = (uint32_t)((bounds.cone_axis[0] + 1.0f) * 0.5f * UINT8_MAX);
+					const uint32_t packedAxisY = (uint32_t)((bounds.cone_axis[1] + 1.0f) * 0.5f * UINT8_MAX);
+					const uint32_t packedAxisZ = (uint32_t)((bounds.cone_axis[2] + 1.0f) * 0.5f * UINT8_MAX);
+					const uint32_t packedCutoff = (uint32_t)(bounds.cone_cutoff_s8 * 2);
+
+					gpuMeshlet.m_ConeAxisAndCutoff = packedAxisX | (packedAxisY << 8) | (packedAxisZ << 16) | (packedCutoff << 24);
+
+					for (uint32_t v = 0; v < m.vertex_count; ++v)
 					{
-						lodIndices = localIndices;
-						lodError = 0.0f;
-					}
-					else
-					{
-						// Skip LOD generation for simple/low-poly meshes
-						if (baseIndexCount < kIndexLimitForLODGeneration)
-							break;
-
-						size_t target_index_count = size_t(baseIndexCount * pow(kIndexReductionPercentageForLODGeneration, (float)lod));
-						target_index_count = std::max(target_index_count, kMinimumIndicesForLODGeneration);
-
-						if (target_index_count >= p.m_IndexCounts[lod - 1])
-							break;
-
-						lodIndices.resize(baseIndexCount);
-						size_t new_index_count = meshopt_simplifyWithAttributes(
-							lodIndices.data(),
-							localIndices.data(), baseIndexCount,
-							&optimizedVertices[0].m_Pos.x, p.m_VertexCount, sizeof(Vertex),
-							&optimizedVertices[0].m_Normal.x, sizeof(Vertex),
-							attribute_weights, 3,
-							nullptr, target_index_count, target_error_hq,
-							meshopt_SimplifySparse,
-							&lodError);
-						lodIndices.resize(new_index_count);
-
-						// Stop if we reached the target index count
-						if (new_index_count < kIndexLimitForLODGeneration)
-							break;
-
-						// Stop if simplification didn't reduce the mesh significantly or reached a high error
-						if (new_index_count >= p.m_IndexCounts[lod - 1] * kMinReductionRatio || lodError > kMaxErrorForLODGeneration)
-							break;
-
-						// optimize the LOD
-						meshopt_optimizeVertexCache(lodIndices.data(), lodIndices.data(), lodIndices.size(), p.m_VertexCount);
+						res.meshletVertices.push_back(meshlet_vertices[m.vertex_offset + v]);
 					}
 
-					p.m_IndexOffsets[lod] = (uint32_t)outIndices.size();
-					p.m_IndexCounts[lod] = (uint32_t)lodIndices.size();
-					p.m_LODErrors[lod] = lodError * simplifyScale;
-
-					for (uint32_t idx : lodIndices)
+					for (uint32_t t = 0; t < m.triangle_count; ++t)
 					{
-						outIndices.push_back(idx + p.m_VertexOffset);
+						uint32_t i0 = meshlet_triangles[m.triangle_offset + t * 3 + 0];
+						uint32_t i1 = meshlet_triangles[m.triangle_offset + t * 3 + 1];
+						uint32_t i2 = meshlet_triangles[m.triangle_offset + t * 3 + 2];
+						res.meshletTriangles.push_back(i0 | (i1 << 8) | (i2 << 16));
 					}
 
-					size_t max_meshlets = meshopt_buildMeshletsBound(lodIndices.size(), max_vertices, max_triangles);
-					std::vector<meshopt_Meshlet> localMeshlets(max_meshlets);
-					std::vector<unsigned int> meshlet_vertices(max_meshlets * max_vertices);
-					std::vector<unsigned char> meshlet_triangles(max_meshlets * max_triangles * 3);
-
-					const size_t meshlet_count = meshopt_buildMeshlets(localMeshlets.data(), meshlet_vertices.data(), meshlet_triangles.data(),
-						lodIndices.data(), lodIndices.size(), &optimizedVertices[0].m_Pos.x, p.m_VertexCount, sizeof(Vertex),
-						max_vertices, max_triangles, cone_weight);
-
-					localMeshlets.resize(meshlet_count);
-
-					p.m_MeshletOffsets[lod] = (uint32_t)scene.m_Meshlets.size();
-					p.m_MeshletCounts[lod] = (uint32_t)meshlet_count;
-					p.m_LODCount = lod + 1;
-
-					SDL_Log("[Scene]   LOD %u: Indices %u, Meshlets %zu, Error %.6f (Abs: %.6f)",
-						lod, p.m_IndexCounts[lod], meshlet_count, lodError, p.m_LODErrors[lod]);
-
-					for (size_t i = 0; i < meshlet_count; ++i)
-					{
-						const meshopt_Meshlet& m = localMeshlets[i];
-
-						// Optimization
-						meshopt_optimizeMeshlet(&meshlet_vertices[m.vertex_offset], &meshlet_triangles[m.triangle_offset], m.triangle_count, m.vertex_count);
-
-						// Bounds
-						meshopt_Bounds bounds = meshopt_computeMeshletBounds(&meshlet_vertices[m.vertex_offset], &meshlet_triangles[m.triangle_offset],
-							m.triangle_count, &optimizedVertices[0].m_Pos.x, p.m_VertexCount, sizeof(Vertex));
-
-						Meshlet gpuMeshlet;
-						gpuMeshlet.m_VertexOffset = (uint32_t)(scene.m_MeshletVertices.size());
-						gpuMeshlet.m_TriangleOffset = (uint32_t)(scene.m_MeshletTriangles.size());
-						gpuMeshlet.m_VertexCount = (uint32_t)m.vertex_count;
-						gpuMeshlet.m_TriangleCount = (uint32_t)m.triangle_count;
-
-						gpuMeshlet.m_CenterRadius[0] = meshopt_quantizeHalf(bounds.center[0]) | (meshopt_quantizeHalf(bounds.center[1]) << 16);
-						gpuMeshlet.m_CenterRadius[1] = meshopt_quantizeHalf(bounds.center[2]) | (meshopt_quantizeHalf(bounds.radius) << 16);
-
-						const uint32_t packedAxisX = (uint32_t)((bounds.cone_axis[0] + 1.0f) * 0.5f * UINT8_MAX);
-						const uint32_t packedAxisY = (uint32_t)((bounds.cone_axis[1] + 1.0f) * 0.5f * UINT8_MAX);
-						const uint32_t packedAxisZ = (uint32_t)((bounds.cone_axis[2] + 1.0f) * 0.5f * UINT8_MAX);
-						const uint32_t packedCutoff = (uint32_t)(bounds.cone_cutoff_s8 * 2);
-
-						gpuMeshlet.m_ConeAxisAndCutoff = packedAxisX | (packedAxisY << 8) | (packedAxisZ << 16) | (packedCutoff << 24);
-
-						// Add vertices (adjust to global offset)
-						for (uint32_t v = 0; v < m.vertex_count; ++v)
-						{
-							scene.m_MeshletVertices.push_back(meshlet_vertices[m.vertex_offset + v] + p.m_VertexOffset);
-						}
-
-						// Add triangles (packed: 3 indices per uint32_t)
-						for (uint32_t t = 0; t < m.triangle_count; ++t)
-						{
-							uint32_t i0 = meshlet_triangles[m.triangle_offset + t * 3 + 0];
-							uint32_t i1 = meshlet_triangles[m.triangle_offset + t * 3 + 1];
-							uint32_t i2 = meshlet_triangles[m.triangle_offset + t * 3 + 2];
-							scene.m_MeshletTriangles.push_back(i0 | (i1 << 8) | (i2 << 16));
-						}
-
-						scene.m_Meshlets.push_back(gpuMeshlet);
-					}
+					res.meshlets.push_back(gpuMeshlet);
 				}
 			}
+		}
 
-			p.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) + offsets.materialOffset : -1;
+		res.minimalPrim.m_VertexCount = (uint32_t)uniqueVertices;
+		res.minimalPrim.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) + offsets.materialOffset : -1;
+	});
 
-			// Extract MeshData
-			p.m_MeshDataIndex = (uint32_t)scene.m_MeshData.size();
-			
-			Scene::Primitive minimalPrim;
-			minimalPrim.m_VertexOffset = p.m_VertexOffset;
-			minimalPrim.m_VertexCount = p.m_VertexCount;
-			minimalPrim.m_MaterialIndex = p.m_MaterialIndex;
-			minimalPrim.m_MeshDataIndex = p.m_MeshDataIndex;
-			mesh.m_Primitives.push_back(minimalPrim);
+	// Merging results
+	uint32_t currentVertexOffset = (uint32_t)outVerticesQuantized.size();
+	uint32_t currentIndexOffset = (uint32_t)outIndices.size();
+	uint32_t currentMeshletOffset = (uint32_t)scene.m_Meshlets.size();
+	uint32_t currentMeshletVertexOffset = (uint32_t)scene.m_MeshletVertices.size();
+	uint32_t currentMeshletTriangleOffset = (uint32_t)scene.m_MeshletTriangles.size();
+	uint32_t currentMeshDataOffset = (uint32_t)scene.m_MeshData.size();
 
-			MeshData md{};
-			md.m_LODCount = p.m_LODCount;
-			for (uint32_t lod = 0; lod < p.m_LODCount; ++lod)
+	for (uint32_t mi = 0; mi < (uint32_t)meshResults.size(); ++mi)
+	{
+		MeshResult& meshRes = meshResults[mi];
+		Scene::Mesh mesh;
+		uint32_t meshFirstVertex = currentVertexOffset;
+
+		for (uint32_t pi = 0; pi < (uint32_t)meshRes.primitives.size(); ++pi)
+		{
+			PrimitiveResult& primRes = meshRes.primitives[pi];
+
+			primRes.minimalPrim.m_VertexOffset = currentVertexOffset;
+			primRes.minimalPrim.m_MeshDataIndex = currentMeshDataOffset;
+			mesh.m_Primitives.push_back(primRes.minimalPrim);
+
+			for (uint32_t& idx : primRes.indices)
 			{
-				md.m_IndexOffsets[lod] = p.m_IndexOffsets[lod];
-				md.m_IndexCounts[lod] = p.m_IndexCounts[lod];
-				md.m_MeshletOffsets[lod] = p.m_MeshletOffsets[lod];
-				md.m_MeshletCounts[lod] = p.m_MeshletCounts[lod];
-				md.m_LODErrors[lod] = p.m_LODErrors[lod];
+				idx += currentVertexOffset;
 			}
-			scene.m_MeshData.push_back(md);
 
-			SDL_Log("  Primitive %zu: %u verts, %u indices -> %u LODs", pi, p.m_VertexCount, p.m_IndexCounts[0], p.m_LODCount);
+			for (uint32_t lod = 0; lod < primRes.meshData.m_LODCount; ++lod)
+			{
+				primRes.meshData.m_IndexOffsets[lod] += currentIndexOffset;
+				primRes.meshData.m_MeshletOffsets[lod] += currentMeshletOffset;
+			}
+			scene.m_MeshData.push_back(primRes.meshData);
+
+			for (Meshlet& m : primRes.meshlets)
+			{
+				m.m_VertexOffset += currentMeshletVertexOffset;
+				m.m_TriangleOffset += currentMeshletTriangleOffset;
+				scene.m_Meshlets.push_back(m);
+			}
+
+			for (uint32_t& v : primRes.meshletVertices)
+			{
+				scene.m_MeshletVertices.push_back(v + currentVertexOffset);
+			}
+
+			for (uint32_t& t : primRes.meshletTriangles)
+			{
+				scene.m_MeshletTriangles.push_back(t);
+			}
+
+			outVerticesQuantized.insert(outVerticesQuantized.end(), primRes.vertices.begin(), primRes.vertices.end());
+			outIndices.insert(outIndices.end(), primRes.indices.begin(), primRes.indices.end());
+
+			currentVertexOffset += (uint32_t)primRes.vertices.size();
+			currentIndexOffset += (uint32_t)primRes.indices.size();
+			currentMeshletOffset += (uint32_t)primRes.meshlets.size();
+			currentMeshletVertexOffset += (uint32_t)primRes.meshletVertices.size();
+			currentMeshletTriangleOffset += (uint32_t)primRes.meshletTriangles.size();
+			currentMeshDataOffset++;
 		}
 
 		Sphere s;
 		if (!mesh.m_Primitives.empty())
 		{
-			uint32_t firstVert = mesh.m_Primitives[0].m_VertexOffset;
-			uint32_t lastVert = (uint32_t)outVerticesQuantized.size();
-			Sphere::CreateFromPoints(s, lastVert - firstVert, &outVerticesQuantized[firstVert].m_Pos, sizeof(VertexQuantized));
+			uint32_t meshVertexCount = currentVertexOffset - meshFirstVertex;
+			Sphere::CreateFromPoints(s, meshVertexCount, &outVerticesQuantized[meshFirstVertex].m_Pos, sizeof(VertexQuantized));
 		}
 		else
 		{
 			s.Center = { 0,0,0 };
 			s.Radius = 0;
 		}
-		mesh.m_Center = s.Center;
+		mesh.m_Center = (Vector3)s.Center;
 		mesh.m_Radius = s.Radius;
 
-		const size_t primitives_count = cgMesh.primitives_count;
-		SDL_Log("[Scene] Mesh %zu [%s]: %zu primitives", mi, cgMesh.name ? cgMesh.name : "unnamed", primitives_count);
+		SDL_Log("[Scene] Mesh %u [%s]: %zu primitives", mi, meshRes.name.c_str(), meshRes.primitives.size());
 		scene.m_Meshes.push_back(std::move(mesh));
 	}
 
