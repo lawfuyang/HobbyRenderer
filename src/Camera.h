@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pch.h"
+#include "shaders/ShaderShared.h"
 
 struct ProjectionParams
 {
@@ -34,12 +35,15 @@ public:
     // Set projection parameters
     void SetProjection(const ProjectionParams& proj) { m_Proj = proj; }
 
+    void FillPlanarViewConstants(PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const;
+
     // Reset camera to default position and orientation
     void Reset();
 
     // Movement / input tuning (access directly)
     float m_MoveSpeed = 5.0f;
     float m_MouseSensitivity = 0.0025f;
+    Vector2 m_PixelOffset{ 0.0f, 0.0f };
 
 private:
     Vector3 m_Position{0.0f, 0.0f, -5.0f};

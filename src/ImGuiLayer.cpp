@@ -83,7 +83,7 @@ void ImGuiLayer::UpdateFrame()
             ImGui::SliderFloat("IBL Intensity", &renderer->m_IBLIntensity, 0.0f, 10.0f);
 
             static const char* kDebugModes[] = {
-                "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Irradiance", "Radiance", "IBL"
+                "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Irradiance", "Radiance", "IBL", "Motion Vectors"
             };
             ImGui::Combo("Debug Mode", &renderer->m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 

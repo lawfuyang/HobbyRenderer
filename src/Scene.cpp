@@ -228,6 +228,7 @@ void Scene::FinalizeLoadedScene()
         {
             PerInstanceData inst{};
             inst.m_World = node.m_WorldTransform;
+            inst.m_PrevWorld = node.m_WorldTransform;
             inst.m_MaterialIndex = prim.m_MaterialIndex;
             inst.m_MeshDataIndex = prim.m_MeshDataIndex;
             inst.m_Center = node.m_Center;
@@ -276,6 +277,12 @@ void Scene::FinalizeLoadedScene()
 
 void Scene::Update(float deltaTime)
 {
+	// Save current worlds as previous worlds for all instances
+	for (PerInstanceData& inst : m_InstanceData)
+	{
+		inst.m_PrevWorld = inst.m_World;
+	}
+
 	if (m_Animations.empty()) return;
 	PROFILE_FUNCTION();
 

@@ -159,6 +159,7 @@ struct Renderer
     nvrhi::TextureHandle m_GBufferNormals;
     nvrhi::TextureHandle m_GBufferORM;
     nvrhi::TextureHandle m_GBufferEmissive;
+    nvrhi::TextureHandle m_GBufferMotionVectors;
 
     // HDR resources
     nvrhi::TextureHandle m_HDRColorTexture;
@@ -180,6 +181,8 @@ struct Renderer
     // Scene and Camera
     Scene m_Scene;
     Camera m_Camera;
+    PlanarViewConstants m_View;
+    PlanarViewConstants m_ViewPrev;
     int m_SelectedCameraIndex = -1;
 
     // Renderers

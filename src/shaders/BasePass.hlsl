@@ -48,12 +48,27 @@ float3 TransformNormal(float3 normal, float4x4 worldMatrix)
     return normalize(mul(normal, adjugateWorldMatrix));
 }
 
+float2 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos)
+{
+    float4 clipPos = mul(float4(worldPos, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
+    float4 prevClipPos = mul(float4(prevWorldPos, 1.0), g_PerFrame.m_PrevView.m_MatWorldToClip);
+
+    clipPos.xyz /= clipPos.w;
+    prevClipPos.xyz /= prevClipPos.w;
+
+    float2 windowPos = clipPos.xy * g_PerFrame.m_View.m_ClipToWindowScale + g_PerFrame.m_View.m_ClipToWindowBias;
+    float2 prevWindowPos = prevClipPos.xy * g_PerFrame.m_PrevView.m_ClipToWindowScale + g_PerFrame.m_PrevView.m_ClipToWindowBias;
+
+    return prevWindowPos.xy - windowPos.xy + (g_PerFrame.m_View.m_PixelOffset - g_PerFrame.m_PrevView.m_PixelOffset);
+}
+
 struct VSOut
 {
     float4 Position : SV_POSITION;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
     float3 worldPos : TEXCOORD1;
+    float3 prevWorldPos : TEXCOORD5;
     nointerpolation uint instanceID : TEXCOORD2;
     nointerpolation uint meshletID : TEXCOORD3;
     nointerpolation uint lodIndex : TEXCOORD4;
@@ -63,11 +78,12 @@ VSOut PrepareVSOut(Vertex v, PerInstanceData inst, uint instanceID, uint meshlet
 {
     VSOut o;
     float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
-    o.Position = mul(worldPos, g_PerFrame.m_ViewProj);
+    o.Position = mul(worldPos, g_PerFrame.m_View.m_MatWorldToClip);
 
     o.normal = TransformNormal(v.m_Normal, inst.m_World);
     o.uv = v.m_Uv;
     o.worldPos = worldPos.xyz;
+    o.prevWorldPos = mul(float4(v.m_Pos, 1.0f), inst.m_PrevWorld).xyz;
     o.instanceID = instanceID;
     o.meshletID = meshletID;
     o.lodIndex = lodIndex;
@@ -127,7 +143,7 @@ void ASMain(
 
         // Transform meshlet sphere to world space, then to view space
         float4 worldCenter = mul(float4(meshletCenter, 1.0f), inst.m_World);
-        float3 viewCenter = mul(worldCenter, g_PerFrame.m_View).xyz;
+        float3 viewCenter = mul(worldCenter, g_PerFrame.m_View.m_MatWorldToView).xyz;
 
         // Approximate world-space radius using max scale from world matrix
         float worldRadius = meshletRadius * GetMaxScale(inst.m_World);
@@ -248,10 +264,11 @@ float3 HashColor(uint id)
 
 struct GBufferOut
 {
-    float4 Albedo   : SV_TARGET0;
-    float2 Normal   : SV_TARGET1;
-    float4 ORM      : SV_TARGET2;
-    float4 Emissive : SV_TARGET3;
+    float4 Albedo        : SV_TARGET0;
+    float2 Normal        : SV_TARGET1;
+    float4 ORM           : SV_TARGET2;
+    float4 Emissive      : SV_TARGET3;
+    float2 MotionVectors : SV_TARGET4;
 };
 
 float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIndex)
@@ -443,7 +460,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         float3 refractedRayExit = input.worldPos + transmissionRay;
 
         // Project to screen space
-        float4 refractClipPos = mul(float4(refractedRayExit, 1.0), g_PerFrame.m_ViewProj);
+        float4 refractClipPos = mul(float4(refractedRayExit, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
         float2 refractUV = (refractClipPos.xy / refractClipPos.w) * float2(0.5, -0.5) + 0.5;
 
         // Sample background with roughness-based LOD
@@ -468,6 +485,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
     }
 
     color += emissive;
+
+    float2 motionVectors = ComputeMotionVectors(input.worldPos, input.prevWorldPos);
 
     // Debug visualizations
     if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)
@@ -503,6 +522,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
     output.Normal = EncodeNormal(N);
     output.ORM = float4(occlusion, roughness, metallic, 0.0f);
     output.Emissive = float4(emissive, 1.0f);
+
+    output.MotionVectors = ComputeMotionVectors(input.worldPos, input.prevWorldPos);
     
     // Debug visualizations
     if (g_PerFrame.m_DebugMode != DEBUG_MODE_NONE)

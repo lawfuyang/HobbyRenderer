@@ -198,6 +198,58 @@ Matrix Camera::GetInvViewProjMatrix() const
     return out;
 }
 
+void Camera::FillPlanarViewConstants(PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const
+{
+    using namespace DirectX;
+    Matrix viewM = GetViewMatrix();
+    Matrix projM = GetProjMatrix();
+    XMMATRIX view = XMLoadFloat4x4(&viewM);
+    XMMATRIX proj = XMLoadFloat4x4(&projM);
+    XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+
+    XMVECTOR det;
+    XMMATRIX invView = XMMatrixInverse(&det, view);
+    XMMATRIX invProj = XMMatrixInverse(&det, proj);
+    XMMATRIX invViewProj = XMMatrixInverse(&det, viewProj);
+
+    XMStoreFloat4x4(&constants.m_MatWorldToView, view);
+    XMStoreFloat4x4(&constants.m_MatViewToClip, proj);
+    XMStoreFloat4x4(&constants.m_MatWorldToClip, viewProj);
+    XMStoreFloat4x4(&constants.m_MatClipToView, invProj);
+    XMStoreFloat4x4(&constants.m_MatViewToWorld, invView);
+    XMStoreFloat4x4(&constants.m_MatClipToWorld, invViewProj);
+
+    // Jittered versions (current implementation doesn't have jitter yet, but we'll prepare for it)
+    XMMATRIX jitterMatrix = XMMatrixTranslation(2.0f * m_PixelOffset.x / viewportWidth, -2.0f * m_PixelOffset.y / viewportHeight, 0.0f);
+    XMMATRIX viewProjJittered = XMMatrixMultiply(viewProj, jitterMatrix);
+    XMMATRIX invViewProjJittered = XMMatrixInverse(&det, viewProjJittered);
+    XMMATRIX projJittered = XMMatrixMultiply(proj, jitterMatrix);
+    XMMATRIX invProjJittered = XMMatrixInverse(&det, projJittered);
+
+    XMStoreFloat4x4(&constants.m_MatViewToClip, projJittered);
+    XMStoreFloat4x4(&constants.m_MatWorldToClip, viewProjJittered);
+    XMStoreFloat4x4(&constants.m_MatClipToView, invProjJittered);
+    XMStoreFloat4x4(&constants.m_MatClipToWorld, invViewProjJittered);
+
+    XMStoreFloat4x4(&constants.m_MatViewToClipNoOffset, proj);
+    XMStoreFloat4x4(&constants.m_MatWorldToClipNoOffset, viewProj);
+    XMStoreFloat4x4(&constants.m_MatClipToViewNoOffset, invProj);
+    XMStoreFloat4x4(&constants.m_MatClipToWorldNoOffset, invViewProj);
+
+    constants.m_ViewportOrigin = Vector2(0, 0);
+    constants.m_ViewportSize = Vector2(viewportWidth, viewportHeight);
+    constants.m_ViewportSizeInv = Vector2(1.0f / viewportWidth, 1.0f / viewportHeight);
+    constants.m_PixelOffset = m_PixelOffset;
+
+    constants.m_ClipToWindowScale = Vector2(0.5f * viewportWidth, -0.5f * viewportHeight);
+    constants.m_ClipToWindowBias = Vector2(0.5f * viewportWidth, 0.5f * viewportHeight);
+
+    constants.m_WindowToClipScale = Vector2(1.0f / constants.m_ClipToWindowScale.x, 1.0f / constants.m_ClipToWindowScale.y);
+    constants.m_WindowToClipBias = Vector2(-constants.m_ClipToWindowBias.x * constants.m_WindowToClipScale.x, -constants.m_ClipToWindowBias.y * constants.m_WindowToClipScale.y);
+
+    constants.m_CameraDirectionOrPosition = Vector4(m_Position.x, m_Position.y, m_Position.z, 1.0f);
+}
+
 void Camera::SetFromMatrix(const Matrix& worldTransform)
 {
     using namespace DirectX;

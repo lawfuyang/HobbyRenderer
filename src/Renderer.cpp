@@ -37,6 +37,7 @@ public:
         commandList->clearTextureFloat(renderer->m_GBufferNormals, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(renderer->m_GBufferORM, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(renderer->m_GBufferEmissive, nvrhi::AllSubresources, nvrhi::Color{});
+        commandList->clearTextureFloat(renderer->m_GBufferMotionVectors, nvrhi::AllSubresources, nvrhi::Color{});
     }
     const char* GetName() const override { return "Clear"; }
 };
@@ -628,7 +629,12 @@ void Renderer::Run()
         m_ImGuiLayer.UpdateFrame();
 
         // Update camera (camera retrieves frame time internally)
+        m_ViewPrev = m_View;
         m_Camera.Update();
+
+        int windowW, windowH;
+        SDL_GetWindowSize(m_Window, &windowW, &windowH);
+        m_Camera.FillPlanarViewConstants(m_View, (float)windowW, (float)windowH);
 
         const int readIndex = m_FrameNumber % 2;
         const int writeIndex = (m_FrameNumber + 1) % 2;
@@ -1483,7 +1489,11 @@ void Renderer::CreateSceneResources()
     desc.debugName = "GBufferEmissive";
     m_GBufferEmissive = m_RHI->m_NvrhiDevice->createTexture(desc);
 
-    if (!m_GBufferAlbedo || !m_GBufferNormals || !m_GBufferORM || !m_GBufferEmissive)
+    desc.format = nvrhi::Format::RG16_FLOAT;
+    desc.debugName = "GBufferMotionVectors";
+    m_GBufferMotionVectors = m_RHI->m_NvrhiDevice->createTexture(desc);
+
+    if (!m_GBufferAlbedo || !m_GBufferNormals || !m_GBufferORM || !m_GBufferEmissive || !m_GBufferMotionVectors)
     {
         SDL_LOG_ASSERT_FAIL("Failed to create G-Buffer textures", "[Init] Failed to create G-Buffer textures");
     }
@@ -1575,6 +1585,7 @@ void Renderer::DestroySceneResources()
     m_GBufferNormals = nullptr;
     m_GBufferORM = nullptr;
     m_GBufferEmissive = nullptr;
+    m_GBufferMotionVectors = nullptr;
 
     SDL_Log("[Shutdown] Destroying HDR resources");
 

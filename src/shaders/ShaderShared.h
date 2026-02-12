@@ -66,6 +66,7 @@ struct ImGuiPushConstants
 #define DEBUG_MODE_IRRADIANCE 9
 #define DEBUG_MODE_RADIANCE 10
 #define DEBUG_MODE_IBL 11
+#define DEBUG_MODE_MOTION_VECTORS 12
 
 #define MAX_LOD_COUNT 8
 
@@ -76,6 +77,35 @@ struct Vertex
   Vector3 m_Pos;
   Vector3 m_Normal;
   Vector2 m_Uv;
+};
+
+struct PlanarViewConstants
+{
+    Matrix      m_MatWorldToView;
+    Matrix      m_MatViewToClip;
+    Matrix      m_MatWorldToClip;
+    Matrix      m_MatClipToView;
+    Matrix      m_MatViewToWorld;
+    Matrix      m_MatClipToWorld;
+
+    Matrix      m_MatViewToClipNoOffset;
+    Matrix      m_MatWorldToClipNoOffset;
+    Matrix      m_MatClipToViewNoOffset;
+    Matrix      m_MatClipToWorldNoOffset;
+
+    Vector2      m_ViewportOrigin;
+    Vector2      m_ViewportSize;
+
+    Vector2      m_ViewportSizeInv;
+    Vector2      m_PixelOffset;
+
+    Vector2      m_ClipToWindowScale;
+    Vector2      m_ClipToWindowBias;
+
+    Vector2      m_WindowToClipScale;
+    Vector2      m_WindowToClipBias;
+
+    Vector4      m_CameraDirectionOrPosition;
 };
 
 struct VertexQuantized
@@ -101,8 +131,8 @@ Vertex UnpackVertex(VertexQuantized vq)
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
 {
-  Matrix m_ViewProj;
-  Matrix m_View;
+  PlanarViewConstants m_View;
+  PlanarViewConstants m_PrevView;
   Vector4 m_FrustumPlanes[5];
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
   Vector4 m_CullingCameraPos; // xyz: culling camera position
@@ -126,7 +156,7 @@ struct ForwardLightingPerFrameData
 
 struct DeferredLightingConstants
 {
-  Matrix m_InvViewProj;
+  PlanarViewConstants m_View;
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
   Vector3 m_LightDirection;
   float m_LightIntensity;
@@ -199,6 +229,7 @@ struct MeshletJob
 struct PerInstanceData
 {
   Matrix m_World;
+  Matrix m_PrevWorld;
   uint32_t m_MaterialIndex;
   uint32_t m_MeshDataIndex;
   float m_Radius;

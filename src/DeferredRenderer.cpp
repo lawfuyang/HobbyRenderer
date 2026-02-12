@@ -23,7 +23,7 @@ public:
         const nvrhi::BufferHandle deferredCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(deferredCBD);
 
         DeferredLightingConstants dcb{};
-        dcb.m_InvViewProj = renderer->m_Camera.GetInvViewProjMatrix();
+        dcb.m_View = renderer->m_View;
         dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
         dcb.m_LightDirection = renderer->m_Scene.GetDirectionalLightDirection();
         dcb.m_LightIntensity = renderer->m_Scene.m_DirectionalLight.intensity / 10000.0f;
@@ -40,6 +40,7 @@ public:
             nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_GBufferNormals),
             nvrhi::BindingSetItem::Texture_SRV(2, renderer->m_GBufferORM),
             nvrhi::BindingSetItem::Texture_SRV(3, renderer->m_GBufferEmissive),
+            nvrhi::BindingSetItem::Texture_SRV(7, renderer->m_GBufferMotionVectors),
             nvrhi::BindingSetItem::Texture_SRV(4, renderer->m_DepthTexture),
             nvrhi::BindingSetItem::RayTracingAccelStruct(5, renderer->m_Scene.m_TLAS),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_InstanceDataBuffer),

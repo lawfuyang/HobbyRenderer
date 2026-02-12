@@ -218,6 +218,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         .addColorAttachment(renderer->m_GBufferNormals)
         .addColorAttachment(renderer->m_GBufferORM)
         .addColorAttachment(renderer->m_GBufferEmissive)
+        .addColorAttachment(renderer->m_GBufferMotionVectors)
         .setDepthAttachment(renderer->m_DepthTexture));
 
     nvrhi::FramebufferInfoEx fbInfo;
@@ -231,7 +232,8 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
             nvrhi::Format::RGBA8_UNORM, 
             nvrhi::Format::RG16_FLOAT, 
             nvrhi::Format::RGBA8_UNORM, 
-            nvrhi::Format::RGBA8_UNORM 
+            nvrhi::Format::RGBA8_UNORM,
+            nvrhi::Format::RG16_FLOAT
         };
     }
     fbInfo.setDepthFormat(nvrhi::Format::D32);
@@ -278,13 +280,12 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, registerSpace);
     const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
-    Vector3 camPos = renderer->m_Camera.GetPosition();
-    const Matrix& projectionMatrix = renderer->m_Camera.GetProjMatrix();
-
     ForwardLightingPerFrameData cb{};
-    cb.m_ViewProj = args.m_ViewProj;
-    cb.m_View = args.m_View;
+    cb.m_View = renderer->m_View;
+    cb.m_PrevView = renderer->m_ViewPrev;
     memcpy(cb.m_FrustumPlanes, args.m_FrustumPlanes, sizeof(Vector4) * 5);
+
+    Vector3 camPos = renderer->m_Camera.GetPosition();
     cb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 0.0f };
 
     Vector3 cullingCamPos = camPos;
@@ -303,8 +304,8 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     cb.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
     cb.m_HZBWidth = (uint32_t)renderer->m_HZBTexture->getDesc().width;
     cb.m_HZBHeight = (uint32_t)renderer->m_HZBTexture->getDesc().height;
-    cb.m_P00 = projectionMatrix.m[0][0];
-    cb.m_P11 = projectionMatrix.m[1][1];
+    cb.m_P00 = cb.m_View.m_MatViewToClip._11;
+    cb.m_P11 = cb.m_View.m_MatViewToClip._22;
     cb.m_EnableIBL = renderer->m_EnableIBL ? 1 : 0;
     cb.m_IBLIntensity = renderer->m_IBLIntensity;
     cb.m_RadianceMipCount = CommonResources::GetInstance().RadianceTexture->getDesc().mipLevels;

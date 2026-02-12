@@ -12,6 +12,7 @@ Texture2D<float4> g_GBufferAlbedo    : register(t0, space1);
 Texture2D<float2> g_GBufferNormals   : register(t1, space1);
 Texture2D<float4> g_GBufferORM       : register(t2, space1);
 Texture2D<float4> g_GBufferEmissive  : register(t3, space1);
+Texture2D<float2> g_GBufferMotion    : register(t7, space1);
 Texture2D<float>  g_Depth            : register(t4, space1);
 RaytracingAccelerationStructure g_SceneAS : register(t5, space1);
 StructuredBuffer<PerInstanceData> g_Instances : register(t10, space1);
@@ -52,7 +53,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     clipPos.z = depth;
     clipPos.w = 1.0f;
 
-    float4 worldPosFour = mul(clipPos, g_Deferred.m_InvViewProj);
+    float4 worldPosFour = mul(clipPos, g_Deferred.m_View.m_MatClipToWorld);
     float3 worldPos = worldPosFour.xyz / worldPosFour.w;
 
     // Lighting calculations
@@ -110,6 +111,8 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
             color = iblComp.radiance;
         else if (g_Deferred.m_DebugMode == DEBUG_MODE_IBL)
             color = ibl;
+        else if (g_Deferred.m_DebugMode == DEBUG_MODE_MOTION_VECTORS)
+            color = float3(abs(g_GBufferMotion.Load(uint3(uvInt, 0)).xy), 0.0f);
         
         if (g_Deferred.m_DebugMode == DEBUG_MODE_INSTANCES ||
             g_Deferred.m_DebugMode == DEBUG_MODE_MESHLETS ||
