@@ -752,7 +752,7 @@ void Renderer::Run()
         { \
             extern IRenderer* rendererName; \
             IRenderer* pRenderer = rendererName; \
-            m_RenderGraph.BeginPass(); \
+            m_RenderGraph.BeginPass(pRenderer->GetName()); \
             pRenderer->Setup(m_RenderGraph); \
             nvrhi::CommandListHandle cmd = AcquireCommandList(pRenderer->GetName()); \
             const bool bImmediateExecute = false; /* defer execution until after render graph compiles */ \

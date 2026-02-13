@@ -88,6 +88,7 @@ void RenderGraph::Reset()
     m_CurrentPassIndex = 0;
     m_IsCompiled = false;
     m_Stats = Stats{};
+    m_PassNames.clear();
 
     // Mark all resources as not declared this frame and reset lifetimes
     for (TransientTexture& texture : m_Textures)
@@ -146,9 +147,11 @@ void RenderGraph::Reset()
     }
 }
 
-void RenderGraph::BeginPass()
+void RenderGraph::BeginPass(const char* name)
 {
+    SDL_assert(name);
     m_CurrentPassIndex++;
+    m_PassNames.push_back(name);
 }
 
 RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle existing)
@@ -782,6 +785,114 @@ void RenderGraph::RenderDebugUI()
                    m_Stats.m_TotalBufferMemory / (1024.0 * 1024.0),
                    m_Stats.m_PeakBufferMemory / (1024.0 * 1024.0));
         
+        ImGui::Separator();
+        
+        if (ImGui::TreeNode("Lifetime Visualization"))
+        {
+            const float kPassWidth = 25.0f;
+            const float kRowHeight = 22.0f;
+            const float kNameWidth = 200.0f;
+            
+            uint32_t numPasses = (uint32_t)m_PassNames.size();
+            
+            if (numPasses > 0)
+            {
+                ImGui::BeginChild("LifetimeScroll", ImVec2(0, 400), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize, ImGuiWindowFlags_HorizontalScrollbar);
+                
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                ImVec2 startPos = ImGui::GetCursorScreenPos();
+                
+                // Header - Pass names (vertical or angled if many)
+                float headerHeight = 100.0f;
+                ImGui::Dummy(ImVec2(kNameWidth + numPasses * kPassWidth, headerHeight));
+                
+                for (uint32_t i = 0; i < numPasses; ++i)
+                {
+                    ImVec2 textPos = ImVec2(startPos.x + kNameWidth + i * kPassWidth + kPassWidth * 0.5f, startPos.y + headerHeight - 5.0f);
+                    // Draw pass number and name rotated or vertically
+                    char passLabel[16];
+                    sprintf(passLabel, "%u", i + 1);
+                    drawList->AddText(ImVec2(textPos.x - 5, startPos.y), ImGui::GetColorU32(ImGuiCol_Text), passLabel);
+                    
+                    // Simple vertical line
+                    drawList->AddLine(ImVec2(startPos.x + kNameWidth + i * kPassWidth, startPos.y + 20), 
+                                      ImVec2(startPos.x + kNameWidth + i * kPassWidth, startPos.y + 1000), 
+                                      ImGui::GetColorU32(ImGuiCol_Separator, 0.5f));
+                }
+
+                auto drawResourceRow = [&](const auto& resource, const char* typeName, ImU32 color)
+                {
+                    if (!resource.m_IsDeclaredThisFrame || !resource.m_Lifetime.IsValid())
+                        return;
+
+                    ImVec2 rowStart = ImGui::GetCursorScreenPos();
+                    const std::string& name = resource.m_Desc.m_NvrhiDesc.debugName;
+                    
+                    ImGui::Text("%s", name.c_str());
+                    
+                    float barStart = kNameWidth + (resource.m_Lifetime.m_FirstPass - 1) * kPassWidth;
+                    float barEnd = kNameWidth + (resource.m_Lifetime.m_LastPass) * kPassWidth;
+                    
+                    ImVec2 pMin = ImVec2(rowStart.x + barStart, rowStart.y);
+                    ImVec2 pMax = ImVec2(rowStart.x + barEnd, rowStart.y + kRowHeight - 2.0f);
+                    
+                    drawList->AddRectFilled(pMin, pMax, color, 4.0f);
+                    if (resource.m_AliasedFromIndex != UINT32_MAX)
+                    {
+                         drawList->AddRect(pMin, pMax, ImGui::GetColorU32(ImGuiCol_PlotLinesHovered), 4.0f, 0, 2.0f);
+                    }
+
+                    ImGui::SetCursorScreenPos(rowStart);
+                    ImGui::InvisibleButton(name.c_str(), ImVec2(kNameWidth + numPasses * kPassWidth, kRowHeight));
+                    
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::BeginTooltip();
+                        ImGui::Text("Resource: %s", name.c_str());
+                        ImGui::Text("Type: %s", typeName);
+                        ImGui::Text("Size: %.2f MB", resource.m_Desc.GetMemorySize() / (1024.0 * 1024.0));
+                        ImGui::Text("Lifetime: Pass %u to %u", resource.m_Lifetime.m_FirstPass, resource.m_Lifetime.m_LastPass);
+                        
+                        if (resource.m_Lifetime.m_FirstPass > 0 && resource.m_Lifetime.m_FirstPass <= m_PassNames.size())
+                            ImGui::Text("First Pass: %s", m_PassNames[resource.m_Lifetime.m_FirstPass - 1]);
+                        
+                        if (resource.m_Lifetime.m_LastPass > 0 && resource.m_Lifetime.m_LastPass <= m_PassNames.size())
+                            ImGui::Text("Last Pass: %s", m_PassNames[resource.m_Lifetime.m_LastPass - 1]);
+
+                        ImGui::Text("Heap Index: %d", resource.m_HeapIndex != UINT32_MAX ? (int)resource.m_HeapIndex : -1);
+                        ImGui::Text("Offset: %llu", resource.m_Offset);
+                        
+                        if (resource.m_AliasedFromIndex != UINT32_MAX)
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 0, 1));
+                            ImGui::Text("Aliased from: index %u", resource.m_AliasedFromIndex);
+                            ImGui::PopStyleColor();
+                        }
+                        else
+                        {
+                            ImGui::Text("Physical Owner: %s", resource.m_IsPhysicalOwner ? "Yes" : "No");
+                        }
+                        
+                        ImGui::EndTooltip();
+                    }
+                };
+
+                for (const auto& tex : m_Textures)
+                    drawResourceRow(tex, "Texture", ImGui::GetColorU32(ImVec4(0.2f, 0.5f, 0.8f, 0.8f)));
+
+                for (const auto& buf : m_Buffers)
+                    drawResourceRow(buf, "Buffer", ImGui::GetColorU32(ImVec4(0.2f, 0.7f, 0.3f, 0.8f)));
+
+                ImGui::EndChild();
+            }
+            else
+            {
+                ImGui::Text("No passes recorded.");
+            }
+            
+            ImGui::TreePop();
+        }
+
         ImGui::Separator();
         
         bool aliasingEnabled = m_AliasingEnabled;

@@ -154,7 +154,7 @@ public:
     void WriteBuffer(RGBufferHandle handle);
     
     // Pass management (internal use by render loop)
-    void BeginPass();
+    void BeginPass(const char* name);
     
     // Compilation & Execution
     void Compile();
@@ -212,6 +212,7 @@ private:
 private:
     std::vector<RenderGraphInternal::TransientTexture> m_Textures;
     std::vector<RenderGraphInternal::TransientBuffer> m_Buffers;
+    std::vector<const char*> m_PassNames;
     
     Stats m_Stats;
     bool m_AliasingEnabled = false;
