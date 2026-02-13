@@ -735,6 +735,7 @@ void Renderer::Run()
             m_RenderGraph.BeginPass(); \
             pRenderer->Setup(m_RenderGraph); \
             nvrhi::CommandListHandle cmd = AcquireCommandList(pRenderer->GetName()); \
+            const bool bImmediateExecute = false; /* defer execution until after render graph compiles */ \
             m_TaskScheduler->ScheduleTask([this, pRenderer, cmd, readIndex, writeIndex]() { \
                 PROFILE_SCOPED(pRenderer->GetName()) \
                 ScopedCommandList scopedCmd{ cmd }; \
@@ -748,7 +749,7 @@ void Renderer::Run()
                 pRenderer->Render(scopedCmd); \
                 scopedCmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
                 pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds()); \
-            }); \
+            }, bImmediateExecute); \
         }
 
         ADD_RENDER_PASS(g_TLASRenderer);

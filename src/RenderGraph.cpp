@@ -407,7 +407,8 @@ void RenderGraph::AllocateTextures()
     
     AllocateResourcesInternal(
         false,  // bIsBuffer
-        [this, device](uint32_t idx) {
+        [this, device](uint32_t idx)
+        {
             TransientTexture& texture = m_Textures[idx];
             texture.m_Desc.m_NvrhiDesc.isVirtual = true;
             texture.m_PhysicalTexture = device->createTexture(texture.m_Desc.m_NvrhiDesc);
@@ -427,7 +428,8 @@ void RenderGraph::AllocateBuffers()
 
     AllocateResourcesInternal(
         true,  // bIsBuffer
-        [this, device](uint32_t idx) {
+        [this, device](uint32_t idx)
+        {
             TransientBuffer& buffer = m_Buffers[idx];
             buffer.m_Desc.m_NvrhiDesc.isVirtual = true;
             buffer.m_PhysicalBuffer = device->createBuffer(buffer.m_Desc.m_NvrhiDesc);

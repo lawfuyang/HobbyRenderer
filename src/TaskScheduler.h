@@ -7,7 +7,7 @@ public:
     ~TaskScheduler();
 
     void ParallelFor(uint32_t count, const std::function<void(uint32_t index, uint32_t threadIndex)>& func);
-    void ScheduleTask(std::function<void()> func);
+    void ScheduleTask(std::function<void()> func, bool bImmediateExecute = true);
     void ExecuteAllScheduledTasks();
 
     uint32_t GetThreadCount() const { return static_cast<uint32_t>(m_Workers.size()); }

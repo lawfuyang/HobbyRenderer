@@ -57,7 +57,7 @@ void TaskScheduler::ParallelFor(uint32_t count, const std::function<void(uint32_
     completionCondition.wait(lock, [&remaining]() { return remaining == 0; });
 }
 
-void TaskScheduler::ScheduleTask(std::function<void()> func)
+void TaskScheduler::ScheduleTask(std::function<void()> func, bool bImmediateExecute)
 {
     std::lock_guard<std::mutex> lock(m_QueueMutex);
     m_RemainingTasks.fetch_add(1);
@@ -65,6 +65,11 @@ void TaskScheduler::ScheduleTask(std::function<void()> func)
         {
             func();
         });
+
+    if (bImmediateExecute)
+    {
+        m_Condition.notify_one();
+    }
 }
 
 void TaskScheduler::ExecuteAllScheduledTasks()
