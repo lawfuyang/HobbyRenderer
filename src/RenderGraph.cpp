@@ -26,6 +26,15 @@ size_t RGTextureDesc::ComputeHash() const
     hash_combine(seed, m_NvrhiDesc.isRenderTarget);
     hash_combine(seed, m_NvrhiDesc.isUAV);
     hash_combine(seed, m_NvrhiDesc.isTypeless);
+    hash_combine(seed, (uint32_t)m_NvrhiDesc.initialState);
+    hash_combine(seed, m_NvrhiDesc.useClearValue);
+    if (m_NvrhiDesc.useClearValue)
+    {
+        hash_combine(seed, m_NvrhiDesc.clearValue.r);
+        hash_combine(seed, m_NvrhiDesc.clearValue.g);
+        hash_combine(seed, m_NvrhiDesc.clearValue.b);
+        hash_combine(seed, m_NvrhiDesc.clearValue.a);
+    }
     return seed;
 }
 
@@ -38,6 +47,7 @@ size_t RGBufferDesc::ComputeHash() const
     hash_combine(seed, m_NvrhiDesc.canHaveUAVs);
     hash_combine(seed, m_NvrhiDesc.isVertexBuffer);
     hash_combine(seed, m_NvrhiDesc.isIndexBuffer);
+    hash_combine(seed, (uint32_t)m_NvrhiDesc.initialState);
     return seed;
 }
 
@@ -96,6 +106,7 @@ void RenderGraph::Reset()
         texture.m_IsDeclaredThisFrame = false;
         texture.m_Lifetime = {};
         texture.m_AliasedFromIndex = UINT32_MAX;
+        texture.m_PhysicalLastPass = 0;
 
         // Cleanup physical resources not used for > 3 frames
         if (texture.m_PhysicalTexture && (m_FrameIndex - texture.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
@@ -118,6 +129,7 @@ void RenderGraph::Reset()
         buffer.m_IsDeclaredThisFrame = false;
         buffer.m_Lifetime = {};
         buffer.m_AliasedFromIndex = UINT32_MAX;
+        buffer.m_PhysicalLastPass = 0;
 
         if (buffer.m_PhysicalBuffer && (m_FrameIndex - buffer.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
@@ -183,6 +195,7 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
     {
         if (!m_Textures[i].m_IsDeclaredThisFrame && m_Textures[i].m_Hash == hash)
         {
+            m_Textures[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Textures[i].m_IsDeclaredThisFrame = true;
             m_Textures[i].m_LastFrameUsed = m_FrameIndex;
             UpdateResourceLifetime(m_Textures[i].m_Lifetime, m_CurrentPassIndex);
@@ -233,6 +246,7 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
     {
         if (!m_Buffers[i].m_IsDeclaredThisFrame && m_Buffers[i].m_Hash == hash)
         {
+            m_Buffers[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Buffers[i].m_IsDeclaredThisFrame = true;
             m_Buffers[i].m_LastFrameUsed = m_FrameIndex;
             UpdateResourceLifetime(m_Buffers[i].m_Lifetime, m_CurrentPassIndex);
@@ -368,10 +382,12 @@ void RenderGraph::Compile()
         {
             TransientTexture& texture = m_Textures[idx];
 
-            if (texture.m_PhysicalTexture && texture.m_Heap == heap && texture.m_Offset == offset)
+            if (texture.m_PhysicalTexture && 
+                texture.m_Heap == heap && 
+                texture.m_Offset == offset &&
+                texture.m_LastBoundName == texture.m_Desc.m_NvrhiDesc.debugName)
             {
-                // Already bound correctly to the right heap at the right offset
-                texture.m_IsPhysicalOwner = true;
+                // Already bound correctly to the right heap at the right offset, and metadata matches
                 return;
             }
 
@@ -382,7 +398,7 @@ void RenderGraph::Compile()
             device->bindTextureMemory(texture.m_PhysicalTexture, heap, offset);
             texture.m_Heap = heap;
             texture.m_Offset = offset;
-            texture.m_IsPhysicalOwner = true;
+            texture.m_LastBoundName = texture.m_Desc.m_NvrhiDesc.debugName;
         }
     );
 
@@ -392,10 +408,12 @@ void RenderGraph::Compile()
         {
             TransientBuffer& buffer = m_Buffers[idx];
 
-            if (buffer.m_PhysicalBuffer && buffer.m_Heap == heap && buffer.m_Offset == offset)
+            if (buffer.m_PhysicalBuffer && 
+                buffer.m_Heap == heap && 
+                buffer.m_Offset == offset &&
+                buffer.m_LastBoundName == buffer.m_Desc.m_NvrhiDesc.debugName)
             {
-                // Already bound correctly to the right heap at the right offset
-                buffer.m_IsPhysicalOwner = true;
+                // Already bound correctly to the right heap at the right offset, and metadata matches
                 return;
             }
 
@@ -406,7 +424,7 @@ void RenderGraph::Compile()
             device->bindBufferMemory(buffer.m_PhysicalBuffer, heap, offset);
             buffer.m_Heap = heap;
             buffer.m_Offset = offset;
-            buffer.m_IsPhysicalOwner = true;
+            buffer.m_LastBoundName = buffer.m_Desc.m_NvrhiDesc.debugName;
         }
     );
 
@@ -604,6 +622,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
             SDL_assert(heapEntry.m_Heap == resource->m_Heap);
 
             heapEntry.m_LastFrameUsed = m_FrameIndex;
+            resource->m_PhysicalLastPass = resource->m_Lifetime.m_LastPass;
 
             if (bIsBuffer) m_Stats.m_NumAllocatedBuffers++;
             else m_Stats.m_NumAllocatedTextures++;
@@ -624,33 +643,42 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                 if (candidateIdx == idx) break;
                 TransientResourceBase* candidate = bIsBuffer ? (TransientResourceBase*)&m_Buffers[candidateIdx] : (TransientResourceBase*)&m_Textures[candidateIdx];
                 
-                if (!candidate->m_IsAllocated)
+                if (!candidate->m_IsAllocated || !candidate->m_IsPhysicalOwner)
                     continue;
 
-                bool bCanAlias = !candidate->m_Lifetime.Overlaps(resource->m_Lifetime);
-                if (bCanAlias)
-                {
-                    bCanAlias = resource->GetMemorySize() <= candidate->GetMemorySize();
-                }
+                bool bCanAlias = resource->m_Lifetime.m_FirstPass > candidate->m_PhysicalLastPass;
+                bCanAlias &= resource->GetMemorySize() <= candidate->GetMemorySize();
                 
                 if (bCanAlias)
                 {
-                    if (bIsBuffer)
-                    {
-                        m_Buffers[idx].m_PhysicalBuffer = m_Buffers[candidateIdx].m_PhysicalBuffer;
-                        m_Stats.m_NumAliasedBuffers++;
-                    }
-                    else
-                    {
-                        m_Textures[idx].m_PhysicalTexture = m_Textures[candidateIdx].m_PhysicalTexture;
-                        m_Stats.m_NumAliasedTextures++;
-                    }
                     resource->m_Heap = candidate->m_Heap;
                     resource->m_Offset = candidate->m_Offset;
+                    resource->m_HeapIndex = candidate->m_HeapIndex;
                     resource->m_BlockOffset = candidate->m_BlockOffset;
                     resource->m_AliasedFromIndex = candidateIdx;
                     resource->m_IsAllocated = true;
                     resource->m_IsPhysicalOwner = false;
+                    
+                    candidate->m_PhysicalLastPass = std::max(candidate->m_PhysicalLastPass, resource->m_Lifetime.m_LastPass);
+
+                    // Force re-creation of the placed resource for aliased memory.
+                    // Invalidating the physical handle ensures a new placed resource is created
+                    // each frame, which is required for correct aliasing activation:
+                    //  - D3D12: CreatePlacedResource acts as implicit aliasing activation
+                    //  - Vulkan: new VkImage starts in UNDEFINED layout, so NVRHI generates
+                    //    UNDEFINED->target transitions that properly discard stale memory contents
+                    // Without this, NVRHI's internal stateInitialized flag stays true from
+                    // previous frames, causing it to skip the critical Common->target transition.
+                    if (bIsBuffer)
+                        m_Buffers[idx].m_PhysicalBuffer = nullptr;
+                    else
+                        m_Textures[idx].m_PhysicalTexture = nullptr;
+
+                    createAndBindResource(idx, resource->m_Heap, resource->m_Offset);
+
+                    if (bIsBuffer) m_Stats.m_NumAliasedBuffers++;
+                    else m_Stats.m_NumAliasedTextures++;
+                    
                     aliased = true;
                     break;
                 }
@@ -661,8 +689,14 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         {
             const uint64_t alignment = bIsBuffer ? Renderer::GetInstance()->m_RHI->GetBufferAlignment() : Renderer::GetInstance()->m_RHI->GetTextureAlignment();
             SubAllocateResource(resource, alignment);
-            createAndBindResource(idx, resource->m_Heap, resource->m_Offset);
+            
             resource->m_IsAllocated = true;
+            resource->m_IsPhysicalOwner = true;
+            resource->m_AliasedFromIndex = UINT32_MAX;
+            resource->m_PhysicalLastPass = resource->m_Lifetime.m_LastPass;
+
+            createAndBindResource(idx, resource->m_Heap, resource->m_Offset);
+
             if (bIsBuffer)
                 m_Stats.m_NumAllocatedBuffers++;
             else
@@ -676,6 +710,39 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         }
     }
     
+    // Reactivate alias targets (physical owners whose memory is shared with aliased resources) next frame.
+    // The alias target's memory was overwritten by the aliased resource in the previous frame,
+    // so it also needs a fresh placed resource to get proper state transitions:
+    //  - D3D12: CreatePlacedResource acts as implicit aliasing activation 
+    //  - Vulkan: UNDEFINED->target layout transition discards stale contents (HTILE/DCC metadata)
+    if (m_AliasingEnabled)
+    {
+        std::unordered_set<uint32_t> aliasTargetIndices;
+        for (uint32_t idx : sortedIndices)
+        {
+            TransientResourceBase* resource = bIsBuffer
+                ? (TransientResourceBase*)&m_Buffers[idx]
+                : (TransientResourceBase*)&m_Textures[idx];
+            if (resource->m_AliasedFromIndex != UINT32_MAX)
+                aliasTargetIndices.insert(resource->m_AliasedFromIndex);
+        }
+
+        for (uint32_t targetIdx : aliasTargetIndices)
+        {
+            TransientResourceBase* target = bIsBuffer
+                ? (TransientResourceBase*)&m_Buffers[targetIdx]
+                : (TransientResourceBase*)&m_Textures[targetIdx];
+
+            // Invalidate physical handle to force re-creation (bypasses the cache check)
+            if (bIsBuffer)
+                m_Buffers[targetIdx].m_PhysicalBuffer = nullptr;
+            else
+                m_Textures[targetIdx].m_PhysicalTexture = nullptr;
+
+            createAndBindResource(targetIdx, target->m_Heap, target->m_Offset);
+        }
+    }
+
     // Memory events for peak calculation
     std::vector<std::pair<uint16_t, int64_t>> memoryEvents;
     for (uint32_t idx : sortedIndices)
@@ -686,7 +753,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         
         const size_t size = bIsBuffer ? m_Buffers.at(idx).m_Desc.GetMemorySize() : m_Textures.at(idx).m_Desc.GetMemorySize();
         memoryEvents.push_back({ resource->m_Lifetime.m_FirstPass, static_cast<int64_t>(size) });
-        memoryEvents.push_back({ static_cast<uint16_t>(resource->m_Lifetime.m_LastPass + 1), -static_cast<int64_t>(size) });
+        memoryEvents.push_back({ static_cast<uint16_t>(resource->m_PhysicalLastPass + 1), -static_cast<int64_t>(size) });
     }
     
     std::sort(memoryEvents.begin(), memoryEvents.end());
@@ -745,6 +812,43 @@ nvrhi::BufferHandle RenderGraph::GetBuffer(RGBufferHandle handle) const
     SDL_assert(buffer.m_IsAllocated && "Buffer not allocated");
     
     return buffer.m_PhysicalBuffer;
+}
+
+void RenderGraph::InvalidateTransientResources()
+{
+    SDL_Log("[RenderGraph] Invalidating all transient resource allocations");
+
+    for (TransientTexture& texture : m_Textures)
+    {
+        if (texture.m_PhysicalTexture)
+        {
+            if (texture.m_IsPhysicalOwner && texture.m_HeapIndex != UINT32_MAX)
+            {
+                FreeBlock(texture.m_HeapIndex, texture.m_BlockOffset);
+            }
+            texture.m_PhysicalTexture = nullptr;
+            texture.m_Heap = nullptr;
+            texture.m_HeapIndex = UINT32_MAX;
+            texture.m_IsAllocated = false;
+            texture.m_Desc.m_CachedMemorySize = 0;
+        }
+    }
+
+    for (TransientBuffer& buffer : m_Buffers)
+    {
+        if (buffer.m_PhysicalBuffer)
+        {
+            if (buffer.m_IsPhysicalOwner && buffer.m_HeapIndex != UINT32_MAX)
+            {
+                FreeBlock(buffer.m_HeapIndex, buffer.m_BlockOffset);
+            }
+            buffer.m_PhysicalBuffer = nullptr;
+            buffer.m_Heap = nullptr;
+            buffer.m_HeapIndex = UINT32_MAX;
+            buffer.m_IsAllocated = false;
+            buffer.m_Desc.m_CachedMemorySize = 0;
+        }
+    }
 }
 
 // ============================================================================
@@ -884,24 +988,24 @@ void RenderGraph::RenderDebugUI()
 
         ImGui::Separator();
         
-        bool aliasingEnabled = m_AliasingEnabled;
-        if (ImGui::Checkbox("Enable Aliasing", &aliasingEnabled))
+        if (ImGui::Checkbox("Enable Aliasing", &m_AliasingEnabled))
         {
-            m_AliasingEnabled = aliasingEnabled;
+            InvalidateTransientResources();
         }
         
         ImGui::Separator();
         
         if (ImGui::TreeNode("Textures"))
         {
-            if (ImGui::BeginTable("Textures", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (ImGui::BeginTable("Textures", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Name");
-                ImGui::TableSetupColumn("Size");
+                ImGui::TableSetupColumn("Dimensions");
                 ImGui::TableSetupColumn("Format");
                 ImGui::TableSetupColumn("First Pass");
                 ImGui::TableSetupColumn("Last Pass");
                 ImGui::TableSetupColumn("Memory (MB)");
+                ImGui::TableSetupColumn("Heap Idx");
                 ImGui::TableSetupColumn("Offset");
                 ImGui::TableSetupColumn("Aliased From");
                 ImGui::TableHeadersRow();
@@ -936,6 +1040,9 @@ void RenderGraph::RenderDebugUI()
                     ImGui::Text("%.2f", texture.m_Desc.GetMemorySize() / (1024.0 * 1024.0));
 
                     ImGui::TableNextColumn();
+                    ImGui::Text("%d", texture.m_HeapIndex != UINT32_MAX ? (int)texture.m_HeapIndex : -1);
+
+                    ImGui::TableNextColumn();
                     ImGui::Text("%llu", texture.m_Offset);
                     
                     ImGui::TableNextColumn();
@@ -958,6 +1065,7 @@ void RenderGraph::RenderDebugUI()
                 ImGui::TableSetupColumn("Size (MB)");
                 ImGui::TableSetupColumn("First Pass");
                 ImGui::TableSetupColumn("Last Pass");
+                ImGui::TableSetupColumn("Heap Idx");
                 ImGui::TableSetupColumn("Offset");
                 ImGui::TableSetupColumn("Aliased From");
                 ImGui::TableHeadersRow();
@@ -984,6 +1092,9 @@ void RenderGraph::RenderDebugUI()
                         ImGui::Text("%u", buffer.m_Lifetime.m_LastPass);
                     else
                         ImGui::Text("N/A");
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", buffer.m_HeapIndex != UINT32_MAX ? (int)buffer.m_HeapIndex : -1);
 
                     ImGui::TableNextColumn();
                     ImGui::Text("%llu", buffer.m_Offset);

@@ -93,6 +93,7 @@ struct TransientResourceBase
     size_t m_Hash = 0;
     ResourceLifetime m_Lifetime;
     uint32_t m_AliasedFromIndex = UINT32_MAX;
+    uint16_t m_PhysicalLastPass = 0;
     uint64_t m_LastFrameUsed = 0;
     uint64_t m_Offset = 0;
     uint64_t m_BlockOffset = 0;
@@ -101,6 +102,7 @@ struct TransientResourceBase
     bool m_IsDeclaredThisFrame = false;
     bool m_IsPhysicalOwner = false;
     nvrhi::HeapHandle m_Heap;
+    std::string m_LastBoundName;
 
     virtual size_t GetMemorySize() const = 0;
     virtual ~TransientResourceBase() = default;
@@ -162,6 +164,8 @@ public:
     nvrhi::TextureHandle GetTexture(RGTextureHandle handle) const;
     nvrhi::BufferHandle GetBuffer(RGBufferHandle handle) const;
     
+    void InvalidateTransientResources();
+
     // Debug & Stats
     struct Stats
     {
