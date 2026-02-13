@@ -931,26 +931,26 @@ public:
     // Get supported instance extensions from those requested
     std::vector<const char*> GetSupportedInstanceExtensions(const std::vector<const char*>& requested, const std::vector<const char*>& layers = {})
     {
-        std::set<std::string> availableExts;
+        std::unordered_set<std::string> availableExts;
         
         // Get extensions from implementation
         {
             const std::vector<vk::ExtensionProperties> implExtensions = vk::enumerateInstanceExtensionProperties();
-            for (const auto& ext : implExtensions)
+            for (const vk::ExtensionProperties& ext : implExtensions)
             {
                 const char* name = ext.extensionName;
-                availableExts.insert(std::string(name));
+                availableExts.insert(name);
             }
         }
         
         // Get extensions from layers
         for (const char* layerName : layers)
         {
-            const std::vector<vk::ExtensionProperties> layerExtensions = vk::enumerateInstanceExtensionProperties(std::string(layerName));
-            for (const auto& ext : layerExtensions)
+            const std::vector<vk::ExtensionProperties> layerExtensions = vk::enumerateInstanceExtensionProperties(std::string{ layerName });
+            for (const vk::ExtensionProperties& ext : layerExtensions)
             {
                 const char* name = ext.extensionName;
-                availableExts.insert(std::string(name));
+                availableExts.insert(name);
             }
         }
         
