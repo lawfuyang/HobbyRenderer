@@ -89,6 +89,7 @@ void RenderGraph::Reset()
     m_IsCompiled = false;
     m_Stats = Stats{};
     m_PassNames.clear();
+    m_PerPassAliasBarriers.clear();
 
     // Mark all resources as not declared this frame and reset lifetimes
     for (TransientTexture& texture : m_Textures)
@@ -370,8 +371,7 @@ void RenderGraph::Compile()
 
             if (texture.m_PhysicalTexture && 
                 texture.m_Heap == heap && 
-                texture.m_Offset == offset &&
-                texture.m_LastBoundName == texture.m_Desc.m_NvrhiDesc.debugName)
+                texture.m_Offset == offset)
             {
                 // Already bound correctly to the right heap at the right offset, and metadata matches
                 return;
@@ -384,7 +384,6 @@ void RenderGraph::Compile()
             device->bindTextureMemory(texture.m_PhysicalTexture, heap, offset);
             texture.m_Heap = heap;
             texture.m_Offset = offset;
-            texture.m_LastBoundName = texture.m_Desc.m_NvrhiDesc.debugName;
         }
     );
 
@@ -396,8 +395,7 @@ void RenderGraph::Compile()
 
             if (buffer.m_PhysicalBuffer && 
                 buffer.m_Heap == heap && 
-                buffer.m_Offset == offset &&
-                buffer.m_LastBoundName == buffer.m_Desc.m_NvrhiDesc.debugName)
+                buffer.m_Offset == offset)
             {
                 // Already bound correctly to the right heap at the right offset, and metadata matches
                 return;
@@ -410,11 +408,112 @@ void RenderGraph::Compile()
             device->bindBufferMemory(buffer.m_PhysicalBuffer, heap, offset);
             buffer.m_Heap = heap;
             buffer.m_Offset = offset;
-            buffer.m_LastBoundName = buffer.m_Desc.m_NvrhiDesc.debugName;
         }
     );
 
+    // Build per-pass aliasing barrier info.
+    // For each aliased resource, insert an aliasing barrier at the pass where it's first used.
+    // This ensures the GPU flushes caches for the shared heap memory before the new resource accesses it.
+    m_PerPassAliasBarriers.clear();
+    m_PerPassAliasBarriers.resize(m_CurrentPassIndex + 1); // pass indices are 1-based
+
+    if (m_AliasingEnabled)
+    {
+        auto addBarrier = [&](bool isBuffer, uint32_t index, const RenderGraphInternal::ResourceLifetime& lifetime)
+        {
+            if (lifetime.IsValid())
+            {
+                uint16_t passIdx = lifetime.m_FirstPass;
+                if (passIdx < m_PerPassAliasBarriers.size())
+                {
+                    m_PerPassAliasBarriers[passIdx].push_back({ isBuffer, index });
+                }
+            }
+        };
+
+        for (uint32_t i = 0; i < (uint32_t)m_Textures.size(); ++i)
+        {
+            const TransientTexture& tex = m_Textures[i];
+            if (!tex.m_IsDeclaredThisFrame) continue;
+
+            bool needsBarrier = (tex.m_AliasedFromIndex != UINT32_MAX);
+            
+            if (!needsBarrier && tex.m_IsPhysicalOwner)
+            {
+                for (const TransientTexture& other : m_Textures)
+                {
+                    if (other.m_IsDeclaredThisFrame && other.m_AliasedFromIndex == i)
+                    {
+                        needsBarrier = true;
+                        break;
+                    }
+                }
+            }
+
+            if (needsBarrier)
+            {
+                addBarrier(false, i, tex.m_Lifetime);
+            }
+        }
+
+        for (uint32_t i = 0; i < (uint32_t)m_Buffers.size(); ++i)
+        {
+            const TransientBuffer& buf = m_Buffers[i];
+            if (!buf.m_IsDeclaredThisFrame) continue;
+
+            bool needsBarrier = (buf.m_AliasedFromIndex != UINT32_MAX);
+
+            if (!needsBarrier && buf.m_IsPhysicalOwner)
+            {
+                for (const TransientBuffer& other : m_Buffers)
+                {
+                    if (other.m_IsDeclaredThisFrame && other.m_AliasedFromIndex == i)
+                    {
+                        needsBarrier = true;
+                        break;
+                    }
+                }
+            }
+
+            if (needsBarrier)
+            {
+                addBarrier(true, i, buf.m_Lifetime);
+            }
+        }
+    }
+
     m_IsCompiled = true;
+}
+
+// ============================================================================
+// RenderGraph - Aliasing Barriers
+// ============================================================================
+
+void RenderGraph::InsertAliasBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const
+{
+    if (!m_AliasingEnabled || passIndex >= m_PerPassAliasBarriers.size())
+        return;
+
+    const std::vector<AliasBarrierEntry>& barriers = m_PerPassAliasBarriers[passIndex];
+    for (const AliasBarrierEntry& entry : barriers)
+    {
+        if (entry.m_IsBuffer)
+        {
+            const TransientBuffer& buffer = m_Buffers[entry.m_ResourceIndex];
+            if (buffer.m_PhysicalBuffer)
+            {
+                commandList->insertAliasingBarrier(buffer.m_PhysicalBuffer);
+            }
+        }
+        else
+        {
+            const TransientTexture& texture = m_Textures[entry.m_ResourceIndex];
+            if (texture.m_PhysicalTexture)
+            {
+                commandList->insertAliasingBarrier(texture.m_PhysicalTexture);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -651,19 +750,6 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                     
                     candidate->m_PhysicalLastPass = std::max(candidate->m_PhysicalLastPass, resource->m_Lifetime.m_LastPass);
 
-                    // Force re-creation of the placed resource for aliased memory.
-                    // Invalidating the physical handle ensures a new placed resource is created
-                    // each frame, which is required for correct aliasing activation:
-                    //  - D3D12: CreatePlacedResource acts as implicit aliasing activation
-                    //  - Vulkan: new VkImage starts in UNDEFINED layout, so NVRHI generates
-                    //    UNDEFINED->target transitions that properly discard stale memory contents
-                    // Without this, NVRHI's internal stateInitialized flag stays true from
-                    // previous frames, causing it to skip the critical Common->target transition.
-                    if (bIsBuffer)
-                        m_Buffers[idx].m_PhysicalBuffer = nullptr;
-                    else
-                        m_Textures[idx].m_PhysicalTexture = nullptr;
-
                     createAndBindResource(idx, resource->m_Heap, resource->m_Offset);
 
                     if (bIsBuffer) m_Stats.m_NumAliasedBuffers++;
@@ -696,39 +782,6 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
 
             m_Stats.m_TotalBufferMemory += bufferMemory;
             m_Stats.m_TotalTextureMemory += textureMemory;
-        }
-    }
-    
-    // Reactivate alias targets (physical owners whose memory is shared with aliased resources) next frame.
-    // The alias target's memory was overwritten by the aliased resource in the previous frame,
-    // so it also needs a fresh placed resource to get proper state transitions:
-    //  - D3D12: CreatePlacedResource acts as implicit aliasing activation 
-    //  - Vulkan: UNDEFINED->target layout transition discards stale contents (HTILE/DCC metadata)
-    if (m_AliasingEnabled)
-    {
-        std::unordered_set<uint32_t> aliasTargetIndices;
-        for (uint32_t idx : sortedIndices)
-        {
-            TransientResourceBase* resource = bIsBuffer
-                ? (TransientResourceBase*)&m_Buffers[idx]
-                : (TransientResourceBase*)&m_Textures[idx];
-            if (resource->m_AliasedFromIndex != UINT32_MAX)
-                aliasTargetIndices.insert(resource->m_AliasedFromIndex);
-        }
-
-        for (uint32_t targetIdx : aliasTargetIndices)
-        {
-            TransientResourceBase* target = bIsBuffer
-                ? (TransientResourceBase*)&m_Buffers[targetIdx]
-                : (TransientResourceBase*)&m_Textures[targetIdx];
-
-            // Invalidate physical handle to force re-creation (bypasses the cache check)
-            if (bIsBuffer)
-                m_Buffers[targetIdx].m_PhysicalBuffer = nullptr;
-            else
-                m_Textures[targetIdx].m_PhysicalTexture = nullptr;
-
-            createAndBindResource(targetIdx, target->m_Heap, target->m_Offset);
         }
     }
 }

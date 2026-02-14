@@ -100,7 +100,6 @@ struct TransientResourceBase
     bool m_IsDeclaredThisFrame = false;
     bool m_IsPhysicalOwner = false;
     nvrhi::HeapHandle m_Heap;
-    std::string m_LastBoundName;
 
     virtual nvrhi::MemoryRequirements GetMemoryRequirements() const = 0;
     virtual ~TransientResourceBase() = default;
@@ -162,6 +161,13 @@ public:
     nvrhi::TextureHandle GetTexture(RGTextureHandle handle) const;
     nvrhi::BufferHandle GetBuffer(RGBufferHandle handle) const;
     
+    // Insert aliasing barriers for a given pass into the command list.
+    // Must be called at the start of each pass's command list recording, before any GPU work.
+    void InsertAliasBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const;
+
+    // Returns the pass index for the current pass (valid after BeginPass, before Compile)
+    uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
+    
     void InvalidateTransientResources();
 
     // Debug & Stats
@@ -206,6 +212,14 @@ private:
     
     // Helper for updating resource lifetimes
     void UpdateResourceLifetime(RenderGraphInternal::ResourceLifetime& lifetime, uint16_t currentPass);
+
+    // Per-pass aliasing barrier info
+    struct AliasBarrierEntry
+    {
+        bool m_IsBuffer = false;
+        uint32_t m_ResourceIndex = UINT32_MAX;
+    };
+    std::vector<std::vector<AliasBarrierEntry>> m_PerPassAliasBarriers; // indexed by pass index
     
 private:
     std::vector<RenderGraphInternal::TransientTexture> m_Textures;

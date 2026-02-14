@@ -754,9 +754,10 @@ void Renderer::Run()
             IRenderer* pRenderer = rendererName; \
             m_RenderGraph.BeginPass(pRenderer->GetName()); \
             pRenderer->Setup(m_RenderGraph); \
+            const uint16_t passIndex = m_RenderGraph.GetCurrentPassIndex(); \
             nvrhi::CommandListHandle cmd = AcquireCommandList(pRenderer->GetName()); \
             const bool bImmediateExecute = false; /* defer execution until after render graph compiles */ \
-            m_TaskScheduler->ScheduleTask([this, pRenderer, cmd, readIndex, writeIndex]() { \
+            m_TaskScheduler->ScheduleTask([this, pRenderer, cmd, readIndex, writeIndex, passIndex]() { \
                 PROFILE_SCOPED(pRenderer->GetName()) \
                 ScopedCommandList scopedCmd{ cmd }; \
                 if (m_RHI->m_NvrhiDevice->pollTimerQuery(pRenderer->m_GPUQueries[readIndex])) \
@@ -765,6 +766,7 @@ void Renderer::Run()
                 } \
                 m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]); \
                 SimpleTimer cpuTimer; \
+                m_RenderGraph.InsertAliasBarriers(passIndex, scopedCmd); \
                 scopedCmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
                 pRenderer->Render(scopedCmd); \
                 scopedCmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
