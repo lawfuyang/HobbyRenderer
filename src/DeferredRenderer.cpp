@@ -28,19 +28,19 @@ public:
         renderGraph.WriteTexture(g_RG_HDRColor);
     }
     
-    void Render(nvrhi::CommandListHandle commandList) override
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         PROFILE_FUNCTION();
         Renderer* renderer = Renderer::GetInstance();
         nvrhi::utils::ScopedMarker marker(commandList, "Deferred Lighting");
 
-        nvrhi::TextureHandle depthTexture = renderer->m_RenderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle gbufferAlbedo = renderer->m_RenderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle gbufferNormals = renderer->m_RenderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle gbufferORM = renderer->m_RenderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle gbufferEmissive = renderer->m_RenderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle gbufferMotionVectors = renderer->m_RenderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle hdrColor = renderer->m_RenderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle gbufferAlbedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle gbufferNormals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle gbufferORM = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle gbufferEmissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle gbufferMotionVectors = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
         nvrhi::BindingSetDesc bset;
         // ... rest of the bindings ...

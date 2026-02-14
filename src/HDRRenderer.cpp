@@ -48,16 +48,16 @@ public:
     }
 
     
-    void Render(nvrhi::CommandListHandle commandList) override
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         Renderer* renderer = Renderer::GetInstance();
 
         nvrhi::utils::ScopedMarker marker(commandList, "HDR Post-Processing");
 
-        nvrhi::BufferHandle luminanceHistogram = renderer->m_RenderGraph.GetBuffer(g_RG_LuminanceHistogram, RGResourceAccessMode::Write);
-        nvrhi::BufferHandle exposureBuffer = renderer->m_RenderGraph.GetBuffer(g_RG_ExposureBuffer, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle hdrColor = renderer->m_RenderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle bloomUpPyramid = renderer->m_RenderGraph.GetTexture(g_RG_BloomUpPyramid, RGResourceAccessMode::Read);
+        nvrhi::BufferHandle luminanceHistogram = renderGraph.GetBuffer(g_RG_LuminanceHistogram, RGResourceAccessMode::Write);
+        nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(g_RG_ExposureBuffer, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle bloomUpPyramid = renderGraph.GetTexture(g_RG_BloomUpPyramid, RGResourceAccessMode::Read);
 
         // 1. Histogram Pass
         {

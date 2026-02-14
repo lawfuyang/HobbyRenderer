@@ -11,7 +11,7 @@ class ImGuiRenderer : public IRenderer
 public:
     void Initialize() override;
     
-    void Render(nvrhi::CommandListHandle commandList) override;
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override;
     const char* GetName() const override { return "ImGui"; }
 
 private:
@@ -36,7 +36,7 @@ void ImGuiRenderer::Initialize()
     CreateDeviceObjects();
 }
 
-void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList)
+void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
 {
     Renderer* renderer = Renderer::GetInstance();
     ImDrawData* draw_data = ImGui::GetDrawData();

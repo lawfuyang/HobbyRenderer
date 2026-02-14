@@ -114,18 +114,18 @@ public:
         renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
     }
     
-    void Render(nvrhi::CommandListHandle commandList) override
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         Renderer* renderer = Renderer::GetInstance();
 
         // Get transient resources from render graph
-        nvrhi::TextureHandle depthTexture = renderer->m_RenderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle hdrColor = renderer->m_RenderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle gbufferAlbedo = renderer->m_RenderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle gbufferNormals = renderer->m_RenderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle gbufferORM = renderer->m_RenderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle gbufferEmissive = renderer->m_RenderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle gbufferMotion = renderer->m_RenderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle gbufferAlbedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle gbufferNormals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle gbufferORM = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle gbufferEmissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle gbufferMotion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
 
         // Clear depth for reversed-Z (clear to 0.0f, no stencil)
         commandList->clearDepthStencilTexture(depthTexture, nvrhi::AllSubresources, true, Renderer::DEPTH_FAR, false, 0);
@@ -147,7 +147,7 @@ class TLASRenderer : public IRenderer
 {
 public:
 
-    void Render(nvrhi::CommandListHandle commandList) override
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         Renderer* renderer = Renderer::GetInstance();
         Scene& scene = renderer->m_Scene;
@@ -769,7 +769,7 @@ void Renderer::Run()
                 SimpleTimer cpuTimer; \
                 m_RenderGraph.InsertAliasBarriers(passIndex, scopedCmd); \
                 scopedCmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
-                pRenderer->Render(scopedCmd); \
+                pRenderer->Render(scopedCmd, m_RenderGraph); \
                 m_RenderGraph.SetActivePass(0); \
                 scopedCmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]); \
                 pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds()); \

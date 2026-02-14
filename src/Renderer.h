@@ -22,7 +22,7 @@ public:
     virtual void Initialize() {}
     virtual void PostSceneLoad() {}
     virtual void Setup(RenderGraph& renderGraph) {}
-    virtual void Render(nvrhi::CommandListHandle commandList) = 0;
+    virtual void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) = 0;
     virtual const char* GetName() const = 0;
 
     float m_CPUTime = 0.0f;

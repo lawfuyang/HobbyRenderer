@@ -47,7 +47,7 @@ public:
         nvrhi::TextureHandle hdr;
         nvrhi::TextureHandle opaque;
 
-        void Populate(RenderGraph& rg, BasePassUsage usage)
+        void Populate(const RenderGraph& rg, BasePassUsage usage)
         {
             Renderer* renderer = Renderer::GetInstance();
             BasePassResources& res = renderer->m_BasePassResources;
@@ -98,7 +98,7 @@ public:
         Renderer::GetInstance()->m_BasePassResources.DeclareResources(renderGraph);
     }
     
-    virtual void Render(nvrhi::CommandListHandle commandList) override = 0;
+    virtual void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override = 0;
 
 protected:
     struct BasePassRenderingArgs
@@ -548,11 +548,11 @@ public:
         renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
     }
 
-    void Render(nvrhi::CommandListHandle commandList) override;
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override;
     const char* GetName() const override { return "OpaquePhase1"; }
 };
 
-void OpaquePhase1Renderer::Render(nvrhi::CommandListHandle commandList)
+void OpaquePhase1Renderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
 {
     Renderer* renderer = Renderer::GetInstance();
     const uint32_t numOpaque = renderer->m_Scene.m_OpaqueBucket.m_Count;
@@ -563,7 +563,7 @@ void OpaquePhase1Renderer::Render(nvrhi::CommandListHandle commandList)
     PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
     ResourceHandles handles;
-    handles.Populate(renderer->m_RenderGraph, BasePassUsage::OpaquePhase1);
+    handles.Populate(renderGraph, BasePassUsage::OpaquePhase1);
 
     ClearAllCounters(commandList, handles);
 
@@ -590,10 +590,10 @@ public:
         renderGraph.ReadTexture(g_RG_DepthTexture);
     }
 
-    void Render(nvrhi::CommandListHandle commandList) override
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         ResourceHandles handles;
-        handles.Populate(Renderer::GetInstance()->m_RenderGraph, BasePassUsage::HZB);
+        handles.Populate(renderGraph, BasePassUsage::HZB);
         GenerateHZBMips(commandList, handles);
     }
     const char* GetName() const override { return "HZBGenerator"; }
@@ -624,11 +624,11 @@ public:
         renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
     }
 
-    void Render(nvrhi::CommandListHandle commandList) override;
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override;
     const char* GetName() const override { return "OpaquePhase2"; }
 };
 
-void OpaquePhase2Renderer::Render(nvrhi::CommandListHandle commandList)
+void OpaquePhase2Renderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
 {
     Renderer* renderer = Renderer::GetInstance();
     if (!renderer->m_EnableOcclusionCulling) return;
@@ -641,7 +641,7 @@ void OpaquePhase2Renderer::Render(nvrhi::CommandListHandle commandList)
     PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
     ResourceHandles handles;
-    handles.Populate(renderer->m_RenderGraph, BasePassUsage::OpaquePhase2);
+    handles.Populate(renderGraph, BasePassUsage::OpaquePhase2);
 
     BasePassRenderingArgs args;
     args.m_FrustumPlanes = frustumPlanes;
@@ -683,11 +683,11 @@ public:
         renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
     }
 
-    void Render(nvrhi::CommandListHandle commandList) override;
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override;
     const char* GetName() const override { return "MaskedPass"; }
 };
 
-void MaskedPassRenderer::Render(nvrhi::CommandListHandle commandList)
+void MaskedPassRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
 {
     Renderer* renderer = Renderer::GetInstance();
     const uint32_t numMasked = renderer->m_Scene.m_MaskedBucket.m_Count;
@@ -698,9 +698,9 @@ void MaskedPassRenderer::Render(nvrhi::CommandListHandle commandList)
     PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
     ResourceHandles handles;
-    handles.Populate(renderer->m_RenderGraph, BasePassUsage::Masked);
+    handles.Populate(renderGraph, BasePassUsage::Masked);
 
-    ClearVisibleCounters(commandList, handles);
+    ClearAllCounters(commandList, handles);
 
     BasePassRenderingArgs args;
     args.m_FrustumPlanes = frustumPlanes;
@@ -725,10 +725,10 @@ public:
         renderGraph.ReadTexture(g_RG_DepthTexture);
     }
 
-    void Render(nvrhi::CommandListHandle commandList) override
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         ResourceHandles handles;
-        handles.Populate(Renderer::GetInstance()->m_RenderGraph, BasePassUsage::HZB);
+        handles.Populate(renderGraph, BasePassUsage::HZB);
         GenerateHZBMips(commandList, handles);
     }
     const char* GetName() const override { return "HZBGeneratorPhase2"; }
@@ -783,18 +783,18 @@ public:
         renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
     }
 
-    void Render(nvrhi::CommandListHandle commandList) override;
+    void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override;
     const char* GetName() const override { return "TransparentPass"; }
 };
 
-void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList)
+void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
 {
     Renderer* renderer = Renderer::GetInstance();
     const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
     if (numTransparent == 0) return;
 
     ResourceHandles handles;
-    handles.Populate(renderer->m_RenderGraph, BasePassUsage::Transparent);
+    handles.Populate(renderGraph, BasePassUsage::Transparent);
 
     // Capture the opaque scene for refraction
     commandList->copyTexture(handles.opaque, nvrhi::TextureSlice(), handles.hdr, nvrhi::TextureSlice());
