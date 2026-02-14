@@ -1,5 +1,15 @@
 #include "ShaderShared.h"
 
+#ifndef SPD_NUM_CHANNELS
+#define SPD_NUM_CHANNELS 1
+#endif
+
+#if SPD_NUM_CHANNELS == 3
+#define SPD_TYPE float3
+#else
+#define SPD_TYPE float
+#endif
+
 #define SPD_REDUCTION_MIN 0
 #define SPD_REDUCTION_MAX 1
 #define SPD_REDUCTION_AVERAGE 2
@@ -54,23 +64,23 @@ FfxUInt32x2 ffxRemapForWaveReduction(FfxUInt32 a)
 PUSH_CONSTANT
 SpdConstants g_SpdConstants;
 
-// Resource boundaries for HZB
-Texture2D<float> g_HZBMip0 : register(t0);
+// Resource boundaries
+Texture2D<SPD_TYPE> g_Mip0 : register(t0);
 
 // NVRHI/SPIR-V mapping
 // We use a switch to handle multiple UAVs if bindless is not preferred for this specific task
-RWTexture2D<float> g_OutMip1 : register(u0);
-RWTexture2D<float> g_OutMip2 : register(u1);
-RWTexture2D<float> g_OutMip3 : register(u2);
-RWTexture2D<float> g_OutMip4 : register(u3);
-RWTexture2D<float> g_OutMip5 : register(u4);
-RWTexture2D<float> g_OutMip6 : register(u5);
-RWTexture2D<float> g_OutMip7 : register(u6);
-RWTexture2D<float> g_OutMip8 : register(u7);
-RWTexture2D<float> g_OutMip9 : register(u8);
-RWTexture2D<float> g_OutMip10 : register(u9);
-RWTexture2D<float> g_OutMip11 : register(u10);
-RWTexture2D<float> g_OutMip12 : register(u11);
+RWTexture2D<SPD_TYPE> g_Out1 : register(u0);
+RWTexture2D<SPD_TYPE> g_Out2 : register(u1);
+RWTexture2D<SPD_TYPE> g_Out3 : register(u2);
+RWTexture2D<SPD_TYPE> g_Out4 : register(u3);
+RWTexture2D<SPD_TYPE> g_Out5 : register(u4);
+RWTexture2D<SPD_TYPE> g_Out6 : register(u5);
+RWTexture2D<SPD_TYPE> g_Out7 : register(u6);
+RWTexture2D<SPD_TYPE> g_Out8 : register(u7);
+RWTexture2D<SPD_TYPE> g_Out9 : register(u8);
+RWTexture2D<SPD_TYPE> g_Out10 : register(u9);
+RWTexture2D<SPD_TYPE> g_Out11 : register(u10);
+RWTexture2D<SPD_TYPE> g_Out12 : register(u11);
 RWStructuredBuffer<uint> g_AtomicCounter : register(u12);
 
 groupshared FfxFloat32 spdIntermediateR[16][16];
@@ -81,30 +91,44 @@ groupshared FfxFloat32 spdIntermediateA[16][16];
 // SPD Callbacks implementations
 FfxFloat32x4 SpdLoadSourceImage(FfxInt32x2 tex, FfxUInt32 slice)
 {
-    return g_HZBMip0.Load(int3(tex, 0)).xxxx;
+#if SPD_NUM_CHANNELS == 3
+    return float4(g_Mip0.Load(int3(tex, 0)).xyz, 0);
+#else
+    return g_Mip0.Load(int3(tex, 0)).xxxx;
+#endif
 }
 
 FfxFloat32x4 SpdLoad(FfxInt32x2 tex, FfxUInt32 slice)
 {
     // SPD uses this to load from mip 5 when processing more than 6 mips
-    return g_OutMip6.Load(tex).xxxx;
+#if SPD_NUM_CHANNELS == 3
+    return float4(g_Out6.Load(tex).xyz, 0);
+#else
+    return g_Out6.Load(tex).xxxx;
+#endif
 }
 
 void SpdStore(FfxInt32x2 pix, FfxFloat32x4 v, FfxUInt32 mip, FfxUInt32 slice)
 {
-    // SPD mip 0 -> HZB mip 1 (since we source from HZB mip 0)
-    if (mip == 0) g_OutMip1[pix] = v.x;
-    else if (mip == 1) g_OutMip2[pix] = v.x;
-    else if (mip == 2) g_OutMip3[pix] = v.x;
-    else if (mip == 3) g_OutMip4[pix] = v.x;
-    else if (mip == 4) g_OutMip5[pix] = v.x;
-    else if (mip == 5) g_OutMip6[pix] = v.x;
-    else if (mip == 6) g_OutMip7[pix] = v.x;
-    else if (mip == 7) g_OutMip8[pix] = v.x;
-    else if (mip == 8) g_OutMip9[pix] = v.x;
-    else if (mip == 9) g_OutMip10[pix] = v.x;
-    else if (mip == 10) g_OutMip11[pix] = v.x;
-    else if (mip == 11) g_OutMip12[pix] = v.x;
+    SPD_TYPE val;
+#if SPD_NUM_CHANNELS == 3
+    val = v.xyz;
+#else
+    val = v.x;
+#endif
+
+    if (mip == 0) g_Out1[pix] = val;
+    else if (mip == 1) g_Out2[pix] = val;
+    else if (mip == 2) g_Out3[pix] = val;
+    else if (mip == 3) g_Out4[pix] = val;
+    else if (mip == 4) g_Out5[pix] = val;
+    else if (mip == 5) g_Out6[pix] = val;
+    else if (mip == 6) g_Out7[pix] = val;
+    else if (mip == 7) g_Out8[pix] = val;
+    else if (mip == 8) g_Out9[pix] = val;
+    else if (mip == 9) g_Out10[pix] = val;
+    else if (mip == 10) g_Out11[pix] = val;
+    else if (mip == 11) g_Out12[pix] = val;
 }
 
 FfxFloat32x4 SpdLoadIntermediate(FfxUInt32 x, FfxUInt32 y)
@@ -156,7 +180,7 @@ void SpdResetAtomicCounter(FfxUInt32 slice)
 #include "ffx_spd.h"
 
 [numthreads(256, 1, 1)]
-void HZBDownsampleSPD_CSMain(uint3 workGroupId : SV_GroupID, uint localInvocationIndex : SV_GroupIndex)
+void SPD_CSMain(uint3 workGroupId : SV_GroupID, uint localInvocationIndex : SV_GroupIndex)
 {
     SpdDownsample(workGroupId.xy, localInvocationIndex, g_SpdConstants.m_Mips, g_SpdConstants.m_NumWorkGroups, 0, g_SpdConstants.m_WorkGroupOffset);
 }

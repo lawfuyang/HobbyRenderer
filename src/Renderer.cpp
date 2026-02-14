@@ -1364,6 +1364,9 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::Command
 {
     nvrhi::utils::ScopedMarker spdMarker{ commandList, markerName };
 
+    const nvrhi::FormatInfo& formatInfo = nvrhi::getFormatInfo(texture->getDesc().format);
+    const uint32_t numChannels = formatInfo.hasBlue ? 3 : 1;
+
     const uint32_t numMips = texture->getDesc().mipLevels;
 
     // We generate mips 1..N. SPD will be configured to take mip 0 as source.
@@ -1378,7 +1381,7 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::Command
 
     ffxSpdSetup(dispatchThreadGroupCountXY, workGroupOffset, numWorkGroupsAndMips, rectInfo, spdmips);
 
-    // Constant buffer matching HZBDownsampleSPD.hlsl
+    // Constant buffer matching SPD.hlsl
     SpdConstants spdData;
     spdData.m_Mips = numWorkGroupsAndMips[1];
     spdData.m_NumWorkGroups = numWorkGroupsAndMips[0];
@@ -1409,7 +1412,7 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::Command
 
     Renderer::RenderPassParams params{
         .commandList = commandList,
-        .shaderName = "HZBDownsampleSPD_HZBDownsampleSPD_CSMain",
+        .shaderName = (numChannels == 3) ? "SPD_SPD_CSMain_3Channel" : "SPD_SPD_CSMain_1Channel",
         .bindingSetDesc = spdBset,
         .pushConstants = &spdData,
         .pushConstantsSize = sizeof(spdData),
