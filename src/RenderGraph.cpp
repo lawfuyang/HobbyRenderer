@@ -950,6 +950,7 @@ void RenderGraph::InvalidateTransientResources()
 void RenderGraph::RenderDebugUI()
 {
     nvrhi::IDevice* device = Renderer::GetInstance()->m_RHI->m_NvrhiDevice.Get();
+
     if (ImGui::TreeNode("Render Graph"))
     {
         ImGui::Text("Textures: %u (Allocated: %u, Aliased: %u)", 
@@ -1060,10 +1061,10 @@ void RenderGraph::RenderDebugUI()
                     }
                 };
 
-                for (const auto& tex : m_Textures)
+                for (const TransientTexture& tex : m_Textures)
                     drawResourceRow(tex, "Texture", ImGui::GetColorU32(ImVec4(0.2f, 0.5f, 0.8f, 0.8f)));
 
-                for (const auto& buf : m_Buffers)
+                for (const TransientBuffer& buf : m_Buffers)
                     drawResourceRow(buf, "Buffer", ImGui::GetColorU32(ImVec4(0.2f, 0.7f, 0.3f, 0.8f)));
 
                 ImGui::EndChild();
@@ -1212,35 +1213,87 @@ void RenderGraph::RenderDebugUI()
             ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("Heaps"))
+        if (ImGui::TreeNode("Render Passes"))
         {
-            for (size_t i = 0; i < m_Heaps.size(); ++i)
+            uint32_t numPasses = (uint32_t)m_PassNames.size();
+            if (numPasses > 0)
             {
-                const HeapEntry& heap = m_Heaps[i];
-                if (!heap.m_Heap) continue;
-
-                if (ImGui::TreeNode((void*)(intptr_t)i, "Heap %zu (%.2f MB)", i, heap.m_Size / (1024.0 * 1024.0)))
+                if (ImGui::BeginTable("RenderPassesTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
                 {
-                    if (ImGui::BeginTable("HeapBlocks", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+                    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Resources (R/W)", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                    ImGui::TableSetupColumn("Barriers", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+                    ImGui::TableHeadersRow();
+
+                    for (uint32_t i = 1; i <= numPasses; ++i)
                     {
-                        ImGui::TableSetupColumn("Offset");
-                        ImGui::TableSetupColumn("Size");
-                        ImGui::TableSetupColumn("Status");
-                        ImGui::TableHeadersRow();
-                        for (const HeapBlock& block : heap.m_Blocks)
+                        const PassAccess& access = m_PassAccesses[i - 1];
+                        
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%u", i);
+
+                        ImGui::TableNextColumn();
+                        bool nodeOpen = ImGui::TreeNodeEx(m_PassNames[i - 1], ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding);
+                        
+                        ImGui::TableNextColumn();
+                        ImGui::Text("T: %zu/%zu, B: %zu/%zu", 
+                            access.m_ReadTextures.size(), access.m_WriteTextures.size(),
+                            access.m_ReadBuffers.size(), access.m_WriteBuffers.size());
+                        if (ImGui::IsItemHovered())
                         {
-                            ImGui::TableNextRow();
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%llu", block.m_Offset);
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%.2f KB", block.m_Size / 1024.0);
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%s", block.m_IsFree ? "Free" : "Allocated");
+                            ImGui::BeginTooltip();
+                            ImGui::Text("Summary of resources accessed in this pass.");
+                            ImGui::EndTooltip();
                         }
-                        ImGui::EndTable();
+
+                        ImGui::TableNextColumn();
+                        int numBarriers = (i < m_PerPassAliasBarriers.size()) ? (int)m_PerPassAliasBarriers[i].size() : 0;
+                        if (numBarriers > 0) ImGui::Text("%d barriers", numBarriers);
+                        else ImGui::Text("-");
+
+                        if (nodeOpen)
+                        {
+                            if (ImGui::TreeNodeEx("Resource Accesses", ImGuiTreeNodeFlags_DefaultOpen))
+                            {
+                                auto listAccesses = [&](const std::unordered_set<uint32_t>& indices, bool isBuffer, const char* mode, ImVec4 color) {
+                                    if (indices.empty()) return;
+                                    ImGui::TextColored(color, "%s %s:", mode, isBuffer ? "Buffers" : "Textures");
+                                    for (uint32_t idx : indices) {
+                                        const char* name = isBuffer ? m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName.c_str() : m_Textures[idx].m_Desc.m_NvrhiDesc.debugName.c_str();
+                                        ImGui::BulletText("%s", name);
+                                    }
+                                };
+
+                                listAccesses(access.m_ReadTextures, false, "Read", ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+                                listAccesses(access.m_WriteTextures, false, "Write", ImVec4(1.0f, 0.6f, 0.4f, 1.0f));
+                                listAccesses(access.m_ReadBuffers, true, "Read", ImVec4(0.4f, 1.0f, 0.7f, 1.0f));
+                                listAccesses(access.m_WriteBuffers, true, "Write", ImVec4(1.0f, 0.4f, 0.7f, 1.0f));
+                                ImGui::TreePop();
+                            }
+
+                            if (numBarriers > 0)
+                            {
+                                if (ImGui::TreeNodeEx("Aliasing Barriers Details", ImGuiTreeNodeFlags_DefaultOpen))
+                                {
+                                    for (const auto& barrier : m_PerPassAliasBarriers[i])
+                                    {
+                                        const char* name = barrier.m_IsBuffer ? m_Buffers[barrier.m_ResourceIndex].m_Desc.m_NvrhiDesc.debugName.c_str() : m_Textures[barrier.m_ResourceIndex].m_Desc.m_NvrhiDesc.debugName.c_str();
+                                        ImGui::BulletText("%s (%s)", name, barrier.m_IsBuffer ? "Buffer" : "Texture");
+                                    }
+                                    ImGui::TreePop();
+                                }
+                            }
+                            ImGui::TreePop();
+                        }
                     }
-                    ImGui::TreePop();
+                    ImGui::EndTable();
                 }
+            }
+            else
+            {
+                ImGui::Text("No passes recorded.");
             }
             ImGui::TreePop();
         }
