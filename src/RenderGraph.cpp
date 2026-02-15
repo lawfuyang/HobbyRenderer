@@ -1297,6 +1297,39 @@ void RenderGraph::RenderDebugUI()
             }
             ImGui::TreePop();
         }
+
+        if (ImGui::TreeNode("Heaps"))
+        {
+            for (size_t i = 0; i < m_Heaps.size(); ++i)
+            {
+                const HeapEntry& heap = m_Heaps[i];
+                if (!heap.m_Heap) continue;
+
+                if (ImGui::TreeNode((void*)(intptr_t)i, "Heap %zu (%.2f MB)", i, heap.m_Size / (1024.0 * 1024.0)))
+                {
+                    if (ImGui::BeginTable("HeapBlocks", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                    {
+                        ImGui::TableSetupColumn("Offset");
+                        ImGui::TableSetupColumn("Size");
+                        ImGui::TableSetupColumn("Status");
+                        ImGui::TableHeadersRow();
+                        for (const HeapBlock& block : heap.m_Blocks)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%llu", block.m_Offset);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.2f KB", block.m_Size / 1024.0);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", block.m_IsFree ? "Free" : "Allocated");
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TreePop();
+                }
+            }
+            ImGui::TreePop();
+        }
         
         ImGui::TreePop();
     }
