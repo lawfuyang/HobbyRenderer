@@ -3,26 +3,23 @@
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 
-cbuffer PerFrameCB : register(b0, space1)
+cbuffer PerFrameCB : register(b0)
 {
     ForwardLightingPerFrameData g_PerFrame;
 };
 
-StructuredBuffer<PerInstanceData> g_Instances : register(t0, space1);
-StructuredBuffer<MaterialConstants> g_Materials : register(t1, space1);
-StructuredBuffer<VertexQuantized> g_Vertices : register(t2, space1);
-StructuredBuffer<Meshlet> g_Meshlets : register(t3, space1);
-StructuredBuffer<uint> g_MeshletVertices : register(t4, space1);
-StructuredBuffer<uint> g_MeshletTriangles : register(t5, space1);
-StructuredBuffer<MeshletJob> g_MeshletJobs : register(t6, space1);
-StructuredBuffer<MeshData> g_MeshData : register(t7, space1);
-StructuredBuffer<uint> g_Indices : register(t10, space1);
-Texture2D<float> g_HZB : register(t8, space1);
-RaytracingAccelerationStructure g_SceneAS : register(t9, space1);
-Texture2D g_OpaqueColor : register(t11, space1);
-SamplerState g_SamplerAnisoClamp : register(s0, space1);
-SamplerState g_SamplerAnisoWrap  : register(s1, space1);
-SamplerState g_MinReductionSampler : register(s2, space1);
+StructuredBuffer<PerInstanceData> g_Instances : register(t0);
+StructuredBuffer<MaterialConstants> g_Materials : register(t1);
+StructuredBuffer<VertexQuantized> g_Vertices : register(t2);
+StructuredBuffer<Meshlet> g_Meshlets : register(t3);
+StructuredBuffer<uint> g_MeshletVertices : register(t4);
+StructuredBuffer<uint> g_MeshletTriangles : register(t5);
+StructuredBuffer<MeshletJob> g_MeshletJobs : register(t6);
+StructuredBuffer<MeshData> g_MeshData : register(t7);
+StructuredBuffer<uint> g_Indices : register(t10);
+Texture2D<float> g_HZB : register(t8);
+RaytracingAccelerationStructure g_SceneAS : register(t9);
+Texture2D g_OpaqueColor : register(t11);
 
 void UnpackMeshletBV(Meshlet m, out float3 center, out float radius)
 {
@@ -159,7 +156,8 @@ void ASMain(
 
         if (bVisible && g_PerFrame.m_EnableOcclusionCulling)
         {
-            bVisible &= OcclusionSphereTest(viewCenter, worldRadius, uint2(g_PerFrame.m_HZBWidth, g_PerFrame.m_HZBHeight), g_PerFrame.m_P00, g_PerFrame.m_P11, g_HZB, g_MinReductionSampler);
+            SamplerState minSam = SamplerDescriptorHeap[NonUniformResourceIndex(SAMPLER_MIN_REDUCTION_INDEX)];
+            bVisible &= OcclusionSphereTest(viewCenter, worldRadius, uint2(g_PerFrame.m_HZBWidth, g_PerFrame.m_HZBHeight), g_PerFrame.m_P00, g_PerFrame.m_P11, g_HZB, minSam);
         }
 
         if (bVisible && g_PerFrame.m_EnableConeCulling)
@@ -338,7 +336,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     // Texture sampling (only when present)
     bool hasAlbedo = (mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0;
     float4 albedoSample = hasAlbedo
-        ? SampleBindlessTexture(mat.m_AlbedoTextureIndex, g_SamplerAnisoClamp, g_SamplerAnisoWrap, mat.m_AlbedoSamplerIndex, input.uv)
+        ? SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, input.uv)
         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
     // Alpha test (discard) as early as possible
@@ -353,17 +351,17 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
     bool hasORM = (mat.m_TextureFlags & TEXFLAG_ROUGHNESS_METALLIC) != 0;
     float4 ormSample = hasORM
-        ? SampleBindlessTexture(mat.m_RoughnessMetallicTextureIndex, g_SamplerAnisoClamp, g_SamplerAnisoWrap, mat.m_RoughnessSamplerIndex, input.uv)
+        ? SampleBindlessTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex, input.uv)
         : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 1.0f, 0.0f); // R=occ, G=rough, B=metal
 
     bool hasNormal = (mat.m_TextureFlags & TEXFLAG_NORMAL) != 0;
     float4 nmSample = hasNormal
-        ? SampleBindlessTexture(mat.m_NormalTextureIndex, g_SamplerAnisoClamp, g_SamplerAnisoWrap, mat.m_NormalSamplerIndex, input.uv)
+        ? SampleBindlessTexture(mat.m_NormalTextureIndex, mat.m_NormalSamplerIndex, input.uv)
         : float4(0.5f, 0.5f, 1.0f, 0.0f);
 
     bool hasEmissive = (mat.m_TextureFlags & TEXFLAG_EMISSIVE) != 0;
     float4 emissiveSample = hasEmissive
-        ? SampleBindlessTexture(mat.m_EmissiveTextureIndex, g_SamplerAnisoClamp, g_SamplerAnisoWrap, mat.m_EmissiveSamplerIndex, input.uv)
+        ? SampleBindlessTexture(mat.m_EmissiveTextureIndex, mat.m_EmissiveSamplerIndex, input.uv)
         : float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Normal (from normal map when available)
@@ -432,8 +430,6 @@ GBufferOut GBuffer_PSMain(VSOut input)
     lightingInputs.materials = g_Materials;
     lightingInputs.indices = g_Indices;
     lightingInputs.vertices = g_Vertices;
-    lightingInputs.clampSampler = g_SamplerAnisoClamp;
-    lightingInputs.wrapSampler = g_SamplerAnisoWrap;
 
     PrepareLightingByproducts(lightingInputs);
 
@@ -465,7 +461,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
         // Sample background with roughness-based LOD
         float lod = log2(g_PerFrame.m_OpaqueColorDimensions.x) * roughness * clamp(mat.m_IOR * 2.0 - 2.0, 0.0, 1.0);
-        float3 refractedColor = g_OpaqueColor.SampleLevel(g_SamplerAnisoClamp, refractUV, lod).rgb;
+        SamplerState clampSam = SamplerDescriptorHeap[NonUniformResourceIndex(SAMPLER_ANISOTROPIC_CLAMP_INDEX)];
+        float3 refractedColor = g_OpaqueColor.SampleLevel(clampSam, refractUV, lod).rgb;
 
         // --- Volume Attenuation (Beer-Lambert) ---
         refractedColor = ApplyVolumeAttenuation(refractedColor, length(transmissionRay), mat.m_AttenuationColor, mat.m_AttenuationDistance);

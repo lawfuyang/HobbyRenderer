@@ -2,26 +2,23 @@
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 
-cbuffer DeferredCB : register(b1, space1)
+cbuffer DeferredCB : register(b0)
 {
     DeferredLightingConstants g_Deferred;
 };
 
-// These are bound to space 1 because we use the global bindless descriptor table in space 0.
-Texture2D<float4> g_GBufferAlbedo    : register(t0, space1);
-Texture2D<float2> g_GBufferNormals   : register(t1, space1);
-Texture2D<float4> g_GBufferORM       : register(t2, space1);
-Texture2D<float4> g_GBufferEmissive  : register(t3, space1);
-Texture2D<float2> g_GBufferMotion    : register(t7, space1);
-Texture2D<float>  g_Depth            : register(t4, space1);
-RaytracingAccelerationStructure g_SceneAS : register(t5, space1);
-StructuredBuffer<PerInstanceData> g_Instances : register(t10, space1);
-StructuredBuffer<MaterialConstants> g_Materials : register(t11, space1);
-StructuredBuffer<VertexQuantized> g_Vertices : register(t12, space1);
-StructuredBuffer<MeshData> g_MeshData : register(t13, space1);
-StructuredBuffer<uint> g_Indices : register(t14, space1);
-SamplerState g_SamplerAnisoClamp : register(s0, space1);
-SamplerState g_SamplerAnisoWrap  : register(s1, space1);
+Texture2D<float4> g_GBufferAlbedo    : register(t0);
+Texture2D<float2> g_GBufferNormals   : register(t1);
+Texture2D<float4> g_GBufferORM       : register(t2);
+Texture2D<float4> g_GBufferEmissive  : register(t3);
+Texture2D<float2> g_GBufferMotion    : register(t7);
+Texture2D<float>  g_Depth            : register(t4);
+RaytracingAccelerationStructure g_SceneAS : register(t5);
+StructuredBuffer<PerInstanceData> g_Instances : register(t10);
+StructuredBuffer<MaterialConstants> g_Materials : register(t11);
+StructuredBuffer<VertexQuantized> g_Vertices : register(t12);
+StructuredBuffer<MeshData> g_MeshData : register(t13);
+StructuredBuffer<uint> g_Indices : register(t14);
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -78,8 +75,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     lightingInputs.materials = g_Materials;
     lightingInputs.indices = g_Indices;
     lightingInputs.vertices = g_Vertices;
-    lightingInputs.clampSampler = g_SamplerAnisoClamp;
-    lightingInputs.wrapSampler = g_SamplerAnisoWrap;
 
     PrepareLightingByproducts(lightingInputs);
 

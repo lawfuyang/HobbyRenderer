@@ -598,6 +598,7 @@ void Renderer::Initialize()
     }
 
     InitializeGlobalBindlessTextures();
+    InitializeGlobalBindlessSamplers();
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
     m_BasePassResources.Initialize();
@@ -862,10 +863,13 @@ void Renderer::Shutdown()
     CommonResources::GetInstance().Shutdown();
     m_BasePassResources.~BasePassResources(); // explicit destructor call to ensure release of GPU resources
 
-    // Shutdown global bindless texture system
+    // Shutdown global bindless systems
     m_GlobalTextureDescriptorTable = nullptr;
     m_GlobalTextureBindingLayout = nullptr;
     m_NextTextureIndex = 0;
+
+    m_GlobalSamplerDescriptorTable = nullptr;
+    m_GlobalSamplerBindingLayout = nullptr;
 
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
@@ -972,6 +976,7 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindingLayoutFromBindingSetDesc(
     nvrhi::BindingLayoutDesc layoutDesc;
     layoutDesc.visibility = nvrhi::ShaderType::All;
     layoutDesc.registerSpace = registerSpace;
+    layoutDesc.registerSpaceIsDescriptorSet = true;
     layoutDesc.bindingOffsets.shaderResource = SPIRV_TEXTURE_SHIFT;
     layoutDesc.bindingOffsets.sampler = SPIRV_SAMPLER_SHIFT;
     layoutDesc.bindingOffsets.constantBuffer = SPIRV_CBUFFER_SHIFT;
@@ -1104,6 +1109,55 @@ bool Renderer::RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle textu
         return false;
     }
     SDL_Log("[Renderer] Registered texture (%s) at index %u", texture->getDesc().debugName.c_str(), index);
+    return true;
+}
+
+void Renderer::InitializeGlobalBindlessSamplers()
+{
+    static const uint32_t kInitialSamplerCapacity = 128;
+
+    // Create bindless layout for global samplers
+    nvrhi::BindlessLayoutDesc bindlessDesc;
+    bindlessDesc.visibility = nvrhi::ShaderType::All;
+    bindlessDesc.maxCapacity = kInitialSamplerCapacity;
+    bindlessDesc.layoutType = nvrhi::BindlessLayoutDesc::LayoutType::MutableSampler;
+
+    m_GlobalSamplerBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
+    if (!m_GlobalSamplerBindingLayout)
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to create global bindless layout for samplers", "[Renderer] Failed to create global bindless layout for samplers");
+        return;
+    }
+
+    // Create descriptor table
+    m_GlobalSamplerDescriptorTable = m_RHI->m_NvrhiDevice->createDescriptorTable(m_GlobalSamplerBindingLayout);
+    if (!m_GlobalSamplerDescriptorTable)
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to create global sampler descriptor table", "[Renderer] Failed to create global sampler descriptor table");
+        return;
+    }
+
+    m_RHI->m_NvrhiDevice->resizeDescriptorTable(m_GlobalSamplerDescriptorTable, bindlessDesc.maxCapacity, false);
+
+    SDL_Log("[Renderer] Global bindless sampler system initialized");
+}
+
+bool Renderer::RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampler)
+{
+    if (!sampler || !m_GlobalSamplerDescriptorTable)
+    {
+        return false;
+    }
+
+    SINGLE_THREAD_GUARD();
+
+    const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Sampler(index, sampler);
+    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_GlobalSamplerDescriptorTable, item))
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to register sampler in global descriptor table", "[Renderer] Failed to register sampler at index %u", index);
+        return false;
+    }
+    SDL_Log("[Renderer] Registered sampler at index %u", index);
     return true;
 }
 
@@ -1269,18 +1323,20 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
 
     std::vector<nvrhi::BindingSetHandle> bindingSets;
 
-    if (params.useBindlessTextures)
-    {
-        desc.bindingLayouts.push_back(GetGlobalTextureBindingLayout());
-        bindingSets.push_back(GetGlobalTextureDescriptorTable());
-    }
-
-    const uint32_t registerSpace = params.useBindlessTextures ? (m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? 0 : 1) : 0;
-    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc, registerSpace);
+    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc);
     const nvrhi::BindingSetHandle bindingSet = m_RHI->m_NvrhiDevice->createBindingSet(params.bindingSetDesc, layout);
 
     desc.bindingLayouts.push_back(layout);
     bindingSets.push_back(bindingSet);
+
+    if (params.useBindlessResources)
+    {
+        desc.bindingLayouts.push_back(GetGlobalTextureBindingLayout());
+        bindingSets.push_back(GetGlobalTextureDescriptorTable());
+
+        desc.bindingLayouts.push_back(GetGlobalSamplerBindingLayout());
+        bindingSets.push_back(GetGlobalSamplerDescriptorTable());
+    }
 
     desc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
     desc.renderState.depthStencilState.depthTestEnable = false;
@@ -1320,22 +1376,24 @@ void Renderer::AddComputePass(const RenderPassParams& params)
     nvrhi::BindingLayoutVector layouts;
     std::vector<nvrhi::BindingSetHandle> bindingSets;
 
-    if (params.useBindlessTextures)
-    {
-        layouts.push_back(GetGlobalTextureBindingLayout());
-        bindingSets.push_back(GetGlobalTextureDescriptorTable());
-    }
-
-    const uint32_t registerSpace = params.useBindlessTextures ? (m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? 0 : 1) : 0;
-    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc, registerSpace);
+    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc);
     const nvrhi::BindingSetHandle bindingSet = m_RHI->m_NvrhiDevice->createBindingSet(params.bindingSetDesc, layout);
-    
+
     layouts.push_back(layout);
     bindingSets.push_back(bindingSet);
 
+    if (params.useBindlessResources)
+    {
+        layouts.push_back(GetGlobalTextureBindingLayout());
+        bindingSets.push_back(GetGlobalTextureDescriptorTable());
+
+        layouts.push_back(GetGlobalSamplerBindingLayout());
+        bindingSets.push_back(GetGlobalSamplerDescriptorTable());
+    }
+
     nvrhi::ComputeState state;
     state.pipeline = GetOrCreateComputePipeline(GetShaderHandle(params.shaderName), layouts);
-    for (const auto& bindingSet : bindingSets)
+    for (const nvrhi::BindingSetHandle& bindingSet : bindingSets)
     {
         state.bindings.push_back(bindingSet.Get());
     }

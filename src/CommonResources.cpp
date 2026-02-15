@@ -77,6 +77,16 @@ void CommonResources::Initialize()
         MinReductionClamp = createSampler("MinReductionClamp", desc);
     }
 
+    // Register common samplers with global sampler descriptor heap
+    renderer->RegisterSamplerAtIndex(SAMPLER_ANISOTROPIC_CLAMP_INDEX, AnisotropicClamp);
+    renderer->RegisterSamplerAtIndex(SAMPLER_ANISOTROPIC_WRAP_INDEX, AnisotropicWrap);
+    renderer->RegisterSamplerAtIndex(SAMPLER_POINT_CLAMP_INDEX, PointClamp);
+    renderer->RegisterSamplerAtIndex(SAMPLER_POINT_WRAP_INDEX, PointWrap);
+    renderer->RegisterSamplerAtIndex(SAMPLER_LINEAR_CLAMP_INDEX, LinearClamp);
+    renderer->RegisterSamplerAtIndex(SAMPLER_LINEAR_WRAP_INDEX, LinearWrap);
+    renderer->RegisterSamplerAtIndex(SAMPLER_MIN_REDUCTION_INDEX, MinReductionClamp);
+    renderer->RegisterSamplerAtIndex(SAMPLER_MAX_REDUCTION_INDEX, MaxReductionClamp);
+
     // Initialize common raster states
     // glTF spec says counter-clockwise is front face, but Vulkan viewport flip reverses winding
     // With X negation in projection for Vulkan, winding is flipped again

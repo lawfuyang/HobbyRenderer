@@ -120,7 +120,7 @@ struct Renderer
         nvrhi::CommandListHandle commandList;
         std::string_view shaderName;
         nvrhi::BindingSetDesc bindingSetDesc;
-        bool useBindlessTextures = false;
+        bool useBindlessResources = false;
         const void* pushConstants = nullptr;
         size_t pushConstantsSize = 0;
         // Compute specific
@@ -140,6 +140,12 @@ struct Renderer
     bool RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle texture);
     nvrhi::DescriptorTableHandle GetGlobalTextureDescriptorTable() const { return m_GlobalTextureDescriptorTable; }
     nvrhi::BindingLayoutHandle GetGlobalTextureBindingLayout() const { return m_GlobalTextureBindingLayout; }
+
+    // Global Sampler Descriptor Heap
+    void InitializeGlobalBindlessSamplers();
+    bool RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampler);
+    nvrhi::DescriptorTableHandle GetGlobalSamplerDescriptorTable() const { return m_GlobalSamplerDescriptorTable; }
+    nvrhi::BindingLayoutHandle GetGlobalSamplerBindingLayout() const { return m_GlobalSamplerBindingLayout; }
 
     // Public Methods
     double GetFrameTimeMs() const { return m_FrameTime; }
@@ -235,6 +241,10 @@ private:
     nvrhi::DescriptorTableHandle m_GlobalTextureDescriptorTable;
     nvrhi::BindingLayoutHandle m_GlobalTextureBindingLayout;
     uint32_t m_NextTextureIndex = DEFAULT_TEXTURE_COUNT;
+
+    // Global sampler descriptor heap
+    nvrhi::DescriptorTableHandle m_GlobalSamplerDescriptorTable;
+    nvrhi::BindingLayoutHandle m_GlobalSamplerBindingLayout;
 
     // GPU Timing
     nvrhi::TimerQueryHandle m_GPUQueries[2];

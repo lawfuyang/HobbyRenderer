@@ -133,8 +133,6 @@ struct LightingInputs
     StructuredBuffer<MaterialConstants> materials;
     StructuredBuffer<uint> indices;
     StructuredBuffer<VertexQuantized> vertices;
-    SamplerState clampSampler;
-    SamplerState wrapSampler;
 
     // Derived values
     float3 F0;       // Base reflectivity at normal incidence
@@ -266,7 +264,7 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs)
                     
                     bool hasAlbedo = (mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0;
                     float4 albedoSample = hasAlbedo 
-                        ? SampleBindlessTextureGrad(mat.m_AlbedoTextureIndex, inputs.clampSampler, inputs.wrapSampler, mat.m_AlbedoSamplerIndex, uv, ddx_uv, ddy_uv)
+                        ? SampleBindlessTextureGrad(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uv, ddx_uv, ddy_uv)
                         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
                     
                     float alpha = hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
@@ -304,9 +302,11 @@ IBLComponents ComputeIBL(LightingInputs inputs)
 {
     IBLComponents components;
 
+    SamplerState clampSampler = SamplerDescriptorHeap[SAMPLER_ANISOTROPIC_CLAMP_INDEX];
+
     // Diffuse IBL
     TextureCube irradianceMap = ResourceDescriptorHeap[DEFAULT_TEXTURE_IRRADIANCE];
-    float3 irradiance = irradianceMap.Sample(inputs.clampSampler, inputs.N).rgb;
+    float3 irradiance = irradianceMap.Sample(clampSampler, inputs.N).rgb;
     float3 diffuseIBL = irradiance * inputs.baseColor * inputs.kD;
 
     // Specular IBL
@@ -314,10 +314,10 @@ IBLComponents ComputeIBL(LightingInputs inputs)
     float3 R = reflect(-inputs.V, inputs.N);
     
     float mipLevel = inputs.roughness * (float(inputs.radianceMipCount) - 1.0f);
-    float3 prefilteredColor = prefilteredEnvMap.SampleLevel(inputs.clampSampler, R, mipLevel).rgb;
+    float3 prefilteredColor = prefilteredEnvMap.SampleLevel(clampSampler, R, mipLevel).rgb;
 
     Texture2D brdfLut = ResourceDescriptorHeap[DEFAULT_TEXTURE_BRDF_LUT];
-    float2 brdf = brdfLut.SampleLevel(inputs.clampSampler, float2(inputs.NdotV, inputs.roughness), 0).rg;
+    float2 brdf = brdfLut.SampleLevel(clampSampler, float2(inputs.NdotV, inputs.roughness), 0).rg;
 
     float3 specularIBL = prefilteredColor * (inputs.F0 * brdf.x + brdf.y);
 

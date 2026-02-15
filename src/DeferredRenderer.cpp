@@ -42,8 +42,6 @@ public:
         nvrhi::TextureHandle gbufferMotionVectors = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
-        nvrhi::BindingSetDesc bset;
-        // ... rest of the bindings ...
         const Vector3 camPos = renderer->m_Camera.GetPosition();
 
         // Deferred CB
@@ -62,8 +60,9 @@ public:
         dcb.m_RadianceMipCount = CommonResources::GetInstance().RadianceTexture->getDesc().mipLevels;
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
+        nvrhi::BindingSetDesc bset;
         bset.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(1, deferredCB),
+            nvrhi::BindingSetItem::ConstantBuffer(0, deferredCB),
             nvrhi::BindingSetItem::Texture_SRV(0, gbufferAlbedo),
             nvrhi::BindingSetItem::Texture_SRV(1, gbufferNormals),
             nvrhi::BindingSetItem::Texture_SRV(2, gbufferORM),
@@ -75,16 +74,14 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(11, renderer->m_Scene.m_MaterialConstantsBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_VertexBufferQuantized),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(13, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().AnisotropicClamp),
-            nvrhi::BindingSetItem::Sampler(1, CommonResources::GetInstance().AnisotropicWrap)
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer)
         };
 
         Renderer::RenderPassParams params{
             .commandList = commandList,
             .shaderName = "DeferredLighting_DeferredLighting_PSMain",
             .bindingSetDesc = bset,
-            .useBindlessTextures = true,
+            .useBindlessResources = true,
             .framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor))
         };
 

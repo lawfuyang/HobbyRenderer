@@ -44,6 +44,19 @@
       float4 pos : SV_Position;
       float2 uv : TEXCOORD0;
   };
+
+  uint32_t DivideAndRoundUp(uint32_t dividend, uint32_t divisor)
+  {
+    return (dividend + divisor - 1) / divisor;
+  }
+
+  float GetMaxScale(Matrix m)
+  {
+    return max(length(m[0].xyz), max(length(m[1].xyz), length(m[2].xyz)));
+  }
+
+#define DEPTH_NEAR 1.0f
+#define DEPTH_FAR 0.0f
 #endif
 
 struct ImGuiPushConstants
@@ -52,7 +65,10 @@ struct ImGuiPushConstants
 	Vector2 uTranslate;
 };
 
-// Forward lighting related shared types
+static const float PI = 3.14159265359f;
+static const uint32_t kThreadsPerGroup = 32;
+static const uint32_t kMaxMeshletVertices = 64;
+static const uint32_t kMaxMeshletTriangles = 96;
 
 #define DEBUG_MODE_NONE 0
 #define DEBUG_MODE_INSTANCES 1
@@ -67,6 +83,32 @@ struct ImGuiPushConstants
 #define DEBUG_MODE_RADIANCE 10
 #define DEBUG_MODE_IBL 11
 #define DEBUG_MODE_MOTION_VECTORS 12
+
+#define TEXFLAG_ALBEDO (1u << 0)
+#define TEXFLAG_NORMAL (1u << 1)
+#define TEXFLAG_ROUGHNESS_METALLIC (1u << 2)
+#define TEXFLAG_EMISSIVE (1u << 3)
+
+// Default texture indices for bindless access
+#define DEFAULT_TEXTURE_BLACK 0
+#define DEFAULT_TEXTURE_WHITE 1
+#define DEFAULT_TEXTURE_GRAY 2
+#define DEFAULT_TEXTURE_NORMAL 3
+#define DEFAULT_TEXTURE_PBR 4
+#define DEFAULT_TEXTURE_BRDF_LUT 5
+#define DEFAULT_TEXTURE_IRRADIANCE 6
+#define DEFAULT_TEXTURE_RADIANCE 7
+#define DEFAULT_TEXTURE_COUNT 8
+
+// Global Sampler Indices
+#define SAMPLER_ANISOTROPIC_CLAMP_INDEX 0
+#define SAMPLER_ANISOTROPIC_WRAP_INDEX 1
+#define SAMPLER_POINT_CLAMP_INDEX 2
+#define SAMPLER_POINT_WRAP_INDEX 3
+#define SAMPLER_LINEAR_CLAMP_INDEX 4
+#define SAMPLER_LINEAR_WRAP_INDEX 5
+#define SAMPLER_MIN_REDUCTION_INDEX 6
+#define SAMPLER_MAX_REDUCTION_INDEX 7
 
 #define MAX_LOD_COUNT 8
 
@@ -114,19 +156,6 @@ struct VertexQuantized
   uint32_t m_Normal; // 10-10-10-2 snorm
   uint32_t m_Uv;     // half2
 };
-
-#ifndef __cplusplus
-Vertex UnpackVertex(VertexQuantized vq)
-{
-    Vertex v;
-    v.m_Pos = vq.m_Pos;
-    v.m_Normal.x = float(vq.m_Normal & 1023) / 511.0f - 1.0f;
-    v.m_Normal.y = float((vq.m_Normal >> 10) & 1023) / 511.0f - 1.0f;
-    v.m_Normal.z = float((vq.m_Normal >> 20) & 1023) / 511.0f - 1.0f;
-    v.m_Uv = f16tof32(uint2(vq.m_Uv & 0xFFFF, vq.m_Uv >> 16));
-    return v;
-}
-#endif
 
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
@@ -329,48 +358,15 @@ struct BloomConstants
     float m_UpsampleRadius;
 };
 
-#ifdef __cplusplus
-inline uint32_t DivideAndRoundUp(uint32_t dividend, uint32_t divisor)
+#if !defined(__cplusplus)
+Vertex UnpackVertex(VertexQuantized vq)
 {
-    return (dividend + divisor - 1) / divisor;
+  Vertex v;
+  v.m_Pos = vq.m_Pos;
+  v.m_Normal.x = float(vq.m_Normal & 1023) / 511.0f - 1.0f;
+  v.m_Normal.y = float((vq.m_Normal >> 10) & 1023) / 511.0f - 1.0f;
+  v.m_Normal.z = float((vq.m_Normal >> 20) & 1023) / 511.0f - 1.0f;
+  v.m_Uv = f16tof32(uint2(vq.m_Uv & 0xFFFF, vq.m_Uv >> 16));
+  return v;
 }
-#else
-uint32_t DivideAndRoundUp(uint32_t dividend, uint32_t divisor)
-{
-    return (dividend + divisor - 1) / divisor;
-}
-#endif
-
-static const float PI = 3.14159265359f;
-static const uint32_t kThreadsPerGroup = 32;
-static const uint32_t kMaxMeshletVertices = 64;
-static const uint32_t kMaxMeshletTriangles = 96;
-
-#define TEXFLAG_ALBEDO (1u << 0)
-#define TEXFLAG_NORMAL (1u << 1)
-#define TEXFLAG_ROUGHNESS_METALLIC (1u << 2)
-#define TEXFLAG_EMISSIVE (1u << 3)
-
-// Default texture indices for bindless access
-#define DEFAULT_TEXTURE_BLACK 0
-#define DEFAULT_TEXTURE_WHITE 1
-#define DEFAULT_TEXTURE_GRAY 2
-#define DEFAULT_TEXTURE_NORMAL 3
-#define DEFAULT_TEXTURE_PBR 4
-#define DEFAULT_TEXTURE_BRDF_LUT 5
-#define DEFAULT_TEXTURE_IRRADIANCE 6
-#define DEFAULT_TEXTURE_RADIANCE 7
-#define DEFAULT_TEXTURE_COUNT 8
-
-#define SAMPLER_CLAMP_INDEX 0
-#define SAMPLER_WRAP_INDEX 1
-
-#ifndef __cplusplus
-float GetMaxScale(Matrix m)
-{
-    return max(length(m[0].xyz), max(length(m[1].xyz), length(m[2].xyz)));
-}
-
-#define DEPTH_NEAR 1.0f
-#define DEPTH_FAR 0.0f
-#endif
+#endif // __cplusplus

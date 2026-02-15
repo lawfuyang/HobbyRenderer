@@ -308,16 +308,10 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         nvrhi::BindingSetItem::Texture_SRV(8, renderer->m_HZBTexture),
         nvrhi::BindingSetItem::RayTracingAccelStruct(9, renderer->m_Scene.m_TLAS),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_IndexBuffer),
-        nvrhi::BindingSetItem::Texture_SRV(11, opaqueColor),
-        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().AnisotropicClamp),
-        nvrhi::BindingSetItem::Sampler(1, CommonResources::GetInstance().AnisotropicWrap),
-        nvrhi::BindingSetItem::Sampler(2, CommonResources::GetInstance().MinReductionClamp)
+        nvrhi::BindingSetItem::Texture_SRV(11, opaqueColor)
     };
 
-    // in Vulkan, space 0 is reserved for bindless, so we use space 1 for other bindings
-    const uint32_t registerSpace = renderer->m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? 0 : 1;
-
-    const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset, registerSpace);
+    const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
     const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
     ForwardLightingPerFrameData cb{};
@@ -377,7 +371,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         meshPipelineDesc.MS = renderer->GetShaderHandle("BasePass_MSMain");
         meshPipelineDesc.PS = renderer->GetShaderHandle(psName);
         meshPipelineDesc.renderState = renderState;
-        meshPipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
+        meshPipelineDesc.bindingLayouts = { layout, renderer->GetGlobalTextureBindingLayout(), renderer->GetGlobalSamplerBindingLayout() };
         meshPipelineDesc.useDrawIndex = true;
 
         const nvrhi::MeshletPipelineHandle meshPipeline = renderer->GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
@@ -385,7 +379,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         nvrhi::MeshletState meshState;
         meshState.framebuffer = framebuffer;
         meshState.pipeline = meshPipeline;
-        meshState.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
+        meshState.bindings = { bindingSet, renderer->GetGlobalTextureDescriptorTable(), renderer->GetGlobalSamplerDescriptorTable() };
         meshState.viewport = viewportState;
         meshState.indirectParams = handles.meshletIndirect;
         meshState.indirectCountBuffer = handles.meshletJobCount;
@@ -400,14 +394,14 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         pipelineDesc.PS = renderer->GetShaderHandle(psName);
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
         pipelineDesc.renderState = renderState;
-        pipelineDesc.bindingLayouts = { renderer->GetGlobalTextureBindingLayout(), layout };
+        pipelineDesc.bindingLayouts = { layout, renderer->GetGlobalTextureBindingLayout(), renderer->GetGlobalSamplerBindingLayout() };
         pipelineDesc.useDrawIndex = true;
 
         nvrhi::GraphicsState state;
         state.framebuffer = framebuffer;
         state.viewport = viewportState;
         state.indexBuffer = nvrhi::IndexBufferBinding{ renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
-        state.bindings = { renderer->GetGlobalTextureDescriptorTable(), bindingSet };
+        state.bindings = { bindingSet, renderer->GetGlobalTextureDescriptorTable(), renderer->GetGlobalSamplerDescriptorTable() };
         state.pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
         state.indirectParams = handles.visibleIndirect;
         state.indirectCountBuffer = handles.visibleCount;
