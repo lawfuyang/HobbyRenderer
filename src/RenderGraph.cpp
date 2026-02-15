@@ -535,6 +535,24 @@ void RenderGraph::InsertAliasBarriers(uint16_t passIndex, nvrhi::ICommandList* c
             if (texture.m_PhysicalTexture)
             {
                 commandList->insertAliasingBarrier(texture.m_PhysicalTexture);
+
+                // After an aliasing barrier activates a new placed resource on shared heap memory, D3D12 requires that the first GPU operation on that resource must be one of:
+                //     - DiscardResource() — invalidates all hardware compression metadata
+                //     - A full clear (ClearRenderTargetView, ClearDepthStencilView)
+                //     - A copy/write that covers the ENTIRE resource
+                // Just clear because im lazy
+                // Also, DiscardResource() implicitly modifies the resource state to RENDER_TARGET, which messes up the state tracking in nvrhi, and i dont want to deal with that
+                const nvrhi::TextureDesc& desc = texture.m_Desc.m_NvrhiDesc;
+                if (desc.format == nvrhi::Format::D16 ||
+                    desc.format == nvrhi::Format::D24S8 || desc.format == nvrhi::Format::D32 ||
+                    desc.format == nvrhi::Format::D32S8)
+                {
+                    commandList->clearDepthStencilTexture(texture.m_PhysicalTexture, nvrhi::AllSubresources, true, Renderer::DEPTH_FAR, false, 0);
+                }
+                else if (desc.isRenderTarget)
+                {
+                    commandList->clearTextureFloat(texture.m_PhysicalTexture, nvrhi::AllSubresources, desc.clearValue);
+                }
             }
         }
     }
@@ -1081,6 +1099,7 @@ void RenderGraph::RenderDebugUI()
         
         if (ImGui::Checkbox("Enable Aliasing", &m_AliasingEnabled))
         {
+            Reset();
             Shutdown();
         }
         
