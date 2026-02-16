@@ -287,6 +287,59 @@ void CommonResources::Initialize()
         LoadAndUpload(renderer->m_IrradianceTexture, "IrradianceTexture", IrradianceTexture, true);
         LoadAndUpload(renderer->m_RadianceTexture, "RadianceTexture", RadianceTexture, true);
 
+        // Load Bruneton Atmosphere textures
+        auto LoadBruneton = [&](const char* filename, const char* debugName, nvrhi::TextureHandle& outTexture, uint32_t width, uint32_t height, uint32_t depth = 1)
+        {
+            std::filesystem::path path = std::filesystem::path(basePath) / "bruneton" / filename;
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file.is_open())
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to load Bruneton texture", "Failed to open %s", path.generic_string().c_str());
+                return;
+            }
+
+            size_t size = file.tellg();
+            file.seekg(0, std::ios::beg);
+            std::vector<float> data(size / sizeof(float));
+            file.read(reinterpret_cast<char*>(data.data()), size);
+
+            const bool bUseHalfFloat = true; // We can use half float since the data is mostly low dynamic range, and it saves memory and bandwidth
+
+            nvrhi::TextureDesc desc;
+            desc.width = width;
+            desc.height = height;
+            desc.depth = depth;
+            desc.dimension = (depth > 1) ? nvrhi::TextureDimension::Texture3D : nvrhi::TextureDimension::Texture2D;
+            desc.format = bUseHalfFloat ? nvrhi::Format::RGBA16_FLOAT : nvrhi::Format::RGBA32_FLOAT;
+            desc.isShaderResource = true;
+            desc.debugName = debugName;
+            desc.initialState = nvrhi::ResourceStates::ShaderResource;
+            desc.keepInitialState = true;
+
+            outTexture = device->createTexture(desc);
+            SDL_assert(outTexture);
+
+            if (bUseHalfFloat)
+            {
+                std::vector<uint16_t> halfData(data.size());
+                for (size_t i = 0; i < data.size(); ++i)
+                {
+                    halfData[i] = DirectX::PackedVector::XMConvertFloatToHalf(data[i]);
+                }
+
+                ::UploadTexture(commandList, outTexture, desc, halfData.data(), halfData.size() * sizeof(uint16_t));
+            }
+            else
+            {
+                ::UploadTexture(commandList, outTexture, desc, data.data(), data.size() * sizeof(float));
+            }
+        };
+
+        // Bruneton constants from atmosphere/constants.h
+        LoadBruneton("transmittance.dat", "BrunetonTransmittance", BrunetonTransmittance, 256, 64);
+        LoadBruneton("scattering.dat", "BrunetonScattering", BrunetonScattering, 256, 128, 32); // WIDTH=NU_SIZE*MU_S_SIZE = 8*32 = 256, HEIGHT=128, DEPTH=32
+        LoadBruneton("irradiance.dat", "BrunetonIrradiance", BrunetonIrradiance, 64, 16);
+
         // Black texture
         uint32_t blackPixel = 0xFF000000; // RGBA(0,0,0,255)
         commandList->writeTexture(DefaultTextureBlack, 0, 0, &blackPixel, sizeof(uint32_t), 0);
@@ -326,11 +379,19 @@ void CommonResources::RegisterDefaultTextures()
     renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_BRDF_LUT, BRDF_LUT);
     renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_IRRADIANCE, IrradianceTexture);
     renderer->RegisterTextureAtIndex(DEFAULT_TEXTURE_RADIANCE, RadianceTexture);
+
+    renderer->RegisterTextureAtIndex(BRUNETON_TRANSMITTANCE_TEXTURE, BrunetonTransmittance);
+    renderer->RegisterTextureAtIndex(BRUNETON_SCATTERING_TEXTURE, BrunetonScattering);
+    renderer->RegisterTextureAtIndex(BRUNETON_IRRADIANCE_TEXTURE, BrunetonIrradiance);
+
     SDL_Log("[CommonResources] Default textures registered with bindless system");
 }
 
 void CommonResources::Shutdown()
 {
+    BrunetonIrradiance = nullptr;
+    BrunetonScattering = nullptr;
+    BrunetonTransmittance = nullptr;
     RadianceTexture = nullptr;
     IrradianceTexture = nullptr;
     BRDF_LUT = nullptr;

@@ -42,6 +42,7 @@
 
 // DirectXMath aliases moved from MathTypes.h
 #include <DirectXMath.h>
+#include <DirectXPackedVector.h>
 #include <DirectXCollision.h>
 
 #include <dxgiformat.h>

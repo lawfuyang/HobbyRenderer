@@ -67,6 +67,11 @@ public:
     nvrhi::TextureHandle IrradianceTexture;          // Irradiance cubemap for IBL
     nvrhi::TextureHandle RadianceTexture;            // Radiance cubemap (filtered environment) for IBL
 
+    // Bruneton Atmosphere textures
+    nvrhi::TextureHandle BrunetonTransmittance;
+    nvrhi::TextureHandle BrunetonScattering;
+    nvrhi::TextureHandle BrunetonIrradiance;
+
     // Default buffers
     nvrhi::BufferHandle DummyUAVBuffer;    // Empty structured buffer
 
