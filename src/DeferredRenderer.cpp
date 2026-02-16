@@ -53,8 +53,7 @@ public:
         DeferredLightingConstants dcb{};
         dcb.m_View = renderer->m_View;
         dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
-        dcb.m_LightDirection = renderer->m_Scene.GetDirectionalLightDirection();
-        dcb.m_LightIntensity = renderer->m_Scene.m_DirectionalLight.intensity / 10000.0f;
+        dcb.m_LightCount = renderer->m_Scene.m_LightCount;
         dcb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
         dcb.m_DebugMode = renderer->m_DebugMode;
         dcb.m_EnableIBL = renderer->m_EnableIBL ? 1 : 0;
@@ -72,6 +71,7 @@ public:
             nvrhi::BindingSetItem::Texture_SRV(7, gbufferMotionVectors),
             nvrhi::BindingSetItem::Texture_SRV(4, depthTexture),
             nvrhi::BindingSetItem::RayTracingAccelStruct(5, renderer->m_Scene.m_TLAS),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_LightBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_InstanceDataBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(11, renderer->m_Scene.m_MaterialConstantsBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_VertexBufferQuantized),

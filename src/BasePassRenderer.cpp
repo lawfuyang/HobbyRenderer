@@ -308,7 +308,8 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         nvrhi::BindingSetItem::Texture_SRV(8, renderer->m_HZBTexture),
         nvrhi::BindingSetItem::RayTracingAccelStruct(9, renderer->m_Scene.m_TLAS),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_IndexBuffer),
-        nvrhi::BindingSetItem::Texture_SRV(11, opaqueColor)
+        nvrhi::BindingSetItem::Texture_SRV(11, opaqueColor),
+        nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_LightBuffer)
     };
 
     const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
@@ -329,8 +330,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     }
     cb.m_CullingCameraPos = Vector4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f };
 
-    cb.m_LightDirection = renderer->m_Scene.GetDirectionalLightDirection();
-    cb.m_LightIntensity = renderer->m_Scene.m_DirectionalLight.intensity / 10000.0f;
+    cb.m_LightCount = renderer->m_Scene.m_LightCount;
     cb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
     cb.m_DebugMode = (uint32_t)renderer->m_DebugMode;
     cb.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;

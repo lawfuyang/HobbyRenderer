@@ -33,8 +33,8 @@ public:
     // Texture and GPU buffer functions
     static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sceneDir, Renderer* renderer);
     static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer);
-    static void SetupDirectionalLightAndCamera(Scene& scene, Renderer* renderer);
     static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices);
+    static void CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer);
 
 private:
     // Utility functions

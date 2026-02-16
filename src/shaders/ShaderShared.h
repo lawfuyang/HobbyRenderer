@@ -157,6 +157,20 @@ struct VertexQuantized
   uint32_t m_Uv;     // half2
 };
 
+struct GPULight
+{
+    Vector3 m_Position;
+    float m_Intensity;
+    Vector3 m_Direction;
+    uint32_t m_Type;
+    Vector3 m_Color;
+    float m_Range;
+    float m_SpotInnerConeAngle;
+    float m_SpotOuterConeAngle;
+    float m_Radius;
+    uint32_t pad0;
+};
+
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
 {
@@ -165,8 +179,7 @@ struct ForwardLightingPerFrameData
   Vector4 m_FrustumPlanes[5];
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
   Vector4 m_CullingCameraPos; // xyz: culling camera position
-  Vector3 m_LightDirection;
-  float m_LightIntensity;
+  uint32_t m_LightCount;
   uint32_t m_EnableRTShadows;
   uint32_t m_DebugMode;
   uint32_t m_EnableFrustumCulling;
@@ -180,21 +193,20 @@ struct ForwardLightingPerFrameData
   float m_IBLIntensity;
   uint32_t m_RadianceMipCount;
   Vector2 m_OpaqueColorDimensions;
-  uint32_t pad0[2];
+  uint32_t pad0[3];
 };
 
 struct DeferredLightingConstants
 {
   PlanarViewConstants m_View;
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
-  Vector3 m_LightDirection;
-  float m_LightIntensity;
+  uint32_t m_LightCount;
   uint32_t m_EnableRTShadows;
   uint32_t m_DebugMode;
   uint32_t m_EnableIBL;
   float m_IBLIntensity;
   uint32_t m_RadianceMipCount;
-  uint32_t pad1;
+  uint32_t pad1[2];
 };
 
 // Material constants (persistent, per-material data)

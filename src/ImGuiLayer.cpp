@@ -129,13 +129,73 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
-        // Directional Light controls
-        if (ImGui::TreeNode("Directional Light"))
+        // Lights controls
+        if (ImGui::TreeNode("Lights"))
         {
-            ImGui::DragFloat("Yaw", &renderer->m_Scene.m_DirectionalLight.yaw, 0.01f, -std::numbers::pi_v<float>, std::numbers::pi_v<float>);
-            ImGui::DragFloat("Pitch", &renderer->m_Scene.m_DirectionalLight.pitch, 0.01f, -std::numbers::pi_v<float> *0.5f, std::numbers::pi_v<float> *0.5f);
-            ImGui::DragFloat("Lux", &renderer->m_Scene.m_DirectionalLight.intensity, 100.0f, 0.0f, 200000.0f);
+            if (!renderer->m_Scene.m_Lights.empty() && renderer->m_Scene.m_Lights[0].m_Type == Scene::Light::Directional)
+            {
+                Scene::Light& sun = renderer->m_Scene.m_Lights[0];
+                if (sun.m_NodeIndex != -1)
+                {
+                    if (ImGui::TreeNode("Sun Orientation"))
+                    {
+                        static float yaw = 0.0f;
+                        static float pitch = 0.0f;
+                        static bool initialized = false;
 
+                        Scene::Node& node = renderer->m_Scene.m_Nodes[sun.m_NodeIndex];
+
+                        if (!initialized)
+                        {
+                            using namespace DirectX;
+                            XMVECTOR q = XMLoadFloat4(&node.m_Rotation);
+                            XMVECTOR forward = XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
+                            XMVECTOR dir = XMVector3Rotate(forward, q);
+                            XMFLOAT3 d;
+                            XMStoreFloat3(&d, dir);
+
+                            pitch = asinf(std::clamp(-d.y, -1.0f, 1.0f));
+                            yaw = atan2f(d.x, -d.z);
+                            initialized = true;
+                        }
+
+                        bool changed = false;
+                        changed |= ImGui::SliderAngle("Yaw", &yaw, -180.0f, 180.0f);
+                        changed |= ImGui::SliderAngle("Pitch", &pitch, -90.0f, 90.0f);
+
+                        if (changed)
+                        {
+                            using namespace DirectX;
+                            XMVECTOR rotationQuat = XMQuaternionRotationRollPitchYaw(pitch, yaw, 0.0f);
+                            XMStoreFloat4(&node.m_Rotation, rotationQuat);
+                            node.m_IsDirty = true;
+                            renderer->m_Scene.m_LightsDirty = true;
+                        }
+
+                        ImGui::TreePop();
+                    }
+                }
+            }
+
+            for (size_t i = 0; i < renderer->m_Scene.m_Lights.size(); ++i)
+            {
+                Scene::Light& light = renderer->m_Scene.m_Lights[i];
+                std::string label = light.m_Name.empty() ? ("Light " + std::to_string(i)) : light.m_Name;
+                if (ImGui::TreeNode(label.c_str()))
+                {
+                    const char* types[] = { "Directional", "Point", "Spot" };
+                    ImGui::Text("Type: %s", types[light.m_Type]);
+                    renderer->m_Scene.m_LightsDirty |= ImGui::ColorEdit3("Color", (float*)&light.m_Color);
+                    renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Intensity", &light.m_Intensity, 0.1f, 0.0f, 10.0f);
+                    renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Range", &light.m_Range, 0.1f, 0.0f, 1000.0f);
+                    if (light.m_Type == Scene::Light::Spot)
+                    {
+                        renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Inner Angle", &light.m_SpotInnerConeAngle, 0.01f, 0.0f, light.m_SpotOuterConeAngle);
+                        renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Outer Angle", &light.m_SpotOuterConeAngle, 0.01f, light.m_SpotInnerConeAngle, DirectX::XM_PI);
+                    }
+                    ImGui::TreePop();
+                }
+            }
             ImGui::TreePop();
         }
 
@@ -158,7 +218,7 @@ void ImGuiLayer::UpdateFrame()
             if (!renderer->m_Scene.m_Cameras.empty())
             {
                 std::vector<const char*> cameraNames;
-                for (const auto& cam : renderer->m_Scene.m_Cameras)
+                for (const Scene::Camera& cam : renderer->m_Scene.m_Cameras)
                 {
                     cameraNames.push_back(cam.m_Name.empty() ? "Unnamed Camera" : cam.m_Name.c_str());
                 }

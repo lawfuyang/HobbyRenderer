@@ -2,6 +2,7 @@
 #include "Utilities.h"
 #include "Config.h"
 #include "CommonResources.h"
+#include "SceneLoader.h"
 
 #define FFX_CPU
 #define FFX_STATIC static
@@ -729,6 +730,12 @@ void Renderer::Run()
                         startIdx * sizeof(nvrhi::rt::InstanceDesc));
                 }
             }
+        }
+
+        if (m_Scene.m_LightsDirty)
+        {
+            SceneLoader::CreateAndUploadLightBuffer(m_Scene, this);
+            m_Scene.m_LightsDirty = false;
         }
 
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)

@@ -355,6 +355,27 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							ct = cgltf_skip_json(tokens.data(), ct + 1);
 						}
 					}
+					else if (type == "SpotLight")
+					{
+						scene.m_Lights.emplace_back();
+						Scene::Light& light = scene.m_Lights.back();
+						light.m_Type = Scene::Light::Spot;
+						light.m_Name = newNode.m_Name;
+						light.m_NodeIndex = nodeIdx;
+						newNode.m_LightIndex = (int)scene.m_Lights.size() - 1;
+
+						int ct = ctStart;
+						for (int ki = 0; ki < nKeys; ++ki)
+						{
+							if (json_strcmp(ctx, ct, "intensity")) light.m_Intensity = json_get_float(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "innerAngle")) light.m_SpotInnerConeAngle = json_get_float(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "outerAngle")) light.m_SpotOuterConeAngle = json_get_float(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "radius")) light.m_Radius = json_get_float(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "range")) light.m_Range = json_get_float(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "color")) light.m_Color = json_get_vec3(ctx, ct + 1);
+							ct = cgltf_skip_json(tokens.data(), ct + 1);
+						}
+					}
 				}
 
 				t = cgltf_skip_json(tokens.data(), t + 1);
@@ -857,21 +878,28 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
 	{
 		const cgltf_light& cgLight = data->lights[i];
+		if (cgLight.type == cgltf_light_type_point)
+			continue;
+
 		Scene::Light light;
 		light.m_Name = cgLight.name ? cgLight.name : std::string();
 		light.m_Color = Vector3{ cgLight.color[0], cgLight.color[1], cgLight.color[2] };
 		light.m_Intensity = cgLight.intensity;
 		light.m_Range = cgLight.range;
+		light.m_Radius = 0.0f;
 		light.m_SpotInnerConeAngle = cgLight.spot_inner_cone_angle;
 		light.m_SpotOuterConeAngle = cgLight.spot_outer_cone_angle;
 		if (cgLight.type == cgltf_light_type_directional)
 			light.m_Type = Scene::Light::Directional;
-		else if (cgLight.type == cgltf_light_type_point)
-			light.m_Type = Scene::Light::Point;
 		else if (cgLight.type == cgltf_light_type_spot)
 			light.m_Type = Scene::Light::Spot;
 		scene.m_Lights.push_back(std::move(light));
 	}
+
+	std::sort(scene.m_Lights.begin(), scene.m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
+	{
+		return a.m_Type < b.m_Type; // Directional < Spot < Point
+	});
 }
 
 void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
@@ -1405,37 +1433,6 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene,
 	}
 }
 
-void SceneLoader::SetupDirectionalLightAndCamera(Scene& scene, Renderer* renderer)
-{
-	SCOPED_TIMER("[Scene] Setup Lights+Camera");
-	for (const Scene::Light& light : scene.m_Lights)
-	{
-		if (light.m_Type == Scene::Light::Directional && light.m_NodeIndex >= 0 && light.m_NodeIndex < static_cast<int>(scene.m_Nodes.size()))
-		{
-			const Matrix& worldTransform = scene.m_Nodes[light.m_NodeIndex].m_WorldTransform;
-			const DirectX::XMMATRIX m = DirectX::XMLoadFloat4x4(&worldTransform);
-			const DirectX::XMVECTOR localDir = DirectX::XMVectorSet(0, 0, -1, 0);
-			const DirectX::XMVECTOR worldDir = DirectX::XMVector3TransformNormal(localDir, m);
-			DirectX::XMFLOAT3 dir;
-			DirectX::XMStoreFloat3(&dir, DirectX::XMVector3Normalize(worldDir));
-			const float yaw = atan2f(dir.x, dir.z);
-			const float pitch = asinf(dir.y);
-			scene.m_DirectionalLight.yaw = yaw;
-			scene.m_DirectionalLight.pitch = pitch;
-			scene.m_DirectionalLight.intensity = light.m_Intensity;
-			scene.m_DirectionalLight.angularSize = light.m_AngularSize;
-			break;
-		}
-	}
-
-	if (!scene.m_Cameras.empty())
-	{
-		const Scene::Camera& firstCam = scene.m_Cameras[0];
-		renderer->SetCameraFromSceneCamera(firstCam);
-		renderer->m_SelectedCameraIndex = 0;
-	}
-}
-
 void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices)
 {
 	SCOPED_TIMER("[Scene] GPU Upload");
@@ -1566,6 +1563,71 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		(scene.m_MeshletVertices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletVertices.size(),
 		(scene.m_MeshletTriangles.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletTriangles.size(),
 		(scene.m_InstanceData.size() * sizeof(PerInstanceData)) / (1024.0f * 1024.0f), scene.m_InstanceData.size());
+}
+
+void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
+{
+	std::vector<GPULight> gpuLights;
+
+	for (const Scene::Light& light : scene.m_Lights)
+	{
+		GPULight gl;
+		gl.m_Type = (uint32_t)light.m_Type;
+		gl.m_Color = light.m_Color;
+		gl.m_Intensity = light.m_Intensity;
+		gl.m_Range = light.m_Range;
+		gl.m_Radius = light.m_Radius;
+		gl.m_SpotInnerConeAngle = light.m_SpotInnerConeAngle;
+		gl.m_SpotOuterConeAngle = light.m_SpotOuterConeAngle;
+		gl.pad0 = 0;
+
+		if (light.m_NodeIndex != -1)
+		{
+			const Scene::Node& node = scene.m_Nodes[light.m_NodeIndex];
+			DirectX::XMMATRIX worldM = DirectX::XMLoadFloat4x4(&node.m_WorldTransform);
+
+			DirectX::XMVECTOR worldPosVec, worldScaleVec, worldRotVec;
+			DirectX::XMMatrixDecompose(&worldScaleVec, &worldRotVec, &worldPosVec, worldM);
+
+			DirectX::XMStoreFloat3(&gl.m_Position, worldPosVec);
+
+			DirectX::XMVECTOR localDirVec = DirectX::XMVectorSet(0, 0, -1, 0); // GLTF forward is -Z
+			DirectX::XMVECTOR worldDirVec = DirectX::XMVector3TransformNormal(localDirVec, worldM);
+			worldDirVec = DirectX::XMVector3Normalize(worldDirVec);
+			DirectX::XMStoreFloat3(&gl.m_Direction, worldDirVec);
+		}
+		else
+		{
+			gl.m_Position = Vector3(0, 0, 0);
+			gl.m_Direction = Vector3(0, -1, 0);
+		}
+
+		gpuLights.push_back(gl);
+	}
+
+	scene.m_LightCount = (uint32_t)gpuLights.size();
+
+	if (!gpuLights.empty())
+	{
+		bool needsNewBuffer = !scene.m_LightBuffer || (scene.m_LightBuffer->getDesc().byteSize < (uint32_t)(gpuLights.size() * sizeof(GPULight)));
+
+		if (needsNewBuffer)
+		{
+			nvrhi::BufferDesc desc;
+			desc.byteSize = (uint32_t)(gpuLights.size() * sizeof(GPULight));
+			desc.debugName = "LightBuffer";
+			desc.structStride = sizeof(GPULight);
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			desc.canHaveUAVs = true; // For potential future compute sorting
+
+			scene.m_LightBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		}
+
+		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+		ScopedCommandList scopedCmd(cmd, "Upload Light Buffer");
+		cmd->writeBuffer(scene.m_LightBuffer, gpuLights.data(), (uint32_t)(gpuLights.size() * sizeof(GPULight)));
+	}
 }
 
 bool SceneLoader::LoadGLTFScene(Scene& scene, const std::string& scenePath, std::vector<VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices)

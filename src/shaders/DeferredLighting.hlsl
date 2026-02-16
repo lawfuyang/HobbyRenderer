@@ -1,3 +1,4 @@
+#define DEFERRED_PASS
 #include "ShaderShared.h"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
@@ -19,6 +20,7 @@ StructuredBuffer<MaterialConstants> g_Materials : register(t11);
 StructuredBuffer<VertexQuantized> g_Vertices : register(t12);
 StructuredBuffer<MeshData> g_MeshData : register(t13);
 StructuredBuffer<uint> g_Indices : register(t14);
+StructuredBuffer<GPULight> g_Lights : register(t6);
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -28,7 +30,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     float depth = g_Depth.Load(uint3(uvInt, 0));
     if (depth == 0.0f) // Reversed-Z, 0 is far plane
     {
-        return float4(1.0f, 1.0f, 1.0f, 1.0f);
+        return float4(0,0,0,0);
     }
 
     float4 albedoAlpha = g_GBufferAlbedo.Load(uint3(uvInt, 0));
@@ -53,19 +55,16 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     float4 worldPosFour = mul(clipPos, g_Deferred.m_View.m_MatClipToWorld);
     float3 worldPos = worldPosFour.xyz / worldPosFour.w;
 
-    // Lighting calculations
     float3 V = normalize(g_Deferred.m_CameraPos.xyz - worldPos);
-    float3 L = g_Deferred.m_LightDirection;
 
     LightingInputs lightingInputs;
     lightingInputs.N = N;
     lightingInputs.V = V;
-    lightingInputs.L = L;
+    lightingInputs.L = float3(0, 1, 0); // Placeholder, updated in loop
     lightingInputs.baseColor = baseColor;
     lightingInputs.roughness = roughness;
     lightingInputs.metallic = metallic;
     lightingInputs.ior = 1.5f; // Default IOR for opaque
-    lightingInputs.lightIntensity = g_Deferred.m_LightIntensity;
     lightingInputs.worldPos = worldPos;
     lightingInputs.radianceMipCount = g_Deferred.m_RadianceMipCount;
     lightingInputs.enableRTShadows = g_Deferred.m_EnableRTShadows != 0;
@@ -75,12 +74,12 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     lightingInputs.materials = g_Materials;
     lightingInputs.indices = g_Indices;
     lightingInputs.vertices = g_Vertices;
+    lightingInputs.lights = g_Lights;
 
-    PrepareLightingByproducts(lightingInputs);
-
-    LightingComponents directLight = ComputeDirectionalLighting(lightingInputs);
-    float3 color = directLight.diffuse + directLight.specular;
+    LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
+    float3 color = directLighting.diffuse + directLighting.specular;
     
+    PrepareLightingByproducts(lightingInputs);
     IBLComponents iblComp = ComputeIBL(lightingInputs);
     float3 ibl = iblComp.ibl;
     ibl *= float(g_Deferred.m_EnableIBL) * g_Deferred.m_IBLIntensity;

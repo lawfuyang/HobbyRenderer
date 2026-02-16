@@ -74,7 +74,7 @@ struct Renderer
     static constexpr float DEPTH_NEAR = 1.0f;
     static constexpr float DEPTH_FAR = 0.0f;
     static constexpr nvrhi::Format HDR_COLOR_FORMAT = nvrhi::Format::R11G11B10_FLOAT;
-    inline static const nvrhi::Color kHDROutputClearColor = nvrhi::Color{ 0.1f };
+    inline static const nvrhi::Color kHDROutputClearColor = nvrhi::Color{};
 
     // Instance Management
     static void SetInstance(Renderer* instance);

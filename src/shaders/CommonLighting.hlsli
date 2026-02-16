@@ -133,6 +133,7 @@ struct LightingInputs
     StructuredBuffer<MaterialConstants> materials;
     StructuredBuffer<uint> indices;
     StructuredBuffer<VertexQuantized> vertices;
+    StructuredBuffer<GPULight> lights;
 
     // Derived values
     float3 F0;       // Base reflectivity at normal incidence
@@ -176,23 +177,41 @@ struct LightingComponents
     float3 specular;
 };
 
-LightingComponents ComputeDirectionalLighting(LightingInputs inputs)
+LightingComponents EvaluateDirectLight(LightingInputs inputs, float3 radiance, float shadow)
 {
     LightingComponents components;
 
-    //float diffuseTerm = OrenNayar(NdotL, inputs.NdotV, LdotV, inputs.roughness);
     float diffuseTerm = DisneyBurleyDiffuse(inputs.NdotL, inputs.NdotV, inputs.LdotH, inputs.roughness);
     float3 diffuse = diffuseTerm * inputs.kD * inputs.baseColor;
 
     float NDF = DistributionGGX(inputs.NdotH, inputs.roughness);
     float G = GeometrySmith(inputs.NdotV, inputs.NdotL, inputs.roughness);
-    float3 F = inputs.F;
 
-    float3 numerator = NDF * G * F; 
-    float denominator = 4.0 * inputs.NdotV * inputs.NdotL + 0.0001; // + 0.0001 to prevent divide by zero
+    float3 numerator = NDF * G * inputs.F; 
+    float denominator = 4.0 * inputs.NdotV * inputs.NdotL + 0.0001;
     float3 spec = numerator / denominator;
 
-    float3 radiance = float3(inputs.lightIntensity, inputs.lightIntensity, inputs.lightIntensity);
+    components.diffuse = diffuse * inputs.NdotL * radiance * shadow;
+    components.specular = spec * inputs.NdotL * radiance * shadow;
+
+    return components;
+}
+
+LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight light)
+{
+    LightingComponents result;
+    result.diffuse = 0;
+    result.specular = 0;
+
+    if (light.m_Intensity <= 0.0) return result;
+
+    float3 L = normalize(-light.m_Direction);
+    if (dot(inputs.N, L) <= 0.0) return result;
+
+    inputs.L = L;
+    PrepareLightingByproducts(inputs);
+
+    float3 radiance = light.m_Color * light.m_Intensity;
 
     // Raytraced shadows
     float shadow = 1.0f;
@@ -236,28 +255,21 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs)
 
                     float2 uv = uv0 * (1.0f - bary.x - bary.y) + uv1 * bary.x + uv2 * bary.y;
                     
-                    // Compute approximate UV gradients for proper texture filtering in ray tracing
-                    // Use triangle geometry and distance to estimate ddx/ddy
                     float3 p0 = mul(float4(v0.m_Pos, 1.0f), inst.m_World).xyz;
                     float3 p1 = mul(float4(v1.m_Pos, 1.0f), inst.m_World).xyz;
                     float3 p2 = mul(float4(v2.m_Pos, 1.0f), inst.m_World).xyz;
                     
-                    // Interpolate hit position using barycentrics
                     float3 hitPos = p0 * (1.0f - bary.x - bary.y) + p1 * bary.x + p2 * bary.y;
                     float dist = length(hitPos - ray.Origin);
                     
-                    // Compute triangle area in world space
                     float3 edge1 = p1 - p0;
                     float3 edge2 = p2 - p0;
                     float triangleArea = length(cross(edge1, edge2)) * 0.5f;
                     
-                    // Compute UV range across the triangle
                     float2 uvMin = min(uv0, min(uv1, uv2));
                     float2 uvMax = max(uv0, max(uv1, uv2));
                     float2 uvRange = uvMax - uvMin;
                     
-                    // Approximate gradient scale based on triangle size and distance
-                    // This provides a heuristic for proper mip selection
                     float gradientScale = triangleArea / max(dist, 0.1f);
                     float2 ddx_uv = uvRange * gradientScale;
                     float2 ddy_uv = uvRange * gradientScale;
@@ -276,11 +288,10 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs)
                 }
                 else if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
                 {
-                    // ignore. dont let transparent geometry cast shadows
+                    // ignore
                 }
                 else if (mat.m_AlphaMode == ALPHA_MODE_OPAQUE)
                 {
-                    // This should not happen if TLAS/BLAS flags are correct, but handle it just in case
                     q.CommitNonOpaqueTriangleHit();
                 }
             }
@@ -292,10 +303,80 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs)
         }
     }
 
-    components.diffuse = diffuse * inputs.NdotL * radiance * shadow;
-    components.specular = spec * inputs.NdotL * radiance * shadow;
+    return EvaluateDirectLight(inputs, radiance, shadow);
+}
 
-    return components;
+LightingComponents ComputeSpotLighting(LightingInputs inputs, GPULight light)
+{
+    LightingComponents result;
+    result.diffuse = 0;
+    result.specular = 0;
+
+    if (light.m_Intensity <= 0.0) return result;
+
+    float3 L_unnorm = light.m_Position - inputs.worldPos;
+    float distSq = dot(L_unnorm, L_unnorm);
+    
+    // Aggressive culling: Range test
+    if (light.m_Range > 0.0 && distSq > light.m_Range * light.m_Range) return result;
+
+    float dist = sqrt(distSq);
+    float3 L = L_unnorm / dist;
+    
+    // Front-face culling
+    float NdotL = dot(inputs.N, L);
+    if (NdotL <= 0.0) return result;
+
+    // Spot falloff culling
+    float3 lightDir = normalize(light.m_Direction);
+    float cosTheta = dot(L, lightDir);
+    float cosOuter = cos(light.m_SpotOuterConeAngle);
+    if (cosTheta > cosOuter) return result;
+
+    // Spot falloff math
+    float cosInner = cos(light.m_SpotInnerConeAngle);
+    float spotAttenuation = saturate((cosTheta - cosOuter) / (cosInner - cosOuter));
+    
+    // Distance attenuation
+    float distAttenuation = 1.0 / (distSq + 1.0);
+    if (light.m_Range > 0.0)
+    {
+        distAttenuation *= pow(saturate(1.0 - pow(dist / light.m_Range, 4.0)), 2.0);
+    }
+    
+    float3 radiance = light.m_Color * light.m_Intensity * spotAttenuation * distAttenuation;
+    
+    inputs.L = L;
+    PrepareLightingByproducts(inputs);
+    
+    return EvaluateDirectLight(inputs, radiance, 1.0f);
+}
+
+LightingComponents AccumulateDirectLighting(LightingInputs inputs, uint lightCount)
+{
+    LightingComponents total;
+    total.diffuse = 0;
+    total.specular = 0;
+
+    for (uint i = 0; i < lightCount; ++i)
+    {
+        GPULight light = inputs.lights[i];
+        
+        [branch]
+        if (light.m_Type == 0) // Directional
+        {
+            LightingComponents comp = ComputeDirectionalLighting(inputs, light);
+            total.diffuse += comp.diffuse;
+            total.specular += comp.specular;
+        }
+        else if (light.m_Type == 2) // Spot
+        {
+            LightingComponents comp = ComputeSpotLighting(inputs, light);
+            total.diffuse += comp.diffuse;
+            total.specular += comp.specular;
+        }
+    }
+    return total;
 }
 
 IBLComponents ComputeIBL(LightingInputs inputs)

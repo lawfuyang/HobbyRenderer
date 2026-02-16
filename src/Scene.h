@@ -153,6 +153,7 @@ public:
         Vector3 m_Color = Vector3{1.0f, 1.0f, 1.0f};
         float m_Intensity = 1.0f;
         float m_Range = 0.0f; // 0 = infinite
+        float m_Radius = 0.0f;
         // Spot
         float m_SpotInnerConeAngle = 0.0f;
         float m_SpotOuterConeAngle = DirectX::XM_PIDIV4; // 45deg
@@ -184,8 +185,6 @@ public:
     nvrhi::TextureHandle m_RadianceTexture;
     nvrhi::TextureHandle m_IrradianceTexture;
 
-    DirectionalLight m_DirectionalLight;
-
     std::pair<uint32_t, uint32_t> m_InstanceDirtyRange = { UINT32_MAX, 0 };
 
     struct BucketInfo
@@ -205,6 +204,9 @@ public:
     nvrhi::BufferHandle m_MeshletBuffer;
     nvrhi::BufferHandle m_MeshletVerticesBuffer;
     nvrhi::BufferHandle m_MeshletTrianglesBuffer;
+    nvrhi::BufferHandle m_LightBuffer;
+    uint32_t m_LightCount = 0;
+    bool m_LightsDirty = false;
 
     std::vector<PerInstanceData> m_InstanceData;
     std::vector<MeshData> m_MeshData;
@@ -235,9 +237,6 @@ public:
     // Binary Scene Cache
     bool LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices, std::vector<VertexQuantized>& allVerticesQuantized);
     void SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices, const std::vector<VertexQuantized>& allVerticesQuantized);
-
-    // Get directional light direction in world space
-    Vector3 GetDirectionalLightDirection() const;
 
     void UpdateNodeBoundingSphere(int nodeIndex);
 };

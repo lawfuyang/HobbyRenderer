@@ -79,9 +79,16 @@ void Scene::LoadScene()
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir, renderer);
 	SceneLoader::ApplyEnvironmentLights(*this);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this, renderer);
-	SceneLoader::SetupDirectionalLightAndCamera(*this, renderer);
 	SceneLoader::CreateAndUploadGpuBuffers(*this, renderer, allVerticesQuantized, allIndices);
+	SceneLoader::CreateAndUploadLightBuffer(*this, renderer);
 	BuildAccelerationStructures();
+
+	if (!m_Cameras.empty())
+	{
+		const Scene::Camera& firstCam = m_Cameras[0];
+		renderer->SetCameraFromSceneCamera(firstCam);
+		renderer->m_SelectedCameraIndex = 0;
+	}
 }
 
 void Scene::BuildAccelerationStructures()
@@ -193,7 +200,7 @@ void Scene::FinalizeLoadedScene()
     std::function<void(int, bool)> IdentifyDynamic = [&](int idx, bool parentDynamic)
     {
         Node& node = m_Nodes[idx];
-        node.m_IsDynamic = node.m_IsAnimated || parentDynamic;
+        node.m_IsDynamic = node.m_IsAnimated || node.m_LightIndex != -1 || parentDynamic;
         if (node.m_IsDynamic)
         {
             m_DynamicNodeIndices.push_back(idx);
@@ -430,6 +437,7 @@ void Scene::Shutdown()
 	m_MeshletBuffer = nullptr;
 	m_MeshletVerticesBuffer = nullptr;
 	m_MeshletTrianglesBuffer = nullptr;
+	m_LightBuffer = nullptr;
 	m_TLAS = nullptr;
 	m_RTInstanceDescBuffer = nullptr;
 	m_RTInstanceDescs.clear();
@@ -470,17 +478,4 @@ void Scene::UpdateNodeBoundingSphere(int nodeIndex)
         node.m_Center = worldSphere.Center;
         node.m_Radius = worldSphere.Radius;
     }
-}
-
-Vector3 Scene::GetDirectionalLightDirection() const
-{
-    // Convert yaw and pitch to direction vector
-    // Yaw: rotation around Y axis, Pitch: elevation from XZ plane
-    float cosYaw = cos(m_DirectionalLight.yaw);
-    float sinYaw = sin(m_DirectionalLight.yaw);
-    float cosPitch = cos(m_DirectionalLight.pitch);
-    float sinPitch = sin(m_DirectionalLight.pitch);
-    
-    // Direction from surface to light (pointing toward the light)
-    return Vector3{ -sinYaw * cosPitch, -sinPitch, -cosYaw * cosPitch };
 }

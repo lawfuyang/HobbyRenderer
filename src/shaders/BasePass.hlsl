@@ -20,6 +20,7 @@ StructuredBuffer<uint> g_Indices : register(t10);
 Texture2D<float> g_HZB : register(t8);
 RaytracingAccelerationStructure g_SceneAS : register(t9);
 Texture2D g_OpaqueColor : register(t11);
+StructuredBuffer<GPULight> g_Lights : register(t12);
 
 void UnpackMeshletBV(Meshlet m, out float3 center, out float radius)
 {
@@ -410,17 +411,14 @@ GBufferOut GBuffer_PSMain(VSOut input)
         N = -N; // Shading normals must always face the viewer
     }
 
-    float3 L = g_PerFrame.m_LightDirection;
-
     LightingInputs lightingInputs;
     lightingInputs.N = N;
     lightingInputs.V = V;
-    lightingInputs.L = L;
+    lightingInputs.L = float3(0, 1, 0); // Placeholder
     lightingInputs.baseColor = baseColor;
     lightingInputs.roughness = roughness;
     lightingInputs.metallic = metallic;
     lightingInputs.ior = mat.m_IOR;
-    lightingInputs.lightIntensity = g_PerFrame.m_LightIntensity;
     lightingInputs.worldPos = input.worldPos;
     lightingInputs.radianceMipCount = g_PerFrame.m_RadianceMipCount;
     lightingInputs.enableRTShadows = g_PerFrame.m_EnableRTShadows != 0;
@@ -430,16 +428,18 @@ GBufferOut GBuffer_PSMain(VSOut input)
     lightingInputs.materials = g_Materials;
     lightingInputs.indices = g_Indices;
     lightingInputs.vertices = g_Vertices;
+    lightingInputs.lights = g_Lights;
+
+    LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_PerFrame.m_LightCount);
+    float3 directDiffuse = directLighting.diffuse;
+    float3 directSpecular = directLighting.specular;
 
     PrepareLightingByproducts(lightingInputs);
-
-    LightingComponents directLighting = ComputeDirectionalLighting(lightingInputs);
-
     IBLComponents iblComp = ComputeIBL(lightingInputs);
     float3 ibl = iblComp.ibl;
     ibl *= float(g_PerFrame.m_EnableIBL) * g_PerFrame.m_IBLIntensity;
 
-    float3 color = directLighting.diffuse + directLighting.specular + ibl;
+    float3 color = directDiffuse + directSpecular + ibl;
 
     // Refraction logic
     if (mat.m_TransmissionFactor > 0.0)
@@ -473,7 +473,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         // --- Fresnel split ---
         // We use the same view-dependent Fresnel for the background blend
         float3 transmitted = refractedColor * (1.0 - lightingInputs.F);
-        float3 reflected = directLighting.specular + iblComp.radiance * float(g_PerFrame.m_EnableIBL) * g_PerFrame.m_IBLIntensity;
+        float3 reflected = directSpecular + iblComp.radiance * float(g_PerFrame.m_EnableIBL) * g_PerFrame.m_IBLIntensity;
 
         float3 transmissionLighting = reflected + transmitted;
 
