@@ -8,6 +8,12 @@ void RenderGraph::RenderDebugUI()
 {
     nvrhi::IDevice* device = Renderer::GetInstance()->m_RHI->m_NvrhiDevice.Get();
 
+    static ImGuiTextFilter visFilter;
+    static ImGuiTextFilter texFilter;
+    static ImGuiTextFilter bufFilter;
+    static ImGuiTextFilter passFilter;
+    static ImGuiTextFilter heapFilter;
+
     if (ImGui::TreeNode("Render Graph"))
     {
         ImGui::Text("Textures: %u (Allocated: %u, Aliased: %u)", 
@@ -28,6 +34,8 @@ void RenderGraph::RenderDebugUI()
         
         if (ImGui::TreeNode("Lifetime Visualization"))
         {
+            visFilter.Draw("Filter Resources");
+
             const float kPassWidth = 25.0f;
             const float kRowHeight = 22.0f;
             const float kNameWidth = 200.0f;
@@ -43,6 +51,7 @@ void RenderGraph::RenderDebugUI()
                 
                 // Header - Pass names (vertical or angled if many)
                 float headerHeight = 100.0f;
+                // Adjust width based on filtered passes? No, passes stay the same, but rows are filtered.
                 ImGui::Dummy(ImVec2(kNameWidth + numPasses * kPassWidth, headerHeight));
                 
                 for (uint32_t i = 0; i < numPasses; ++i)
@@ -64,8 +73,11 @@ void RenderGraph::RenderDebugUI()
                     if (!resource.m_IsDeclaredThisFrame || !resource.m_Lifetime.IsValid())
                         return;
 
-                    ImVec2 rowStart = ImGui::GetCursorScreenPos();
                     const std::string& name = resource.m_Desc.m_NvrhiDesc.debugName;
+                    if (!visFilter.PassFilter(name.c_str()))
+                        return;
+
+                    ImVec2 rowStart = ImGui::GetCursorScreenPos();
                     
                     ImGui::Text("%s", name.c_str());
                     
@@ -143,6 +155,7 @@ void RenderGraph::RenderDebugUI()
         
         if (ImGui::TreeNode("Textures"))
         {
+            texFilter.Draw("Filter Textures");
             if (ImGui::BeginTable("Textures", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Name");
@@ -159,6 +172,8 @@ void RenderGraph::RenderDebugUI()
                 for (uint32_t i = 0; i < m_Textures.size(); ++i)
                 {
                     const TransientTexture& texture = m_Textures[i];
+                    if (!texFilter.PassFilter(texture.m_Desc.m_NvrhiDesc.debugName.c_str()))
+                        continue;
                     
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
@@ -216,6 +231,7 @@ void RenderGraph::RenderDebugUI()
         
         if (ImGui::TreeNode("Buffers"))
         {
+            bufFilter.Draw("Filter Buffers");
             if (ImGui::BeginTable("Buffers", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Name");
@@ -232,6 +248,8 @@ void RenderGraph::RenderDebugUI()
                 for (uint32_t i = 0; i < m_Buffers.size(); ++i)
                 {
                     const TransientBuffer& buffer = m_Buffers[i];
+                    if (!bufFilter.PassFilter(buffer.m_Desc.m_NvrhiDesc.debugName.c_str()))
+                        continue;
                     
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
@@ -292,6 +310,7 @@ void RenderGraph::RenderDebugUI()
 
         if (ImGui::TreeNode("Render Passes"))
         {
+            passFilter.Draw("Filter Passes");
             uint32_t numPasses = (uint32_t)m_PassNames.size();
             if (numPasses > 0)
             {
@@ -305,14 +324,28 @@ void RenderGraph::RenderDebugUI()
 
                     for (uint32_t i = 1; i <= numPasses; ++i)
                     {
+                        const char* passName = m_PassNames[i - 1];
                         const PassAccess& access = m_PassAccesses[i - 1];
+
+                        bool match = passFilter.PassFilter(passName);
+                        if (!match)
+                        {
+                            // Search in resources used by this pass
+                            for (uint32_t idx : access.m_ReadTextures) if (passFilter.PassFilter(m_Textures[idx].m_Desc.m_NvrhiDesc.debugName.c_str())) { match = true; break; }
+                            if (!match) for (uint32_t idx : access.m_WriteTextures) if (passFilter.PassFilter(m_Textures[idx].m_Desc.m_NvrhiDesc.debugName.c_str())) { match = true; break; }
+                            if (!match) for (uint32_t idx : access.m_ReadBuffers) if (passFilter.PassFilter(m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName.c_str())) { match = true; break; }
+                            if (!match) for (uint32_t idx : access.m_WriteBuffers) if (passFilter.PassFilter(m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName.c_str())) { match = true; break; }
+                        }
+
+                        if (!match)
+                            continue;
                         
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         ImGui::Text("%u", i);
 
                         ImGui::TableNextColumn();
-                        bool nodeOpen = ImGui::TreeNodeEx(m_PassNames[i - 1], ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding);
+                        bool nodeOpen = ImGui::TreeNodeEx(passName, ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding);
                         
                         ImGui::TableNextColumn();
                         ImGui::Text("T: %zu/%zu, B: %zu/%zu", 
@@ -377,6 +410,7 @@ void RenderGraph::RenderDebugUI()
 
         if (ImGui::TreeNode("Heaps"))
         {
+            heapFilter.Draw("Filter Heaps/Resources");
             for (size_t i = 0; i < m_Heaps.size(); ++i)
             {
                 const HeapEntry& heap = m_Heaps[i];
@@ -384,14 +418,42 @@ void RenderGraph::RenderDebugUI()
 
                 if (ImGui::TreeNode((void*)(intptr_t)i, "Heap %zu (%.2f MB)", i, heap.m_Size / (1024.0 * 1024.0)))
                 {
-                    if (ImGui::BeginTable("HeapBlocks", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                    if (ImGui::BeginTable("HeapBlocks", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
                     {
                         ImGui::TableSetupColumn("Offset");
                         ImGui::TableSetupColumn("Size");
                         ImGui::TableSetupColumn("Status");
+                        ImGui::TableSetupColumn("Resource");
                         ImGui::TableHeadersRow();
                         for (const HeapBlock& block : heap.m_Blocks)
                         {
+                            const char* resourceName = "-";
+                            if (!block.m_IsFree)
+                            {
+                                for (const TransientTexture& tex : m_Textures)
+                                {
+                                    if (tex.m_HeapIndex == (uint32_t)i && tex.m_Offset == block.m_Offset)
+                                    {
+                                        resourceName = tex.m_Desc.m_NvrhiDesc.debugName.c_str();
+                                        break;
+                                    }
+                                }
+                                if (resourceName[0] == '-')
+                                {
+                                    for (const TransientBuffer& buf : m_Buffers)
+                                    {
+                                        if (buf.m_HeapIndex == (uint32_t)i && buf.m_Offset == block.m_Offset)
+                                        {
+                                            resourceName = buf.m_Desc.m_NvrhiDesc.debugName.c_str();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (!heapFilter.PassFilter(resourceName) && !heapFilter.PassFilter(block.m_IsFree ? "Free" : "Allocated"))
+                                continue;
+
                             ImGui::TableNextRow();
                             ImGui::TableNextColumn();
                             ImGui::Text("%llu", block.m_Offset);
@@ -399,6 +461,8 @@ void RenderGraph::RenderDebugUI()
                             ImGui::Text("%.2f KB", block.m_Size / 1024.0);
                             ImGui::TableNextColumn();
                             ImGui::Text("%s", block.m_IsFree ? "Free" : "Allocated");
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", resourceName);
                         }
                         ImGui::EndTable();
                     }
