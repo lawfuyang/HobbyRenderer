@@ -89,9 +89,9 @@ RayGradients GetShadowRayGradients(
     float3 rayOrigin,
     float4x4 world)
 {
-    float3 p0 = mul(float4(tv.v0.m_Pos, 1.0f), world).xyz;
-    float3 p1 = mul(float4(tv.v1.m_Pos, 1.0f), world).xyz;
-    float3 p2 = mul(float4(tv.v2.m_Pos, 1.0f), world).xyz;
+    float3 p0 = MatrixMultiply(float4(tv.v0.m_Pos, 1.0f), world).xyz;
+    float3 p1 = MatrixMultiply(float4(tv.v1.m_Pos, 1.0f), world).xyz;
+    float3 p2 = MatrixMultiply(float4(tv.v2.m_Pos, 1.0f), world).xyz;
 
     float3 hitPos = p0 * (1.0f - bary.x - bary.y) + p1 * bary.x + p2 * bary.y;
     float dist = length(hitPos - rayOrigin);

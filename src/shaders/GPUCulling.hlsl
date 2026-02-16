@@ -53,7 +53,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	PerInstanceData inst = g_InstanceData[actualInstanceIndex];
     MeshData mesh = g_MeshData[inst.m_MeshDataIndex];
 
-    float3 sphereViewCenter = mul(float4(inst.m_Center, 1.0), g_Culling.m_View).xyz;
+    float3 sphereViewCenter = MatrixMultiply(float4(inst.m_Center, 1.0), g_Culling.m_View).xyz;
 
     bool isVisible = true;
 

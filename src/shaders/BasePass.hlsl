@@ -32,8 +32,8 @@ void UnpackMeshletBV(Meshlet m, out float3 center, out float radius)
 
 float2 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos)
 {
-    float4 clipPos = mul(float4(worldPos, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
-    float4 prevClipPos = mul(float4(prevWorldPos, 1.0), g_PerFrame.m_PrevView.m_MatWorldToClip);
+    float4 clipPos = MatrixMultiply(float4(worldPos, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
+    float4 prevClipPos = MatrixMultiply(float4(prevWorldPos, 1.0), g_PerFrame.m_PrevView.m_MatWorldToClip);
 
     clipPos.xyz /= clipPos.w;
     prevClipPos.xyz /= prevClipPos.w;
@@ -59,13 +59,13 @@ struct VSOut
 VSOut PrepareVSOut(Vertex v, PerInstanceData inst, uint instanceID, uint meshletID, uint lodIndex)
 {
     VSOut o;
-    float4 worldPos = mul(float4(v.m_Pos, 1.0f), inst.m_World);
-    o.Position = mul(worldPos, g_PerFrame.m_View.m_MatWorldToClip);
+    float4 worldPos = MatrixMultiply(float4(v.m_Pos, 1.0f), inst.m_World);
+    o.Position = MatrixMultiply(worldPos, g_PerFrame.m_View.m_MatWorldToClip);
 
     o.normal = TransformNormal(v.m_Normal, inst.m_World);
     o.uv = v.m_Uv;
     o.worldPos = worldPos.xyz;
-    o.prevWorldPos = mul(float4(v.m_Pos, 1.0f), inst.m_PrevWorld).xyz;
+    o.prevWorldPos = MatrixMultiply(float4(v.m_Pos, 1.0f), inst.m_PrevWorld).xyz;
     o.instanceID = instanceID;
     o.meshletID = meshletID;
     o.lodIndex = lodIndex;
@@ -124,8 +124,8 @@ void ASMain(
         UnpackMeshletBV(m, meshletCenter, meshletRadius);
 
         // Transform meshlet sphere to world space, then to view space
-        float4 worldCenter = mul(float4(meshletCenter, 1.0f), inst.m_World);
-        float3 viewCenter = mul(worldCenter, g_PerFrame.m_View.m_MatWorldToView).xyz;
+        float4 worldCenter = MatrixMultiply(float4(meshletCenter, 1.0f), inst.m_World);
+        float3 viewCenter = MatrixMultiply(worldCenter, g_PerFrame.m_View.m_MatWorldToView).xyz;
 
         // Approximate world-space radius using max scale from world matrix
         float worldRadius = meshletRadius * GetMaxScale(inst.m_World);
@@ -355,7 +355,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     {
         float3 normalMap = TwoChannelNormalX2(nmSample.xy);
         float3x3 TBN = CalculateTBNWithoutTangent(input.worldPos, input.normal, input.uv);
-        N = normalize(mul(normalMap, TBN));
+        N = normalize(MatrixMultiply(normalMap, TBN));
     }
     else
     {
@@ -440,7 +440,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         float3 refractedRayExit = input.worldPos + transmissionRay;
 
         // Project to screen space
-        float4 refractClipPos = mul(float4(refractedRayExit, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
+        float4 refractClipPos = MatrixMultiply(float4(refractedRayExit, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
         float2 refractUV = (refractClipPos.xy / refractClipPos.w) * float2(0.5, -0.5) + 0.5;
 
         // Sample background with roughness-based LOD

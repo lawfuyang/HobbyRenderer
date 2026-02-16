@@ -29,7 +29,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     clipPos.y = (1.0f - uv.y) * 2.0f - 1.0f;
     
     // just use 0.9. we're only interested in the direction
-    float4 rayEndFar = mul(float4(clipPos, 0.9f, 1.0f), g_PathTracer.m_View.m_MatClipToWorld);
+    float4 rayEndFar = MatrixMultiply(float4(clipPos, 0.9f, 1.0f), g_PathTracer.m_View.m_MatClipToWorld);
     rayEndFar.xyz /= rayEndFar.w;
 
     float3 rayDir = normalize(rayEndFar.xyz - g_PathTracer.m_CameraPos.xyz);

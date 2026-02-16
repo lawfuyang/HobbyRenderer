@@ -50,6 +50,17 @@
     return (dividend + divisor - 1) / divisor;
   }
 
+  // Standard MatrixMultiply helper to enforce consistent multiplication order: mul(vector, matrix)
+  float4 MatrixMultiply(float4 v, float4x4 m)
+  {
+      return mul(v, m);
+  }
+
+  float3 MatrixMultiply(float3 v, float3x3 m)
+  {
+      return mul(v, m);
+  }
+
   float GetMaxScale(Matrix m)
   {
     return max(length(m[0].xyz), max(length(m[1].xyz), length(m[2].xyz)));
@@ -68,7 +79,7 @@
   float3 TransformNormal(float3 normal, float4x4 worldMatrix)
   {
       float3x3 adjugateWorldMatrix = MakeAdjugateMatrix(worldMatrix);
-      return normalize(mul(normal, adjugateWorldMatrix));
+      return normalize(MatrixMultiply(normal, adjugateWorldMatrix));
   }
 
 #define DEPTH_NEAR 1.0f

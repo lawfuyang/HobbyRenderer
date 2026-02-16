@@ -52,7 +52,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     clipPos.z = depth;
     clipPos.w = 1.0f;
 
-    float4 worldPosFour = mul(clipPos, g_Deferred.m_View.m_MatClipToWorld);
+    float4 worldPosFour = MatrixMultiply(clipPos, g_Deferred.m_View.m_MatClipToWorld);
     float3 worldPos = worldPosFour.xyz / worldPosFour.w;
 
     float3 V = normalize(g_Deferred.m_CameraPos.xyz - worldPos);
