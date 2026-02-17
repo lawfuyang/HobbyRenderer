@@ -33,4 +33,12 @@ float4 SampleBindlessTextureGrad(uint textureIndex, uint samplerIndex, float2 uv
     return tex.SampleGrad(sam, uv, ddx_uv, ddy_uv);
 }
 
+// 3D Texture helpers
+float4 SampleBindlessTexture3DLevel(uint textureIndex, uint samplerIndex, float3 uvw, float lod)
+{
+    Texture3D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
+    SamplerState sam = SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
+    return tex.SampleLevel(sam, uvw, lod);
+}
+
 #endif // BINDLESS_HLSLI
