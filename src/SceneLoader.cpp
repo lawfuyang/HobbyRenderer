@@ -919,6 +919,21 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 		light.m_Color = Vector3{ 1.0f, 1.0f, 1.0f };
 		light.m_Intensity = 1.0f;
 		scene.m_Lights.push_back(std::move(light));
+
+		// If we had to create a default directional light, also create a dummy scene node
+		// so UI (ImGui layer) can modify its transform/direction.
+		Scene::Node node;
+		node.m_Name = "Default Directional Node";
+		node.m_Parent = -1;
+		// Set identity transform
+		DirectX::XMMATRIX id = DirectX::XMMatrixIdentity();
+		DirectX::XMStoreFloat4x4(&node.m_LocalTransform, id);
+		DirectX::XMStoreFloat4x4(&node.m_WorldTransform, id);
+		node.m_LightIndex = 0; // we enforce directional lights to be 0
+
+		scene.m_Nodes.push_back(std::move(node));
+		scene.m_Lights.back().m_NodeIndex = static_cast<int>(scene.m_Nodes.size()) - 1;
+		scene.m_LightsDirty = true;
 	}
 
 	std::sort(scene.m_Lights.begin(), scene.m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
