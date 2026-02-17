@@ -135,6 +135,9 @@ struct LightingInputs
     StructuredBuffer<VertexQuantized> vertices;
     StructuredBuffer<GPULight> lights;
 
+    float3 sunRadiance; // Atmosphere-aware direct radiance (already contains BRDF/n.l)
+    float3 sunDirection;
+
     // Derived values
     float3 F0;       // Base reflectivity at normal incidence
     float3 kD;       // Diffuse coefficient, (1 - metallic)
@@ -266,6 +269,12 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
     PrepareLightingByproducts(inputs);
 
     float3 radiance = light.m_Color * light.m_Intensity;
+
+    // Use atmosphere-aware sun radiance if available
+    if (length(inputs.sunRadiance) > 0.0 && dot(L, inputs.sunDirection) > 0.999)
+    {
+        radiance = inputs.sunRadiance;
+    }
 
     float shadow = CalculateRTShadow(inputs, L, 1e10f);
 
