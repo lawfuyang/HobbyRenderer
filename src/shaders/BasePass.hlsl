@@ -232,10 +232,40 @@ float3x3 CalculateTBNWithoutTangent(float3 p, float3 n, float2 uv)
     float2 duv1 = ddx(uv);
     float2 duv2 = ddy(uv);
 
-    float r = 1.0 / (duv1.x * duv2.y - duv2.x * duv1.y);
+    float det = duv1.x * duv2.y - duv2.x * duv1.y;
+    const float EPS = 1e-6;
+
+    if (abs(det) > EPS)
+    {
+        float r = 1.0 / det;
     float3 T = (dp1 * duv2.y - dp2 * duv1.y) * r;
     float3 B = (dp2 * duv1.x - dp1 * duv2.x) * r;
-    return float3x3(normalize(T), normalize(B), n);
+
+        float tLen = length(T);
+        float bLen = length(B);
+        if (tLen > EPS && bLen > EPS)
+        {
+            T /= tLen;
+            B /= bLen;
+            return float3x3(T, B, n);
+        }
+    }
+
+    // Fallback: construct robust orthonormal basis from normal to avoid NaNs
+    float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    float3 Tfb = cross(up, n);
+    float tfbLen = length(Tfb);
+    if (tfbLen <= EPS)
+    {
+        // final fallback if cross produced near-zero vector
+        Tfb = float3(1.0, 0.0, 0.0);
+    }
+    else
+    {
+        Tfb /= tfbLen;
+    }
+    float3 Bfb = cross(n, Tfb);
+    return float3x3(Tfb, Bfb, n);
 }
 
 float3 HashColor(uint id)
