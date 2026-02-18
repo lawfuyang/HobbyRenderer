@@ -349,7 +349,7 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 						int ct = ctStart;
 						for (int ki = 0; ki < nKeys; ++ki)
 						{
-							if (json_strcmp(ctx, ct, "irradiance")) light.m_Intensity = json_get_float(ctx, ct + 1);
+							if (json_strcmp(ctx, ct, "irradiance")) light.m_Intensity = 1;//json_get_float(ctx, ct + 1); // hack
 							else if (json_strcmp(ctx, ct, "angularSize")) light.m_AngularSize = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "color")) light.m_Color = json_get_vec3(ctx, ct + 1);
 							ct = cgltf_skip_json(tokens.data(), ct + 1);
@@ -367,7 +367,7 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 						int ct = ctStart;
 						for (int ki = 0; ki < nKeys; ++ki)
 						{
-							if (json_strcmp(ctx, ct, "intensity")) light.m_Intensity = json_get_float(ctx, ct + 1);
+							if (json_strcmp(ctx, ct, "intensity")) light.m_Intensity = 1;//json_get_float(ctx, ct + 1); // hack
 							else if (json_strcmp(ctx, ct, "innerAngle")) light.m_SpotInnerConeAngle = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "outerAngle")) light.m_SpotOuterConeAngle = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "radius")) light.m_Radius = json_get_float(ctx, ct + 1);
@@ -876,14 +876,6 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 {
 	SCOPED_TIMER("[Scene] Lights");
 	bool hasDirectional = false;
-	for (const Scene::Light& l : scene.m_Lights)
-	{
-		if (l.m_Type == Scene::Light::Directional)
-		{
-			hasDirectional = true;
-			break;
-		}
-	}
 
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
 	{
@@ -903,6 +895,8 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 		{
 			light.m_Type = Scene::Light::Directional;
 			hasDirectional = true;
+
+			light.m_Intensity = 1; // hack
 		}
 		else if (cgLight.type == cgltf_light_type_spot)
 		{
@@ -919,21 +913,6 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 		light.m_Color = Vector3{ 1.0f, 1.0f, 1.0f };
 		light.m_Intensity = 1.0f;
 		scene.m_Lights.push_back(std::move(light));
-
-		// If we had to create a default directional light, also create a dummy scene node
-		// so UI (ImGui layer) can modify its transform/direction.
-		Scene::Node node;
-		node.m_Name = "Default Directional Node";
-		node.m_Parent = -1;
-		// Set identity transform
-		DirectX::XMMATRIX id = DirectX::XMMatrixIdentity();
-		DirectX::XMStoreFloat4x4(&node.m_LocalTransform, id);
-		DirectX::XMStoreFloat4x4(&node.m_WorldTransform, id);
-		node.m_LightIndex = 0; // we enforce directional lights to be 0
-
-		scene.m_Nodes.push_back(std::move(node));
-		scene.m_Lights.back().m_NodeIndex = static_cast<int>(scene.m_Nodes.size()) - 1;
-		scene.m_LightsDirty = true;
 	}
 
 	std::sort(scene.m_Lights.begin(), scene.m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
