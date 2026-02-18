@@ -2,6 +2,7 @@
 #include "ShaderShared.h"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
+#include "Atmosphere.hlsli"
 
 cbuffer DeferredCB : register(b0)
 {
@@ -28,10 +29,17 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     float2 uv = input.uv;
     
     float depth = g_Depth.Load(uint3(uvInt, 0));
-    if (depth == 0.0f) // Reversed-Z, 0 is far plane
-    {
-        return float4(0,0,0,0);
-    }
+    
+    // Position/Ray reconstruction
+    float4 clipPos;
+    clipPos.x = uv.x * 2.0f - 1.0f;
+    clipPos.y = (1.0f - uv.y) * 2.0f - 1.0f;
+    clipPos.z = depth;
+    clipPos.w = 1.0f;
+
+    float4 worldPosFour = MatrixMultiply(clipPos, g_Deferred.m_View.m_MatClipToWorldNoOffset);
+    float3 worldPos = worldPosFour.xyz / worldPosFour.w;
+    float3 V = normalize(g_Deferred.m_CameraPos.xyz - worldPos);
 
     float4 albedoAlpha = g_GBufferAlbedo.Load(uint3(uvInt, 0));
     float3 baseColor = albedoAlpha.rgb;
@@ -45,19 +53,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 
     float3 emissive = g_GBufferEmissive.Load(uint3(uvInt, 0)).rgb;
 
-    // Reconstruct world position
-    float4 clipPos;
-    clipPos.x = uv.x * 2.0f - 1.0f;
-    clipPos.y = (1.0f - uv.y) * 2.0f - 1.0f;
-    clipPos.z = depth;
-    clipPos.w = 1.0f;
-
-    // FIXME: Switch to m_MatClipToWorld (jittered) once TAA is implemented
-    float4 worldPosFour = MatrixMultiply(clipPos, g_Deferred.m_View.m_MatClipToWorldNoOffset);
-    float3 worldPos = worldPosFour.xyz / worldPosFour.w;
-
-    float3 V = normalize(g_Deferred.m_CameraPos.xyz - worldPos);
-
     LightingInputs lightingInputs;
     lightingInputs.N = N;
     lightingInputs.V = V;
@@ -67,7 +62,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     lightingInputs.metallic = metallic;
     lightingInputs.ior = 1.5f; // Default IOR for opaque
     lightingInputs.worldPos = worldPos;
-    lightingInputs.radianceMipCount = g_Deferred.m_RadianceMipCount;
     lightingInputs.enableRTShadows = g_Deferred.m_EnableRTShadows != 0;
     lightingInputs.sceneAS = g_SceneAS;
     lightingInputs.instances = g_Instances;
@@ -76,16 +70,52 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     lightingInputs.indices = g_Indices;
     lightingInputs.vertices = g_Vertices;
     lightingInputs.lights = g_Lights;
+    lightingInputs.sunRadiance = 0;
+    lightingInputs.sunDirection = g_Deferred.m_SunDirection;
+    lightingInputs.useSunRadiance = false;
+    lightingInputs.sunShadow = 1.0f;
+
+    float3 p_atmo = (worldPos - kEarthCenter) / 1000.0;
+
+    if (g_Deferred.m_EnvironmentLightingMode == 1) // Sky
+    {
+        float r = length(p_atmo);
+        float mu_s = dot(p_atmo, g_Deferred.m_SunDirection) / r;
+        
+        // Use solar_irradiance * transmittance as the direct sun radiance at surface
+        lightingInputs.sunRadiance = ATMOSPHERE.solar_irradiance * GetTransmittanceToSun(BRUNETON_TRANSMITTANCE_TEXTURE, r, mu_s) * g_Lights[0].m_Intensity;
+        lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+        lightingInputs.useSunRadiance = true;
+    }
 
     LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
     float3 color = directLighting.diffuse + directLighting.specular;
     
-    PrepareLightingByproducts(lightingInputs);
-    IBLComponents iblComp = ComputeIBL(lightingInputs);
-    float3 ibl = iblComp.ibl;
-    ibl *= float(g_Deferred.m_EnableIBL) * g_Deferred.m_IBLIntensity;
+    float3 ambient = 0.0;
+    if (g_Deferred.m_EnvironmentLightingMode == 1) // Sky
+    {
+        float3 skyIrradiance;
+        GetSunAndSkyIrradiance(
+            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_IRRADIANCE_TEXTURE,
+            p_atmo, N, g_Deferred.m_SunDirection, skyIrradiance);
+        
+        ambient = skyIrradiance * (baseColor / PI) * g_Lights[0].m_Intensity;
+    }
 
-    color += ibl + emissive;
+    color += ambient + emissive;
+
+    // Aerial perspective
+    if (g_Deferred.m_EnvironmentLightingMode == 1) // Sky
+    {
+        float3 cameraPos = (g_Deferred.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
+        
+        float3 transmittance;
+        float3 inScattering = GetSkyRadianceToPoint(
+            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE,
+            cameraPos, p_atmo, 0.0, g_Deferred.m_SunDirection, transmittance);
+            
+        color = color * transmittance + inScattering * g_Lights[0].m_Intensity;
+    }
 
     // Debug visualizations
     if (g_Deferred.m_DebugMode != DEBUG_MODE_NONE)
@@ -100,12 +130,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
             color = metallic.xxx;
         else if (g_Deferred.m_DebugMode == DEBUG_MODE_EMISSIVE)
             color = emissive;
-        else if (g_Deferred.m_DebugMode == DEBUG_MODE_IRRADIANCE)
-            color = iblComp.irradiance;
-        else if (g_Deferred.m_DebugMode == DEBUG_MODE_RADIANCE)
-            color = iblComp.radiance;
-        else if (g_Deferred.m_DebugMode == DEBUG_MODE_IBL)
-            color = ibl;
         else if (g_Deferred.m_DebugMode == DEBUG_MODE_MOTION_VECTORS)
             color = float3(abs(g_GBufferMotion.Load(uint3(uvInt, 0)).xy), 0.0f);
         

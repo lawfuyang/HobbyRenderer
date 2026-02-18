@@ -46,7 +46,7 @@ public:
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width = width;
             desc.m_NvrhiDesc.height = height;
-            desc.m_NvrhiDesc.format = nvrhi::Format::D32;
+            desc.m_NvrhiDesc.format = Renderer::DEPTH_FORMAT;
             desc.m_NvrhiDesc.isRenderTarget = true;
             desc.m_NvrhiDesc.debugName = "DepthBuffer_RG";
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::DepthWrite;
@@ -66,7 +66,7 @@ public:
             desc.m_NvrhiDesc.isRenderTarget = true;
             desc.m_NvrhiDesc.isUAV = true;
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::RenderTarget;
-            desc.m_NvrhiDesc.setClearValue(Renderer::kHDROutputClearColor);
+            desc.m_NvrhiDesc.setClearValue(nvrhi::Color{});
             g_RG_HDRColor = renderGraph.DeclareTexture(desc, g_RG_HDRColor);
         }
         
@@ -80,27 +80,27 @@ public:
         gbufferDesc.m_NvrhiDesc.setClearValue(nvrhi::Color{});
         
         // Albedo: RGBA8
-        gbufferDesc.m_NvrhiDesc.format = nvrhi::Format::RGBA8_UNORM;
+        gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_ALBEDO_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferAlbedo_RG";
         g_RG_GBufferAlbedo = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferAlbedo);
         
         // Normals: RG16_FLOAT
-        gbufferDesc.m_NvrhiDesc.format = nvrhi::Format::RG16_FLOAT;
+        gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_NORMALS_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferNormals_RG";
         g_RG_GBufferNormals = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferNormals);
         
         // ORM: RGBA8
-        gbufferDesc.m_NvrhiDesc.format = nvrhi::Format::RGBA8_UNORM;
+        gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_ORM_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferORM_RG";
         g_RG_GBufferORM = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferORM);
         
         // Emissive: RGBA8
-        gbufferDesc.m_NvrhiDesc.format = nvrhi::Format::RGBA8_UNORM;
+        gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_EMISSIVE_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferEmissive_RG";
         g_RG_GBufferEmissive = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferEmissive);
         
         // Motion Vectors: RG16_FLOAT
-        gbufferDesc.m_NvrhiDesc.format = nvrhi::Format::RG16_FLOAT;
+        gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_MOTION_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferMotion_RG";
         g_RG_GBufferMotionVectors = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferMotionVectors);
 
@@ -112,21 +112,19 @@ public:
         Renderer* renderer = Renderer::GetInstance();
 
         // Get transient resources from render graph
-        nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
         nvrhi::TextureHandle gbufferAlbedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
         nvrhi::TextureHandle gbufferNormals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
         nvrhi::TextureHandle gbufferORM = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
         nvrhi::TextureHandle gbufferEmissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
         nvrhi::TextureHandle gbufferMotion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
 
-        // Clear depth for reversed-Z (clear to 0.0f, no stencil)
-        commandList->clearDepthStencilTexture(depthTexture, nvrhi::AllSubresources, true, Renderer::DEPTH_FAR, false, 0);
-
-        // Clear HDR color
-        commandList->clearTextureFloat(hdrColor, nvrhi::AllSubresources, Renderer::kHDROutputClearColor);
+        // Clear depth for reversed-Z (clear to 0.0f) and stencil to 0
+        commandList->clearDepthStencilTexture(depthTexture, nvrhi::AllSubresources, true, Renderer::DEPTH_FAR, true, 0);
 
         // clear gbuffers
+        commandList->clearTextureFloat(hdrColor, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(gbufferAlbedo, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(gbufferNormals, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(gbufferORM, nvrhi::AllSubresources, nvrhi::Color{});
@@ -627,7 +625,7 @@ void Renderer::Initialize()
     m_TaskScheduler->SetThreadCount(TaskScheduler::kRuntimeThreadCount);
 
     // Initialize renderers with scene-dependent resources
-    for (const auto& renderer : m_Renderers)
+    for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
     {
         renderer->PostSceneLoad();
     }
@@ -765,6 +763,7 @@ void Renderer::Run()
         extern IRenderer* g_MaskedPassRenderer;
         extern IRenderer* g_HZBGeneratorPhase2;
         extern IRenderer* g_DeferredRenderer;
+        extern IRenderer* g_SkyRenderer;
         extern IRenderer* g_TransparentPassRenderer;
         extern IRenderer* g_BloomRenderer;
         extern IRenderer* g_HDRRenderer;
@@ -786,6 +785,7 @@ void Renderer::Run()
             m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
             m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
             m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
+            m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
             m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);
             m_RenderGraph.ScheduleRenderer(g_BloomRenderer);
         }
@@ -1286,7 +1286,7 @@ nvrhi::ComputePipelineHandle Renderer::GetOrCreateComputePipeline(nvrhi::ShaderH
     // Hash relevant pipeline properties: CS shader handle, binding layout pointers
     size_t h = 1469598103934665603ull;
     h = h * 1099511628211u + std::hash<const void*>()(shader.Get());
-    for (const auto& layout : bindingLayouts)
+    for (const nvrhi::BindingLayoutHandle& layout : bindingLayouts)
     {
         h = h * 1099511628211u + std::hash<const void*>()(layout.Get());
     }
@@ -1340,14 +1340,17 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
     }
 
     desc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
-    desc.renderState.depthStencilState.depthTestEnable = false;
-    desc.renderState.depthStencilState.depthWriteEnable = false;
+    desc.renderState.depthStencilState = params.depthStencilState ? *params.depthStencilState : CommonResources::GetInstance().DepthDisabled;
 
     nvrhi::MeshletPipelineHandle pipeline = GetOrCreateMeshletPipeline(desc, params.framebuffer->getFramebufferInfo());
 
     nvrhi::MeshletState state;
+    if (params.depthStencilState)
+    {
+        state.dynamicStencilRefValue = params.depthStencilState->stencilRefValue;
+    }
     state.pipeline = pipeline;
-    for (const auto& bindingSet : bindingSets)
+    for (const nvrhi::BindingSetHandle& bindingSet : bindingSets)
     {
         state.bindings.push_back(bindingSet.Get());
     }

@@ -67,8 +67,13 @@ struct Renderer
 
     static constexpr float DEPTH_NEAR = 1.0f;
     static constexpr float DEPTH_FAR = 0.0f;
+    static constexpr nvrhi::Format DEPTH_FORMAT = nvrhi::Format::D24S8;
     static constexpr nvrhi::Format HDR_COLOR_FORMAT = nvrhi::Format::R11G11B10_FLOAT;
-    inline static const nvrhi::Color kHDROutputClearColor = nvrhi::Color{};
+    static constexpr nvrhi::Format GBUFFER_ALBEDO_FORMAT    = nvrhi::Format::RGBA8_UNORM;
+    static constexpr nvrhi::Format GBUFFER_NORMALS_FORMAT   = nvrhi::Format::RG16_FLOAT;
+    static constexpr nvrhi::Format GBUFFER_ORM_FORMAT       = nvrhi::Format::RGBA8_UNORM;
+    static constexpr nvrhi::Format GBUFFER_EMISSIVE_FORMAT  = nvrhi::Format::RGBA8_UNORM;
+    static constexpr nvrhi::Format GBUFFER_MOTION_FORMAT    = nvrhi::Format::RG16_FLOAT;
 
     // Instance Management
     static void SetInstance(Renderer* instance);
@@ -121,6 +126,7 @@ struct Renderer
         ComputeDispatchParams dispatchParams;
         // Graphics specific
         nvrhi::FramebufferHandle framebuffer;
+        nvrhi::DepthStencilState* depthStencilState = nullptr;
     };
 
     void AddComputePass(const RenderPassParams& params);
@@ -203,13 +209,6 @@ struct Renderer
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;
 
-    // IBL settings
-    bool m_EnableIBL = true;
-    float m_IBLIntensity = 1.0f;
-    std::string m_IrradianceTexture = "irradiance.dds";
-    std::string m_RadianceTexture = "radiance.dds";
-    std::string m_BRDFLutTexture = "brdf_lut.dds";
-
     float m_AdaptationSpeed = 5.0f;
     bool m_EnableAutoExposure = true;
 
@@ -220,6 +219,12 @@ struct Renderer
     float m_UpsampleRadius = 0.85f;
 
     int m_DebugMode = 0;
+
+    // Environment Lighting settings
+    int m_EnvironmentLightingMode = 1; // 0: None, 1: Sky
+    std::string m_IrradianceTexture = "irradiance.dds";
+    std::string m_RadianceTexture = "radiance.dds";
+    std::string m_BRDFLutTexture = "brdf_lut.dds";
 
 private:
     // Internal State

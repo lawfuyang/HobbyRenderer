@@ -137,6 +137,8 @@ struct LightingInputs
 
     float3 sunRadiance; // Atmosphere-aware direct radiance (already contains BRDF/n.l)
     float3 sunDirection;
+    bool useSunRadiance;
+    float sunShadow;
 
     // Derived values
     float3 F0;       // Base reflectivity at normal incidence
@@ -260,8 +262,6 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
     result.diffuse = 0;
     result.specular = 0;
 
-    if (light.m_Intensity <= 0.0) return result;
-
     float3 L = normalize(-light.m_Direction);
     if (dot(inputs.N, L) <= 0.0) return result;
 
@@ -269,14 +269,18 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
     PrepareLightingByproducts(inputs);
 
     float3 radiance = light.m_Color * light.m_Intensity;
+    float shadow = 0;
 
     // Use atmosphere-aware sun radiance if available
-    if (length(inputs.sunRadiance) > 0.0 && dot(L, inputs.sunDirection) > 0.999)
+    if (inputs.useSunRadiance)
     {
         radiance = inputs.sunRadiance;
+        shadow = inputs.sunShadow;
     }
-
-    float shadow = CalculateRTShadow(inputs, L, 1e10f);
+    else
+    {
+        shadow = CalculateRTShadow(inputs, L, 1e10f);
+    }
 
     return EvaluateDirectLight(inputs, radiance, shadow);
 }

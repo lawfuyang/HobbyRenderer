@@ -121,10 +121,7 @@ static const int IRRADIANCE_TEXTURE_HEIGHT = 16;
 #define DEBUG_MODE_METALLIC 6
 #define DEBUG_MODE_EMISSIVE 7
 #define DEBUG_MODE_LOD 8
-#define DEBUG_MODE_IRRADIANCE 9
-#define DEBUG_MODE_RADIANCE 10
-#define DEBUG_MODE_IBL 11
-#define DEBUG_MODE_MOTION_VECTORS 12
+#define DEBUG_MODE_MOTION_VECTORS 9
 
 #define TEXFLAG_ALBEDO (1u << 0)
 #define TEXFLAG_NORMAL (1u << 1)
@@ -224,34 +221,46 @@ struct ForwardLightingPerFrameData
   Vector4 m_FrustumPlanes[5];
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
   Vector4 m_CullingCameraPos; // xyz: culling camera position
+  //
   uint32_t m_LightCount;
   uint32_t m_EnableRTShadows;
   uint32_t m_DebugMode;
   uint32_t m_EnableFrustumCulling;
+  //
   uint32_t m_EnableConeCulling;
   uint32_t m_EnableOcclusionCulling;
   uint32_t m_HZBWidth;
   uint32_t m_HZBHeight;
+  //
   float m_P00;
   float m_P11;
-  uint32_t m_EnableIBL;
-  float m_IBLIntensity;
-  uint32_t m_RadianceMipCount;
   Vector2 m_OpaqueColorDimensions;
-  uint32_t pad0[3];
+  //
+  Vector3 m_SunDirection;
+  uint32_t m_EnvironmentLightingMode; // 0: None, 1: Sky
+};
+
+struct SkyConstants
+{
+  PlanarViewConstants m_View;
+  Vector4 m_CameraPos;
+  Vector3 m_SunDirection;
+  float m_SunIntensity;
+  float pad0;
 };
 
 struct DeferredLightingConstants
 {
   PlanarViewConstants m_View;
-  Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
+  Vector4 m_CameraPos;
+  //
+  Vector3 m_SunDirection;
   uint32_t m_LightCount;
+  //
   uint32_t m_EnableRTShadows;
   uint32_t m_DebugMode;
-  uint32_t m_EnableIBL;
-  float m_IBLIntensity;
-  uint32_t m_RadianceMipCount;
-  uint32_t pad1[2];
+  uint32_t m_EnvironmentLightingMode; // 0: None, 1: Sky
+  uint32_t pad1;
 };
 
 struct PathTracerConstants

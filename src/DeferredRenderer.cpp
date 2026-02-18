@@ -53,12 +53,11 @@ public:
         DeferredLightingConstants dcb{};
         dcb.m_View = renderer->m_View;
         dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
+        dcb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        dcb.m_EnvironmentLightingMode = renderer->m_EnvironmentLightingMode;
         dcb.m_LightCount = renderer->m_Scene.m_LightCount;
         dcb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
         dcb.m_DebugMode = renderer->m_DebugMode;
-        dcb.m_EnableIBL = renderer->m_EnableIBL ? 1 : 0;
-        dcb.m_IBLIntensity = renderer->m_IBLIntensity;
-        dcb.m_RadianceMipCount = CommonResources::GetInstance().RadianceTexture->getDesc().mipLevels;
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
         nvrhi::BindingSetDesc bset;
@@ -79,12 +78,27 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer)
         };
 
+        nvrhi::FramebufferDesc fbDesc;
+        fbDesc.addColorAttachment(hdrColor);
+        fbDesc.setDepthAttachment(depthTexture);
+
+        nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
+
+        // Surfaces Pass (Stencil == 1)
+        nvrhi::DepthStencilState ds;
+        ds.depthTestEnable = false;
+        ds.depthWriteEnable = false;
+        ds.stencilEnable = true;
+        ds.stencilRefValue = 1;
+        ds.frontFaceStencil.stencilFunc = nvrhi::ComparisonFunc::Equal;
+
         Renderer::RenderPassParams params{
             .commandList = commandList,
             .shaderName = "DeferredLighting_DeferredLighting_PSMain",
             .bindingSetDesc = bset,
             .useBindlessResources = true,
-            .framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor))
+            .framebuffer = framebuffer,
+            .depthStencilState = &ds
         };
 
         renderer->AddFullScreenPass(params);

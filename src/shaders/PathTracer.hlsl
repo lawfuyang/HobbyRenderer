@@ -102,6 +102,10 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         inputs.indices = g_Indices;
         inputs.vertices = g_Vertices;
         inputs.lights = g_Lights;
+        inputs.sunRadiance = 0;
+        inputs.sunDirection = 0;
+        inputs.useSunRadiance = false;
+        inputs.sunShadow = 1.0f;
 
         PrepareLightingByproducts(inputs);
 

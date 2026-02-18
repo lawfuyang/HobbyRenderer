@@ -20,7 +20,6 @@ public:
     
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        PROFILE_FUNCTION();
         Renderer* renderer = Renderer::GetInstance();
         nvrhi::utils::ScopedMarker marker(commandList, "Sky Pass");
 
@@ -36,9 +35,8 @@ public:
         SkyConstants scb{};
         scb.m_View = renderer->m_View;
         scb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
-        scb.m_SunDirection = renderer->m_SunDirection;
-        scb.m_SunIntensity = renderer->m_SunIntensity;
-        scb.m_EarthCenter = renderer->m_EarthCenter;
+        scb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        scb.m_SunIntensity = renderer->m_Scene.GetSunIntensity();
         
         commandList->writeBuffer(skyCB, &scb, sizeof(scb), 0);
 
@@ -68,9 +66,7 @@ public:
             .bindingSetDesc = bset,
             .useBindlessResources = true,
             .framebuffer = framebuffer,
-            .depthStencilState = ds,
-            .useDepthStencilState = true,
-            .stencilRef = 0
+            .depthStencilState = &ds
         };
 
         renderer->AddFullScreenPass(params);

@@ -269,14 +269,14 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     else
     {
         fbInfo.colorFormats = { 
-            nvrhi::Format::RGBA8_UNORM, 
-            nvrhi::Format::RG16_FLOAT, 
-            nvrhi::Format::RGBA8_UNORM, 
-            nvrhi::Format::RGBA8_UNORM,
-            nvrhi::Format::RG16_FLOAT
+            Renderer::GBUFFER_ALBEDO_FORMAT,
+            Renderer::GBUFFER_NORMALS_FORMAT,
+            Renderer::GBUFFER_ORM_FORMAT,
+            Renderer::GBUFFER_EMISSIVE_FORMAT,
+            Renderer::GBUFFER_MOTION_FORMAT
         };
     }
-    fbInfo.setDepthFormat(nvrhi::Format::D32);
+    fbInfo.setDepthFormat(Renderer::DEPTH_FORMAT);
 
     const uint32_t w = renderer->m_RHI->m_SwapchainExtent.x;
     const uint32_t h = renderer->m_RHI->m_SwapchainExtent.y;
@@ -341,10 +341,10 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     // FIXME: Switch to m_MatViewToClip (jittered) once TAA is implemented
     cb.m_P00 = cb.m_View.m_MatViewToClipNoOffset._11;
     cb.m_P11 = cb.m_View.m_MatViewToClipNoOffset._22;
-    cb.m_EnableIBL = renderer->m_EnableIBL ? 1 : 0;
-    cb.m_IBLIntensity = renderer->m_IBLIntensity;
-    cb.m_RadianceMipCount = CommonResources::GetInstance().RadianceTexture->getDesc().mipLevels;
     cb.m_OpaqueColorDimensions = Vector2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height };
+    cb.m_EnvironmentLightingMode = renderer->m_EnvironmentLightingMode;
+    cb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+
     commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
     nvrhi::RenderState renderState;
@@ -359,6 +359,10 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     {
         renderState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetOpaque;
         renderState.depthStencilState = CommonResources::GetInstance().DepthReadWrite;
+        renderState.depthStencilState.stencilEnable = true;
+        renderState.depthStencilState.frontFaceStencil.passOp = nvrhi::StencilOp::Replace;
+        renderState.depthStencilState.frontFaceStencil.stencilFunc = nvrhi::ComparisonFunc::Always;
+        renderState.depthStencilState.stencilRefValue = 1;
     }
 
     const char* psName = bUseAlphaTest ? "BasePass_GBuffer_PSMain_AlphaTest_AlphaTest" : 

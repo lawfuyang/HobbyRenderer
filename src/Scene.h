@@ -234,6 +234,13 @@ public:
     // Release GPU resources and clear scene data
     void Shutdown();
 
+    // Environment / Atmosphere settings
+    float m_SunPitch = DirectX::XMConvertToRadians(45.0f);
+    float m_SunYaw = 0.0f;
+    Vector3 m_SunDirection = Vector3(0.0f, 1.0f, 0.0f);
+
+    float GetSunIntensity() const { return m_Lights.at(0).m_Intensity; } // 1st light is always the sun
+
     // Binary Scene Cache
     bool LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices, std::vector<VertexQuantized>& allVerticesQuantized);
     void SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices, const std::vector<VertexQuantized>& allVerticesQuantized);

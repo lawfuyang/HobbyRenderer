@@ -2,6 +2,7 @@
 #include "Culling.h"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
+#include "Atmosphere.hlsli"
 
 cbuffer PerFrameCB : register(b0)
 {
@@ -408,7 +409,6 @@ GBufferOut GBuffer_PSMain(VSOut input)
     lightingInputs.metallic = metallic;
     lightingInputs.ior = mat.m_IOR;
     lightingInputs.worldPos = input.worldPos;
-    lightingInputs.radianceMipCount = g_PerFrame.m_RadianceMipCount;
     lightingInputs.enableRTShadows = g_PerFrame.m_EnableRTShadows != 0;
     lightingInputs.sceneAS = g_SceneAS;
     lightingInputs.instances = g_Instances;
@@ -417,17 +417,39 @@ GBufferOut GBuffer_PSMain(VSOut input)
     lightingInputs.indices = g_Indices;
     lightingInputs.vertices = g_Vertices;
     lightingInputs.lights = g_Lights;
+    lightingInputs.sunRadiance = 0;
+    lightingInputs.sunDirection = g_PerFrame.m_SunDirection;
+    lightingInputs.useSunRadiance = false;
+    lightingInputs.sunShadow = 1.0f;
+
+    float3 p_atmo = (input.worldPos - kEarthCenter) / 1000.0;
+
+    if (g_PerFrame.m_EnvironmentLightingMode == 1) // Sky
+    {
+        float r = length(p_atmo);
+        float mu_s = dot(p_atmo, g_PerFrame.m_SunDirection) / r;
+
+        // Use solar_irradiance * transmittance as the direct sun radiance at surface
+        lightingInputs.sunRadiance = ATMOSPHERE.solar_irradiance * GetTransmittanceToSun(BRUNETON_TRANSMITTANCE_TEXTURE, r, mu_s) * g_Lights[0].m_Intensity;
+        lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+        lightingInputs.useSunRadiance = true;
+    }
 
     LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_PerFrame.m_LightCount);
     float3 directDiffuse = directLighting.diffuse;
     float3 directSpecular = directLighting.specular;
 
     PrepareLightingByproducts(lightingInputs);
-    IBLComponents iblComp = ComputeIBL(lightingInputs);
-    float3 ibl = iblComp.ibl;
-    ibl *= float(g_PerFrame.m_EnableIBL) * g_PerFrame.m_IBLIntensity;
 
-    float3 color = directDiffuse + directSpecular + ibl;
+    float3 ambient = float3(0,0,0);
+    if (g_PerFrame.m_EnvironmentLightingMode == 1) // Sky
+    {
+        float3 skyIrradiance;
+        GetSunAndSkyIrradiance(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_IRRADIANCE_TEXTURE, p_atmo, N, g_PerFrame.m_SunDirection, skyIrradiance);
+        ambient = skyIrradiance * (baseColor / PI) * g_Lights[0].m_Intensity;
+    }
+
+    float3 color = directDiffuse + directSpecular + ambient;
 
     // Refraction logic
     if (mat.m_TransmissionFactor > 0.0)
@@ -462,7 +484,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         // --- Fresnel split ---
         // We use the same view-dependent Fresnel for the background blend
         float3 transmitted = refractedColor * (1.0 - lightingInputs.F);
-        float3 reflected = directSpecular + iblComp.radiance * float(g_PerFrame.m_EnableIBL) * g_PerFrame.m_IBLIntensity;
+        float3 reflected = directSpecular;
 
         float3 transmissionLighting = reflected + transmitted;
 
@@ -471,6 +493,19 @@ GBufferOut GBuffer_PSMain(VSOut input)
     }
 
     color += emissive;
+
+    // Aerial perspective
+    if (g_PerFrame.m_EnvironmentLightingMode == 1) // Sky
+    {
+        float3 cameraPos = (g_PerFrame.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
+        
+        float3 transmittance;
+        float3 inScattering = GetSkyRadianceToPoint(
+            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE,
+            cameraPos, p_atmo, 0.0, g_PerFrame.m_SunDirection, transmittance);
+
+        color = color * transmittance + inScattering * g_Lights[0].m_Intensity;
+    }
 
     float2 motionVectors = ComputeMotionVectors(input.worldPos, input.prevWorldPos);
 
@@ -493,12 +528,6 @@ GBufferOut GBuffer_PSMain(VSOut input)
             color = metallic.xxx;
         else if (g_PerFrame.m_DebugMode == DEBUG_MODE_EMISSIVE)
             color = emissive;
-        else if (g_PerFrame.m_DebugMode == DEBUG_MODE_IRRADIANCE)
-            color = iblComp.irradiance;
-        else if (g_PerFrame.m_DebugMode == DEBUG_MODE_RADIANCE)
-            color = iblComp.radiance;
-        else if (g_PerFrame.m_DebugMode == DEBUG_MODE_IBL)
-            color = ibl;
     }
 
     return float4(color, alpha);

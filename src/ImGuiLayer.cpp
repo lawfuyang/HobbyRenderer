@@ -48,6 +48,7 @@ void ImGuiLayer::UpdateFrame()
     
     // Build ImGui UI and end with ImGui::Render(); rendering happens in ImGuiRenderer::Render
     Renderer* renderer = Renderer::GetInstance();
+    Scene& scene = renderer->m_Scene;
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
@@ -80,8 +81,9 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Checkbox("Reference Path Tracer", &renderer->m_EnableReferencePathTracer);
             ImGui::Checkbox("Use Meshlet Rendering", &renderer->m_UseMeshletRendering);
             ImGui::Checkbox("Enable RT Shadows", &renderer->m_EnableRTShadows);
-            ImGui::Checkbox("Enable IBL", &renderer->m_EnableIBL);
-            ImGui::SliderFloat("IBL Intensity", &renderer->m_IBLIntensity, 0.0f, 10.0f);
+            
+            static const char* kEnvModes[] = { "None", "Atmosphere (Sky)" };
+            ImGui::Combo("Environment Lighting", &renderer->m_EnvironmentLightingMode, kEnvModes, IM_ARRAYSIZE(kEnvModes));
 
             static const char* kDebugModes[] = {
                 "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Irradiance", "Radiance", "IBL", "Motion Vectors"
@@ -133,66 +135,44 @@ void ImGuiLayer::UpdateFrame()
         // Lights controls
         if (ImGui::TreeNode("Lights"))
         {
-            if (!renderer->m_Scene.m_Lights.empty() && renderer->m_Scene.m_Lights[0].m_Type == Scene::Light::Directional)
+            // index 0 is guaranteed to be the sun light
+            Scene::Light& sun = scene.m_Lights[0];
+            if (ImGui::TreeNode("Sun Orientation"))
             {
-                Scene::Light& sun = renderer->m_Scene.m_Lights[0];
-                if (sun.m_NodeIndex != -1)
+                bool changed = false;
+                changed |= ImGui::SliderAngle("Yaw", &scene.m_SunYaw, -180.0f, 180.0f);
+                changed |= ImGui::SliderAngle("Pitch", &scene.m_SunPitch, 0.0f, 90.0f);
+
+                if (changed)
                 {
-                    if (ImGui::TreeNode("Sun Orientation"))
-                    {
-                        static float yaw = 0.0f;
-                        static float pitch = 0.0f;
-                        static bool initialized = false;
+                    scene.m_LightsDirty = true;
 
-                        Scene::Node& node = renderer->m_Scene.m_Nodes[sun.m_NodeIndex];
-
-                        if (!initialized)
-                        {
-                            using namespace DirectX;
-                            XMVECTOR q = XMLoadFloat4(&node.m_Rotation);
-                            XMVECTOR forward = XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
-                            XMVECTOR dir = XMVector3Rotate(forward, q);
-                            XMFLOAT3 d;
-                            XMStoreFloat3(&d, dir);
-
-                            pitch = asinf(std::clamp(-d.y, -1.0f, 1.0f));
-                            yaw = atan2f(d.x, -d.z);
-                            initialized = true;
-                        }
-
-                        bool changed = false;
-                        changed |= ImGui::SliderAngle("Yaw", &yaw, -180.0f, 180.0f);
-                        changed |= ImGui::SliderAngle("Pitch", &pitch, -90.0f, 90.0f);
-
-                        if (changed)
-                        {
-                            using namespace DirectX;
-                            XMVECTOR rotationQuat = XMQuaternionRotationRollPitchYaw(pitch, yaw, 0.0f);
-                            XMStoreFloat4(&node.m_Rotation, rotationQuat);
-                            node.m_IsDirty = true;
-                            renderer->m_Scene.m_LightsDirty = true;
-                        }
-
-                        ImGui::TreePop();
-                    }
+                    // Final sun direction for atmosphere (points TOWARDS the sun)
+                    const float pitchRad = scene.m_SunPitch;
+                    const float yawRad = scene.m_SunYaw;
+                    scene.m_SunDirection.x = cosf(pitchRad) * sinf(yawRad);
+                    scene.m_SunDirection.y = sinf(pitchRad);
+                    scene.m_SunDirection.z = cosf(pitchRad) * cosf(yawRad);
                 }
+
+                ImGui::TreePop();
             }
 
-            for (size_t i = 0; i < renderer->m_Scene.m_Lights.size(); ++i)
+            for (size_t i = 0; i < scene.m_Lights.size(); ++i)
             {
-                Scene::Light& light = renderer->m_Scene.m_Lights[i];
+                Scene::Light& light = scene.m_Lights[i];
                 std::string label = light.m_Name.empty() ? ("Light " + std::to_string(i)) : light.m_Name;
                 if (ImGui::TreeNode(label.c_str()))
                 {
                     const char* types[] = { "Directional", "Point", "Spot" };
                     ImGui::Text("Type: %s", types[light.m_Type]);
-                    renderer->m_Scene.m_LightsDirty |= ImGui::ColorEdit3("Color", (float*)&light.m_Color);
-                    renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Intensity", &light.m_Intensity, 0.1f, 0.0f, 10.0f);
-                    renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Range", &light.m_Range, 0.1f, 0.0f, 1000.0f);
+                    scene.m_LightsDirty |= ImGui::ColorEdit3("Color", (float*)&light.m_Color);
+                    scene.m_LightsDirty |= ImGui::DragFloat("Intensity", &light.m_Intensity, 0.1f, 0.1f, 10.0f);
+                    scene.m_LightsDirty |= ImGui::DragFloat("Range", &light.m_Range, 0.1f, 0.0f, 1000.0f);
                     if (light.m_Type == Scene::Light::Spot)
                     {
-                        renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Inner Angle", &light.m_SpotInnerConeAngle, 0.01f, 0.0f, light.m_SpotOuterConeAngle);
-                        renderer->m_Scene.m_LightsDirty |= ImGui::DragFloat("Outer Angle", &light.m_SpotOuterConeAngle, 0.01f, light.m_SpotInnerConeAngle, DirectX::XM_PI);
+                        scene.m_LightsDirty |= ImGui::DragFloat("Inner Angle", &light.m_SpotInnerConeAngle, 0.01f, 0.0f, light.m_SpotOuterConeAngle);
+                        scene.m_LightsDirty |= ImGui::DragFloat("Outer Angle", &light.m_SpotOuterConeAngle, 0.01f, light.m_SpotInnerConeAngle, DirectX::XM_PI);
                     }
                     ImGui::TreePop();
                 }
@@ -216,18 +196,18 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Text("Forward: %.2f, %.2f, %.2f", fwd.x, fwd.y, fwd.z);
             
             // GLTF Camera selection
-            if (!renderer->m_Scene.m_Cameras.empty())
+            if (!scene.m_Cameras.empty())
             {
                 std::vector<const char*> cameraNames;
-                for (const Scene::Camera& cam : renderer->m_Scene.m_Cameras)
+                for (const Scene::Camera& cam : scene.m_Cameras)
                 {
                     cameraNames.push_back(cam.m_Name.empty() ? "Unnamed Camera" : cam.m_Name.c_str());
                 }
                 if (ImGui::Combo("GLTF Camera", &renderer->m_SelectedCameraIndex, cameraNames.data(), static_cast<int>(cameraNames.size())))
                 {
-                    if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(renderer->m_Scene.m_Cameras.size()))
+                    if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
                     {
-                        const Scene::Camera& selectedCam = renderer->m_Scene.m_Cameras[renderer->m_SelectedCameraIndex];
+                        const Scene::Camera& selectedCam = scene.m_Cameras[renderer->m_SelectedCameraIndex];
                         renderer->SetCameraFromSceneCamera(selectedCam);
                     }
                 }
@@ -235,9 +215,9 @@ void ImGuiLayer::UpdateFrame()
 
             if (ImGui::Button("Reset Camera"))
             {
-                if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(renderer->m_Scene.m_Cameras.size()))
+                if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
                 {
-                    const Scene::Camera& selectedCam = renderer->m_Scene.m_Cameras[renderer->m_SelectedCameraIndex];
+                    const Scene::Camera& selectedCam = scene.m_Cameras[renderer->m_SelectedCameraIndex];
                     renderer->SetCameraFromSceneCamera(selectedCam);
                 }
                 else
@@ -277,10 +257,10 @@ void ImGuiLayer::UpdateFrame()
                 MicroProfileDumpFileImmediately(dumpPath.c_str(), nullptr, nullptr);
             }
 
-            ImGui::Text("Total Instances: %zu", renderer->m_Scene.m_InstanceData.size());
-            ImGui::Text("Opaque:      %u", renderer->m_Scene.m_OpaqueBucket.m_Count);
-            ImGui::Text("Masked:      %u", renderer->m_Scene.m_MaskedBucket.m_Count);
-            ImGui::Text("Transparent: %u", renderer->m_Scene.m_TransparentBucket.m_Count);
+            ImGui::Text("Total Instances: %zu", scene.m_InstanceData.size());
+            ImGui::Text("Opaque:      %u", scene.m_OpaqueBucket.m_Count);
+            ImGui::Text("Masked:      %u", scene.m_MaskedBucket.m_Count);
+            ImGui::Text("Transparent: %u", scene.m_TransparentBucket.m_Count);
             ImGui::NewLine();
 
             if (ImGui::BeginTable("TimingsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
