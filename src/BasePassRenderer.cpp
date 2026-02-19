@@ -55,7 +55,7 @@ protected:
         bool m_BackFaceCull = false;
     };
 
-    void GenerateHZBMips(nvrhi::CommandListHandle commandList, const ResourceHandles& handles);
+    void GenerateHZBMips(nvrhi::CommandListHandle commandList, const ResourceHandles& handles, nvrhi::BufferHandle spdAtomicCounter);
     void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5]);
     void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args, const ResourceHandles& handles);
     void RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args, const ResourceHandles& handles);
@@ -85,6 +85,17 @@ protected:
         {
             commandList->clearBufferUInt(handles.meshletJobCount, 0);
         }
+    }
+
+    RGBufferDesc GetSPDAtomicCounterDesc(const char* debugName) const
+    {
+        RGBufferDesc desc;
+        desc.m_NvrhiDesc.structStride = sizeof(uint32_t);
+        desc.m_NvrhiDesc.byteSize = sizeof(uint32_t);
+        desc.m_NvrhiDesc.canHaveUAVs = true;
+        desc.m_NvrhiDesc.debugName = debugName;
+        desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        return desc;
     }
 };
 
@@ -416,7 +427,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     }
 }
 
-void BasePassRendererBase::GenerateHZBMips(nvrhi::CommandListHandle commandList, const ResourceHandles& handles)
+void BasePassRendererBase::GenerateHZBMips(nvrhi::CommandListHandle commandList, const ResourceHandles& handles, nvrhi::BufferHandle spdAtomicCounter)
 {
     PROFILE_FUNCTION();
 
@@ -462,7 +473,7 @@ void BasePassRendererBase::GenerateHZBMips(nvrhi::CommandListHandle commandList,
         renderer->AddComputePass(params);
     }
 
-    renderer->GenerateMipsUsingSPD(renderer->m_HZBTexture, commandList, "Generate HZB Mips", SPD_REDUCTION_MIN);
+    renderer->GenerateMipsUsingSPD(renderer->m_HZBTexture, spdAtomicCounter, commandList, "Generate HZB Mips", SPD_REDUCTION_MIN);
 }
 
 class OpaquePhase1Renderer : public BasePassRendererBase
@@ -556,6 +567,10 @@ public:
         if (!renderer->m_EnableOcclusionCulling) return false;
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
+
+        m_RG_SPDAtomicCounter = renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("HZB SPD Atomic Counter"), m_RG_SPDAtomicCounter);
+        renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
+
         return true;
     }
 
@@ -565,9 +580,13 @@ public:
         
         ResourceHandles handles;
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
-        GenerateHZBMips(commandList, handles);
+        nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
+        GenerateHZBMips(commandList, handles, spdAtomicCounter);
     }
     const char* GetName() const override { return "HZBGenerator"; }
+
+private:
+    RGBufferHandle m_RG_SPDAtomicCounter;
 };
 
 class OpaquePhase2Renderer : public BasePassRendererBase
@@ -736,6 +755,10 @@ public:
         if (!renderer->m_EnableOcclusionCulling) return false;
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
+
+        m_RG_SPDAtomicCounter = renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("HZB Phase 2 SPD Atomic Counter"), m_RG_SPDAtomicCounter);
+        renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
+
         return true;
     }
 
@@ -745,9 +768,13 @@ public:
         
         ResourceHandles handles;
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
-        GenerateHZBMips(commandList, handles);
+        nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
+        GenerateHZBMips(commandList, handles, spdAtomicCounter);
     }
     const char* GetName() const override { return "HZBGeneratorPhase2"; }
+
+private:
+    RGBufferHandle m_RG_SPDAtomicCounter;
 };
 
 class TransparentPassRenderer : public BasePassRendererBase
@@ -801,11 +828,17 @@ public:
             renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
         }
 
+        m_RG_SPDAtomicCounter = renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("Transparent SPD Atomic Counter"), m_RG_SPDAtomicCounter);
+        renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
+
         return true;
     }
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override;
     const char* GetName() const override { return "TransparentPass"; }
+
+private:
+    RGBufferHandle m_RG_SPDAtomicCounter;
 };
 
 void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
@@ -832,7 +865,8 @@ void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList, const
     // Capture the opaque scene for refraction
     commandList->copyTexture(handles.opaque, nvrhi::TextureSlice(), handles.hdr, nvrhi::TextureSlice());
 
-    renderer->GenerateMipsUsingSPD(handles.opaque, commandList, "Generate Mips for Opaque Color", SPD_REDUCTION_AVERAGE);
+    nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
+    renderer->GenerateMipsUsingSPD(handles.opaque, spdAtomicCounter, commandList, "Generate Mips for Opaque Color", SPD_REDUCTION_AVERAGE);
 
     Matrix view, viewProjForCulling;
     Vector4 frustumPlanes[5];

@@ -1424,7 +1424,7 @@ void Renderer::AddComputePass(const RenderPassParams& params)
     }
 }
 
-void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::CommandListHandle commandList, const char* markerName, SpdReductionType reductionType)
+void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, SpdReductionType reductionType)
 {
     nvrhi::utils::ScopedMarker spdMarker{ commandList, markerName };
 
@@ -1454,7 +1454,7 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::Command
     spdData.m_ReductionType = reductionType;
 
     // Clear atomic counter
-    commandList->clearBufferUInt(m_SPDAtomicCounter, 0);
+    commandList->clearBufferUInt(spdAtomicCounter, 0);
 
     nvrhi::BindingSetDesc spdBset;
     spdBset.bindings.push_back(nvrhi::BindingSetItem::PushConstants(0, sizeof(SpdConstants)));
@@ -1472,7 +1472,7 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::Command
     }
 
     // Atomic counter always at slot 12
-    spdBset.bindings.push_back(nvrhi::BindingSetItem::StructuredBuffer_UAV(12, m_SPDAtomicCounter));
+    spdBset.bindings.push_back(nvrhi::BindingSetItem::StructuredBuffer_UAV(12, spdAtomicCounter));
 
     Renderer::RenderPassParams params{
         .commandList = commandList,
@@ -1601,15 +1601,6 @@ void Renderer::CreateSceneResources()
         return;
     }
 
-    // Create atomic counter buffer for SPD
-    nvrhi::BufferDesc counterDesc;
-    counterDesc.structStride = sizeof(uint32_t);
-    counterDesc.byteSize = sizeof(uint32_t);
-    counterDesc.canHaveUAVs = true;
-    counterDesc.debugName = "SPD Atomic Counter";
-    counterDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-    m_SPDAtomicCounter = m_RHI->m_NvrhiDevice->createBuffer(counterDesc);
-
     nvrhi::CommandListHandle cmd = AcquireCommandList();
     ScopedCommandList scopedCmd{ cmd, "HZB_Clear" };
     scopedCmd->clearTextureFloat(m_HZBTexture, nvrhi::AllSubresources, DEPTH_FAR);
@@ -1622,7 +1613,6 @@ void Renderer::DestroySceneResources()
     SDL_Log("[Shutdown] Destroying Depth textures");
 
     m_HZBTexture = nullptr;
-    m_SPDAtomicCounter = nullptr;
 }
 
 int main(int argc, char* argv[])
