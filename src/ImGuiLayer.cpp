@@ -142,6 +142,7 @@ void ImGuiLayer::UpdateFrame()
                 bool changed = false;
                 changed |= ImGui::SliderAngle("Yaw", &scene.m_SunYaw, -180.0f, 180.0f);
                 changed |= ImGui::SliderAngle("Pitch", &scene.m_SunPitch, 0.0f, 90.0f);
+                ImGui::Text("Direction: %.2f, %.2f, %.2f", scene.m_SunDirection.x, scene.m_SunDirection.y, scene.m_SunDirection.z);
 
                 if (changed)
                 {

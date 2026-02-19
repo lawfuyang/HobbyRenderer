@@ -262,7 +262,7 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
     result.diffuse = 0;
     result.specular = 0;
 
-    float3 L = normalize(-light.m_Direction);
+    float3 L = inputs.sunDirection;
     if (dot(inputs.N, L) <= 0.0) return result;
 
     inputs.L = L;

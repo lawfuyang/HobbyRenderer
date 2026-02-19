@@ -911,6 +911,17 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 		light.m_Color = Vector3{ 1.0f, 1.0f, 1.0f };
 		light.m_Intensity = 1.0f;
 		scene.m_Lights.push_back(std::move(light));
+
+		scene.m_Lights.back().m_NodeIndex = (int)scene.m_Nodes.size();
+		Scene::Node& lightNode = scene.m_Nodes.emplace_back();
+		lightNode.m_LightIndex = 0; // The default directional light will be index 0
+
+		const Vector quat = DirectX::XMQuaternionRotationRollPitchYaw(-scene.m_SunPitch, scene.m_SunYaw, 0.0f);
+		DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
+
+		const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
+		DirectX::XMStoreFloat4x4(&lightNode.m_LocalTransform, localM);
+		lightNode.m_WorldTransform = lightNode.m_LocalTransform;
 	}
 
 	std::sort(scene.m_Lights.begin(), scene.m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
