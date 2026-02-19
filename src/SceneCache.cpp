@@ -3,7 +3,7 @@
 #include "meshoptimizer.h"
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 20;
+static constexpr uint32_t kSceneCacheVersion = 21;
 
 // --- Binary Serialization Helpers ---
 template<typename T>

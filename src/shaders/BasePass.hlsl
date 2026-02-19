@@ -52,6 +52,7 @@ struct VSOut
 {
     float4 Position : SV_POSITION;
     float3 normal : NORMAL;
+    float4 tangent : TANGENT;
     float2 uv : TEXCOORD0;
     float3 worldPos : TEXCOORD1;
     float3 prevWorldPos : TEXCOORD5;
@@ -68,6 +69,8 @@ VSOut PrepareVSOut(Vertex v, PerInstanceData inst, uint instanceID, uint meshlet
     o.Position = MatrixMultiply(worldPos, g_PerFrame.m_View.m_MatWorldToClipNoOffset);
 
     o.normal = TransformNormal(v.m_Normal, inst.m_World);
+    o.tangent.xyz = TransformNormal(v.m_Tangent.xyz, inst.m_World);
+    o.tangent.w = v.m_Tangent.w;
     o.uv = v.m_Uv;
     o.worldPos = worldPos.xyz;
     o.prevWorldPos = MatrixMultiply(float4(v.m_Pos, 1.0f), inst.m_PrevWorld).xyz;
@@ -224,21 +227,6 @@ float3 TwoChannelNormalX2(float2 normal)
     return float3(xy.x, xy.y, z);
 }
 
-// Christian Schuler, "Normal Mapping without Precomputed Tangents", ShaderX 5, Chapter 2.6, pp. 131-140
-// See also follow-up blog post: http://www.thetenthplanet.de/archives/1180
-float3x3 CalculateTBNWithoutTangent(float3 p, float3 n, float2 uv)
-{
-    float3 dp1 = ddx(p);
-    float3 dp2 = ddy(p);
-    float2 duv1 = ddx(uv);
-    float2 duv2 = ddy(uv);
-
-    float r = 1.0 / (duv1.x * duv2.y - duv2.x * duv1.y);
-    float3 T = (dp1 * duv2.y - dp2 * duv1.y) * r;
-    float3 B = (dp2 * duv1.x - dp1 * duv2.x) * r;
-    return float3x3(normalize(T), normalize(B), n);
-}
-
 float3 HashColor(uint id)
 {
     uint h = id * 0x27D4EB2Du;
@@ -359,7 +347,11 @@ GBufferOut GBuffer_PSMain(VSOut input)
     if (hasNormal)
     {
         float3 normalMap = TwoChannelNormalX2(nmSample.xy);
-        float3x3 TBN = CalculateTBNWithoutTangent(input.worldPos, input.normal, input.uv);
+        float3 n_w = normalize(input.normal);
+        float3 t_w = normalize(input.tangent.xyz);
+        t_w = normalize(t_w - n_w * dot(t_w, n_w));
+        float3 b_w = normalize(cross(n_w, t_w) * input.tangent.w);
+        float3x3 TBN = float3x3(t_w, b_w, n_w);
         N = normalize(MatrixMultiply(normalMap, TBN));
     }
     else

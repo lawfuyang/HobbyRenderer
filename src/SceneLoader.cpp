@@ -1056,6 +1056,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		const cgltf_accessor* posAcc = nullptr;
 		const cgltf_accessor* normAcc = nullptr;
 		const cgltf_accessor* uvAcc = nullptr;
+		const cgltf_accessor* tangAcc = nullptr;
 
 		for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai)
 		{
@@ -1066,10 +1067,21 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 				normAcc = attr.data;
 			else if (attr.type == cgltf_attribute_type_texcoord)
 				uvAcc = attr.data;
+			else if (attr.type == cgltf_attribute_type_tangent)
+				tangAcc = attr.data;
 		}
 
 		if (!posAcc)
 			return;
+
+		if (!tangAcc)
+		{
+			if (prim.material)
+			{
+				int matIdx = offsets.materialOffset + (int)(prim.material - data->materials);
+				scene.m_Materials[matIdx].m_NormalTexture = -1;
+			}
+		}
 
 		const cgltf_size vertCount = posAcc->count;
 
@@ -1097,6 +1109,14 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 				cgltf_accessor_read_float(uvAcc, v, uv, uvComps);
 			}
 			vx.m_Uv.x = uv[0]; vx.m_Uv.y = uv[1];
+
+			float tang[4] = { 0,0,0,0 };
+			if (tangAcc)
+			{
+				cgltf_size tangComps = cgltf_num_components(tangAcc->type);
+				cgltf_accessor_read_float(tangAcc, v, tang, tangComps);
+			}
+			vx.m_Tangent.x = tang[0]; vx.m_Tangent.y = tang[1]; vx.m_Tangent.z = tang[2]; vx.m_Tangent.w = tang[3];
 
 			rawVertices[v] = vx;
 		}
@@ -1136,8 +1156,26 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 			vq.m_Normal = (meshopt_quantizeSnorm(v.m_Normal.x, 10) + 511) |
 				((meshopt_quantizeSnorm(v.m_Normal.y, 10) + 511) << 10) |
 				((meshopt_quantizeSnorm(v.m_Normal.z, 10) + 511) << 20);
+			// bit 30 is bitangent sign (W)
+			vq.m_Normal |= (v.m_Tangent.w >= 0 ? 0 : 1) << 30;
+
 			vq.m_Uv = (meshopt_quantizeHalf(v.m_Uv.x)) |
 				((meshopt_quantizeHalf(v.m_Uv.y)) << 16);
+
+			// 8-8 octahedral tangent
+			float tx = v.m_Tangent.x, ty = v.m_Tangent.y, tz = v.m_Tangent.z;
+			float tsum = fabsf(tx) + fabsf(ty) + fabsf(tz);
+			if (tsum > 1e-6f)
+			{
+				float tu = tz >= 0 ? tx / tsum : (1.0f - fabsf(ty / tsum)) * (tx >= 0 ? 1.0f : -1.0f);
+				float tv = tz >= 0 ? ty / tsum : (1.0f - fabsf(tx / tsum)) * (ty >= 0 ? 1.0f : -1.0f);
+				vq.m_Tangent = (meshopt_quantizeSnorm(tu, 8) + 127) | (meshopt_quantizeSnorm(tv, 8) + 127) << 8;
+			}
+			else
+			{
+				vq.m_Tangent = 0;
+			}
+
 			res.vertices.push_back(vq);
 		}
 
@@ -1270,6 +1308,9 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 
 		res.minimalPrim.m_VertexCount = (uint32_t)uniqueVertices;
 		res.minimalPrim.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) + offsets.materialOffset : -1;
+
+		SDL_Log("[Scene] Processed Mesh %u Primitive %u: %zu vertices, %zu indices, %zu meshlets",
+			job.meshIdx, job.primIdx, res.vertices.size(), res.indices.size(), res.meshlets.size());
 	});
 
 	// Merging results
