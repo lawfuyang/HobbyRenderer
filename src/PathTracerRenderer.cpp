@@ -7,24 +7,12 @@ extern RGTextureHandle g_RG_HDRColor;
 
 class PathTracerRenderer : public IRenderer
 {
-    nvrhi::TextureHandle m_AccumulationBuffer;
+    RGTextureHandle m_AccumulationBuffer;
     uint32_t m_AccumulationIndex = 0;
 
 public:
     void Initialize() override
     {
-        Renderer* renderer = Renderer::GetInstance();
-
-        nvrhi::TextureDesc desc;
-        desc.width = renderer->m_RHI->m_SwapchainExtent.x;
-        desc.height = renderer->m_RHI->m_SwapchainExtent.y;
-        desc.format = nvrhi::Format::RGBA32_FLOAT;
-        desc.isUAV = true;
-        desc.debugName = "AccumulationBuffer";
-        desc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        desc.keepInitialState = true;
-        m_AccumulationBuffer = renderer->m_RHI->m_NvrhiDevice->createTexture(desc);
-        
     }
 
     bool Setup(RenderGraph& renderGraph) override
@@ -36,6 +24,15 @@ public:
             return false;
         }
 
+        RGTextureDesc desc;
+        desc.m_NvrhiDesc.width = renderer->m_RHI->m_SwapchainExtent.x;
+        desc.m_NvrhiDesc.height = renderer->m_RHI->m_SwapchainExtent.y;
+        desc.m_NvrhiDesc.format = nvrhi::Format::RGBA32_FLOAT;
+        desc.m_NvrhiDesc.isUAV = true;
+        desc.m_NvrhiDesc.debugName = "AccumulationBuffer";
+        desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        m_AccumulationBuffer = renderGraph.DeclarePersistentTexture(desc, m_AccumulationBuffer);
+
         renderGraph.WriteTexture(g_RG_HDRColor);
         return true;
     }
@@ -46,6 +43,7 @@ public:
         Renderer* renderer = Renderer::GetInstance();
 
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle accumBuffer = renderGraph.GetTexture(m_AccumulationBuffer, RGResourceAccessMode::Write);
         const nvrhi::TextureDesc& hdrDesc = hdrColor->getDesc();
 
         // Camera change detection
@@ -88,7 +86,7 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(5, renderer->m_Scene.m_IndexBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_VertexBufferQuantized),
             nvrhi::BindingSetItem::Texture_UAV(0, hdrColor),
-            nvrhi::BindingSetItem::Texture_UAV(1, m_AccumulationBuffer)
+            nvrhi::BindingSetItem::Texture_UAV(1, accumBuffer)
         };
 
         Renderer::RenderPassParams params{

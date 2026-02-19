@@ -109,7 +109,7 @@ void RenderGraph::Reset()
         // Cleanup physical resources not used for > 3 frames
         if (texture.m_PhysicalTexture && (m_FrameIndex - texture.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
-            SDL_Log("[RenderGraph] Freeing texture '%s' due to inactivity", texture.m_Desc.m_NvrhiDesc.debugName.c_str());
+            //SDL_Log("[RenderGraph] Freeing texture '%s' due to inactivity", texture.m_Desc.m_NvrhiDesc.debugName.c_str());
             if (texture.m_IsPhysicalOwner)
             {
                 FreeBlock(texture.m_HeapIndex, texture.m_BlockOffset);
@@ -131,7 +131,7 @@ void RenderGraph::Reset()
 
         if (buffer.m_PhysicalBuffer && (m_FrameIndex - buffer.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
-            SDL_Log("[RenderGraph] Freeing buffer '%s' due to inactivity", buffer.m_Desc.m_NvrhiDesc.debugName.c_str());
+            //SDL_Log("[RenderGraph] Freeing buffer '%s' due to inactivity", buffer.m_Desc.m_NvrhiDesc.debugName.c_str());
             if (buffer.m_IsPhysicalOwner)
             {
                 FreeBlock(buffer.m_HeapIndex, buffer.m_BlockOffset);
@@ -148,7 +148,7 @@ void RenderGraph::Reset()
     {
         if (heapEntry.m_Heap && (m_FrameIndex - heapEntry.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
-            SDL_Log("[RenderGraph] Freeing heap slot %u due to inactivity", heapEntry.m_HeapIdx);
+            //SDL_Log("[RenderGraph] Freeing heap slot %u due to inactivity", heapEntry.m_HeapIdx);
             heapEntry.m_Heap = nullptr;
             heapEntry.m_Blocks.clear();
             heapEntry.m_Size = 0;
@@ -296,7 +296,7 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
 
         if (texture.m_Hash != hash)
         {
-            SDL_Log("[RenderGraph] Texture desc mismatch for handle %u, freeing old resource", existing.m_Index);
+            //SDL_Log("[RenderGraph] Texture desc mismatch for handle %u, freeing old resource", existing.m_Index);
             texture.m_PhysicalTexture = nullptr;
             texture.m_IsAllocated = false;
         }
@@ -304,6 +304,7 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
         texture.m_Desc = desc;
         texture.m_Hash = hash;
         texture.m_IsDeclaredThisFrame = true;
+        texture.m_IsPersistent = false;
         texture.m_LastFrameUsed = m_FrameIndex;
         
         m_PendingDeclaredTextures.push_back(existing.m_Index);
@@ -318,6 +319,7 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
         {
             m_Textures[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Textures[i].m_IsDeclaredThisFrame = true;
+            m_Textures[i].m_IsPersistent = false;
             m_Textures[i].m_LastFrameUsed = m_FrameIndex;
             
             m_PendingDeclaredTextures.push_back(i);
@@ -333,6 +335,7 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
     texture.m_Desc = desc;
     texture.m_Hash = hash;
     texture.m_IsDeclaredThisFrame = true;
+    texture.m_IsPersistent = false;
     texture.m_LastFrameUsed = m_FrameIndex;
     
     m_Textures.push_back(texture);
@@ -357,7 +360,7 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
 
         if (buffer.m_Hash != hash)
         {
-            SDL_Log("[RenderGraph] Buffer desc mismatch for handle %u, freeing old resource", existing.m_Index);
+            //SDL_Log("[RenderGraph] Buffer desc mismatch for handle %u, freeing old resource", existing.m_Index);
             buffer.m_PhysicalBuffer = nullptr;
             buffer.m_IsAllocated = false;
         }
@@ -365,6 +368,7 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
         buffer.m_Desc = desc;
         buffer.m_Hash = hash;
         buffer.m_IsDeclaredThisFrame = true;
+        buffer.m_IsPersistent = false;
         buffer.m_LastFrameUsed = m_FrameIndex;
 
         m_PendingDeclaredBuffers.push_back(existing.m_Index);
@@ -378,6 +382,7 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
         {
             m_Buffers[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Buffers[i].m_IsDeclaredThisFrame = true;
+            m_Buffers[i].m_IsPersistent = false;
             m_Buffers[i].m_LastFrameUsed = m_FrameIndex;
 
             m_PendingDeclaredBuffers.push_back(i);
@@ -393,12 +398,27 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
     buffer.m_Desc = desc;
     buffer.m_Hash = hash;
     buffer.m_IsDeclaredThisFrame = true;
+    buffer.m_IsPersistent = false;
     buffer.m_LastFrameUsed = m_FrameIndex;
     
     m_Buffers.push_back(buffer);
     m_PendingDeclaredBuffers.push_back(handle.m_Index);
 
     WriteBuffer(handle); // Implicitly mark new buffers as written in the declaring pass, since they start with undefined contents    
+    return handle;
+}
+
+RGTextureHandle RenderGraph::DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle existing)
+{
+    RGTextureHandle handle = DeclareTexture(desc, existing);
+    m_Textures[handle.m_Index].m_IsPersistent = true;
+    return handle;
+}
+
+RGBufferHandle RenderGraph::DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle existing)
+{
+    RGBufferHandle handle = DeclareBuffer(desc, existing);
+    m_Buffers[handle.m_Index].m_IsPersistent = true;
     return handle;
 }
 
@@ -774,7 +794,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
             block.m_IsFree = true;
             m_Heaps[i].m_Blocks.push_back(block);
             
-            SDL_Log("[RenderGraph] Reused heap slot %u for new heap of size %.2f MB", i, size / (1024.0 * 1024.0));
+            //SDL_Log("[RenderGraph] Reused heap slot %u for new heap of size %.2f MB", i, size / (1024.0 * 1024.0));
             return heap;
         }
     }
@@ -948,13 +968,13 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         }
 
         bool aliased = false;
-        if (m_AliasingEnabled && !bIsBuffer) // TODO: figure out why the fuck aliasing buffers is buggy
+        if (m_AliasingEnabled && !bIsBuffer && !resource->m_IsPersistent) // TODO: figure out why the fuck aliasing buffers is buggy
         {
             for (uint32_t candidateIdx : sortedIndices)
             {
                 if (candidateIdx == idx) break;
                 TransientResourceBase* candidate = bIsBuffer ? (TransientResourceBase*)&m_Buffers[candidateIdx] : (TransientResourceBase*)&m_Textures[candidateIdx];
-                if (!candidate->m_IsAllocated || !candidate->m_IsPhysicalOwner)
+                if (!candidate->m_IsAllocated || !candidate->m_IsPhysicalOwner || candidate->m_IsPersistent)
                     continue;
 
                 bool bCanAlias = resource->m_Lifetime.m_FirstPass > candidate->m_PhysicalLastPass;

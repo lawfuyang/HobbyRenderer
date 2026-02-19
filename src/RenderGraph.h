@@ -99,6 +99,7 @@ struct TransientResourceBase
     uint32_t m_HeapIndex = UINT32_MAX;
     bool m_IsAllocated = false;
     bool m_IsDeclaredThisFrame = false;
+    bool m_IsPersistent = false;
     bool m_IsPhysicalOwner = false;
     nvrhi::HeapHandle m_Heap;
 
@@ -142,10 +143,11 @@ public:
     // Reset graph for new frame (doesn't free physical resources)
     void Reset();
     
-    // Resource Declaration (called during Setup phase)
     RGTextureHandle DeclareTexture(const RGTextureDesc& desc, RGTextureHandle existing = {});
     RGBufferHandle DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle existing = {});
-    
+    RGTextureHandle DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle existing = {});
+    RGBufferHandle DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle existing = {});
+
     // Resource Access Registration (called during Setup phase)
     void ReadTexture(RGTextureHandle handle);
     void WriteTexture(RGTextureHandle handle);
