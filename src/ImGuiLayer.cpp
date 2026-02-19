@@ -81,9 +81,7 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Checkbox("Reference Path Tracer", &renderer->m_EnableReferencePathTracer);
             ImGui::Checkbox("Use Meshlet Rendering", &renderer->m_UseMeshletRendering);
             ImGui::Checkbox("Enable RT Shadows", &renderer->m_EnableRTShadows);
-            
-            static const char* kEnvModes[] = { "None", "Atmosphere (Sky)" };
-            ImGui::Combo("Environment Lighting", &renderer->m_EnvironmentLightingMode, kEnvModes, IM_ARRAYSIZE(kEnvModes));
+            ImGui::Checkbox("Enable Sky", &renderer->m_EnableSky);
 
             static const char* kDebugModes[] = {
                 "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Irradiance", "Radiance", "IBL", "Motion Vectors"

@@ -77,7 +77,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 
     float3 p_atmo = (worldPos - kEarthCenter) / 1000.0;
 
-    if (g_Deferred.m_EnvironmentLightingMode == 1) // Sky
+    if (g_Deferred.m_EnableSky)
     {
         float r = length(p_atmo);
         float mu_s = dot(p_atmo, g_Deferred.m_SunDirection) / r;
@@ -92,7 +92,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     float3 color = directLighting.diffuse + directLighting.specular;
     
     float3 ambient = 0.0;
-    if (g_Deferred.m_EnvironmentLightingMode == 1) // Sky
+    if (g_Deferred.m_EnableSky)
     {
         float3 skyIrradiance;
         GetSunAndSkyIrradiance(
@@ -105,7 +105,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     color += ambient + emissive;
 
     // Aerial perspective
-    if (g_Deferred.m_EnvironmentLightingMode == 1) // Sky
+    if (g_Deferred.m_EnableSky)
     {
         float3 cameraPos = (g_Deferred.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
         

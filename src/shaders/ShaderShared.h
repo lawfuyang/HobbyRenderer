@@ -239,7 +239,7 @@ struct ForwardLightingPerFrameData
   Vector2 m_OpaqueColorDimensions;
   //
   Vector3 m_SunDirection;
-  uint32_t m_EnvironmentLightingMode; // 0: None, 1: Sky
+  uint32_t m_EnableSky;
 };
 
 struct SkyConstants
@@ -261,7 +261,7 @@ struct DeferredLightingConstants
   //
   uint32_t m_EnableRTShadows;
   uint32_t m_DebugMode;
-  uint32_t m_EnvironmentLightingMode; // 0: None, 1: Sky
+  uint32_t m_EnableSky;
   uint32_t pad1;
 };
 

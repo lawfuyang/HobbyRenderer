@@ -54,7 +54,7 @@ public:
         dcb.m_View = renderer->m_View;
         dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
         dcb.m_SunDirection = renderer->m_Scene.m_SunDirection;
-        dcb.m_EnvironmentLightingMode = renderer->m_EnvironmentLightingMode;
+        dcb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;
         dcb.m_LightCount = renderer->m_Scene.m_LightCount;
         dcb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
         dcb.m_DebugMode = renderer->m_DebugMode;

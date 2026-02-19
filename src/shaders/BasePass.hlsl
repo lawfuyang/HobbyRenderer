@@ -416,7 +416,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
     float3 p_atmo = (input.worldPos - kEarthCenter) / 1000.0;
 
-    if (g_PerFrame.m_EnvironmentLightingMode == 1) // Sky
+    if (g_PerFrame.m_EnableSky)
     {
         float r = length(p_atmo);
         float mu_s = dot(p_atmo, g_PerFrame.m_SunDirection) / r;
@@ -434,7 +434,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     PrepareLightingByproducts(lightingInputs);
 
     float3 ambient = float3(0,0,0);
-    if (g_PerFrame.m_EnvironmentLightingMode == 1) // Sky
+    if (g_PerFrame.m_EnableSky)
     {
         float3 skyIrradiance;
         GetSunAndSkyIrradiance(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_IRRADIANCE_TEXTURE, p_atmo, N, g_PerFrame.m_SunDirection, skyIrradiance);
@@ -487,7 +487,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     color += emissive;
 
     // Aerial perspective
-    if (g_PerFrame.m_EnvironmentLightingMode == 1) // Sky
+    if (g_PerFrame.m_EnableSky)
     {
         float3 cameraPos = (g_PerFrame.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
         

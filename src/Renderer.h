@@ -221,7 +221,7 @@ struct Renderer
     int m_DebugMode = 0;
 
     // Environment Lighting settings
-    int m_EnvironmentLightingMode = 1; // 0: None, 1: Sky
+    bool m_EnableSky = true;
     std::string m_IrradianceTexture = "irradiance.dds";
     std::string m_RadianceTexture = "radiance.dds";
     std::string m_BRDFLutTexture = "brdf_lut.dds";

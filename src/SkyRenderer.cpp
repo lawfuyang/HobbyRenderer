@@ -12,6 +12,13 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
+        Renderer* renderer = Renderer::GetInstance();
+
+        if (!renderer->m_EnableSky)
+        {
+            return false;
+        }
+
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.WriteTexture(g_RG_HDRColor);
 
