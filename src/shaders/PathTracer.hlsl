@@ -85,9 +85,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         FullHitAttributes attr = GetFullHitAttributes(hit, ray, inst, mesh, g_Indices, g_Vertices);
         PBRAttributes pbr = GetPBRAttributes(attr.m_Uv, mat, 0.0f);
 
-        float3 p_atmo = (attr.m_WorldPos - kEarthCenter) / 1000.0;
-        float r = length(p_atmo);
-        float mu_s = dot(p_atmo, g_PathTracer.m_SunDirection) / r;
+        float3 p_atmo = GetAtmospherePos(attr.m_WorldPos);
 
         LightingInputs inputs;
         inputs.N = attr.m_WorldNormal;
@@ -107,7 +105,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         inputs.indices = g_Indices;
         inputs.vertices = g_Vertices;
         inputs.lights = g_Lights;
-        inputs.sunRadiance = ATMOSPHERE.solar_irradiance * GetTransmittanceToSun(BRUNETON_TRANSMITTANCE_TEXTURE, r, mu_s) * g_Lights[0].m_Intensity;
+        inputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_PathTracer.m_SunDirection, g_Lights[0].m_Intensity);
         inputs.sunDirection = g_PathTracer.m_SunDirection;
         inputs.useSunRadiance = true;
         inputs.sunShadow = CalculateRTShadow(inputs, g_PathTracer.m_SunDirection, 1e10f);
@@ -117,43 +115,14 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         LightingComponents direct = AccumulateDirectLighting(inputs, g_PathTracer.m_LightCount);
         finalColor = direct.diffuse + direct.specular;
 
-        float3 skyIrradiance;
-        GetSunAndSkyIrradiance(
-            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_IRRADIANCE_TEXTURE,
-            p_atmo, inputs.N, g_PathTracer.m_SunDirection, skyIrradiance);
-
-        finalColor += (skyIrradiance * (inputs.baseColor / PI)) * g_Lights[0].m_Intensity + pbr.emissive;
+        finalColor += GetAtmosphereSkyIrradiance(p_atmo, inputs.N, g_PathTracer.m_SunDirection, g_Lights[0].m_Intensity) * (inputs.baseColor / PI) + pbr.emissive;
 
         // Aerial perspective
-        float3 cameraPos = (g_PathTracer.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
-        float3 transmittance;
-        float3 inScattering = GetSkyRadianceToPoint(
-            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE,
-            cameraPos, p_atmo, 0.0, g_PathTracer.m_SunDirection, transmittance);
-
-        finalColor = finalColor * transmittance + inScattering * g_Lights[0].m_Intensity;
+        finalColor = ApplyAtmosphereAerialPerspective(finalColor, g_PathTracer.m_CameraPos.xyz, p_atmo, g_PathTracer.m_SunDirection, g_Lights[0].m_Intensity);
     }
     else
     {
-        float3 cameraPos = (g_PathTracer.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
-        float3 viewRay = rayDir;
-        float3 sunDir = g_PathTracer.m_SunDirection;
-
-        float3 transmittance;
-        float3 skyRadiance = GetSkyRadiance(
-            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE,
-            cameraPos, viewRay, 0.0, sunDir, transmittance);
-
-        // Sun disk
-        float nu = dot(viewRay, sunDir);
-        float sunAngularRadius = ATMOSPHERE.sun_angular_radius;
-        if (nu > cos(sunAngularRadius))
-        {
-            float3 sunRadiance = ATMOSPHERE.solar_irradiance / (PI * sunAngularRadius * sunAngularRadius);
-            skyRadiance += sunRadiance * transmittance;
-        }
-
-        finalColor = skyRadiance * g_Lights[0].m_Intensity;
+        finalColor = GetAtmosphereSkyRadiance(g_PathTracer.m_CameraPos.xyz, rayDir, g_PathTracer.m_SunDirection, g_Lights[0].m_Intensity);
     }
 
     float4 accum = float4(finalColor, 1.0f);

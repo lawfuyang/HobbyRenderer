@@ -11,10 +11,6 @@ class PathTracerRenderer : public IRenderer
     uint32_t m_AccumulationIndex = 0;
 
 public:
-    void Initialize() override
-    {
-    }
-
     bool Setup(RenderGraph& renderGraph) override
     {
         Renderer* renderer = Renderer::GetInstance();

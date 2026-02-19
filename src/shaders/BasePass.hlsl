@@ -414,15 +414,12 @@ GBufferOut GBuffer_PSMain(VSOut input)
     lightingInputs.useSunRadiance = false;
     lightingInputs.sunShadow = 1.0f;
 
-    float3 p_atmo = (input.worldPos - kEarthCenter) / 1000.0;
+    float3 p_atmo = GetAtmospherePos(input.worldPos);
 
     if (g_PerFrame.m_EnableSky)
     {
-        float r = length(p_atmo);
-        float mu_s = dot(p_atmo, g_PerFrame.m_SunDirection) / r;
-
         // Use solar_irradiance * transmittance as the direct sun radiance at surface
-        lightingInputs.sunRadiance = ATMOSPHERE.solar_irradiance * GetTransmittanceToSun(BRUNETON_TRANSMITTANCE_TEXTURE, r, mu_s) * g_Lights[0].m_Intensity;
+        lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_PerFrame.m_SunDirection, g_Lights[0].m_Intensity);
         lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
         lightingInputs.useSunRadiance = true;
     }
@@ -436,9 +433,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     float3 ambient = float3(0,0,0);
     if (g_PerFrame.m_EnableSky)
     {
-        float3 skyIrradiance;
-        GetSunAndSkyIrradiance(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_IRRADIANCE_TEXTURE, p_atmo, N, g_PerFrame.m_SunDirection, skyIrradiance);
-        ambient = skyIrradiance * (baseColor / PI) * g_Lights[0].m_Intensity;
+        ambient = GetAtmosphereSkyIrradiance(p_atmo, N, g_PerFrame.m_SunDirection, g_Lights[0].m_Intensity) * (baseColor / PI);
     }
 
     float3 color = directDiffuse + directSpecular + ambient;
@@ -489,14 +484,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     // Aerial perspective
     if (g_PerFrame.m_EnableSky)
     {
-        float3 cameraPos = (g_PerFrame.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
-        
-        float3 transmittance;
-        float3 inScattering = GetSkyRadianceToPoint(
-            BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE,
-            cameraPos, p_atmo, 0.0, g_PerFrame.m_SunDirection, transmittance);
-
-        color = color * transmittance + inScattering * g_Lights[0].m_Intensity;
+        color = ApplyAtmosphereAerialPerspective(color, g_PerFrame.m_CameraPos.xyz, p_atmo, g_PerFrame.m_SunDirection, g_Lights[0].m_Intensity);
     }
 
     float2 motionVectors = ComputeMotionVectors(input.worldPos, input.prevWorldPos);

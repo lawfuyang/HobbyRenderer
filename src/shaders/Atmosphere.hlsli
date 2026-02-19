@@ -558,4 +558,49 @@ float3 GetSkyRadianceToPoint(uint transmittance_texture_index, uint scattering_t
     return scattering * RayleighPhaseFunction(nu) + single_mie_scattering * MiePhaseFunction(ATMOSPHERE.mie_phase_function_g, nu);
 }
 
+// Helper functions for easy atmospheric lighting access in shaders
+float3 GetAtmospherePos(float3 worldPos)
+{
+    return (worldPos - kEarthCenter) / 1000.0; // convert to km and center on earth
+}
+
+float3 GetAtmosphereSunRadiance(float3 p_atmo, float3 sunDirection, float sunIntensity)
+{
+    float r = length(p_atmo);
+    float mu_s = dot(p_atmo, sunDirection) / r;
+    return ATMOSPHERE.solar_irradiance * GetTransmittanceToSun(BRUNETON_TRANSMITTANCE_TEXTURE, r, mu_s) * sunIntensity;
+}
+
+float3 GetAtmosphereSkyIrradiance(float3 p_atmo, float3 normal, float3 sunDirection, float sunIntensity)
+{
+    float3 skyIrradiance;
+    GetSunAndSkyIrradiance(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_IRRADIANCE_TEXTURE, p_atmo, normal, sunDirection, skyIrradiance);
+    return skyIrradiance * sunIntensity;
+}
+
+float3 ApplyAtmosphereAerialPerspective(float3 color, float3 cameraPos, float3 p_atmo, float3 sunDirection, float sunIntensity)
+{
+    float3 cameraPos_atmo = GetAtmospherePos(cameraPos);
+    float3 transmittance;
+    float3 inScattering = GetSkyRadianceToPoint(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE, cameraPos_atmo, p_atmo, 0.0, sunDirection, transmittance);
+    return color * transmittance + inScattering * sunIntensity;
+}
+
+float3 GetAtmosphereSkyRadiance(float3 cameraPos, float3 viewRay, float3 sunDirection, float sunIntensity)
+{
+    float3 cameraPos_atmo = GetAtmospherePos(cameraPos);
+    float3 transmittance;
+    float3 skyRadiance = GetSkyRadiance(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE, cameraPos_atmo, viewRay, 0.0, sunDirection, transmittance);
+
+    // Add sun disk
+    float nu = dot(viewRay, sunDirection);
+    float sunAngularRadius = ATMOSPHERE.sun_angular_radius;
+    if (nu > cos(sunAngularRadius))
+    {
+        float3 sunDiskRadiance = ATMOSPHERE.solar_irradiance / (PI * sunAngularRadius * sunAngularRadius);
+        skyRadiance += sunDiskRadiance * transmittance;
+    }
+    return skyRadiance * sunIntensity;
+}
+
 #endif // ATMOSPHERE_HLSLI

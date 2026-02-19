@@ -26,23 +26,8 @@ float4 Sky_PSMain(FullScreenVertexOut input) : SV_Target
     float3 worldPos = worldPosFour.xyz / worldPosFour.w;
     float3 V = normalize(g_Sky.m_CameraPos.xyz - worldPos);
 
-    float3 cameraPos = (g_Sky.m_CameraPos.xyz - kEarthCenter) / 1000.0; // km
     float3 viewRay = -V;
-    float3 sunDir = g_Sky.m_SunDirection;
+    float3 skyRadiance = GetAtmosphereSkyRadiance(g_Sky.m_CameraPos.xyz, viewRay, g_Sky.m_SunDirection, g_Sky.m_SunIntensity);
 
-    float3 transmittance;
-    float3 skyRadiance = GetSkyRadiance(
-        BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE,
-        cameraPos, viewRay, 0.0, sunDir, transmittance);
-
-    // Sun disk
-    float nu = dot(viewRay, sunDir);
-    float sunAngularRadius = ATMOSPHERE.sun_angular_radius;
-    if (nu > cos(sunAngularRadius))
-    {
-        float3 sunRadiance = ATMOSPHERE.solar_irradiance / (PI * sunAngularRadius * sunAngularRadius);
-        skyRadiance += sunRadiance * transmittance;
-    }
-
-    return float4(skyRadiance * g_Sky.m_SunIntensity, 1.0);
+    return float4(skyRadiance, 1.0);
 }
