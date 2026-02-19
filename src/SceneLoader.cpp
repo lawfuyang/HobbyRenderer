@@ -427,6 +427,32 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 		}
 	}
 
+	std::sort(scene.m_Lights.begin(), scene.m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
+	{
+		return a.m_Type < b.m_Type; // Directional < Point < Spot
+	});
+
+	if (scene.m_Lights.empty() || (scene.m_Lights[0].m_Type != Scene::Light::Directional))
+	{
+		Scene::Light light;
+		light.m_Name = "Default Directional";
+		light.m_Type = Scene::Light::Directional;
+		light.m_Color = Vector3{ 1.0f, 1.0f, 1.0f };
+		light.m_Intensity = 1.0f;
+		scene.m_Lights.insert(scene.m_Lights.begin(), std::move(light));
+
+		scene.m_Lights[0].m_NodeIndex = (int)scene.m_Nodes.size();
+		Scene::Node& lightNode = scene.m_Nodes.emplace_back();
+		lightNode.m_LightIndex = 0;
+
+		const Vector quat = DirectX::XMQuaternionRotationRollPitchYaw(-scene.m_SunPitch, scene.m_SunYaw, 0.0f);
+		DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
+
+		const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
+		DirectX::XMStoreFloat4x4(&lightNode.m_LocalTransform, localM);
+		lightNode.m_WorldTransform = lightNode.m_LocalTransform;
+	}
+
 	// Compute world transforms for all roots
 	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
 	{
@@ -875,7 +901,6 @@ void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const Sce
 void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
 	SCOPED_TIMER("[Scene] Lights");
-	bool hasDirectional = false;
 
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
 	{
@@ -894,7 +919,6 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 		if (cgLight.type == cgltf_light_type_directional)
 		{
 			light.m_Type = Scene::Light::Directional;
-			hasDirectional = true;
 		}
 		else if (cgLight.type == cgltf_light_type_spot)
 		{
@@ -902,32 +926,6 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 		}
 		scene.m_Lights.push_back(std::move(light));
 	}
-
-	if (!hasDirectional)
-	{
-		Scene::Light light;
-		light.m_Name = "Default Directional";
-		light.m_Type = Scene::Light::Directional;
-		light.m_Color = Vector3{ 1.0f, 1.0f, 1.0f };
-		light.m_Intensity = 1.0f;
-		scene.m_Lights.push_back(std::move(light));
-
-		scene.m_Lights.back().m_NodeIndex = (int)scene.m_Nodes.size();
-		Scene::Node& lightNode = scene.m_Nodes.emplace_back();
-		lightNode.m_LightIndex = 0; // The default directional light will be index 0
-
-		const Vector quat = DirectX::XMQuaternionRotationRollPitchYaw(-scene.m_SunPitch, scene.m_SunYaw, 0.0f);
-		DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
-
-		const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
-		DirectX::XMStoreFloat4x4(&lightNode.m_LocalTransform, localM);
-		lightNode.m_WorldTransform = lightNode.m_LocalTransform;
-	}
-
-	std::sort(scene.m_Lights.begin(), scene.m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
-	{
-		return a.m_Type < b.m_Type; // Directional < Point < Spot
-	});
 }
 
 void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
