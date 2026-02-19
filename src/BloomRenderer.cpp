@@ -32,10 +32,10 @@ public:
         desc.m_NvrhiDesc.debugName = "Bloom_DownPyramid_RG";
         desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         desc.m_NvrhiDesc.setClearValue(nvrhi::Color{});
-        g_RG_BloomDownPyramid = renderGraph.DeclareTexture(desc, g_RG_BloomDownPyramid);
+        renderGraph.DeclareTexture(desc, g_RG_BloomDownPyramid);
 
         desc.m_NvrhiDesc.debugName = "Bloom_UpPyramid_RG";
-        g_RG_BloomUpPyramid = renderGraph.DeclareTexture(desc, g_RG_BloomUpPyramid);
+        renderGraph.DeclareTexture(desc, g_RG_BloomUpPyramid);
 
         renderGraph.ReadTexture(g_RG_HDRColor);
 

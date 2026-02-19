@@ -31,7 +31,7 @@ public:
         desc.m_NvrhiDesc.isUAV = true;
         desc.m_NvrhiDesc.debugName = "AccumulationBuffer";
         desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        m_AccumulationBuffer = renderGraph.DeclarePersistentTexture(desc, m_AccumulationBuffer);
+        renderGraph.DeclarePersistentTexture(desc, m_AccumulationBuffer);
 
         renderGraph.WriteTexture(g_RG_HDRColor);
         return true;

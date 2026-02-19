@@ -194,7 +194,6 @@ struct Renderer
     Matrix m_FrozenCullingViewMatrix;
     Vector3 m_FrozenCullingCameraPos;
     bool m_EnableOcclusionCulling = true;
-    nvrhi::TextureHandle m_HZBTexture;
 
     // Reference Path Tracer
     bool m_EnableReferencePathTracer = false;
@@ -252,8 +251,6 @@ private:
     nvrhi::TimerQueryHandle m_GPUQueries[2];
 
     // Private methods
-    void CreateSceneResources();
-    void DestroySceneResources();
     void HashPipelineCommonState(size_t& h, const nvrhi::RenderState&, const nvrhi::FramebufferInfoEx&, const nvrhi::BindingLayoutVector&);
     void LoadShaders();
     void UnloadShaders();

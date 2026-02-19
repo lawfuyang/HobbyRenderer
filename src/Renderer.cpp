@@ -21,6 +21,7 @@ using FfxUInt32x4 = uint32_t[4];
 
 // Depth & GBuffer textures (transient, frame-local)
 RGTextureHandle g_RG_DepthTexture;
+RGTextureHandle g_RG_HZBTexture;
 RGTextureHandle g_RG_GBufferAlbedo;
 RGTextureHandle g_RG_GBufferNormals;
 RGTextureHandle g_RG_GBufferORM;
@@ -34,6 +35,7 @@ RGTextureHandle g_RG_HDRColor;
 
 class ClearRenderer : public IRenderer
 {
+    bool m_NeedHZBClear = false;
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
@@ -53,7 +55,7 @@ public:
             desc.m_NvrhiDesc.keepInitialState = true;
             desc.m_NvrhiDesc.setClearValue(nvrhi::Color{ Renderer::DEPTH_FAR, 0.0f, 0.0f, 0.0f });
             
-            g_RG_DepthTexture = renderGraph.DeclareTexture(desc, g_RG_DepthTexture);
+            renderGraph.DeclareTexture(desc, g_RG_DepthTexture);
         }
 
         // HDR Color Texture
@@ -67,7 +69,7 @@ public:
             desc.m_NvrhiDesc.isUAV = true;
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::RenderTarget;
             desc.m_NvrhiDesc.setClearValue(nvrhi::Color{});
-            g_RG_HDRColor = renderGraph.DeclareTexture(desc, g_RG_HDRColor);
+            renderGraph.DeclareTexture(desc, g_RG_HDRColor);
         }
         
         // Declare transient GBuffer textures
@@ -82,27 +84,54 @@ public:
         // Albedo: RGBA8
         gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_ALBEDO_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferAlbedo_RG";
-        g_RG_GBufferAlbedo = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferAlbedo);
+        renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferAlbedo);
         
         // Normals: RG16_FLOAT
         gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_NORMALS_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferNormals_RG";
-        g_RG_GBufferNormals = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferNormals);
+        renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferNormals);
         
         // ORM: RGBA8
         gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_ORM_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferORM_RG";
-        g_RG_GBufferORM = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferORM);
+        renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferORM);
         
         // Emissive: RGBA8
         gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_EMISSIVE_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferEmissive_RG";
-        g_RG_GBufferEmissive = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferEmissive);
+        renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferEmissive);
         
         // Motion Vectors: RG16_FLOAT
         gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_MOTION_FORMAT;
         gbufferDesc.m_NvrhiDesc.debugName = "GBufferMotion_RG";
-        g_RG_GBufferMotionVectors = renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferMotionVectors);
+        renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferMotionVectors);
+
+        // HZB Texture (Persistent)
+        {
+            uint32_t sw = width;
+            uint32_t sh = height;
+            uint32_t hzbWidth = NextLowerPow2(sw);
+            uint32_t hzbHeight = NextLowerPow2(sh);
+            hzbWidth = hzbWidth > sw ? hzbWidth >> 1 : hzbWidth;
+            hzbHeight = hzbHeight > sh ? hzbHeight >> 1 : hzbHeight;
+            uint32_t maxDim = std::max(hzbWidth, hzbHeight);
+            uint32_t mipLevels = 0;
+            while (maxDim > 0) {
+                mipLevels++;
+                maxDim >>= 1;
+            }
+
+            RGTextureDesc hzbDesc;
+            hzbDesc.m_NvrhiDesc.width = hzbWidth;
+            hzbDesc.m_NvrhiDesc.height = hzbHeight;
+            hzbDesc.m_NvrhiDesc.mipLevels = mipLevels;
+            hzbDesc.m_NvrhiDesc.format = nvrhi::Format::R32_FLOAT;
+            hzbDesc.m_NvrhiDesc.debugName = "HZB";
+            hzbDesc.m_NvrhiDesc.isUAV = true;
+            hzbDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            
+            m_NeedHZBClear = renderGraph.DeclarePersistentTexture(hzbDesc, g_RG_HZBTexture);
+        }
 
         return true;
     }
@@ -130,6 +159,12 @@ public:
         commandList->clearTextureFloat(gbufferORM, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(gbufferEmissive, nvrhi::AllSubresources, nvrhi::Color{});
         commandList->clearTextureFloat(gbufferMotion, nvrhi::AllSubresources, nvrhi::Color{});
+
+        if (m_NeedHZBClear)
+        {
+            nvrhi::TextureHandle hzbTexture = renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write);
+            commandList->clearTextureFloat(hzbTexture, nvrhi::AllSubresources, nvrhi::Color{ Renderer::DEPTH_FAR, 0.0f, 0.0f, 0.0f });
+        }
     }
     const char* GetName() const override { return "Clear"; }
 };
@@ -600,7 +635,6 @@ void Renderer::Initialize()
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
     m_BasePassResources.Initialize();
-    CreateSceneResources();
     LoadShaders();
 
     m_ImGuiLayer.Initialize();
@@ -874,8 +908,6 @@ void Renderer::Shutdown()
 
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
-
-    DestroySceneResources();
 
     // Free renderer instances
     m_Renderers.clear();
@@ -1560,60 +1592,6 @@ void Renderer::ExecutePendingCommandLists()
     }
 }
 
-void Renderer::CreateSceneResources()
-{
-    SDL_Log("[Init] Creating Depth textures");
-    
-    // Calculate HZB resolution - use next lower power of 2 for each dimension
-    uint32_t sw = m_RHI->m_SwapchainExtent.x;
-    uint32_t sh = m_RHI->m_SwapchainExtent.y;
-
-    uint32_t hzbWidth = NextLowerPow2(sw);
-    uint32_t hzbHeight = NextLowerPow2(sh);
-    hzbWidth = hzbWidth > sw ? hzbWidth >> 1 : hzbWidth;
-    hzbHeight = hzbHeight > sh ? hzbHeight >> 1 : hzbHeight;
-
-    // Calculate number of mip levels
-    uint32_t maxDim = std::max(hzbWidth, hzbHeight);
-    uint32_t mipLevels = 0;
-    while (maxDim > 0) {
-        mipLevels++;
-        maxDim >>= 1;
-    }
-
-    // Create current HZB texture
-    nvrhi::TextureDesc hzbDesc;
-    hzbDesc.width = hzbWidth;
-    hzbDesc.height = hzbHeight;
-    hzbDesc.arraySize = 1;
-    hzbDesc.mipLevels = mipLevels;
-    hzbDesc.format = nvrhi::Format::R32_FLOAT;
-    hzbDesc.debugName = "HZB";
-    hzbDesc.isRenderTarget = false;
-    hzbDesc.isUAV = true;
-    hzbDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-    hzbDesc.dimension = nvrhi::TextureDimension::Texture2D;
-    
-    m_HZBTexture = m_RHI->m_NvrhiDevice->createTexture(hzbDesc);
-    if (!m_HZBTexture)
-    {
-        SDL_LOG_ASSERT_FAIL("Failed to create HZB texture", "[Init] Failed to create HZB texture");
-        return;
-    }
-
-    nvrhi::CommandListHandle cmd = AcquireCommandList();
-    ScopedCommandList scopedCmd{ cmd, "HZB_Clear" };
-    scopedCmd->clearTextureFloat(m_HZBTexture, nvrhi::AllSubresources, DEPTH_FAR);
-
-    SDL_Log("[Init] Created HZB texture (%ux%u, %u mips)", hzbWidth, hzbHeight, mipLevels);
-}
-
-void Renderer::DestroySceneResources()
-{
-    SDL_Log("[Shutdown] Destroying Depth textures");
-
-    m_HZBTexture = nullptr;
-}
 
 int main(int argc, char* argv[])
 {

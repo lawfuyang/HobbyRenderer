@@ -281,24 +281,26 @@ uint16_t RenderGraph::GetActivePassIndex() const
     return (t_ActivePassIndex != 0) ? t_ActivePassIndex : m_CurrentPassIndex;
 }
 
-RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle existing)
+bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle)
 {
     SDL_assert(m_IsInsideSetup && "DeclareTexture must be called during Setup phase");
     m_DidAccessInSetup = true;
 
     size_t hash = desc.ComputeHash();
 
-    if (existing.IsValid() && existing.m_Index < m_Textures.size())
+    if (outputHandle.IsValid() && outputHandle.m_Index < m_Textures.size())
     {
-        TransientTexture& texture = m_Textures[existing.m_Index];
+        TransientTexture& texture = m_Textures[outputHandle.m_Index];
         
         SDL_assert(!texture.m_IsDeclaredThisFrame && "Texture already declared this frame! Only one pass should declare a resource.");
 
+        bool isNewlyAllocated = false;
         if (texture.m_Hash != hash)
         {
-            //SDL_Log("[RenderGraph] Texture desc mismatch for handle %u, freeing old resource", existing.m_Index);
+            //SDL_Log("[RenderGraph] Texture desc mismatch for handle %u, freeing old resource", outputHandle.m_Index);
             texture.m_PhysicalTexture = nullptr;
             texture.m_IsAllocated = false;
+            isNewlyAllocated = true;
         }
 
         texture.m_Desc = desc;
@@ -307,9 +309,9 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
         texture.m_IsPersistent = false;
         texture.m_LastFrameUsed = m_FrameIndex;
         
-        m_PendingDeclaredTextures.push_back(existing.m_Index);
-        WriteTexture(existing); // Implicitly mark as written in the declaring pass, since they start with undefined contents
-        return existing;
+        m_PendingDeclaredTextures.push_back(outputHandle.m_Index);
+        WriteTexture(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
+        return isNewlyAllocated;
     }
 
     // Try to find a matching unused resource in the pool
@@ -323,8 +325,9 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
             m_Textures[i].m_LastFrameUsed = m_FrameIndex;
             
             m_PendingDeclaredTextures.push_back(i);
-            WriteTexture({ i }); // Implicitly mark as written in the declaring pass, since they start with undefined contents
-            return { i };
+            outputHandle = { i };
+            WriteTexture(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
+            return true;
         }
     }
 
@@ -341,28 +344,31 @@ RGTextureHandle RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTexture
     m_Textures.push_back(texture);
     m_PendingDeclaredTextures.push_back(handle.m_Index);
 
-    WriteTexture(handle); // Implicitly mark new textures as written in the declaring pass, since they start with undefined contents
-    return handle;
+    outputHandle = handle;
+    WriteTexture(outputHandle); // Implicitly mark new textures as written in the declaring pass, since they start with undefined contents
+    return true;
 }
 
-RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle existing)
+bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle)
 {
     SDL_assert(m_IsInsideSetup && "DeclareBuffer must be called during Setup phase");
     m_DidAccessInSetup = true;
 
     size_t hash = desc.ComputeHash();
 
-    if (existing.IsValid() && existing.m_Index < m_Buffers.size())
+    if (outputHandle.IsValid() && outputHandle.m_Index < m_Buffers.size())
     {
-        TransientBuffer& buffer = m_Buffers[existing.m_Index];
+        TransientBuffer& buffer = m_Buffers[outputHandle.m_Index];
         
         SDL_assert(!buffer.m_IsDeclaredThisFrame && "Buffer already declared this frame! Only one pass should declare a resource.");
 
+        bool isNewlyAllocated = false;
         if (buffer.m_Hash != hash)
         {
-            //SDL_Log("[RenderGraph] Buffer desc mismatch for handle %u, freeing old resource", existing.m_Index);
+            //SDL_Log("[RenderGraph] Buffer desc mismatch for handle %u, freeing old resource", outputHandle.m_Index);
             buffer.m_PhysicalBuffer = nullptr;
             buffer.m_IsAllocated = false;
+            isNewlyAllocated = true;
         }
 
         buffer.m_Desc = desc;
@@ -371,9 +377,9 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
         buffer.m_IsPersistent = false;
         buffer.m_LastFrameUsed = m_FrameIndex;
 
-        m_PendingDeclaredBuffers.push_back(existing.m_Index);
-        WriteBuffer(existing); // Implicitly mark as written in the declaring pass, since they start with undefined contents
-        return existing;
+        m_PendingDeclaredBuffers.push_back(outputHandle.m_Index);
+        WriteBuffer(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
+        return isNewlyAllocated;
     }
 
     for (uint32_t i = 0; i < m_Buffers.size(); ++i)
@@ -386,8 +392,9 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
             m_Buffers[i].m_LastFrameUsed = m_FrameIndex;
 
             m_PendingDeclaredBuffers.push_back(i);
-            WriteBuffer({ i }); // Implicitly mark as written in the declaring pass, since they start with undefined contents
-            return { i };
+            outputHandle = { i };
+            WriteBuffer(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
+            return true;
         }
     }
 
@@ -404,22 +411,23 @@ RGBufferHandle RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHand
     m_Buffers.push_back(buffer);
     m_PendingDeclaredBuffers.push_back(handle.m_Index);
 
-    WriteBuffer(handle); // Implicitly mark new buffers as written in the declaring pass, since they start with undefined contents    
-    return handle;
+    outputHandle = handle;
+    WriteBuffer(outputHandle); // Implicitly mark new buffers as written in the declaring pass, since they start with undefined contents    
+    return true;
 }
 
-RGTextureHandle RenderGraph::DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle existing)
+bool RenderGraph::DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle)
 {
-    RGTextureHandle handle = DeclareTexture(desc, existing);
-    m_Textures[handle.m_Index].m_IsPersistent = true;
-    return handle;
+    bool newlyAllocated = DeclareTexture(desc, outputHandle);
+    m_Textures[outputHandle.m_Index].m_IsPersistent = true;
+    return newlyAllocated;
 }
 
-RGBufferHandle RenderGraph::DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle existing)
+bool RenderGraph::DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle)
 {
-    RGBufferHandle handle = DeclareBuffer(desc, existing);
-    m_Buffers[handle.m_Index].m_IsPersistent = true;
-    return handle;
+    bool newlyAllocated = DeclareBuffer(desc, outputHandle);
+    m_Buffers[outputHandle.m_Index].m_IsPersistent = true;
+    return newlyAllocated;
 }
 
 // ============================================================================

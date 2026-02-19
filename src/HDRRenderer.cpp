@@ -28,7 +28,7 @@ public:
             desc.m_NvrhiDesc.debugName = "LuminanceHistogram_RG";
             desc.m_NvrhiDesc.canHaveUAVs = true;
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            g_RG_LuminanceHistogram = renderGraph.DeclareBuffer(desc, g_RG_LuminanceHistogram);
+            renderGraph.DeclareBuffer(desc, g_RG_LuminanceHistogram);
         }
 
         // Exposure Buffer
@@ -39,7 +39,7 @@ public:
             desc.m_NvrhiDesc.debugName = "ExposureBuffer_RG";
             desc.m_NvrhiDesc.canHaveUAVs = true;
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            g_RG_ExposureBuffer = renderGraph.DeclareBuffer(desc, g_RG_ExposureBuffer);
+            renderGraph.DeclareBuffer(desc, g_RG_ExposureBuffer);
         }
 
         if (renderer->m_EnableAutoExposure)

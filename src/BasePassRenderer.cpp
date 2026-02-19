@@ -7,6 +7,7 @@
 #include "shaders/ShaderShared.h"
 
 extern RGTextureHandle g_RG_DepthTexture;
+extern RGTextureHandle g_RG_HZBTexture;
 extern RGTextureHandle g_RG_GBufferAlbedo;
 extern RGTextureHandle g_RG_GBufferNormals;
 extern RGTextureHandle g_RG_GBufferORM;
@@ -30,6 +31,7 @@ public:
         nvrhi::BufferHandle meshletIndirect;
 
         nvrhi::TextureHandle depth;
+        nvrhi::TextureHandle hzb;
         nvrhi::TextureHandle albedo;
         nvrhi::TextureHandle normals;
         nvrhi::TextureHandle orm;
@@ -153,9 +155,9 @@ void BasePassRendererBase::PerformOcclusionCulling(nvrhi::CommandListHandle comm
     cullData.m_View = args.m_View;
     cullData.m_ViewProj = args.m_ViewProj;
     cullData.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
-    cullData.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
-    cullData.m_HZBWidth = renderer->m_HZBTexture->getDesc().width;
-    cullData.m_HZBHeight = renderer->m_HZBTexture->getDesc().height;
+    cullData.m_EnableOcclusionCulling = (renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0;
+    cullData.m_HZBWidth = handles.hzb ? handles.hzb->getDesc().width : 0;
+    cullData.m_HZBHeight = handles.hzb ? handles.hzb->getDesc().height : 0;
     cullData.m_Phase = args.m_CullingPhase;
     cullData.m_UseMeshletRendering = renderer->m_UseMeshletRendering ? 1 : 0;
     cullData.m_P00 = projectionMatrix.m[0][0];
@@ -169,7 +171,7 @@ void BasePassRendererBase::PerformOcclusionCulling(nvrhi::CommandListHandle comm
     {
         nvrhi::BindingSetItem::ConstantBuffer(0, cullCB),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
-        nvrhi::BindingSetItem::Texture_SRV(1, renderer->m_HZBTexture),
+        nvrhi::BindingSetItem::Texture_SRV(1, handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_MeshDataBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(0, handles.visibleIndirect),
         nvrhi::BindingSetItem::StructuredBuffer_UAV(1, handles.visibleCount),
@@ -316,7 +318,7 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
         nvrhi::BindingSetItem::StructuredBuffer_SRV(5, renderer->m_Scene.m_MeshletTrianglesBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(6, handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummyUAVBuffer),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(7, renderer->m_Scene.m_MeshDataBuffer),
-        nvrhi::BindingSetItem::Texture_SRV(8, renderer->m_HZBTexture),
+        nvrhi::BindingSetItem::Texture_SRV(8, handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite),
         nvrhi::BindingSetItem::RayTracingAccelStruct(9, renderer->m_Scene.m_TLAS),
         nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_IndexBuffer),
         nvrhi::BindingSetItem::Texture_SRV(11, opaqueColor),
@@ -346,9 +348,9 @@ void BasePassRendererBase::RenderInstances(nvrhi::CommandListHandle commandList,
     cb.m_DebugMode = (uint32_t)renderer->m_DebugMode;
     cb.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
     cb.m_EnableConeCulling = (renderer->m_EnableConeCulling && args.m_AlphaMode == ALPHA_MODE_OPAQUE) ? 1 : 0;
-    cb.m_EnableOcclusionCulling = renderer->m_EnableOcclusionCulling ? 1 : 0;
-    cb.m_HZBWidth = (uint32_t)renderer->m_HZBTexture->getDesc().width;
-    cb.m_HZBHeight = (uint32_t)renderer->m_HZBTexture->getDesc().height;
+    cb.m_EnableOcclusionCulling = (renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0;
+    cb.m_HZBWidth = handles.hzb ? (uint32_t)handles.hzb->getDesc().width : 0;
+    cb.m_HZBHeight = handles.hzb ? (uint32_t)handles.hzb->getDesc().height : 0;
     // FIXME: Switch to m_MatViewToClip (jittered) once TAA is implemented
     cb.m_P00 = cb.m_View.m_MatViewToClipNoOffset._11;
     cb.m_P11 = cb.m_View.m_MatViewToClipNoOffset._22;
@@ -448,15 +450,15 @@ void BasePassRendererBase::GenerateHZBMips(nvrhi::CommandListHandle commandList,
         nvrhi::utils::ScopedMarker hzbFromDepthMarker{ commandList, "HZB From Depth" };
 
         HZBFromDepthConstants hzbFromDepthData;
-        hzbFromDepthData.m_Width = renderer->m_HZBTexture->getDesc().width;
-        hzbFromDepthData.m_Height = renderer->m_HZBTexture->getDesc().height;
+        hzbFromDepthData.m_Width = handles.hzb->getDesc().width;
+        hzbFromDepthData.m_Height = handles.hzb->getDesc().height;
 
         nvrhi::BindingSetDesc hzbFromDepthBset;
         hzbFromDepthBset.bindings =
         {
             nvrhi::BindingSetItem::PushConstants(0, sizeof(HZBFromDepthConstants)),
             nvrhi::BindingSetItem::Texture_SRV(0, depthTexture),
-            nvrhi::BindingSetItem::Texture_UAV(0, renderer->m_HZBTexture,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
+            nvrhi::BindingSetItem::Texture_UAV(0, handles.hzb,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
             nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
         };
 
@@ -473,7 +475,7 @@ void BasePassRendererBase::GenerateHZBMips(nvrhi::CommandListHandle commandList,
         renderer->AddComputePass(params);
     }
 
-    renderer->GenerateMipsUsingSPD(renderer->m_HZBTexture, spdAtomicCounter, commandList, "Generate HZB Mips", SPD_REDUCTION_MIN);
+    renderer->GenerateMipsUsingSPD(handles.hzb, spdAtomicCounter, commandList, "Generate HZB Mips", SPD_REDUCTION_MIN);
 }
 
 class OpaquePhase1Renderer : public BasePassRendererBase
@@ -489,6 +491,7 @@ public:
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
         if (renderer->m_EnableOcclusionCulling)
         {
+            renderGraph.ReadTexture(g_RG_HZBTexture);
             renderGraph.WriteBuffer(res.m_OccludedCountBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndicesBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
@@ -536,6 +539,7 @@ void OpaquePhase1Renderer::Render(nvrhi::CommandListHandle commandList, const Re
     handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
     handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
+    handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
     handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
     handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
     handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
@@ -567,8 +571,9 @@ public:
         if (!renderer->m_EnableOcclusionCulling) return false;
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
+        renderGraph.WriteTexture(g_RG_HZBTexture);
 
-        m_RG_SPDAtomicCounter = renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("HZB SPD Atomic Counter"), m_RG_SPDAtomicCounter);
+        renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("HZB SPD Atomic Counter"), m_RG_SPDAtomicCounter);
         renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
 
         return true;
@@ -580,6 +585,7 @@ public:
         
         ResourceHandles handles;
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
+        handles.hzb = renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write);
         nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
         GenerateHZBMips(commandList, handles, spdAtomicCounter);
     }
@@ -599,6 +605,7 @@ public:
 
         BasePassResources& res = renderer->m_BasePassResources;
 
+        renderGraph.ReadTexture(g_RG_HZBTexture);
         renderGraph.ReadBuffer(res.m_OccludedIndirectBuffer);
         
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
@@ -645,6 +652,7 @@ void OpaquePhase2Renderer::Render(nvrhi::CommandListHandle commandList, const Re
     handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
     handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
+    handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
     handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
     handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
     handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
@@ -677,6 +685,7 @@ public:
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
         if (renderer->m_EnableOcclusionCulling)
         {
+            renderGraph.ReadTexture(g_RG_HZBTexture);
             renderGraph.WriteBuffer(res.m_OccludedCountBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndicesBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
@@ -724,6 +733,7 @@ void MaskedPassRenderer::Render(nvrhi::CommandListHandle commandList, const Rend
     handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
     handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
+    handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
     handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
     handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
     handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
@@ -755,8 +765,9 @@ public:
         if (!renderer->m_EnableOcclusionCulling) return false;
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
+        renderGraph.WriteTexture(g_RG_HZBTexture);
 
-        m_RG_SPDAtomicCounter = renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("HZB Phase 2 SPD Atomic Counter"), m_RG_SPDAtomicCounter);
+        renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("HZB Phase 2 SPD Atomic Counter"), m_RG_SPDAtomicCounter);
         renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
 
         return true;
@@ -768,6 +779,7 @@ public:
         
         ResourceHandles handles;
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
+        handles.hzb = renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write);
         nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
         GenerateHZBMips(commandList, handles, spdAtomicCounter);
     }
@@ -807,7 +819,7 @@ public:
                 maxDim >>= 1;
             }
             desc.m_NvrhiDesc.mipLevels = mipLevels;
-            g_RG_OpaqueColor = renderGraph.DeclareTexture(desc, g_RG_OpaqueColor);
+            renderGraph.DeclareTexture(desc, g_RG_OpaqueColor);
         }
 
         renderGraph.WriteTexture(g_RG_HDRColor);
@@ -823,12 +835,13 @@ public:
         }
         if (renderer->m_EnableOcclusionCulling)
         {
+            renderGraph.ReadTexture(g_RG_HZBTexture);
             renderGraph.WriteBuffer(res.m_OccludedCountBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndicesBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
         }
 
-        m_RG_SPDAtomicCounter = renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("Transparent SPD Atomic Counter"), m_RG_SPDAtomicCounter);
+        renderGraph.DeclareBuffer(GetSPDAtomicCounterDesc("Transparent SPD Atomic Counter"), m_RG_SPDAtomicCounter);
         renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
 
         return true;
@@ -859,6 +872,7 @@ void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList, const
     handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
     handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
+    handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
     handles.hdr = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
     handles.opaque = renderGraph.GetTexture(g_RG_OpaqueColor, RGResourceAccessMode::Write);
 

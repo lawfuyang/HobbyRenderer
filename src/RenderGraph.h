@@ -143,10 +143,10 @@ public:
     // Reset graph for new frame (doesn't free physical resources)
     void Reset();
     
-    RGTextureHandle DeclareTexture(const RGTextureDesc& desc, RGTextureHandle existing = {});
-    RGBufferHandle DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle existing = {});
-    RGTextureHandle DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle existing = {});
-    RGBufferHandle DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle existing = {});
+    bool DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle);
+    bool DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle);
+    bool DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle);
+    bool DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle);
 
     // Resource Access Registration (called during Setup phase)
     void ReadTexture(RGTextureHandle handle);
