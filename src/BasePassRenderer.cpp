@@ -43,7 +43,13 @@ public:
     
     virtual void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override = 0;
 
+    void Initialize() override
+    {
+        m_BasePassResources.Initialize();
+    }
+
 protected:
+    BasePassResources m_BasePassResources;
     struct BasePassRenderingArgs
     {
         uint32_t m_InstanceBaseIndex;
@@ -478,7 +484,7 @@ public:
         Renderer* renderer = Renderer::GetInstance();
         if (renderer->m_Mode == RenderingMode::ReferencePathTracer) return false;
 
-        BasePassResources& res = renderer->m_BasePassResources;
+        BasePassResources& res = m_BasePassResources;
         res.DeclareResources(renderGraph);
 
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
@@ -522,7 +528,7 @@ void OpaquePhase1Renderer::Render(nvrhi::CommandListHandle commandList, const Re
     PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
     ResourceHandles handles;
-    BasePassResources& res = renderer->m_BasePassResources;
+    BasePassResources& res = m_BasePassResources;
     handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
     handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);
     handles.occludedCount = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
@@ -597,7 +603,8 @@ public:
         Renderer* renderer = Renderer::GetInstance();
         if (!renderer->m_EnableOcclusionCulling || renderer->m_Mode == RenderingMode::ReferencePathTracer) return false;
 
-        BasePassResources& res = renderer->m_BasePassResources;
+        BasePassResources& res = m_BasePassResources;
+        res.DeclareResources(renderGraph);
 
         renderGraph.ReadTexture(g_RG_HZBTexture);
         renderGraph.ReadBuffer(res.m_OccludedIndirectBuffer);
@@ -637,7 +644,7 @@ void OpaquePhase2Renderer::Render(nvrhi::CommandListHandle commandList, const Re
     PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
     ResourceHandles handles;
-    BasePassResources& res = renderer->m_BasePassResources;
+    BasePassResources& res = m_BasePassResources;
     handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
     handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);
     handles.occludedIndirect = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Read) : nullptr;
@@ -675,7 +682,8 @@ public:
         Renderer* renderer = Renderer::GetInstance();
         if (renderer->m_Mode == RenderingMode::ReferencePathTracer) return false;
 
-        BasePassResources& res = renderer->m_BasePassResources;
+        BasePassResources& res = m_BasePassResources;
+        res.DeclareResources(renderGraph);
 
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
@@ -718,7 +726,7 @@ void MaskedPassRenderer::Render(nvrhi::CommandListHandle commandList, const Rend
     PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
     ResourceHandles handles;
-    BasePassResources& res = renderer->m_BasePassResources;
+    BasePassResources& res = m_BasePassResources;
     handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
     handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);
     handles.occludedCount = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
@@ -793,7 +801,9 @@ public:
         Renderer* renderer = Renderer::GetInstance();
         if (renderer->m_Mode == RenderingMode::ReferencePathTracer) return false;
 
-        BasePassResources& res = renderer->m_BasePassResources;
+        BasePassResources& res = m_BasePassResources;
+        res.DeclareResources(renderGraph);
+
         const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
@@ -858,7 +868,7 @@ void TransparentPassRenderer::Render(nvrhi::CommandListHandle commandList, const
     const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
     if (numTransparent == 0) return;
 
-    BasePassResources& res = renderer->m_BasePassResources;
+    BasePassResources& res = m_BasePassResources;
     ResourceHandles handles;
     handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
     handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);

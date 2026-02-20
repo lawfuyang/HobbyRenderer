@@ -643,7 +643,6 @@ void Renderer::Initialize()
     InitializeGlobalBindlessSamplers();
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
-    m_BasePassResources.Initialize();
     LoadShaders();
 
     m_ImGuiLayer.Initialize();
@@ -905,7 +904,6 @@ void Renderer::Shutdown()
 
     m_ImGuiLayer.Shutdown();
     CommonResources::GetInstance().Shutdown();
-    m_BasePassResources.~BasePassResources(); // explicit destructor call to ensure release of GPU resources
 
     // Shutdown global bindless systems
     m_GlobalTextureDescriptorTable = nullptr;

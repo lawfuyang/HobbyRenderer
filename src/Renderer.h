@@ -5,7 +5,6 @@
 #include "ImGuiLayer.h"
 #include "Scene.h"
 #include "Camera.h"
-#include "BasePassCommon.h"
 #include "RenderGraph.h"
 #include "TaskScheduler.h"
 
@@ -204,9 +203,6 @@ struct Renderer
 
     // Rendering mode
     RenderingMode m_Mode = RenderingMode::Normal;
-
-    // Base pass resources
-    BasePassResources m_BasePassResources;
 
     // Rendering options
     bool m_UseMeshletRendering = true;
