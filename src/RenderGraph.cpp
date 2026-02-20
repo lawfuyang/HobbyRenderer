@@ -195,14 +195,14 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
     const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
 
     BeginSetup();
-    bool bPassEnabled = false;
+    pRenderer->m_bPassEnabled = false;
     {
         PROFILE_SCOPED("SetupRenderer");
-        bPassEnabled = pRenderer->Setup(*this);
+        pRenderer->m_bPassEnabled = pRenderer->Setup(*this);
     }
-    EndSetup(bPassEnabled);
+    EndSetup(pRenderer->m_bPassEnabled);
 
-    if (bPassEnabled)
+    if (pRenderer->m_bPassEnabled)
     {
         BeginPass(pRenderer->GetName());
         const uint16_t passIndex = GetCurrentPassIndex();

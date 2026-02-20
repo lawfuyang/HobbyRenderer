@@ -794,6 +794,11 @@ void Renderer::Run()
             m_RHI->m_NvrhiDevice->resetTimerQuery(m_GPUQueries[readIndex]);
             scopedCmd->beginTimerQuery(m_GPUQueries[writeIndex]);
         }
+
+        for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
+        {
+            renderer->m_bPassEnabled = false;
+        }
         
         m_RenderGraph.Reset();
 

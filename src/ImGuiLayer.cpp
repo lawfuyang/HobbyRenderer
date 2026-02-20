@@ -274,8 +274,13 @@ void ImGuiLayer::UpdateFrame()
                 ImGui::TableSetupColumn("CPU (ms)");
                 ImGui::TableSetupColumn("GPU (ms)");
                 ImGui::TableHeadersRow();
-                for (auto& r : renderer->m_Renderers)
+                for (const std::shared_ptr<IRenderer>& r : renderer->m_Renderers)
                 {
+                    if (!r->m_bPassEnabled)
+                    {
+                        continue;
+                    }
+                    
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
                     ImGui::Text("%s", r->GetName());

@@ -23,6 +23,7 @@ public:
     float m_CPUTime = 0.0f;
     float m_GPUTime = 0.0f;
     nvrhi::TimerQueryHandle m_GPUQueries[2];
+    bool m_bPassEnabled = false;
 };
 
 class RendererRegistry
