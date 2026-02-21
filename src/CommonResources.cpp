@@ -204,13 +204,14 @@ void CommonResources::Initialize()
 
     // Create default textures
     {
-        // Helper lambda to create a 1x1 texture
-        auto createDefaultTexture = [device](const char* name, nvrhi::Format format = nvrhi::Format::RGBA8_UNORM, bool isUAV = false) -> nvrhi::TextureHandle
+        // Helper lambda to create default textures
+        auto createDefaultTexture = [device](const char* name, nvrhi::TextureDimension dimension = nvrhi::TextureDimension::Texture2D, nvrhi::Format format = nvrhi::Format::RGBA8_UNORM, bool isUAV = false) -> nvrhi::TextureHandle
         {
             nvrhi::TextureDesc desc;
             desc.width = 1;
             desc.height = 1;
             desc.format = format;
+            desc.dimension = dimension;
             desc.isShaderResource = true;
             desc.isUAV = isUAV;
             desc.initialState = isUAV ? nvrhi::ResourceStates::UnorderedAccess : nvrhi::ResourceStates::ShaderResource;
@@ -230,12 +231,13 @@ void CommonResources::Initialize()
         // Create the textures
         DefaultTextureBlack = createDefaultTexture("DefaultBlack");
         DefaultTextureWhite = createDefaultTexture("DefaultWhite");
+        DefaultTexture3DWhite = createDefaultTexture("Default3DWhite", nvrhi::TextureDimension::Texture3D);
         DefaultTextureGray = createDefaultTexture("DefaultGray");
         DefaultTextureNormal = createDefaultTexture("DefaultNormal");
-        DefaultTexturePBR = createDefaultTexture("DefaultPBR"); // ORM: Occlusion=1, Roughness=1, Metallic=0
+        DefaultTexturePBR = createDefaultTexture("DefaultPBR", nvrhi::TextureDimension::Texture2D, nvrhi::Format::RG8_UNORM); // RM: Roughness=1, Metallic=0
 
         // Create dummy UAV texture
-        DummyUAVTexture = createDefaultTexture("DummyUAV", nvrhi::Format::R32_FLOAT, true);
+        DummyUAVTexture = createDefaultTexture("DummyUAV", nvrhi::TextureDimension::Texture2D, nvrhi::Format::R32_FLOAT, true);
 
         nvrhi::BufferDesc bufferDesc;
         bufferDesc.byteSize = 4;
@@ -349,6 +351,7 @@ void CommonResources::Initialize()
         // White texture
         uint32_t whitePixel = 0xFFFFFFFF; // RGBA(255,255,255,255)
         commandList->writeTexture(DefaultTextureWhite, 0, 0, &whitePixel, sizeof(uint32_t), 0);
+        commandList->writeTexture(DefaultTexture3DWhite, 0, 0, &whitePixel, sizeof(uint32_t), 0);
 
         // Gray texture
         uint32_t grayPixel = 0xFF808080; // RGBA(128,128,128,255)
@@ -358,9 +361,9 @@ void CommonResources::Initialize()
         uint32_t normalPixel = 0xFFFF8080; // RGBA(128,128,255,255) - note: ABGR order in memory
         commandList->writeTexture(DefaultTextureNormal, 0, 0, &normalPixel, sizeof(uint32_t), 0);
 
-        // PBR texture (ORM: Occlusion=1, Roughness=1, Metallic=0)
-        uint32_t pbrPixel = 0xFFFFFF00; // RGBA(0,255,255,255) - R=Metallic(0), G=Roughness(255), B=Occlusion(255), A=255
-        commandList->writeTexture(DefaultTexturePBR, 0, 0, &pbrPixel, sizeof(uint32_t), 0);
+        // PBR texture (RM: Roughness=1, Metallic=0)
+        uint16_t pbrPixel = 0xFFFF; // RG(0,255) - R=Metallic(0), G=Roughness(255)
+        commandList->writeTexture(DefaultTexturePBR, 0, 0, &pbrPixel, sizeof(uint16_t), 0);
 
         // Note: Default textures are registered later in Renderer::Initialize after bindless system is set up
     }
@@ -402,6 +405,7 @@ void CommonResources::Shutdown()
     DefaultTexturePBR = nullptr;
     DefaultTextureNormal = nullptr;
     DefaultTextureGray = nullptr;
+    DefaultTexture3DWhite = nullptr;
     DefaultTextureWhite = nullptr;
     DefaultTextureBlack = nullptr;
     AnisotropicClamp = nullptr;
