@@ -8,8 +8,6 @@ cbuffer SkyCB : register(b0)
     SkyConstants g_Sky;
 };
 
-Texture2D<float> g_Depth : register(t4);
-
 float4 Sky_PSMain(FullScreenVertexOut input) : SV_Target
 {
     uint2 uvInt = uint2(input.pos.xy);

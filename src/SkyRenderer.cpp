@@ -3,7 +3,6 @@
 #include "Utilities.h"
 #include "shaders/ShaderShared.h"
 
-extern RGTextureHandle g_RG_DepthTexture;
 extern RGTextureHandle g_RG_HDRColor;
 
 class SkyRenderer : public IRenderer
@@ -25,7 +24,6 @@ public:
             return false;
         }
 
-        renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.WriteTexture(g_RG_HDRColor);
 
         return true;
@@ -36,7 +34,6 @@ public:
         Renderer* renderer = Renderer::GetInstance();
         nvrhi::utils::ScopedMarker marker(commandList, "Sky Pass");
 
-        nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
         const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
@@ -57,13 +54,10 @@ public:
         nvrhi::BindingSetDesc bset;
         bset.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(0, skyCB),
-            nvrhi::BindingSetItem::Texture_SRV(4, depthTexture),
         };
 
         nvrhi::FramebufferDesc fbDesc;
         fbDesc.addColorAttachment(hdrColor);
-        fbDesc.setDepthAttachment(depthTexture);
-        fbDesc.depthAttachment.isReadOnly = true;
 
         nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
 
