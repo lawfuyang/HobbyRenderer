@@ -193,6 +193,8 @@ struct Renderer
     int m_SelectedRendererIndexForPipelineStatistics = -1;
     uint32_t m_FrameNumber = 0;
 
+    int m_SelectedNodeIndex = -1;
+
     // Culling options
     bool m_EnableFrustumCulling = true;
     bool m_EnableConeCulling = false;

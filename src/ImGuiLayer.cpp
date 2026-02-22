@@ -259,6 +259,35 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
+        // Selected Node Highlight
+        if (ImGui::TreeNode("Node Highlight"))
+        {
+            const char* currentLabel = renderer->m_SelectedNodeIndex == -1 ? "None" : scene.m_Nodes[renderer->m_SelectedNodeIndex].m_Name.c_str();
+
+            if (ImGui::BeginCombo("Highlighted Node", currentLabel))
+            {
+                if (ImGui::Selectable("None", renderer->m_SelectedNodeIndex == -1))
+                    renderer->m_SelectedNodeIndex = -1;
+
+                for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+                {
+                    const Scene::Node& node = scene.m_Nodes[i];
+
+                    bool isSelected = (renderer->m_SelectedNodeIndex == i);
+                    const std::string& nodeName = node.m_Name;
+                    std::string label = std::to_string(i) + ": " + (nodeName.empty() ? "Unnamed Node" : nodeName);
+
+                    if (ImGui::Selectable(label.c_str(), isSelected))
+                        renderer->m_SelectedNodeIndex = i;
+
+                    if (isSelected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TreePop();
+        }
+
         // Culling controls
         if (ImGui::TreeNode("Culling"))
         {
@@ -386,6 +415,142 @@ void ImGuiLayer::UpdateFrame()
         renderer->m_RenderGraph.RenderDebugUI();
     }
     ImGui::End();
+
+    if (renderer->m_SelectedNodeIndex >= 0 && renderer->m_SelectedNodeIndex < (int)scene.m_Nodes.size())
+    {
+        const Scene::Node& node = scene.m_Nodes[renderer->m_SelectedNodeIndex];
+
+        DirectX::XMMATRIX view = DirectX::XMLoadFloat4x4(&scene.m_View.m_MatWorldToView);
+        DirectX::XMMATRIX invView = DirectX::XMLoadFloat4x4(&scene.m_View.m_MatViewToWorld);
+        DirectX::XMMATRIX proj = DirectX::XMLoadFloat4x4(&scene.m_View.m_MatViewToClipNoOffset);
+        
+        ImVec2 viewportSize = ImGui::GetIO().DisplaySize;
+        float viewportWidth = viewportSize.x;
+        float viewportHeight = viewportSize.y;
+
+        DirectX::XMVECTOR vCenter = DirectX::XMLoadFloat3(&node.m_Center);
+        float radius = node.m_Radius;
+
+        // Fallback for nodes that might not have bounding sphere pre-calculated (if any, like pure light nodes)
+        if (radius <= 1e-4f)
+        {
+            vCenter = DirectX::XMVectorSet(node.m_WorldTransform._41, node.m_WorldTransform._42, node.m_WorldTransform._43, 1.0f);
+            radius = 1.0f;
+            if (node.m_LightIndex >= 0)
+            {
+                // Point/Spot light radius from range
+                radius = scene.m_Lights[node.m_LightIndex].m_Radius == 0.0f ? 0.5f : scene.m_Lights[node.m_LightIndex].m_Radius;
+                if (scene.m_Lights[node.m_LightIndex].m_Type == Scene::Light::Directional) radius = 100.0f;
+            }
+        }
+
+        DirectX::XMVECTOR vScreenCenter = DirectX::XMVector3Project(vCenter, 0.0f, 0.0f, viewportWidth, viewportHeight, 0.0f, 1.0f, proj, view, DirectX::XMMatrixIdentity());
+        DirectX::XMFLOAT3 screenCenter;
+        DirectX::XMStoreFloat3(&screenCenter, vScreenCenter);
+
+        bool isOffScreen = (screenCenter.z < 0.0f || screenCenter.z > 1.0f ||
+                            screenCenter.x < 10.0f || screenCenter.x > viewportWidth - 10.0f ||
+                            screenCenter.y < 10.0f || screenCenter.y > viewportHeight - 10.0f);
+
+        // Check if point is in front of camera (Z in [0, 1] for typical DX range)
+        if (!isOffScreen)
+        {
+            float cx = screenCenter.x;
+            float cy = screenCenter.y;
+
+            // Project a point at correct distance horizontally from camera's perspective
+            // using camera's world-space Right vector ensures stability during rotation.
+            DirectX::XMVECTOR vRight = invView.r[0]; 
+            DirectX::XMVECTOR vPoint = DirectX::XMVectorAdd(vCenter, DirectX::XMVectorScale(vRight, radius));
+            DirectX::XMVECTOR vScreenPoint = DirectX::XMVector3Project(vPoint, 0.0f, 0.0f, viewportWidth, viewportHeight, 0.0f, 1.0f, proj, view, DirectX::XMMatrixIdentity());
+            DirectX::XMFLOAT3 screenPoint;
+            DirectX::XMStoreFloat3(&screenPoint, vScreenPoint);
+
+            float radiusPx = sqrtf((screenPoint.x - cx) * (screenPoint.x - cx) + (screenPoint.y - cy) * (screenPoint.y - cy));
+            radiusPx = std::max(radiusPx, 2.0f); // Minimum visual size
+
+            ImDrawList* drawList = ImGui::GetForegroundDrawList();
+            drawList->AddCircle(ImVec2(cx, cy), radiusPx, IM_COL32(255, 255, 0, 255), 64, 2.5f);
+
+            std::string text = (node.m_Name.empty() ? "Node" : node.m_Name) + " [" + std::to_string(renderer->m_SelectedNodeIndex) + "]";
+            drawList->AddText(ImVec2(cx, cy - radiusPx - 20), IM_COL32(255, 255, 0, 255), text.c_str());
+        }
+        else
+        {
+            // Calculate direction from camera to node
+            DirectX::XMVECTOR vCamPos = invView.r[3];
+            DirectX::XMVECTOR vDirWorld = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(vCenter, vCamPos));
+            
+            // Transform world direction to camera space
+            DirectX::XMVECTOR vDirView = DirectX::XMVector3TransformNormal(vDirWorld, view);
+            
+            // Screen space direction (X = right, Y = down)
+            // Note: dx is negated because the project's projection matrix mirrors the X-axis
+            float dx = -DirectX::XMVectorGetX(vDirView); 
+            float dy = -DirectX::XMVectorGetY(vDirView); // Flip Y for screen
+            
+            // If the object is behind, the projection is inverted.
+            // We want the arrow to point towards where the object is in world space.
+            if (DirectX::XMVectorGetZ(vDirView) < 0.0f)
+            {
+                dx = -dx;
+                dy = -dy;
+            }
+
+            float len = sqrtf(dx * dx + dy * dy);
+            if (len > 1e-4f)
+            {
+                dx /= len;
+                dy /= len;
+            }
+            else
+            {
+                // Edge case: directly behind or aligned with look vector
+                dx = 0.0f; dy = -1.0f;
+            }
+
+            // Find position on the edge of the screen
+            float margin = 40.0f;
+            float centerX = viewportWidth * 0.5f;
+            float centerY = viewportHeight * 0.5f;
+            
+            // Ray-cast to viewport edges
+            float scaleX = (dx > 0.0f) ? (viewportWidth * 0.5f - margin) / dx : (dx < 0.0f) ? (-viewportWidth * 0.5f + margin) / dx : 1e10f;
+            float scaleY = (dy > 0.0f) ? (viewportHeight * 0.5f - margin) / dy : (dy < 0.0f) ? (-viewportHeight * 0.5f + margin) / dy : 1e10f;
+            float scale = std::min(scaleX, scaleY);
+            
+            float ax = centerX + dx * scale;
+            float ay = centerY + dy * scale;
+            
+            ImDrawList* drawList = ImGui::GetForegroundDrawList();
+            ImU32 color = IM_COL32(255, 255, 0, 255);
+            float arrowSize = 25.0f;
+            float angle = atan2f(dy, dx);
+            
+            // Arrow Head (Triangle)
+            ImVec2 p1 = ImVec2(ax + arrowSize * cosf(angle), ay + arrowSize * sinf(angle));
+            ImVec2 p2 = ImVec2(ax + arrowSize * 0.6f * cosf(angle + 2.4f), ay + arrowSize * 0.6f * sinf(angle + 2.4f));
+            ImVec2 p3 = ImVec2(ax + arrowSize * 0.6f * cosf(angle - 2.4f), ay + arrowSize * 0.6f * sinf(angle - 2.4f));
+            drawList->AddTriangleFilled(p1, p2, p3, color);
+            
+            // Arrow Shaft (Quad)
+            ImVec2 midBase = ImVec2((p2.x + p3.x) * 0.5f, (p2.y + p3.y) * 0.5f);
+            ImVec2 shaftEnd = ImVec2(midBase.x - arrowSize * 0.8f * cosf(angle), midBase.y - arrowSize * 0.8f * sinf(angle));
+            float sw = arrowSize * 0.2f;
+            float sx = -sinf(angle) * sw;
+            float sy = cosf(angle) * sw;
+            
+            drawList->AddQuadFilled(
+                ImVec2(midBase.x + sx, midBase.y + sy),
+                ImVec2(midBase.x - sx, midBase.y - sy),
+                ImVec2(shaftEnd.x - sx, shaftEnd.y - sy),
+                ImVec2(shaftEnd.x + sx, shaftEnd.y + sy),
+                color);
+
+            std::string text = "LOOK [" + std::to_string(renderer->m_SelectedNodeIndex) + "]";
+            drawList->AddText(ImVec2(ax - 20, ay + 20), color, text.c_str());
+        }
+    }
 
     ImGui::Render();
 }
