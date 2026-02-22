@@ -97,6 +97,7 @@ public:
         nvrhi::FramebufferDesc fbDesc;
         fbDesc.addColorAttachment(hdrColor);
         fbDesc.setDepthAttachment(depthTexture);
+        fbDesc.depthAttachment.isReadOnly = true;
 
         nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
 
