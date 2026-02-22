@@ -309,7 +309,9 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
     // Try to find a matching unused resource in the pool
     for (uint32_t i = 0; i < m_Textures.size(); ++i)
     {
-        if (!m_Textures[i].m_IsDeclaredThisFrame && m_Textures[i].m_Hash == hash)
+        if (!m_Textures[i].m_IsDeclaredThisFrame
+            && m_Textures[i].m_Hash == hash
+            && (m_FrameIndex - m_Textures[i].m_LastFrameUsed > 1))
         {
             m_Textures[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Textures[i].m_IsDeclaredThisFrame = true;
@@ -375,7 +377,9 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
 
     for (uint32_t i = 0; i < m_Buffers.size(); ++i)
     {
-        if (!m_Buffers[i].m_IsDeclaredThisFrame && m_Buffers[i].m_Hash == hash)
+        if (!m_Buffers[i].m_IsDeclaredThisFrame
+            && m_Buffers[i].m_Hash == hash
+            && (m_FrameIndex - m_Buffers[i].m_LastFrameUsed > 1))
         {
             m_Buffers[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Buffers[i].m_IsDeclaredThisFrame = true;
@@ -384,7 +388,7 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
 
             m_PendingDeclaredBuffers.push_back(i);
             outputHandle = { i };
-            WriteBuffer(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
+            WriteBuffer(outputHandle); // Implicitly mark as written in the declari;ng pass, since they start with undefined contents
             return true;
         }
     }
