@@ -24,6 +24,7 @@
       #define DRAW_INDEX_ARG_COMMA , [[vk::builtin("DrawIndex")]] uint drawIndex : DRAW_INDEX
       #define GET_DRAW_INDEX() drawIndex
       #define PUSH_CONSTANT [[vk::push_constant]]
+      #define VK_IMAGE_FORMAT(f) [[vk::image_format(f)]]
   #elif defined(DXIL)
       // DrawID is bound to b255 in space0 for D3D12 when useDrawIndex is enabled in the pipeline.
       cbuffer DrawIDCB : register(b255)
@@ -33,10 +34,12 @@
       #define DRAW_INDEX_ARG_COMMA 
       #define GET_DRAW_INDEX() g_DrawID
       #define PUSH_CONSTANT 
+      #define VK_IMAGE_FORMAT(f)
   #else
       #define DRAW_INDEX_ARG_COMMA , uint drawIndex : DRAW_INDEX
       #define GET_DRAW_INDEX() drawIndex
       #define PUSH_CONSTANT 
+      #define VK_IMAGE_FORMAT(f)
   #endif
 
   struct FullScreenVertexOut

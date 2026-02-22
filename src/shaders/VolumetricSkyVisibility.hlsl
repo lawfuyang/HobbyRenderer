@@ -7,6 +7,7 @@ cbuffer VolumetricSkyVisibilityCB : register(b0)
 };
 
 // UAVs
+VK_IMAGE_FORMAT("r8")
 RWTexture3D<float> g_OutputVisibility : register(u0);
 
 // SRVs
