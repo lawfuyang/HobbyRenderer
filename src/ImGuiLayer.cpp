@@ -146,16 +146,16 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Checkbox("Auto Exposure", &renderer->m_EnableAutoExposure);
             if (renderer->m_EnableAutoExposure)
             {
-                ImGui::DragFloat("EV Min", &renderer->m_Camera.m_ExposureValueMin, 0.1f, -20.0f, 20.0f);
-                ImGui::DragFloat("EV Max", &renderer->m_Camera.m_ExposureValueMax, 0.1f, -20.0f, 20.0f);
+                ImGui::DragFloat("EV Min", &scene.m_Camera.m_ExposureValueMin, 0.1f, -20.0f, 20.0f);
+                ImGui::DragFloat("EV Max", &scene.m_Camera.m_ExposureValueMax, 0.1f, -20.0f, 20.0f);
                 ImGui::DragFloat("Adaptation Speed", &renderer->m_AdaptationSpeed, 0.1f, 0.0f, 20.0f);
             }
             else
             {
-                ImGui::DragFloat("Exposure Value (EV100)", &renderer->m_Camera.m_ExposureValue, 0.1f, -20.0f, 20.0f);
+                ImGui::DragFloat("Exposure Value (EV100)", &scene.m_Camera.m_ExposureValue, 0.1f, -20.0f, 20.0f);
             }
-            ImGui::DragFloat("Exposure Compensation", &renderer->m_Camera.m_ExposureCompensation, 0.1f, -10.0f, 10.0f);
-            ImGui::Text("Current Multiplier: %.4f", renderer->m_Camera.m_Exposure);
+            ImGui::DragFloat("Exposure Compensation", &scene.m_Camera.m_ExposureCompensation, 0.1f, -10.0f, 10.0f);
+            ImGui::Text("Current Multiplier: %.4f", scene.m_Camera.m_Exposure);
 
             ImGui::TreePop();
         }
@@ -212,15 +212,15 @@ void ImGuiLayer::UpdateFrame()
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {
-            ImGui::DragFloat("Move Speed", &renderer->m_Camera.m_MoveSpeed, 0.1f, 0.0f, 100.0f);
-            ImGui::DragFloat("Mouse Sensitivity", &renderer->m_Camera.m_MouseSensitivity, 0.0005f, 0.0f, 1.0f, "%.4f");
+            ImGui::DragFloat("Move Speed", &scene.m_Camera.m_MoveSpeed, 0.1f, 0.0f, 100.0f);
+            ImGui::DragFloat("Mouse Sensitivity", &scene.m_Camera.m_MouseSensitivity, 0.0005f, 0.0f, 1.0f, "%.4f");
 
             // Display camera position
-            Vector3 pos = renderer->m_Camera.GetPosition();
+            Vector3 pos = scene.m_Camera.GetPosition();
             ImGui::Text("Position: %.2f, %.2f, %.2f", pos.x, pos.y, pos.z);
             
             // Display forward vector (from view matrix, third column)
-            Matrix view = renderer->m_Camera.GetViewMatrix();
+            Matrix view = scene.m_Camera.GetViewMatrix();
             Vector3 fwd = { view._13, view._23, view._33 };
             ImGui::Text("Forward: %.2f, %.2f, %.2f", fwd.x, fwd.y, fwd.z);
             
@@ -232,11 +232,11 @@ void ImGuiLayer::UpdateFrame()
                 {
                     cameraNames.push_back(cam.m_Name.empty() ? "Unnamed Camera" : cam.m_Name.c_str());
                 }
-                if (ImGui::Combo("GLTF Camera", &renderer->m_SelectedCameraIndex, cameraNames.data(), static_cast<int>(cameraNames.size())))
+                if (ImGui::Combo("GLTF Camera", &scene.m_SelectedCameraIndex, cameraNames.data(), static_cast<int>(cameraNames.size())))
                 {
-                    if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
+                    if (scene.m_SelectedCameraIndex >= 0 && scene.m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
                     {
-                        const Scene::Camera& selectedCam = scene.m_Cameras[renderer->m_SelectedCameraIndex];
+                        const Scene::Camera& selectedCam = scene.m_Cameras[scene.m_SelectedCameraIndex];
                         renderer->SetCameraFromSceneCamera(selectedCam);
                     }
                 }
@@ -244,15 +244,15 @@ void ImGuiLayer::UpdateFrame()
 
             if (ImGui::Button("Reset Camera"))
             {
-                if (renderer->m_SelectedCameraIndex >= 0 && renderer->m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
+                if (scene.m_SelectedCameraIndex >= 0 && scene.m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
                 {
-                    const Scene::Camera& selectedCam = scene.m_Cameras[renderer->m_SelectedCameraIndex];
+                    const Scene::Camera& selectedCam = scene.m_Cameras[scene.m_SelectedCameraIndex];
                     renderer->SetCameraFromSceneCamera(selectedCam);
                 }
                 else
                 {
                     // Reset to 0,0,0 position and default orientation
-                    renderer->m_Camera.Reset();
+                    scene.m_Camera.Reset();
                 }
             }
 
@@ -270,8 +270,8 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Checkbox("Freeze Culling Camera", &renderer->m_FreezeCullingCamera);
             if (!prevFreeze && renderer->m_FreezeCullingCamera)
             {
-                renderer->m_FrozenCullingViewMatrix = renderer->m_Camera.GetViewMatrix();
-                renderer->m_FrozenCullingCameraPos = renderer->m_Camera.GetPosition();
+                renderer->m_FrozenCullingViewMatrix = scene.m_Camera.GetViewMatrix();
+                renderer->m_FrozenCullingCameraPos = scene.m_Camera.GetPosition();
             }
 
             ImGui::TreePop();

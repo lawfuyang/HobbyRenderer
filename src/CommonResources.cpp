@@ -286,8 +286,8 @@ void CommonResources::Initialize()
         LoadAndUpload(renderer->m_BRDFLutTexture, "BRDF_LUT", BRDF_LUT);
 
         // Load IBL textures
-        LoadAndUpload(renderer->m_IrradianceTexture, "IrradianceTexture", IrradianceTexture, true);
-        LoadAndUpload(renderer->m_RadianceTexture, "RadianceTexture", RadianceTexture, true);
+        LoadAndUpload(renderer->m_IrradianceTexturePath, "IrradianceTexture", IrradianceTexture, true);
+        LoadAndUpload(renderer->m_RadianceTexturePath, "RadianceTexture", RadianceTexture, true);
 
         m_RadianceMipCount = RadianceTexture->getDesc().mipLevels;
 

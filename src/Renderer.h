@@ -179,12 +179,8 @@ struct Renderer
     // Parallel processing
     std::unique_ptr<TaskScheduler> m_TaskScheduler;
 
-    // Scene and Camera
+    // Scene
     Scene m_Scene;
-    Camera m_Camera;
-    PlanarViewConstants m_View;
-    PlanarViewConstants m_ViewPrev;
-    int m_SelectedCameraIndex = -1;
 
     // Renderers
     std::vector<std::shared_ptr<IRenderer>> m_Renderers;
@@ -237,9 +233,12 @@ struct Renderer
     bool m_EnableSkyVisibilityTemporal = false;
     int m_SkyVisibilityRays = 16;
     int m_SkyVisibilityZCount = 64;
-    std::string m_IrradianceTexture = "irradiance.dds";
-    std::string m_RadianceTexture = "radiance.dds";
+    std::string m_IrradianceTexturePath = "irradiance.dds";
+    std::string m_RadianceTexturePath = "radiance.dds";
     std::string m_BRDFLutTexture = "brdf_lut.dds";
+
+    nvrhi::TextureHandle m_RadianceTexture;
+    nvrhi::TextureHandle m_IrradianceTexture;
 
 private:
     // Internal State

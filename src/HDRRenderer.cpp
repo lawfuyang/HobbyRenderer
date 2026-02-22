@@ -116,9 +116,9 @@ public:
                 consts.m_NumPixels = renderer->m_RHI->m_SwapchainExtent.x * renderer->m_RHI->m_SwapchainExtent.y;
                 consts.m_MinLogLuminance = kMinLogLuminance;
                 consts.m_MaxLogLuminance = kMaxLogLuminance;
-                consts.m_ExposureValueMin = renderer->m_Camera.m_ExposureValueMin;
-                consts.m_ExposureValueMax = renderer->m_Camera.m_ExposureValueMax;
-                consts.m_ExposureCompensation = renderer->m_Camera.m_ExposureCompensation;
+                consts.m_ExposureValueMin = renderer->m_Scene.m_Camera.m_ExposureValueMin;
+                consts.m_ExposureValueMax = renderer->m_Scene.m_Camera.m_ExposureValueMax;
+                consts.m_ExposureCompensation = renderer->m_Scene.m_Camera.m_ExposureCompensation;
 
                 nvrhi::BindingSetDesc bset;
                 bset.bindings = {
@@ -141,7 +141,7 @@ public:
             else
             {
                 // Manual mode: just update the buffer from CPU
-                commandList->writeBuffer(exposureBuffer, &renderer->m_Camera.m_Exposure, sizeof(float));
+                commandList->writeBuffer(exposureBuffer, &renderer->m_Scene.m_Camera.m_Exposure, sizeof(float));
             }
         }
 

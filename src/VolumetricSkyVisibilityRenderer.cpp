@@ -66,9 +66,9 @@ public:
         float farPlane = scene.GetSceneBoundingRadius() * 0.5f;
 
         VolumetricSkyVisibilityConstants consts{};
-        consts.m_View = renderer->m_View;
-        consts.m_PrevView = renderer->m_ViewPrev;
-        consts.m_CameraPos = Vector4{ renderer->m_Camera.GetPosition().x, renderer->m_Camera.GetPosition().y, renderer->m_Camera.GetPosition().z, 1.0f };
+        consts.m_View = renderer->m_Scene.m_View;
+        consts.m_PrevView = renderer->m_Scene.m_ViewPrev;
+        consts.m_CameraPos = Vector4{ renderer->m_Scene.m_Camera.GetPosition().x, renderer->m_Scene.m_Camera.GetPosition().y, renderer->m_Scene.m_Camera.GetPosition().z, 1.0f };
         consts.m_SunDirection = scene.m_SunDirection;
         consts.m_ResolutionX = resX;
         consts.m_ResolutionY = resY;
@@ -77,7 +77,7 @@ public:
         consts.m_FrameIndex = renderer->m_FrameNumber;
         consts.m_SkyVisibilityFar = farPlane;
         consts.m_SkyVisibilityGridZParams = CalculateGridZParams(0.1f, farPlane, 1.0f, renderer->m_SkyVisibilityZCount);
-        consts.m_InvDeviceZToWorldZTransform = CreateInvDeviceZToWorldZTransform(renderer->m_Camera.GetProjMatrix());
+        consts.m_InvDeviceZToWorldZTransform = CreateInvDeviceZToWorldZTransform(renderer->m_Scene.m_Camera.GetProjMatrix());
 
         const nvrhi::BufferDesc cbDesc = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(consts), "SkyVisibility_Constants", 1);
         nvrhi::BufferHandle cb = renderer->m_RHI->m_NvrhiDevice->createBuffer(cbDesc);

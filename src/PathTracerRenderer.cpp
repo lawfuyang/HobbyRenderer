@@ -44,7 +44,7 @@ public:
 
         // Camera change detection
         bool reset = false;
-        if (memcmp(&renderer->m_View.m_MatWorldToClipNoOffset, &renderer->m_ViewPrev.m_MatWorldToClipNoOffset, sizeof(Matrix)) != 0)
+        if (memcmp(&renderer->m_Scene.m_View.m_MatWorldToClipNoOffset, &renderer->m_Scene.m_ViewPrev.m_MatWorldToClipNoOffset, sizeof(Matrix)) != 0)
         {
             reset = true;
         }
@@ -61,8 +61,8 @@ public:
         const nvrhi::BufferHandle pathTracerCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(pathTracerCBD);
 
         PathTracerConstants cb{};
-        cb.m_View = renderer->m_View;
-        cb.m_CameraPos = Vector4{ renderer->m_Camera.GetPosition().x, renderer->m_Camera.GetPosition().y, renderer->m_Camera.GetPosition().z, 1.0f };
+        cb.m_View = renderer->m_Scene.m_View;
+        cb.m_CameraPos = Vector4{ renderer->m_Scene.m_Camera.GetPosition().x, renderer->m_Scene.m_Camera.GetPosition().y, renderer->m_Scene.m_Camera.GetPosition().z, 1.0f };
         cb.m_LightCount = renderer->m_Scene.m_LightCount;
         cb.m_AccumulationIndex = m_AccumulationIndex;
         cb.m_FrameIndex = renderer->m_FrameNumber;

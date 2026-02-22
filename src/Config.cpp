@@ -50,8 +50,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             if (i + 1 < argc)
             {
-                renderer->m_IrradianceTexture = argv[++i];
-                SDL_Log("[Config] Irradiance texture set via command line: %s", renderer->m_IrradianceTexture.c_str());
+                renderer->m_IrradianceTexturePath = argv[++i];
+                SDL_Log("[Config] Irradiance texture set via command line: %s", renderer->m_IrradianceTexturePath.c_str());
             }
             else
             {
@@ -62,8 +62,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             if (i + 1 < argc)
             {
-                renderer->m_RadianceTexture = argv[++i];
-                SDL_Log("[Config] Radiance texture set via command line: %s", renderer->m_RadianceTexture.c_str());
+                renderer->m_RadianceTexturePath = argv[++i];
+                SDL_Log("[Config] Radiance texture set via command line: %s", renderer->m_RadianceTexturePath.c_str());
             }
             else
             {
@@ -77,18 +77,18 @@ void Config::ParseCommandLine(int argc, char* argv[])
                 std::filesystem::path envMapPath = argv[++i];
                 std::string stem = envMapPath.stem().string();
                 std::filesystem::path parent = envMapPath.parent_path();
-                renderer->m_IrradianceTexture = (parent / (stem + "_irradiance.dds")).string();
-                renderer->m_RadianceTexture = (parent / (stem + "_radiance.dds")).string();
+                renderer->m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
+                renderer->m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
 
                 SDL_Log("[Config] Environment map set via command line: %s", envMapPath.string().c_str());
-                SDL_Log("[Config] Irradiance: %s", renderer->m_IrradianceTexture.c_str());
-                SDL_Log("[Config] Radiance: %s", renderer->m_RadianceTexture.c_str());
+                SDL_Log("[Config] Irradiance: %s", renderer->m_IrradianceTexturePath.c_str());
+                SDL_Log("[Config] Radiance: %s", renderer->m_RadianceTexturePath.c_str());
 
-                if (!std::filesystem::exists(renderer->m_IrradianceTexture)) {
-                    SDL_LOG_ASSERT_FAIL("Irradiance map not found", "Irradiance map not found: %s", renderer->m_IrradianceTexture.c_str());
+                if (!std::filesystem::exists(renderer->m_IrradianceTexturePath)) {
+                    SDL_LOG_ASSERT_FAIL("Irradiance map not found", "Irradiance map not found: %s", renderer->m_IrradianceTexturePath.c_str());
                 }
-                if (!std::filesystem::exists(renderer->m_RadianceTexture)) {
-                    SDL_LOG_ASSERT_FAIL("Radiance map not found", "Radiance map not found: %s", renderer->m_RadianceTexture.c_str());
+                if (!std::filesystem::exists(renderer->m_RadianceTexturePath)) {
+                    SDL_LOG_ASSERT_FAIL("Radiance map not found", "Radiance map not found: %s", renderer->m_RadianceTexturePath.c_str());
                 }
             }
             else

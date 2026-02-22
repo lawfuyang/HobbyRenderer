@@ -53,7 +53,7 @@ public:
         nvrhi::TextureHandle skyVisibility = renderer->m_EnableSky ? renderGraph.GetTexture(g_RG_SkyVisibility, RGResourceAccessMode::Read) : CommonResources::GetInstance().DefaultTexture3DWhite;
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
-        const Vector3 camPos = renderer->m_Camera.GetPosition();
+        const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
         float skyVisFarPlane = renderer->m_Scene.GetSceneBoundingRadius() * 0.5f;
 
         // Deferred CB
@@ -61,7 +61,7 @@ public:
         const nvrhi::BufferHandle deferredCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(deferredCBD);
 
         DeferredLightingConstants dcb{};
-        dcb.m_View = renderer->m_View;
+        dcb.m_View = renderer->m_Scene.m_View;
         dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
         dcb.m_SunDirection = renderer->m_Scene.m_SunDirection;
         dcb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;

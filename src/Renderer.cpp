@@ -639,6 +639,11 @@ void Renderer::Initialize()
         return;
     }
 
+    const char* basePathCStr = SDL_GetBasePath();
+    m_IrradianceTexturePath = (std::filesystem::path{ basePathCStr } / "irradiance.dds").string();
+    m_RadianceTexturePath = (std::filesystem::path{ basePathCStr } / "radiance.dds").string();
+    m_BRDFLutTexture = (std::filesystem::path{ basePathCStr } / "brdf_lut.dds").string();
+
     InitializeGlobalBindlessTextures();
     InitializeGlobalBindlessSamplers();
     CommonResources::GetInstance().Initialize();
@@ -692,7 +697,7 @@ void Renderer::Run()
             while (SDL_PollEvent(&event))
             {
                 m_ImGuiLayer.ProcessEvent(event);
-                m_Camera.ProcessEvent(event);
+                m_Scene.m_Camera.ProcessEvent(event);
 
                 if (event.type == SDL_EVENT_QUIT)
                 {
@@ -773,8 +778,8 @@ void Renderer::Run()
         }
 
         // Update camera (camera retrieves frame time internally)
-        m_ViewPrev = m_View;
-        m_Camera.Update();
+        m_Scene.m_ViewPrev = m_Scene.m_View;
+        m_Scene.m_Camera.Update();
 
         // Handle debug mode settings
         if (m_DebugMode != m_ActiveDebugMode)
@@ -784,8 +789,8 @@ void Renderer::Run()
                 // Entering debug mode: save current state
                 m_DebugBackup.m_EnableBloom = m_EnableBloom;
                 m_DebugBackup.m_EnableAutoExposure = m_EnableAutoExposure;
-                m_DebugBackup.m_ExposureValue = m_Camera.m_ExposureValue;
-                m_DebugBackup.m_ExposureCompensation = m_Camera.m_ExposureCompensation;
+                m_DebugBackup.m_ExposureValue = m_Scene.m_Camera.m_ExposureValue;
+                m_DebugBackup.m_ExposureCompensation = m_Scene.m_Camera.m_ExposureCompensation;
 
                 // Set debug defaults
                 m_EnableBloom = false;
@@ -796,8 +801,8 @@ void Renderer::Run()
                 // Leaving debug mode: restore state
                 m_EnableBloom = m_DebugBackup.m_EnableBloom;
                 m_EnableAutoExposure = m_DebugBackup.m_EnableAutoExposure;
-                m_Camera.m_ExposureValue = m_DebugBackup.m_ExposureValue;
-                m_Camera.m_ExposureCompensation = m_DebugBackup.m_ExposureCompensation;
+                m_Scene.m_Camera.m_ExposureValue = m_DebugBackup.m_ExposureValue;
+                m_Scene.m_Camera.m_ExposureCompensation = m_DebugBackup.m_ExposureCompensation;
             }
             m_ActiveDebugMode = m_DebugMode;
         }
@@ -807,12 +812,12 @@ void Renderer::Run()
             // Lock settings in debug mode for consistent raw output
             m_EnableBloom = false;
             m_EnableAutoExposure = false;
-            m_Camera.m_Exposure = 1.0f;
+            m_Scene.m_Camera.m_Exposure = 1.0f;
         }
 
         int windowW, windowH;
         SDL_GetWindowSize(m_Window, &windowW, &windowH);
-        m_Camera.FillPlanarViewConstants(m_View, (float)windowW, (float)windowH);
+        m_Scene.m_Camera.FillPlanarViewConstants(m_Scene.m_View, (float)windowW, (float)windowH);
 
         const int readIndex = m_FrameNumber % 2;
         const int writeIndex = (m_FrameNumber + 1) % 2;
@@ -955,6 +960,9 @@ void Renderer::Shutdown()
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
 
+    m_RadianceTexture = nullptr;
+    m_IrradianceTexture = nullptr;
+
     // Free renderer instances
     m_Renderers.clear();
 
@@ -988,13 +996,13 @@ void Renderer::SetCameraFromSceneCamera(const Scene::Camera& sceneCam)
     if (sceneCam.m_NodeIndex >= 0 && sceneCam.m_NodeIndex < static_cast<int>(m_Scene.m_Nodes.size()))
     {
         const Matrix& worldTransform = m_Scene.m_Nodes[sceneCam.m_NodeIndex].m_WorldTransform;
-        m_Camera.SetFromMatrix(worldTransform);
-        m_Camera.SetProjection(sceneCam.m_Projection);
+        m_Scene.m_Camera.SetFromMatrix(worldTransform);
+        m_Scene.m_Camera.SetProjection(sceneCam.m_Projection);
 
-        m_Camera.m_ExposureValue = sceneCam.m_ExposureValue;
-        m_Camera.m_ExposureCompensation = sceneCam.m_ExposureCompensation;
-        m_Camera.m_ExposureValueMin = sceneCam.m_ExposureValueMin;
-        m_Camera.m_ExposureValueMax = sceneCam.m_ExposureValueMax;
+        m_Scene.m_Camera.m_ExposureValue = sceneCam.m_ExposureValue;
+        m_Scene.m_Camera.m_ExposureCompensation = sceneCam.m_ExposureCompensation;
+        m_Scene.m_Camera.m_ExposureValueMin = sceneCam.m_ExposureValueMin;
+        m_Scene.m_Camera.m_ExposureValueMax = sceneCam.m_ExposureValueMax;
     }
 }
 

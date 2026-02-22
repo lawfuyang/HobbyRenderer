@@ -39,14 +39,14 @@ public:
         nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
-        const Vector3 camPos = renderer->m_Camera.GetPosition();
+        const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
 
         // Sky CB
         const nvrhi::BufferDesc skyCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(SkyConstants), "SkyCB", 1);
         const nvrhi::BufferHandle skyCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(skyCBD);
 
         SkyConstants scb{};
-        scb.m_View = renderer->m_View;
+        scb.m_View = renderer->m_Scene.m_View;
         scb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
         scb.m_SunDirection = renderer->m_Scene.m_SunDirection;
         scb.m_SunIntensity = renderer->m_Scene.GetSunIntensity();

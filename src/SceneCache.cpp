@@ -3,7 +3,7 @@
 #include "meshoptimizer.h"
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 21;
+static constexpr uint32_t kSceneCacheVersion = 22;
 
 // --- Binary Serialization Helpers ---
 template<typename T>
@@ -213,9 +213,6 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t
 		WritePOD(os, light.m_NodeIndex);
 	}
 
-	WriteString(os, m_RadianceTexturePath);
-	WriteString(os, m_IrradianceTexturePath);
-
 	WriteVector(os, m_MeshData);
 	WriteVector(os, m_Meshlets);
 	WritePOD(os, m_MeshletVertices.size());
@@ -372,9 +369,6 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& a
 		ReadPOD(is, light.m_AngularSize);
 		ReadPOD(is, light.m_NodeIndex);
 	}
-
-	ReadString(is, m_RadianceTexturePath);
-	ReadString(is, m_IrradianceTexturePath);
 
 	ReadVector(is, m_MeshData);
 	ReadVector(is, m_Meshlets);

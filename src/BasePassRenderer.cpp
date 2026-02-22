@@ -198,7 +198,7 @@ protected:
         const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), args.m_CullingPhase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
         const nvrhi::BufferHandle cullCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cullCBD);
 
-        const Matrix& projectionMatrix = renderer->m_Camera.GetProjMatrix();
+        const Matrix& projectionMatrix = renderer->m_Scene.m_Camera.GetProjMatrix();
 
         CullingConstants cullData;
         cullData.m_NumPrimitives = args.m_NumInstances;
@@ -365,11 +365,11 @@ protected:
         float skyVisFarPlane = renderer->m_Scene.GetSceneBoundingRadius() * 0.5f;
 
         ForwardLightingPerFrameData cb{};
-        cb.m_View = renderer->m_View;
-        cb.m_PrevView = renderer->m_ViewPrev;
+        cb.m_View = renderer->m_Scene.m_View;
+        cb.m_PrevView = renderer->m_Scene.m_ViewPrev;
         memcpy(cb.m_FrustumPlanes, args.m_FrustumPlanes, sizeof(Vector4) * 5);
 
-        Vector3 camPos = renderer->m_Camera.GetPosition();
+        Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
         cb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 0.0f };
 
         Vector3 cullingCamPos = camPos;
@@ -474,7 +474,7 @@ protected:
     void PrepareRenderingData(Matrix& outView, Matrix& outViewProjForCulling, Vector4 outFrustumPlanes[5])
     {
         Renderer* renderer = Renderer::GetInstance();
-        Camera* cam = &renderer->m_Camera;
+        Camera* cam = &renderer->m_Scene.m_Camera;
         const Matrix viewProj = cam->GetViewProjMatrix();
         outView = cam->GetViewMatrix();
         outViewProjForCulling = viewProj;

@@ -88,7 +88,7 @@ void Scene::LoadScene()
 	{
 		const Scene::Camera& firstCam = m_Cameras[0];
 		renderer->SetCameraFromSceneCamera(firstCam);
-		renderer->m_SelectedCameraIndex = 0;
+		m_SelectedCameraIndex = 0;
 	}
 }
 
@@ -470,10 +470,6 @@ void Scene::Shutdown()
 	m_TLAS = nullptr;
 	m_RTInstanceDescBuffer = nullptr;
 	m_RTInstanceDescs.clear();
-
-	// Release environment texture handles
-	m_RadianceTexture = nullptr;
-	m_IrradianceTexture = nullptr;
 
 	// Clear CPU-side containers
 	m_Meshes.clear();

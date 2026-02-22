@@ -311,11 +311,11 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							std::string stem = envMapPath.stem().string();
 							std::filesystem::path parent = envMapPath.parent_path();
 
-							scene.m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
-							SDL_assert(std::filesystem::exists(scene.m_IrradianceTexturePath));
+							Renderer::GetInstance()->m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
+							SDL_assert(std::filesystem::exists(Renderer::GetInstance()->m_IrradianceTexturePath));
 
-							scene.m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
-							SDL_assert(std::filesystem::exists(scene.m_RadianceTexturePath));
+							Renderer::GetInstance()->m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
+							SDL_assert(std::filesystem::exists(Renderer::GetInstance()->m_RadianceTexturePath));
 						}
 					}
 					else if (type == "PerspectiveCamera" || type == "PerspectiveCameraEx")
@@ -454,16 +454,17 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 
 void SceneLoader::ApplyEnvironmentLights(Scene& scene)
 {
-	if (scene.m_IrradianceTexturePath.empty() || scene.m_RadianceTexturePath.empty())
+	Renderer* renderer = Renderer::GetInstance();
+	if (renderer->m_IrradianceTexturePath.empty() || renderer->m_RadianceTexturePath.empty())
 	{
 		return;
 	}
 
-	SDL_assert(std::filesystem::exists(scene.m_IrradianceTexturePath));
-	SDL_assert(std::filesystem::exists(scene.m_RadianceTexturePath));
+	SDL_assert(std::filesystem::exists(renderer->m_IrradianceTexturePath));
+	SDL_assert(std::filesystem::exists(renderer->m_RadianceTexturePath));
 
-	scene.m_IrradianceTexture = ::LoadAndRegisterEnvMap(scene.m_IrradianceTexturePath, DEFAULT_TEXTURE_IRRADIANCE, "Upload Env Irradiance");
-	scene.m_RadianceTexture = ::LoadAndRegisterEnvMap(scene.m_RadianceTexturePath, DEFAULT_TEXTURE_RADIANCE, "Upload Env Radiance");
+	renderer->m_IrradianceTexture = ::LoadAndRegisterEnvMap(renderer->m_IrradianceTexturePath, DEFAULT_TEXTURE_IRRADIANCE, "Upload Env Irradiance");
+	renderer->m_RadianceTexture = ::LoadAndRegisterEnvMap(renderer->m_RadianceTexturePath, DEFAULT_TEXTURE_RADIANCE, "Upload Env Radiance");
 }
 
 const char* SceneLoader::cgltf_result_tostring(cgltf_result result)
