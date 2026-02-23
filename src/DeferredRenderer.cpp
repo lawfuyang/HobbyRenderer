@@ -14,7 +14,6 @@ extern RGTextureHandle g_RG_SkyVisibility;
 
 class DeferredRenderer : public IRenderer
 {
-    RGTextureHandle m_RG_DepthTextureCopy;
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
@@ -35,20 +34,6 @@ public:
 
         renderGraph.WriteTexture(g_RG_HDRColor);
 
-        if (renderer->m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN)
-        {
-            // On Vulkan in nvrhi we can't bind a single texture as both SRV & DSV
-            RGTextureDesc depthTextureCopyDesc;
-            depthTextureCopyDesc.m_NvrhiDesc.width = renderer->m_RHI->m_SwapchainExtent.x;
-            depthTextureCopyDesc.m_NvrhiDesc.height = renderer->m_RHI->m_SwapchainExtent.y;
-            depthTextureCopyDesc.m_NvrhiDesc.format = nvrhi::Format::R16_FLOAT;
-            depthTextureCopyDesc.m_NvrhiDesc.isRenderTarget = true;
-            depthTextureCopyDesc.m_NvrhiDesc.debugName = "DepthTextureCopy";
-            depthTextureCopyDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-
-            renderGraph.DeclareTexture(depthTextureCopyDesc, m_RG_DepthTextureCopy);
-        }
-
         return true;
     }
     
@@ -66,34 +51,6 @@ public:
         nvrhi::TextureHandle gbufferMotionVectors = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Read);
         nvrhi::TextureHandle skyVisibility = renderer->m_EnableSky ? renderGraph.GetTexture(g_RG_SkyVisibility, RGResourceAccessMode::Read) : CommonResources::GetInstance().DefaultTexture3DWhite;
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle depthTextureSRV = depthTexture;
-        
-        // On Vulkan in nvrhi we can't bind a single texture as both SRV & DSV
-        if (renderer->m_RHI->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN)
-        {
-            nvrhi::TextureHandle depthTextureCopy = renderGraph.GetTexture(m_RG_DepthTextureCopy, RGResourceAccessMode::Write);
-
-            nvrhi::BindingSetDesc bset;
-            bset.bindings = {
-                nvrhi::BindingSetItem::Texture_SRV(0, depthTexture),
-            };
-
-            nvrhi::FramebufferDesc fbDesc;
-            fbDesc.addColorAttachment(depthTextureCopy);
-
-            nvrhi::FramebufferHandle framebuffer = device->createFramebuffer(fbDesc);
-
-            Renderer::RenderPassParams params{
-                .commandList = commandList,
-                .shaderName = "DepthCopy_DepthCopy_PSMain",
-                .bindingSetDesc = bset,
-                .framebuffer = framebuffer
-            };
-
-            renderer->AddFullScreenPass(params);
-
-            depthTextureSRV = depthTextureCopy;
-        }
 
         const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
         float skyVisFarPlane = renderer->m_Scene.GetSceneBoundingRadius();
@@ -125,7 +82,7 @@ public:
             nvrhi::BindingSetItem::Texture_SRV(2, gbufferORM),
             nvrhi::BindingSetItem::Texture_SRV(3, gbufferEmissive),
             nvrhi::BindingSetItem::Texture_SRV(7, gbufferMotionVectors),
-            nvrhi::BindingSetItem::Texture_SRV(4, depthTextureSRV),
+            nvrhi::BindingSetItem::Texture_SRV(4, depthTexture),
             nvrhi::BindingSetItem::RayTracingAccelStruct(5, renderer->m_Scene.m_TLAS),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_LightBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_InstanceDataBuffer),
