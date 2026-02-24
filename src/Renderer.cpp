@@ -352,8 +352,8 @@ void Renderer::Initialize()
     m_RadianceTexturePath = (std::filesystem::path{ basePathCStr } / "radiance.dds").string();
     m_BRDFLutTexture = (std::filesystem::path{ basePathCStr } / "brdf_lut.dds").string();
 
-    InitializeGlobalBindlessTextures();
-    InitializeGlobalBindlessSamplers();
+    InitializeStaticBindlessTextures();
+    InitializeStaticBindlessSamplers();
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
     LoadShaders();
@@ -654,12 +654,12 @@ void Renderer::Shutdown()
     CommonResources::GetInstance().Shutdown();
 
     // Shutdown global bindless systems
-    m_GlobalTextureDescriptorTable = nullptr;
-    m_GlobalTextureBindingLayout = nullptr;
+    m_StaticTextureDescriptorTable = nullptr;
+    m_StaticTextureBindingLayout = nullptr;
     m_NextTextureIndex = 0;
 
-    m_GlobalSamplerDescriptorTable = nullptr;
-    m_GlobalSamplerBindingLayout = nullptr;
+    m_StaticSamplerDescriptorTable = nullptr;
+    m_StaticSamplerBindingLayout = nullptr;
 
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
@@ -834,39 +834,39 @@ nvrhi::BindingLayoutHandle Renderer::GetOrCreateBindlessLayout(const nvrhi::Bind
     return handle;
 }
 
-void Renderer::InitializeGlobalBindlessTextures()
+void Renderer::InitializeStaticBindlessTextures()
 {
     static const uint32_t kInitialTextureCapacity = 1024;
 
-    // Create bindless layout for global textures
+    // Create bindless layout for static textures
     nvrhi::BindlessLayoutDesc bindlessDesc;
     bindlessDesc.visibility = nvrhi::ShaderType::All;
     bindlessDesc.maxCapacity = kInitialTextureCapacity; // Large capacity for many textures
     bindlessDesc.layoutType = nvrhi::BindlessLayoutDesc::LayoutType::MutableSrvUavCbv;
 
-    m_GlobalTextureBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
-    if (!m_GlobalTextureBindingLayout)
+    m_StaticTextureBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
+    if (!m_StaticTextureBindingLayout)
     {
-        SDL_LOG_ASSERT_FAIL("Failed to create global bindless layout for textures", "[Renderer] Failed to create global bindless layout for textures");
+        SDL_LOG_ASSERT_FAIL("Failed to create static bindless layout for textures", "[Renderer] Failed to create static bindless layout for textures");
         return;
     }
 
     // Create descriptor table
-    m_GlobalTextureDescriptorTable = m_RHI->m_NvrhiDevice->createDescriptorTable(m_GlobalTextureBindingLayout);
-    if (!m_GlobalTextureDescriptorTable)
+    m_StaticTextureDescriptorTable = m_RHI->m_NvrhiDevice->createDescriptorTable(m_StaticTextureBindingLayout);
+    if (!m_StaticTextureDescriptorTable)
     {
-        SDL_LOG_ASSERT_FAIL("Failed to create global texture descriptor table", "[Renderer] Failed to create global texture descriptor table");
+        SDL_LOG_ASSERT_FAIL("Failed to create static texture descriptor table", "[Renderer] Failed to create static texture descriptor table");
         return;
     }
 
-    m_RHI->m_NvrhiDevice->resizeDescriptorTable(m_GlobalTextureDescriptorTable, bindlessDesc.maxCapacity, false);
+    m_RHI->m_NvrhiDevice->resizeDescriptorTable(m_StaticTextureDescriptorTable, bindlessDesc.maxCapacity, false);
     
-    SDL_Log("[Renderer] Global bindless texture system initialized");
+    SDL_Log("[Renderer] Static bindless texture system initialized");
 }
 
 uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
 {
-    if (!texture || !m_GlobalTextureDescriptorTable)
+    if (!texture || !m_StaticTextureDescriptorTable)
     {
         SDL_LOG_ASSERT_FAIL("Invalid texture or descriptor table not initialized", "[Renderer] Invalid texture or descriptor table not initialized");
         return UINT32_MAX;
@@ -886,7 +886,7 @@ uint32_t Renderer::RegisterTexture(nvrhi::TextureHandle texture)
 
 bool Renderer::RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle texture)
 {
-    if (!texture || !m_GlobalTextureDescriptorTable)
+    if (!texture || !m_StaticTextureDescriptorTable)
     {
         return false;
     }
@@ -894,48 +894,48 @@ bool Renderer::RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle textu
     SINGLE_THREAD_GUARD();
 
     const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Texture_SRV(index, texture);
-    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_GlobalTextureDescriptorTable, item))
+    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_StaticTextureDescriptorTable, item))
     {
-        SDL_LOG_ASSERT_FAIL("Failed to register texture in global descriptor table", "[Renderer] Failed to register texture at index %u", index);
+        SDL_LOG_ASSERT_FAIL("Failed to register texture in static descriptor table", "[Renderer] Failed to register texture at index %u", index);
         return false;
     }
     SDL_Log("[Renderer] Registered texture (%s) at index %u", texture->getDesc().debugName.c_str(), index);
     return true;
 }
 
-void Renderer::InitializeGlobalBindlessSamplers()
+void Renderer::InitializeStaticBindlessSamplers()
 {
     static const uint32_t kInitialSamplerCapacity = 128;
 
-    // Create bindless layout for global samplers
+    // Create bindless layout for static samplers
     nvrhi::BindlessLayoutDesc bindlessDesc;
     bindlessDesc.visibility = nvrhi::ShaderType::All;
     bindlessDesc.maxCapacity = kInitialSamplerCapacity;
     bindlessDesc.layoutType = nvrhi::BindlessLayoutDesc::LayoutType::MutableSampler;
 
-    m_GlobalSamplerBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
-    if (!m_GlobalSamplerBindingLayout)
+    m_StaticSamplerBindingLayout = GetOrCreateBindlessLayout(bindlessDesc);
+    if (!m_StaticSamplerBindingLayout)
     {
-        SDL_LOG_ASSERT_FAIL("Failed to create global bindless layout for samplers", "[Renderer] Failed to create global bindless layout for samplers");
+        SDL_LOG_ASSERT_FAIL("Failed to create static bindless layout for samplers", "[Renderer] Failed to create static bindless layout for samplers");
         return;
     }
 
     // Create descriptor table
-    m_GlobalSamplerDescriptorTable = m_RHI->m_NvrhiDevice->createDescriptorTable(m_GlobalSamplerBindingLayout);
-    if (!m_GlobalSamplerDescriptorTable)
+    m_StaticSamplerDescriptorTable = m_RHI->m_NvrhiDevice->createDescriptorTable(m_StaticSamplerBindingLayout);
+    if (!m_StaticSamplerDescriptorTable)
     {
-        SDL_LOG_ASSERT_FAIL("Failed to create global sampler descriptor table", "[Renderer] Failed to create global sampler descriptor table");
+        SDL_LOG_ASSERT_FAIL("Failed to create static sampler descriptor table", "[Renderer] Failed to create static sampler descriptor table");
         return;
     }
 
-    m_RHI->m_NvrhiDevice->resizeDescriptorTable(m_GlobalSamplerDescriptorTable, bindlessDesc.maxCapacity, false);
+    m_RHI->m_NvrhiDevice->resizeDescriptorTable(m_StaticSamplerDescriptorTable, bindlessDesc.maxCapacity, false);
 
-    SDL_Log("[Renderer] Global bindless sampler system initialized");
+    SDL_Log("[Renderer] Static bindless sampler system initialized");
 }
 
 bool Renderer::RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampler)
 {
-    if (!sampler || !m_GlobalSamplerDescriptorTable)
+    if (!sampler || !m_StaticSamplerDescriptorTable)
     {
         return false;
     }
@@ -943,7 +943,7 @@ bool Renderer::RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampl
     SINGLE_THREAD_GUARD();
 
     const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Sampler(index, sampler);
-    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_GlobalSamplerDescriptorTable, item))
+    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_StaticSamplerDescriptorTable, item))
     {
         SDL_LOG_ASSERT_FAIL("Failed to register sampler in global descriptor table", "[Renderer] Failed to register sampler at index %u", index);
         return false;
@@ -1124,11 +1124,11 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
 
     if (params.useBindlessResources)
     {
-        desc.bindingLayouts.push_back(GetGlobalTextureBindingLayout());
-        bindingSets.push_back(GetGlobalTextureDescriptorTable());
+        desc.bindingLayouts.push_back(GetStaticTextureBindingLayout());
+        bindingSets.push_back(GetStaticTextureDescriptorTable());
 
-        desc.bindingLayouts.push_back(GetGlobalSamplerBindingLayout());
-        bindingSets.push_back(GetGlobalSamplerDescriptorTable());
+        desc.bindingLayouts.push_back(GetStaticSamplerBindingLayout());
+        bindingSets.push_back(GetStaticSamplerDescriptorTable());
     }
 
     desc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
@@ -1180,11 +1180,11 @@ void Renderer::AddComputePass(const RenderPassParams& params)
 
     if (params.useBindlessResources)
     {
-        layouts.push_back(GetGlobalTextureBindingLayout());
-        bindingSets.push_back(GetGlobalTextureDescriptorTable());
+        layouts.push_back(GetStaticTextureBindingLayout());
+        bindingSets.push_back(GetStaticTextureDescriptorTable());
 
-        layouts.push_back(GetGlobalSamplerBindingLayout());
-        bindingSets.push_back(GetGlobalSamplerDescriptorTable());
+        layouts.push_back(GetStaticSamplerBindingLayout());
+        bindingSets.push_back(GetStaticSamplerDescriptorTable());
     }
 
     nvrhi::ComputeState state;

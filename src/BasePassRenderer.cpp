@@ -431,7 +431,7 @@ protected:
             meshPipelineDesc.MS = renderer->GetShaderHandle("BasePass_MSMain");
             meshPipelineDesc.PS = renderer->GetShaderHandle(psName);
             meshPipelineDesc.renderState = renderState;
-            meshPipelineDesc.bindingLayouts = { layout, renderer->GetGlobalTextureBindingLayout(), renderer->GetGlobalSamplerBindingLayout() };
+            meshPipelineDesc.bindingLayouts = { layout, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
             meshPipelineDesc.useDrawIndex = true;
 
             const nvrhi::MeshletPipelineHandle meshPipeline = renderer->GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
@@ -439,7 +439,7 @@ protected:
             nvrhi::MeshletState meshState;
             meshState.framebuffer = framebuffer;
             meshState.pipeline = meshPipeline;
-            meshState.bindings = { bindingSet, renderer->GetGlobalTextureDescriptorTable(), renderer->GetGlobalSamplerDescriptorTable() };
+            meshState.bindings = { bindingSet, renderer->GetStaticTextureDescriptorTable(), renderer->GetStaticSamplerDescriptorTable() };
             meshState.viewport = viewportState;
             meshState.indirectParams = handles.meshletIndirect;
             meshState.indirectCountBuffer = handles.meshletJobCount;
@@ -454,14 +454,14 @@ protected:
             pipelineDesc.PS = renderer->GetShaderHandle(psName);
             pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
             pipelineDesc.renderState = renderState;
-            pipelineDesc.bindingLayouts = { layout, renderer->GetGlobalTextureBindingLayout(), renderer->GetGlobalSamplerBindingLayout() };
+            pipelineDesc.bindingLayouts = { layout, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
             pipelineDesc.useDrawIndex = true;
 
             nvrhi::GraphicsState state;
             state.framebuffer = framebuffer;
             state.viewport = viewportState;
             state.indexBuffer = nvrhi::IndexBufferBinding{ renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
-            state.bindings = { bindingSet, renderer->GetGlobalTextureDescriptorTable(), renderer->GetGlobalSamplerDescriptorTable() };
+            state.bindings = { bindingSet, renderer->GetStaticTextureDescriptorTable(), renderer->GetStaticSamplerDescriptorTable() };
             state.pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
             state.indirectParams = handles.visibleIndirect;
             state.indirectCountBuffer = handles.visibleCount;

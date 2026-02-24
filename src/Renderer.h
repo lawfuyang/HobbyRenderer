@@ -144,17 +144,17 @@ struct Renderer
     nvrhi::ShaderHandle GetShaderHandle(std::string_view name) const;
 
     // Global Bindless Texture System
-    void InitializeGlobalBindlessTextures();
+    void InitializeStaticBindlessTextures();
     uint32_t RegisterTexture(nvrhi::TextureHandle texture);
     bool RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle texture);
-    nvrhi::DescriptorTableHandle GetGlobalTextureDescriptorTable() const { return m_GlobalTextureDescriptorTable; }
-    nvrhi::BindingLayoutHandle GetGlobalTextureBindingLayout() const { return m_GlobalTextureBindingLayout; }
+    nvrhi::DescriptorTableHandle GetStaticTextureDescriptorTable() const { return m_StaticTextureDescriptorTable; }
+    nvrhi::BindingLayoutHandle GetStaticTextureBindingLayout() const { return m_StaticTextureBindingLayout; }
 
     // Global Sampler Descriptor Heap
-    void InitializeGlobalBindlessSamplers();
+    void InitializeStaticBindlessSamplers();
     bool RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampler);
-    nvrhi::DescriptorTableHandle GetGlobalSamplerDescriptorTable() const { return m_GlobalSamplerDescriptorTable; }
-    nvrhi::BindingLayoutHandle GetGlobalSamplerBindingLayout() const { return m_GlobalSamplerBindingLayout; }
+    nvrhi::DescriptorTableHandle GetStaticSamplerDescriptorTable() const { return m_StaticSamplerDescriptorTable; }
+    nvrhi::BindingLayoutHandle GetStaticSamplerBindingLayout() const { return m_StaticSamplerBindingLayout; }
 
     // Public Methods
     double GetFrameTimeMs() const { return m_FrameTime; }
@@ -254,13 +254,13 @@ private:
     std::unordered_map<size_t, nvrhi::ComputePipelineHandle> m_ComputePipelineCache;
 
     // Global bindless texture system
-    nvrhi::DescriptorTableHandle m_GlobalTextureDescriptorTable;
-    nvrhi::BindingLayoutHandle m_GlobalTextureBindingLayout;
+    nvrhi::DescriptorTableHandle m_StaticTextureDescriptorTable;
+    nvrhi::BindingLayoutHandle m_StaticTextureBindingLayout;
     uint32_t m_NextTextureIndex = DEFAULT_TEXTURE_COUNT;
 
     // Global sampler descriptor heap
-    nvrhi::DescriptorTableHandle m_GlobalSamplerDescriptorTable;
-    nvrhi::BindingLayoutHandle m_GlobalSamplerBindingLayout;
+    nvrhi::DescriptorTableHandle m_StaticSamplerDescriptorTable;
+    nvrhi::BindingLayoutHandle m_StaticSamplerBindingLayout;
 
     // GPU Timing
     nvrhi::TimerQueryHandle m_GPUQueries[2];
