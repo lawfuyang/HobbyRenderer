@@ -127,6 +127,7 @@ set(NVRHI_WITH_DX12 ON CACHE BOOL "" FORCE)
 add_subdirectory(external/nvrhi)
 add_subdirectory(external/meshoptimizer)
 add_subdirectory(external/microprofile)
+add_subdirectory(external/rtxdi)
 
 # ============================================================================
 # ImGui Configuration
@@ -193,6 +194,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE meshoptimizer)
 # Link Microprofile
 target_link_libraries(${PROJECT_NAME} PRIVATE microprofile)
 target_compile_definitions(microprofile PUBLIC MICROPROFILE_USE_CONFIG=0)
+
+# Link RTXDI
+target_link_libraries(${PROJECT_NAME} PRIVATE Rtxdi)
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external/rtxdi/Include")
 
 # cgltf Include
 target_include_directories(${PROJECT_NAME} PRIVATE "${CGLTF_SRC_DIR}")
