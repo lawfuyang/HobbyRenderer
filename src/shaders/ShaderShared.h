@@ -82,6 +82,18 @@
       return normalize(MatrixMultiply(normal, adjugateWorldMatrix));
   }
 
+  // Convert a UV to clip space coordinates (XY: [-1, 1])
+  float2 UVToClipXY(float2 uv)
+  {
+      return uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
+  }
+
+  // Convert a clip position after projection and perspective divide to a UV
+  float2 ClipXYToUV(float2 xy)
+  {
+      return xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+  }
+
 #define DEPTH_NEAR 1.0f
 #define DEPTH_FAR 0.0f
 
