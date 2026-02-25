@@ -269,9 +269,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
 
             // ── BRDF Importance Sampling ───────────────────────────────────
-            float3 F0     = ComputeF0(pbr.baseColor, pbr.metallic, mat.m_IOR);
-            float  NdotV  = saturate(dot(N, V));
-            float3 Fapprox = F_Schlick(F0, NdotV);
+            float3 Fapprox = F_Schlick(inputs.F0, inputs.NdotV);
 
             // Specular selection probability: higher for metals / high Fresnel
             float specProb = clamp(lerp(Fapprox.r * 0.5f + 0.5f * pbr.metallic, 1.0f, pbr.metallic), 0.1f, 0.9f);
@@ -289,7 +287,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 if (dot(N, newDir) <= 0.0f)
                     break;
 
-                brdfWeight = EvalGGX_Weight(F0, N, V, newDir, H, alpha) / specProb;
+                brdfWeight = EvalGGX_Weight(inputs.F0, N, V, newDir, H, alpha) / specProb;
             }
             else
             {
