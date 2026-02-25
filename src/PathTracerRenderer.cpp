@@ -66,6 +66,7 @@ public:
         cb.m_LightCount = renderer->m_Scene.m_LightCount;
         cb.m_AccumulationIndex = m_AccumulationIndex;
         cb.m_FrameIndex = renderer->m_FrameNumber;
+        cb.m_MaxBounces = renderer->m_PathTracerMaxBounces;
         cb.m_Jitter = Vector2{ Halton(m_AccumulationIndex + 1, 2) - 0.5f, Halton(m_AccumulationIndex + 1, 3) - 0.5f };
         cb.m_SunDirection = renderer->m_Scene.m_SunDirection;
 

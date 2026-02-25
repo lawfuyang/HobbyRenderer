@@ -208,6 +208,7 @@ struct Renderer
     int m_ForcedLOD = -1;
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;
+    uint32_t m_PathTracerMaxBounces = 8;
 
     float m_AdaptationSpeed = 5.0f;
     bool m_EnableAutoExposure = true;

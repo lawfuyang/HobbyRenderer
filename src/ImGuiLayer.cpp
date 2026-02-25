@@ -108,6 +108,17 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
+        // Path Tracer settings
+        if (ImGui::TreeNode("Path Tracer"))
+        {
+            int maxBounces = (int)renderer->m_PathTracerMaxBounces;
+            if (ImGui::SliderInt("Max Bounces", &maxBounces, 1, 12))
+            {
+                renderer->m_PathTracerMaxBounces = (uint32_t)maxBounces;
+            }
+            ImGui::TreePop();
+        }
+
         // Post-processing settings
         if (ImGui::TreeNode("Post-Processing"))
         {

@@ -323,7 +323,7 @@ struct PathTracerConstants
     uint32_t m_LightCount;
     uint32_t m_AccumulationIndex;
     uint32_t m_FrameIndex;
-    uint32_t pad1;
+    uint32_t m_MaxBounces;
     // 
     Vector2 m_Jitter;
     Vector2 pad2;
