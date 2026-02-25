@@ -6,8 +6,6 @@ Texture2D<float3> HDRColorInput : register(t0);
 StructuredBuffer<float> ExposureInput : register(t1);
 Texture2D<float3> BloomInput : register(t2);
 
-SamplerState LinearClampSampler : register(s0);
-
 // Input color is non-negative and resides in the Linear Rec. 709 color space.
 // Output color is also Linear Rec. 709, but in the [0, 1] range.
 float3 PBRNeutralToneMapping(float3 color)
@@ -42,6 +40,7 @@ float3 sRGB_OETF(float3 x)
 
 float4 Tonemap_PSMain(FullScreenVertexOut input) : SV_Target
 {
+    SamplerState linearClampSampler = SamplerDescriptorHeap[SAMPLER_LINEAR_CLAMP_INDEX];
     uint2 pixelPos = uint2(input.uv * float2(TonemapCB.m_Width, TonemapCB.m_Height));
     float3 color = HDRColorInput[pixelPos];
     float exposure = ExposureInput[0];
@@ -49,7 +48,7 @@ float4 Tonemap_PSMain(FullScreenVertexOut input) : SV_Target
     float3 bloom = 0;
     if (TonemapCB.m_EnableBloom)
     {
-        bloom = BloomInput.SampleLevel(LinearClampSampler, input.uv, 0).rgb * TonemapCB.m_BloomIntensity;
+        bloom = BloomInput.SampleLevel(linearClampSampler, input.uv, 0).rgb * TonemapCB.m_BloomIntensity;
     }
 
     if (TonemapCB.m_DebugBloom)

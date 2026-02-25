@@ -80,8 +80,7 @@ static void GenerateHZBMips(nvrhi::CommandListHandle commandList, const RenderGr
         {
             nvrhi::BindingSetItem::PushConstants(0, sizeof(HZBFromDepthConstants)),
             nvrhi::BindingSetItem::Texture_SRV(0, depth),
-            nvrhi::BindingSetItem::Texture_UAV(0, hzb,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
+            nvrhi::BindingSetItem::Texture_UAV(0, hzb,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1})
         };
 
         const uint32_t dispatchX = DivideAndRoundUp(hzbFromDepthData.m_Width, 8);
@@ -229,8 +228,7 @@ protected:
             nvrhi::BindingSetItem::StructuredBuffer_UAV(4, (args.m_CullingPhase == 0 && handles.occludedIndirect) ? handles.occludedIndirect : CommonResources::GetInstance().DummyUAVBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(5, handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummyUAVBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(6, handles.meshletJobCount ? handles.meshletJobCount : CommonResources::GetInstance().DummyUAVBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(7, handles.meshletIndirect ? handles.meshletIndirect : CommonResources::GetInstance().DummyUAVBuffer),
-            nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().MinReductionClamp)
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(7, handles.meshletIndirect ? handles.meshletIndirect : CommonResources::GetInstance().DummyUAVBuffer)
         };
 
         if (args.m_CullingPhase == 0)

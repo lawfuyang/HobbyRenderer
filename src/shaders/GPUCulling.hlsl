@@ -32,7 +32,6 @@ RWStructuredBuffer<DispatchIndirectArguments> g_DispatchIndirectArgs : register(
 RWStructuredBuffer<MeshletJob> g_MeshletJobs : register(u5);
 RWStructuredBuffer<uint> g_MeshletJobCount : register(u6);
 RWStructuredBuffer<DispatchIndirectArguments> g_MeshletIndirectArgs : register(u7);
-SamplerState g_MinReductionSampler : register(s0);
 
 [numthreads(kThreadsPerGroup, 1, 1)]
 void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
@@ -66,7 +65,8 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // Occlusion culling
     if (g_Culling.m_EnableOcclusionCulling)
     {
-        isVisible &= OcclusionSphereTest(sphereViewCenter, inst.m_Radius, uint2(g_Culling.m_HZBWidth, g_Culling.m_HZBHeight), g_Culling.m_P00, g_Culling.m_P11, g_HZB, g_MinReductionSampler);
+        SamplerState minSam = SamplerDescriptorHeap[SAMPLER_MIN_REDUCTION_INDEX];
+        isVisible &= OcclusionSphereTest(sphereViewCenter, inst.m_Radius, uint2(g_Culling.m_HZBWidth, g_Culling.m_HZBHeight), g_Culling.m_P00, g_Culling.m_P11, g_HZB, minSam);
     }
 
     // Phase 1: Store visible instances for rendering occluded indices for Phase 2

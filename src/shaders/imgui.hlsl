@@ -40,7 +40,6 @@ VSOutput VSMain(VSInput input)
 //-----------------------------------------------------------------------------
 
 Texture2D sTexture : register(t0);
-SamplerState sSampler : register(s0);
 
 struct PSInput
 {
@@ -51,5 +50,6 @@ struct PSInput
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    return input.Color * sTexture.Sample(sSampler, input.UV);
+    SamplerState sampler = SamplerDescriptorHeap[SAMPLER_LINEAR_CLAMP_INDEX];
+    return input.Color * sTexture.Sample(sampler, input.UV);
 }

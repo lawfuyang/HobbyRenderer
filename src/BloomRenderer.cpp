@@ -67,8 +67,7 @@ public:
             nvrhi::BindingSetDesc bset;
             bset.bindings = {
                 nvrhi::BindingSetItem::PushConstants(0, sizeof(BloomConstants)),
-                nvrhi::BindingSetItem::Texture_SRV(0, hdrColor),
-                nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+                nvrhi::BindingSetItem::Texture_SRV(0, hdrColor)
             };
 
             nvrhi::FramebufferHandle fb = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(bloomDownPyramid, nvrhi::TextureSubresourceSet(0, 1, 0, 1)));
@@ -100,8 +99,7 @@ public:
             nvrhi::BindingSetDesc bset;
             bset.bindings = {
                 nvrhi::BindingSetItem::PushConstants(0, sizeof(BloomConstants)),
-                nvrhi::BindingSetItem::Texture_SRV(0, bloomDownPyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(i - 1, 1, 0, 1)),
-                nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+                nvrhi::BindingSetItem::Texture_SRV(0, bloomDownPyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(i - 1, 1, 0, 1))
             };
 
             nvrhi::FramebufferHandle fb = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(bloomDownPyramid, nvrhi::TextureSubresourceSet(i, 1, 0, 1)));
@@ -141,8 +139,7 @@ public:
             bset.bindings = {
                 nvrhi::BindingSetItem::PushConstants(0, sizeof(BloomConstants)),
                 nvrhi::BindingSetItem::Texture_SRV(0, bloomUpPyramid,   nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(i + 1, 1, 0, 1)),
-                nvrhi::BindingSetItem::Texture_SRV(1, bloomDownPyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(i,     1, 0, 1)),
-                nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+                nvrhi::BindingSetItem::Texture_SRV(1, bloomDownPyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(i,     1, 0, 1))
             };
 
             nvrhi::FramebufferHandle fb = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(bloomUpPyramid, nvrhi::TextureSubresourceSet(i, 1, 0, 1)));

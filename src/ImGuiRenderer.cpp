@@ -162,16 +162,15 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     nvrhi::BindingSetDesc bindingSetDesc;
     bindingSetDesc.bindings = {
         nvrhi::BindingSetItem::PushConstants(0, sizeof(ImGuiPushConstants)),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_FontTexture),
-        nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+        nvrhi::BindingSetItem::Texture_SRV(0, m_FontTexture)
     };
 
     // Get or create binding layout
     nvrhi::BindingLayoutHandle layoutForSet = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bindingSetDesc);
-    pipelineDesc.bindingLayouts = { layoutForSet };
+    pipelineDesc.bindingLayouts = { layoutForSet, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
 
     nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bindingSetDesc, layoutForSet);
-    state.bindings = { bindingSet };
+    state.bindings = { bindingSet, renderer->GetStaticTextureDescriptorTable(), renderer->GetStaticSamplerDescriptorTable() };
 
     // Setup vertex and index buffers
     state.vertexBuffers = { nvrhi::VertexBufferBinding{ m_VertexBuffer, 0, 0 } };

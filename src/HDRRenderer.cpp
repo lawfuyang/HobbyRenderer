@@ -161,8 +161,7 @@ public:
                 nvrhi::BindingSetItem::PushConstants(0, sizeof(TonemapConstants)),
                 nvrhi::BindingSetItem::Texture_SRV(0, hdrColor),
                 nvrhi::BindingSetItem::StructuredBuffer_SRV(1, exposureBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(2, bloomUpPyramid ? bloomUpPyramid : CommonResources::GetInstance().DefaultTextureBlack),
-                nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().LinearClamp)
+                nvrhi::BindingSetItem::Texture_SRV(2, bloomUpPyramid ? bloomUpPyramid : CommonResources::GetInstance().DefaultTextureBlack)
             };
 
             nvrhi::FramebufferDesc fbDesc;
