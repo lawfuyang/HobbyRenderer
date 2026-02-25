@@ -94,6 +94,15 @@
       return xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
   }
 
+  float3 DecodeOct(float2 e)
+  {
+      float3 v = float3(e, 1.0f - abs(e.x) - abs(e.y));
+      float t = max(-v.z, 0.0f);
+      v.x += v.x >= 0.0f ? -t : t;
+      v.y += v.y >= 0.0f ? -t : t;
+      return normalize(v);
+  }
+
 #define DEPTH_NEAR 1.0f
 #define DEPTH_FAR 0.0f
 
@@ -212,6 +221,24 @@ struct VertexQuantized
   uint32_t m_Uv;     // half2 (4 bytes)
   uint32_t m_Tangent; // 10-10-10-2 snorm (4 bytes)
 };                   // total: 24 bytes (multiple of 4)
+
+#if !defined(__cplusplus)
+  Vertex UnpackVertex(VertexQuantized vq)
+  {
+    Vertex v;
+    v.m_Pos = vq.m_Pos;
+    v.m_Normal.x = float(vq.m_Normal & 1023) / 511.0f - 1.0f;
+    v.m_Normal.y = float((vq.m_Normal >> 10) & 1023) / 511.0f - 1.0f;
+    v.m_Normal.z = float((vq.m_Normal >> 20) & 1023) / 511.0f - 1.0f;
+    
+    float2 octTan = float2((vq.m_Tangent & 255), (vq.m_Tangent >> 8) & 255) / 127.0f - 1.0f;
+    v.m_Tangent.xyz = DecodeOct(octTan);
+    v.m_Tangent.w = (vq.m_Normal & (1u << 30)) != 0 ? -1.0f : 1.0f;
+
+    v.m_Uv = f16tof32(uint2(vq.m_Uv & 0xFFFF, vq.m_Uv >> 16));
+    return v;
+  }
+#endif // __cplusplus
 
 struct GPULight
 {
@@ -460,30 +487,3 @@ struct BloomConstants
     uint32_t m_Height;
     float m_UpsampleRadius;
 };
-
-#if !defined(__cplusplus)
-float3 DecodeOct(float2 e)
-{
-    float3 v = float3(e, 1.0f - abs(e.x) - abs(e.y));
-    float t = max(-v.z, 0.0f);
-    v.x += v.x >= 0.0f ? -t : t;
-    v.y += v.y >= 0.0f ? -t : t;
-    return normalize(v);
-}
-
-Vertex UnpackVertex(VertexQuantized vq)
-{
-  Vertex v;
-  v.m_Pos = vq.m_Pos;
-  v.m_Normal.x = float(vq.m_Normal & 1023) / 511.0f - 1.0f;
-  v.m_Normal.y = float((vq.m_Normal >> 10) & 1023) / 511.0f - 1.0f;
-  v.m_Normal.z = float((vq.m_Normal >> 20) & 1023) / 511.0f - 1.0f;
-  
-  float2 octTan = float2((vq.m_Tangent & 255), (vq.m_Tangent >> 8) & 255) / 127.0f - 1.0f;
-  v.m_Tangent.xyz = DecodeOct(octTan);
-  v.m_Tangent.w = (vq.m_Normal & (1u << 30)) != 0 ? -1.0f : 1.0f;
-
-  v.m_Uv = f16tof32(uint2(vq.m_Uv & 0xFFFF, vq.m_Uv >> 16));
-  return v;
-}
-#endif // __cplusplus
