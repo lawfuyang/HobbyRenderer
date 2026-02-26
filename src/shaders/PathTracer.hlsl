@@ -143,8 +143,8 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     ray.TMax      = 1e10f;
 
     // ── Path state ──────────────────────────────────────────────────────────
-    RNG   rng                = InitRNG(dispatchThreadID.xy, g_PathTracer.m_AccumulationIndex);
-    float3 throughput        = float3(1.0f, 1.0f, 1.0f);
+    RNG rng = InitRNG(dispatchThreadID.xy, g_PathTracer.m_AccumulationIndex);
+    float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 accumulatedRadiance = float3(0.0f, 0.0f, 0.0f);
 
     int maxBounces = (int)g_PathTracer.m_MaxBounces;
@@ -163,6 +163,9 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             FullHitAttributes attr = GetFullHitAttributes(hit, ray, inst, mesh, g_Indices, g_Vertices);
             PBRAttributes     pbr  = GetPBRAttributes(attr, mat, 0.0f);
 
+            // ── Next Event Estimation (direct lighting) ────────────────────
+            float3 p_atmo = GetAtmospherePos(attr.m_WorldPos);
+
             float3 N = pbr.normal;
             float3 V = -ray.Direction;
 
@@ -170,20 +173,40 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (dot(N, V) < 0.0f)
                 N = -N;
 
+            LightingInputs inputs;
+            inputs.N                = N;
+            inputs.V                = V;
+            inputs.L                = float3(0, 0, 0); // will be set per-light in the loop
+            inputs.worldPos         = attr.m_WorldPos;
+            inputs.baseColor        = pbr.baseColor;
+            inputs.roughness        = pbr.roughness;
+            inputs.metallic         = pbr.metallic;
+            inputs.ior              = mat.m_IOR;
+            inputs.radianceMipCount = 0;
+            inputs.enableRTShadows  = true;
+            inputs.sceneAS          = g_SceneAS;
+            inputs.instances        = g_Instances;
+            inputs.meshData         = g_MeshData;
+            inputs.materials        = g_Materials;
+            inputs.indices          = g_Indices;
+            inputs.vertices         = g_Vertices;
+            inputs.lights           = g_Lights;
+            inputs.sunRadiance      = GetAtmosphereSunRadiance(p_atmo, g_PathTracer.m_SunDirection, g_Lights[0].m_Intensity);
+            inputs.sunDirection     = g_PathTracer.m_SunDirection;
+            inputs.useSunRadiance   = true;
+            inputs.sunShadow        = 0.0f; // unused in PATH_TRACER_MODE — each sample casts its own shadow ray
+
+            PrepareLightingByproducts(inputs);
+
             // ── Thin Transmissive Approximation ───────────────────────────
             // Gate: either explicit transmission factor, or alpha blending mode
             if (mat.m_TransmissionFactor > 0.0f || mat.m_AlphaMode == ALPHA_MODE_BLEND)
             {
-                // Fresnel: blend F0 toward base color by metallic
-                float3 F0_trans = lerp(float3(0.04f, 0.04f, 0.04f), pbr.baseColor.rgb, pbr.metallic);
-                float  NdotV_t  = saturate(dot(N, V));
-                float3 Fresnel  = F_Schlick(F0_trans, NdotV_t);
-
                 // Effective transmission factor combines user control and alpha (if blended)
                 float transmissionFactor = max(mat.m_TransmissionFactor, pbr.alpha < 0.99f ? (1.0f - pbr.alpha) : 0.0f);
                 
                 // Transmission probability: (1 - Fresnel) weighted by material transmission and surface alpha
-                float probT = clamp((1.0f - Fresnel.r) * transmissionFactor, 0.01f, 0.99f);
+                float probT = clamp((1.0f - inputs.F.r) * transmissionFactor, 0.01f, 0.99f);
 
                 if (NextFloat(rng) < probT)
                 {
@@ -228,34 +251,6 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             // ── Emissive radiance ──────────────────────────────────────────
             accumulatedRadiance += throughput * pbr.emissive;
 
-            // ── Next Event Estimation (direct lighting) ────────────────────
-            float3 p_atmo = GetAtmospherePos(attr.m_WorldPos);
-
-            LightingInputs inputs;
-            inputs.N                = N;
-            inputs.V                = V;
-            inputs.L                = float3(0, 0, 0);
-            inputs.worldPos         = attr.m_WorldPos;
-            inputs.baseColor        = pbr.baseColor;
-            inputs.roughness        = pbr.roughness;
-            inputs.metallic         = pbr.metallic;
-            inputs.ior              = mat.m_IOR;
-            inputs.radianceMipCount = 0;
-            inputs.enableRTShadows  = true;
-            inputs.sceneAS          = g_SceneAS;
-            inputs.instances        = g_Instances;
-            inputs.meshData         = g_MeshData;
-            inputs.materials        = g_Materials;
-            inputs.indices          = g_Indices;
-            inputs.vertices         = g_Vertices;
-            inputs.lights           = g_Lights;
-            inputs.sunRadiance      = GetAtmosphereSunRadiance(p_atmo, g_PathTracer.m_SunDirection, g_Lights[0].m_Intensity);
-            inputs.sunDirection     = g_PathTracer.m_SunDirection;
-            inputs.useSunRadiance   = true;
-            inputs.sunShadow        = 0.0f; // unused in PATH_TRACER_MODE — each sample casts its own shadow ray
-
-            PrepareLightingByproducts(inputs);
-
             LightingComponents direct = AccumulateDirectLighting(inputs, g_PathTracer.m_LightCount, g_PathTracer.m_CosSunAngularRadius, rng);
             accumulatedRadiance += throughput * (direct.diffuse + direct.specular);
 
@@ -269,10 +264,9 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
 
             // ── BRDF Importance Sampling ───────────────────────────────────
-            float3 Fapprox = F_Schlick(inputs.F0, inputs.NdotV);
 
             // Specular selection probability: higher for metals / high Fresnel
-            float specProb = clamp(lerp(Fapprox.r * 0.5f + 0.5f * pbr.metallic, 1.0f, pbr.metallic), 0.1f, 0.9f);
+            float specProb = clamp(lerp(inputs.F.r * 0.5f + 0.5f * pbr.metallic, 1.0f, pbr.metallic), 0.1f, 0.9f);
 
             float3 newDir;
             float3 brdfWeight;
@@ -280,14 +274,13 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (NextFloat(rng) < specProb)
             {
                 // ---- Specular: GGX VNDF sample ----
-                float  alpha = max(pbr.roughness, 0.04f);
-                float3 H     = SampleGGX_VNDF(NextFloat2(rng), N, V, alpha);
-                newDir       = reflect(-V, H);
+                float3 H = SampleGGX_VNDF(NextFloat2(rng), N, V, pbr.roughness);
+                newDir = reflect(-V, H);
 
                 if (dot(N, newDir) <= 0.0f)
                     break;
 
-                brdfWeight = EvalGGX_Weight(inputs.F0, N, V, newDir, H, alpha) / specProb;
+                brdfWeight = EvalGGX_Weight(inputs.F0, N, V, newDir, H, pbr.roughness) / specProb;
             }
             else
             {
@@ -308,7 +301,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 break;
 
             // ── Advance ray ────────────────────────────────────────────────
-            ray.Origin    = attr.m_WorldPos + N * 1e-3f;
+            ray.Origin    = attr.m_WorldPos;
             ray.Direction = newDir;
             ray.TMin      = 1e-4f;
             ray.TMax      = 1e10f;
