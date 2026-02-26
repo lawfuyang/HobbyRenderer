@@ -1,6 +1,6 @@
-# AgenticRenderer
+# HobbyRenderer
 
-A 3D rendering engine built in C++20, featuring modern graphics techniques and supporting both Vulkan and Direct3D 12 APIs.
+A 3D rendering engine built in C++, featuring modern graphics techniques and supporting both Vulkan and Direct3D 12 APIs.
 
 ## Features
 
