@@ -375,10 +375,16 @@ struct MaterialConstants
   float m_AlphaCutoff;
   float m_IOR;
   float m_TransmissionFactor;
+
+  // for rasterized path
   float m_ThicknessFactor;
   float m_AttenuationDistance;
   Vector3 m_AttenuationColor;
-  uint32_t pad0;
+
+  // for path tracer
+  Vector3 m_SigmaA;          // absorption coefficient (per-channel, units: 1/m)
+  uint32_t m_IsThinSurface;  // 1 = thin-walled surface (no refraction bend), 0 = thick/volumetric
+  Vector3 m_SigmaS;          // scattering coefficient (per-channel, reserved for future volume scattering)
 };
 
 struct MeshData

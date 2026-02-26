@@ -22,6 +22,39 @@ RWTexture2D<float4> g_Output : register(u0);
 VK_IMAGE_FORMAT("rgba32f")
 RWTexture2D<float4> g_Accumulation : register(u1);
 
+// ─── Transmissive BSDF Helpers ───────────────────────────────────────────────
+// Evaluates the exact dielectric Fresnel reflectance (unpolarized).
+// Based on RTXPT Fresnel.hlsli / pbr-book §8.2.
+// eta       = etaI / etaT  (e.g. 1.0 / IOR for air-to-glass)
+// cosThetaI = cosine of angle between surface normal and incident direction (> 0)
+// cosThetaT = [out] cosine of refracted angle (set to 0 for total internal reflection)
+// returns   fractional energy that is reflected [0, 1]
+float EvalFresnelDielectric(float eta, float cosThetaI, out float cosThetaT)
+{
+    if (cosThetaI < 0.0f)
+    {
+        eta       = 1.0f / eta;
+        cosThetaI = -cosThetaI;
+    }
+    float sinThetaTSq = eta * eta * (1.0f - cosThetaI * cosThetaI);
+    if (sinThetaTSq >= 1.0f)            // total internal reflection
+    {
+        cosThetaT = 0.0f;
+        return 1.0f;
+    }
+    cosThetaT  = sqrt(max(0.0f, 1.0f - sinThetaTSq));
+    float Rs   = (eta * cosThetaI - cosThetaT) / (eta * cosThetaI + cosThetaT);
+    float Rp   = (eta * cosThetaT - cosThetaI) / (eta * cosThetaT + cosThetaI);
+    return 0.5f * (Rs * Rs + Rp * Rp);
+}
+
+// Beer-Lambert transmittance over a ray segment of length `dist`.
+// sigmaA = absorption coefficient,  sigmaS = scattering coefficient (both per-unit-length).
+float3 EvalTransmittance(float3 sigmaA, float3 sigmaS, float dist)
+{
+    return exp(-(sigmaA + sigmaS) * dist);
+}
+
 // ─── GGX VNDF Importance Sampling ────────────────────────────────────────────
 // Heitz 2018: "Sampling the GGX Distribution of Visible Normals"
 // Returns the sampled microfacet half-vector in world space.
@@ -213,50 +246,92 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
             PrepareLightingByproducts(inputs);
 
-            // ── Thin Transmissive Approximation ───────────────────────────
-            // Gate: either explicit transmission factor, or alpha blending mode
+            // ── BSDF-Driven Transmission ──────────────────────────────────
+            // Handles both thin-walled surfaces (no refraction bend, eta_refract = 1)
+            // and thick/volumetric surfaces (full IOR refraction).
+            // Uses exact dielectric Fresnel for lobe selection and GGX microfacets
+            // for rough transmission with proper refraction PDF Jacobian.
             if (mat.m_TransmissionFactor > 0.0f || mat.m_AlphaMode == ALPHA_MODE_BLEND)
             {
-                // Effective transmission factor combines user control and alpha (if blended)
-                // For ALPHA_MODE_BLEND: Use (1 - alpha) as the transmission probability
-                // For explicit transmission: Use the material's transmission factor
-                float effectiveAlpha = mat.m_AlphaMode == ALPHA_MODE_BLEND ? pbr.alpha : 1.0f;
+                float effectiveAlpha     = (mat.m_AlphaMode == ALPHA_MODE_BLEND) ? pbr.alpha : 1.0f;
                 float transmissionFactor = max(mat.m_TransmissionFactor, 1.0f - effectiveAlpha);
-                
-                // Transmission probability: (1 - Fresnel) weighted by material transmission and surface alpha
-                float probT = clamp((1.0f - inputs.F.r) * transmissionFactor, 0.01f, 0.99f);
+
+                // etaFresnel: always use real IOR for Fresnel (thin surfaces still reflect)
+                // etaRefract: thin surfaces pass through without bending (eta = 1)
+                float etaFresnel = 1.0f / mat.m_IOR;
+                float etaRefract = (mat.m_IsThinSurface != 0) ? 1.0f : etaFresnel;
+
+                // Dielectric Fresnel at the geometry normal for lobe-selection probability
+                float cosThetaT_geo;
+                float F = EvalFresnelDielectric(etaFresnel, max(dot(N, V), 0.0f), cosThetaT_geo);
+
+                // Transmission probability: (1 - Fresnel) * transmissionFactor
+                float probT = (1.0f - F) * transmissionFactor;
 
                 if (NextFloat(rng) < probT)
                 {
-                    // ---- Transmission path ----
-                    float3 refractedDir = refract(ray.Direction, N, 1.0f / mat.m_IOR);
-                    if (dot(refractedDir, refractedDir) < 1e-8f)
-                        refractedDir = reflect(ray.Direction, N); // total internal reflection fallback
+                    // ── Transmission path ─────────────────────────────────
+                    float3 refractedDir;
+                    float3 bsdfWeight;
 
-                    // Roughness perturbation via GGX microfacet normal
-                    if (pbr.roughness > 0.08f)
+                    if (pbr.roughness <= 0.08f)
                     {
-                        float3 H_t   = SampleGGX_VNDF(NextFloat2(rng), N, V, pbr.roughness * 1.5f);
-                        float3 rDir2 = refract(ray.Direction, H_t, 1.0f / mat.m_IOR);
-                        if (dot(rDir2, rDir2) >= 1e-8f)
-                            refractedDir = rDir2;
-                        else
-                            refractedDir = reflect(ray.Direction, H_t);
+                        // ── Delta (specular) transmission ─────────────────
+                        // Refract with etaRefract: thin→pass-through, thick→bend
+                        refractedDir = refract(ray.Direction, N, etaRefract);
+                        if (dot(refractedDir, refractedDir) < 1e-8f)
+                            refractedDir = reflect(ray.Direction, N); // TIR fallback
+
+                        // Delta lobe weight: baseColor * (1-F) / probT cancels to just baseColor
+                        // since probT = (1-F) * transmissionFactor already accounts for selection probability
+                        bsdfWeight = pbr.baseColor.rgb;
+                    }
+                    else
+                    {
+                        // ── Specular (GGX rough) transmission ─────────────
+                        float3 H    = SampleGGX_VNDF(NextFloat2(rng), N, V, pbr.roughness);
+                        float VdotH = saturate(dot(V, H));
+
+                        // Microfacet Fresnel (Fresnel uses real IOR, refract uses etaRefract)
+                        float cosThetaT_mf;
+                        float F_mf = EvalFresnelDielectric(etaFresnel, VdotH, cosThetaT_mf);
+
+                        // Refract through half-vector H.
+                        // Formula (RTXPT convention, wi = V view, wo = transmitted):
+                        //   wo = (etaRefract * VdotH - cosThetaT_mf) * H - etaRefract * V
+                        // For etaRefract = 1 (thin) this reduces to -V = ray.Direction, preserving pass-through.
+                        float cosThetaT_for_dir;
+                        EvalFresnelDielectric(etaRefract, VdotH, cosThetaT_for_dir);
+                        refractedDir = (etaRefract * VdotH - cosThetaT_for_dir) * H - etaRefract * V;
+                        if (dot(refractedDir, refractedDir) < 1e-8f)
+                            refractedDir = reflect(ray.Direction, H); // TIR fallback
+                        refractedDir = normalize(refractedDir);
+
+                        // GGX transmission weight = (1 - F_mf) * G1(L_t) * NdotL_t / probT
+                        // Derivation: BSDF_T * NdotL_t / (probT * pdf_VNDF * J_refraction)
+                        // where J_refraction is the refraction Jacobian dΩ_h / dΩ_t:
+                        //   J = eta_refract^2 * |LdotH| / (|LdotH| + etaRefract * VdotH)^2
+                        // The refraction PDF Jacobian correction (from RTXPT BxDF::evalPdf):
+                        //   pdf_T = pdf_VNDF(H) * VdotH * 4 * |LdotH| / (|LdotH| + eta * VdotH)^2
+                        // Combining BSDF/pdf gives the simplified form below.
+                        float alpha  = pbr.roughness * pbr.roughness;
+                        float alpha2 = alpha * alpha;
+                        float NdotL_t = abs(dot(N, refractedDir));
+                        float G1_t = (NdotL_t > 1e-5f)
+                            ? 2.0f * NdotL_t / (NdotL_t + sqrt(alpha2 + (1.0f - alpha2) * NdotL_t * NdotL_t))
+                            : 0.0f;
+
+                        // GGX transmission weight accounts for microfacet normal distribution
+                        // after stochastic lobe selection (probT already factored in)
+                        bsdfWeight = pbr.baseColor.rgb * (1.0f - F_mf) * G1_t * NdotL_t;
                     }
 
-                    // Volume attenuation via Beer–Lambert: pow(attenuationColor, thicknessFactor * attenuationDistance)
-                    float3 volumeAttenuation = float3(1.0f, 1.0f, 1.0f);
-                    if (mat.m_ThicknessFactor > 0.0f && mat.m_AttenuationDistance > 0.0f)
-                    {
-                        volumeAttenuation = pow(max(mat.m_AttenuationColor, float3(0.0001f, 0.0001f, 0.0001f)), 
-                                                 float3(mat.m_ThicknessFactor * mat.m_AttenuationDistance, 
-                                                         mat.m_ThicknessFactor * mat.m_AttenuationDistance, 
-                                                         mat.m_ThicknessFactor * mat.m_AttenuationDistance));
-                    }
+                    // Beer-Lambert volume attenuation (sigmaA + sigmaS) over the in-medium path length
+                    float3 transmittance = EvalTransmittance(mat.m_SigmaA, mat.m_SigmaS, hit.m_RayT);
 
-                    throughput *= pbr.baseColor.rgb * transmissionFactor * volumeAttenuation / probT;
+                    throughput *= bsdfWeight * transmittance;
 
-                    // Push origin to the exit side of the surface (against N)
+                    // Advance ray: push the origin past the surface (opposite to geometry normal)
                     ray.Origin    = attr.m_WorldPos - N * 0.001f;
                     ray.Direction = normalize(refractedDir);
                     ray.TMin      = 1e-4f;

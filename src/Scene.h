@@ -112,10 +112,16 @@ public:
         float m_IOR = 1.5f;
         // KHR_materials_transmission
         float m_TransmissionFactor = 0.0f;
+
         // KHR_materials_volume
         float m_ThicknessFactor = 0.0f;
         float m_AttenuationDistance = FLT_MAX;
         Vector3 m_AttenuationColor = Vector3{ 1.0f, 1.0f, 1.0f };
+
+        // KHR_materials_volume — converted to physical extinction coefficients
+        Vector3 m_SigmaA = Vector3{ 0.0f, 0.0f, 0.0f };  // absorption coefficient (from attenuationColor + attenuationDistance)
+        Vector3 m_SigmaS = Vector3{ 0.0f, 0.0f, 0.0f };  // scattering coefficient (reserved for future use)
+        bool m_IsThinSurface = false;                      // true = thin-walled (thicknessFactor == 0)
     };
 
     struct Texture

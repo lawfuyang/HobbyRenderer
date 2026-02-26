@@ -3,7 +3,7 @@
 #include "meshoptimizer.h"
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 22;
+static constexpr uint32_t kSceneCacheVersion = 24;
 
 // --- Binary Serialization Helpers ---
 template<typename T>
@@ -175,6 +175,9 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t
 		WritePOD(os, mat.m_ThicknessFactor);
 		WritePOD(os, mat.m_AttenuationDistance);
 		WritePOD(os, mat.m_AttenuationColor);
+		WritePOD(os, mat.m_SigmaA);
+		WritePOD(os, mat.m_SigmaS);
+		WritePOD(os, mat.m_IsThinSurface);
 	}
 
 	// Textures
@@ -326,6 +329,9 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& a
 		ReadPOD(is, mat.m_ThicknessFactor);
 		ReadPOD(is, mat.m_AttenuationDistance);
 		ReadPOD(is, mat.m_AttenuationColor);
+		ReadPOD(is, mat.m_SigmaA);
+		ReadPOD(is, mat.m_SigmaS);
+		ReadPOD(is, mat.m_IsThinSurface);
 	}
 
 	// Textures
