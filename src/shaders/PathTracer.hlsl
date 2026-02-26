@@ -84,7 +84,7 @@ float3 EvalGGX_Weight(float3 F0, float3 N, float3 V, float3 L, float3 H, float r
 }
 
 // ─── Utility: trace a ray and fill a RayHitInfo ────────────────────────────
-bool TraceRay(RayDesc ray, out RayHitInfo hit)
+bool TraceRay(RayDesc ray, RNG rng, out RayHitInfo hit)
 {
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(g_SceneAS, RAY_FLAG_NONE, 0xFF, ray);
@@ -102,8 +102,23 @@ bool TraceRay(RayDesc ray, out RayHitInfo hit)
             MaterialConstants mat= g_Materials[inst.m_MaterialIndex];
 
             float2 uvSample = GetInterpolatedUV(primitiveIndex, bary, mesh, g_Indices, g_Vertices);
-            if (AlphaTest(uvSample, mat))
-                q.CommitNonOpaqueTriangleHit();
+
+            if (mat.m_AlphaMode == ALPHA_MODE_MASK)
+            {
+                if (AlphaTest(uvSample, mat))
+                    q.CommitNonOpaqueTriangleHit();
+            }
+            else if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
+            {
+                float opacity = mat.m_BaseColor.w * (1.0f - mat.m_TransmissionFactor);
+                if ((mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0)
+                {
+                    opacity *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                }
+
+                if (NextFloat(rng) < opacity)
+                    q.CommitNonOpaqueTriangleHit();
+            }
         }
     }
 
@@ -152,7 +167,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     for (int bounce = 0; bounce < maxBounces; ++bounce)
     {
         RayHitInfo hit;
-        bool didHit = TraceRay(ray, hit);
+        bool didHit = TraceRay(ray, rng, hit);
 
         if (didHit)
         {
@@ -203,7 +218,10 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (mat.m_TransmissionFactor > 0.0f || mat.m_AlphaMode == ALPHA_MODE_BLEND)
             {
                 // Effective transmission factor combines user control and alpha (if blended)
-                float transmissionFactor = max(mat.m_TransmissionFactor, pbr.alpha < 0.99f ? (1.0f - pbr.alpha) : 0.0f);
+                // For ALPHA_MODE_BLEND: Use (1 - alpha) as the transmission probability
+                // For explicit transmission: Use the material's transmission factor
+                float effectiveAlpha = mat.m_AlphaMode == ALPHA_MODE_BLEND ? pbr.alpha : 1.0f;
+                float transmissionFactor = max(mat.m_TransmissionFactor, 1.0f - effectiveAlpha);
                 
                 // Transmission probability: (1 - Fresnel) weighted by material transmission and surface alpha
                 float probT = clamp((1.0f - inputs.F.r) * transmissionFactor, 0.01f, 0.99f);
