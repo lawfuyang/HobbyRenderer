@@ -578,19 +578,22 @@ float3 GetAtmosphereSkyIrradiance(float3 p_atmo, float3 normal, float3 sunDirect
     return skyIrradiance * sunIntensity;
 }
 
-float3 GetAtmosphereSkyRadiance(float3 cameraPos, float3 viewRay, float3 sunDirection, float sunIntensity)
+float3 GetAtmosphereSkyRadiance(float3 cameraPos, float3 viewRay, float3 sunDirection, float sunIntensity, bool bAddSunDisk = true)
 {
     float3 cameraPos_atmo = GetAtmospherePos(cameraPos);
     float3 transmittance;
     float3 skyRadiance = GetSkyRadiance(BRUNETON_TRANSMITTANCE_TEXTURE, BRUNETON_SCATTERING_TEXTURE, cameraPos_atmo, viewRay, 0.0, sunDirection, transmittance);
 
     // Add sun disk
-    float nu = dot(viewRay, sunDirection);
-    float sunAngularRadius = ATMOSPHERE.sun_angular_radius;
-    if (nu > cos(sunAngularRadius))
+    if (bAddSunDisk)
     {
-        float3 sunDiskRadiance = ATMOSPHERE.solar_irradiance / (PI * sunAngularRadius * sunAngularRadius);
-        skyRadiance += sunDiskRadiance * transmittance;
+        float nu = dot(viewRay, sunDirection);
+        float sunAngularRadius = ATMOSPHERE.sun_angular_radius;
+        if (nu > cos(sunAngularRadius))
+        {
+            float3 sunDiskRadiance = ATMOSPHERE.solar_irradiance / (PI * sunAngularRadius * sunAngularRadius);
+            skyRadiance += sunDiskRadiance * transmittance;
+        }
     }
     return skyRadiance * sunIntensity;
 }

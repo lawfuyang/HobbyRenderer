@@ -252,7 +252,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             accumulatedRadiance += throughput * pbr.emissive;
 
             LightingComponents direct = AccumulateDirectLighting(inputs, g_PathTracer.m_LightCount, g_PathTracer.m_CosSunAngularRadius, rng);
-            accumulatedRadiance += throughput * (direct.diffuse + direct.specular);
+            accumulatedRadiance += throughput * (direct.diffuse + (bounce == 0 ? direct.specular : 0.0f));
 
             // ── Russian Roulette termination (start after bounce 2) ────────
             if (bounce >= 2)
@@ -309,11 +309,15 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         else
         {
             // ── Miss: accumulate sky and end path ──────────────────────────
-            accumulatedRadiance += throughput * GetAtmosphereSkyRadiance(
+            bool bAddSunDisk = (bounce == 0); // only add sun disk for primary rays to avoid brightening from multiple bounces
+            float3 skyRadiance = GetAtmosphereSkyRadiance(
                 ray.Origin,
                 ray.Direction,
                 g_PathTracer.m_SunDirection,
-                g_Lights[0].m_Intensity);
+                g_Lights[0].m_Intensity,
+                bAddSunDisk);
+
+            accumulatedRadiance += throughput * skyRadiance;
             break;
         }
     }
