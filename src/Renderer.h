@@ -217,6 +217,12 @@ struct Renderer
     bool m_EnableBloom = true;
     bool m_DebugBloom = false;
     float m_BloomIntensity = 0.1f;
+
+    // ReSTIR DI settings
+    bool m_EnableReSTIRDI = false;
+    bool m_ReSTIRDI_EnableTemporal = false;
+    bool m_ReSTIRDI_EnableSpatial = false;
+    int  m_ReSTIRDI_SpatialSamples = 1;
     float m_BloomKnee = 0.1f;
     float m_UpsampleRadius = 0.85f;
 

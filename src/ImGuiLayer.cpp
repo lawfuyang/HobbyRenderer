@@ -103,6 +103,19 @@ void ImGuiLayer::UpdateFrame()
             ImGui::SameLine();
             ImGui::Text("%s", lodNames[forcedLODIdx]);
 
+            ImGui::Checkbox("ReSTIR DI", &renderer->m_EnableReSTIRDI);
+            if (renderer->m_EnableReSTIRDI)
+            {
+                ImGui::Indent();
+                ImGui::Checkbox("Temporal Resampling", &renderer->m_ReSTIRDI_EnableTemporal);
+                ImGui::Checkbox("Spatial Resampling", &renderer->m_ReSTIRDI_EnableSpatial);
+                if (renderer->m_ReSTIRDI_EnableSpatial)
+                {
+                    ImGui::SliderInt("Spatial Samples", &renderer->m_ReSTIRDI_SpatialSamples, 1, 8);
+                }
+                ImGui::Unindent();
+            }
+
             ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
 
             ImGui::TreePop();
@@ -195,7 +208,6 @@ void ImGuiLayer::UpdateFrame()
             }
             ImGui::TreePop();
         }
-
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {

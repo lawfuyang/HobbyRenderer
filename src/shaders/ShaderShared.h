@@ -332,7 +332,8 @@ struct DeferredLightingConstants
   uint32_t m_RenderingMode;
   //
   uint32_t m_RadianceMipCount;
-  Vector3 pad0;
+  uint32_t m_UseReSTIRDI;    // 1 = read g_RTXDIDIOutput instead of computing direct lighting
+  Vector2 pad0;
 };
 
 struct PathTracerConstants
@@ -511,4 +512,74 @@ struct BloomConstants
     uint32_t m_Width;
     uint32_t m_Height;
     float m_UpsampleRadius;
+};
+// ============================================================================
+// RTXDIConstants — GPU-shared constant buffer for ReSTIR DI passes.
+//
+// Layout mirrors the RTXDI SDK parameter structs so that C++ can fill them
+// directly from the ReSTIRDIContext accessors. The #ifdef guards let the same
+// source file compile as both a C++ header and an HLSL include.
+// ============================================================================
+#ifdef __cplusplus
+// Pull in the RTXDI C++ types so we can embed them below.
+#include <Rtxdi/RtxdiParameters.h>
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#endif
+
+struct RTXDIConstants
+{
+    // ---- viewport & frame ----
+    Vector2U m_ViewportSize;     // (width, height) in pixels
+    uint32_t m_FrameIndex;
+    uint32_t m_LightCount;       // total number of lights in g_Lights[]
+
+    // ---- RTXDI_RuntimeParameters ----
+    uint32_t m_NeighborOffsetMask;       // = ReSTIRDIStaticParameters.NeighborOffsetCount - 1
+    uint32_t m_ActiveCheckerboardField;  // 0 = off
+    uint32_t m_RuntimePad1;
+    uint32_t m_RuntimePad2;
+
+    // ---- RTXDI_LightBufferParameters: localLightBufferRegion ----
+    uint32_t m_LocalLightFirstIndex;
+    uint32_t m_LocalLightCount;
+    uint32_t m_LocalRegionPad1;
+    uint32_t m_LocalRegionPad2;
+
+    // ---- RTXDI_LightBufferParameters: infiniteLightBufferRegion ----
+    uint32_t m_InfiniteLightFirstIndex;
+    uint32_t m_InfiniteLightCount;
+    uint32_t m_InfiniteRegionPad1;
+    uint32_t m_InfiniteRegionPad2;
+
+    // ---- RTXDI_LightBufferParameters: environmentLightParams ----
+    uint32_t m_EnvLightPresent;
+    uint32_t m_EnvLightIndex;
+    uint32_t m_EnvLightPad1;
+    uint32_t m_EnvLightPad2;
+
+    // ---- RTXDI_ReservoirBufferParameters ----
+    uint32_t m_ReservoirBlockRowPitch;
+    uint32_t m_ReservoirArrayPitch;
+    uint32_t m_ReservoirPad1;
+    uint32_t m_ReservoirPad2;
+
+    // ---- ReSTIRDI_BufferIndices ----
+    uint32_t m_InitialSamplingOutputBufferIndex;
+    uint32_t m_TemporalResamplingInputBufferIndex;
+    uint32_t m_TemporalResamplingOutputBufferIndex;
+    uint32_t m_SpatialResamplingInputBufferIndex;
+    uint32_t m_SpatialResamplingOutputBufferIndex;
+    uint32_t m_ShadingInputBufferIndex;
+    uint32_t m_BufferIdxPad1;
+    uint32_t m_BufferIdxPad2;
+
+    // ---- Camera: current & previous frame view matrices for reprojection ----
+    PlanarViewConstants m_View;
+    PlanarViewConstants m_PrevView;
+
+    // ---- application-level flags ----
+    uint32_t m_EnableTemporal;
+    uint32_t m_EnableSpatial;
+    int32_t  m_NumSpatialSamples;
+    uint32_t m_ConstPad0;
 };

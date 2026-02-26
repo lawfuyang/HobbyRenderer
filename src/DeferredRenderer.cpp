@@ -10,6 +10,7 @@ extern RGTextureHandle g_RG_GBufferORM;
 extern RGTextureHandle g_RG_GBufferEmissive;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_HDRColor;
+extern RGTextureHandle g_RG_RTXDIDIOutput;
 
 class DeferredRenderer : public IRenderer
 {
@@ -27,6 +28,10 @@ public:
         renderGraph.ReadTexture(g_RG_GBufferMotionVectors);
 
         renderGraph.WriteTexture(g_RG_HDRColor);
+
+        // Conditionally read the RTXDI DI output when ReSTIR DI is enabled
+        if (renderer->m_EnableReSTIRDI)
+            renderGraph.ReadTexture(g_RG_RTXDIDIOutput);
 
         return true;
     }
@@ -62,7 +67,13 @@ public:
         dcb.m_LightCount = renderer->m_Scene.m_LightCount;
         dcb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
         dcb.m_DebugMode = renderer->m_DebugMode;
+        dcb.m_UseReSTIRDI = renderer->m_EnableReSTIRDI ? 1u : 0u;
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
+
+        // Retrieve the RTXDI DI output texture; use a fallback black texture when disabled
+        nvrhi::TextureHandle rtxdiDIOutput = renderer->m_EnableReSTIRDI
+            ? renderGraph.GetTexture(g_RG_RTXDIDIOutput, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DefaultTextureBlack;
 
         nvrhi::BindingSetDesc bset;
         bset.bindings = {
@@ -79,7 +90,8 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(11, renderer->m_Scene.m_MaterialConstantsBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_VertexBufferQuantized),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(13, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer)
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer),
+            nvrhi::BindingSetItem::Texture_SRV(8, rtxdiDIOutput)
         };
 
         nvrhi::FramebufferDesc fbDesc;

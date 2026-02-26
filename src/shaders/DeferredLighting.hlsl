@@ -23,6 +23,7 @@ StructuredBuffer<MeshData> g_MeshData : register(t13);
 StructuredBuffer<uint> g_Indices : register(t14);
 StructuredBuffer<GPULight> g_Lights : register(t6);
 Texture3D g_SkyVisibility : register(t15);
+Texture2D<float4> g_RTXDIDIOutput : register(t8); // ReSTIR DI radiance output (black when disabled)
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -96,8 +97,17 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
             lightingInputs.useSunRadiance = true;
         }
 
-        LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
-        color = directLighting.diffuse + directLighting.specular;
+        if (g_Deferred.m_UseReSTIRDI != 0)
+        {
+            // ReSTIR DI path: read precomputed direct radiance from the RTXDI shade-samples pass.
+            // We still add ambient and emissive from the normal path.
+            color = g_RTXDIDIOutput.Load(uint3(uvInt, 0)).rgb;
+        }
+        else
+        {
+            LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
+            color = directLighting.diffuse + directLighting.specular;
+        }
         
         float3 ambient = 0.0;
 
