@@ -5,7 +5,7 @@
 #include "RaytracingCommon.hlsli"
 
 // Number of shadow-ray samples used for soft-shadow estimation (path-tracer mode only)
-#define LIGHT_SHADOW_SAMPLES 8
+#define LIGHT_SHADOW_SAMPLES 1
 
 // RNG for stochastic sampling — only present in path-tracer compute kernels, not rasterized passes
 #include "PathTracerRNG.hlsli"
