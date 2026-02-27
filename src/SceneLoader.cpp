@@ -1698,7 +1698,13 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 		gl.m_Radius = light.m_Radius;
 		gl.m_SpotInnerConeAngle = light.m_SpotInnerConeAngle;
 		gl.m_SpotOuterConeAngle = light.m_SpotOuterConeAngle;
-		gl.pad0 = 0;
+		gl.m_CosSunAngularRadius = 1.0f;
+
+		if (light.m_Type == Scene::Light::Type::Directional)
+		{
+			const float halfAngleRad = light.m_AngularSize * 0.5f * (DirectX::XM_PI / 180.0f);
+			gl.m_CosSunAngularRadius = cosf(halfAngleRad);
+		}
 
 		if (light.m_NodeIndex != -1)
 		{

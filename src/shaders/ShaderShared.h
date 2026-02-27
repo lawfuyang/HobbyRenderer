@@ -276,7 +276,7 @@ struct GPULight
     float m_SpotInnerConeAngle;
     float m_SpotOuterConeAngle;
     float m_Radius;
-    uint32_t pad0;
+    float m_CosSunAngularRadius;
 };
 
 // Shared per-frame data structure (one definition used by both C++ and HLSL).

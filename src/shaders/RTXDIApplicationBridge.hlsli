@@ -305,6 +305,7 @@ struct RAB_LightInfo
     float  range;
     float  spotInnerCos;
     float  spotOuterCos;
+    float  cosSunAngularRadius;
     uint   lightType; // 0=directional, 1=point, 2=spot
 };
 
@@ -317,14 +318,15 @@ struct RAB_RayPayload
 RAB_LightInfo RAB_EmptyLightInfo()
 {
     RAB_LightInfo li;
-    li.position     = float3(0.0, 0.0, 0.0);
-    li.direction    = float3(0.0, 1.0, 0.0);
-    li.color        = float3(1.0, 1.0, 1.0);
-    li.intensity    = 0.0;
-    li.range        = 0.0;
-    li.spotInnerCos = 0.0;
-    li.spotOuterCos = 0.0;
-    li.lightType    = 0;
+    li.position             = float3(0.0, 0.0, 0.0);
+    li.direction            = float3(0.0, 1.0, 0.0);
+    li.color                = float3(1.0, 1.0, 1.0);
+    li.intensity            = 0.0;
+    li.range                = 0.0;
+    li.spotInnerCos         = 0.0;
+    li.spotOuterCos         = 0.0;
+    li.cosSunAngularRadius  = 1.0;
+    li.lightType            = 0;
     return li;
 }
 
@@ -332,14 +334,15 @@ RAB_LightInfo RAB_LoadLightInfo(uint lightIndex, bool previousFrame)
 {
     GPULight gl = g_Lights[lightIndex];
     RAB_LightInfo li;
-    li.position     = gl.m_Position;
-    li.direction    = lightIndex == 0 ? g_RTXDIConst.m_SunDirection : normalize(gl.m_Direction);
-    li.color        = gl.m_Color;
-    li.intensity    = gl.m_Intensity;
-    li.range        = gl.m_Range;
-    li.spotInnerCos = cos(gl.m_SpotInnerConeAngle);
-    li.spotOuterCos = cos(gl.m_SpotOuterConeAngle);
-    li.lightType    = gl.m_Type;
+    li.position             = gl.m_Position;
+    li.direction            = lightIndex == 0 ? g_RTXDIConst.m_SunDirection : normalize(gl.m_Direction);
+    li.color                = gl.m_Color;
+    li.intensity            = gl.m_Intensity;
+    li.range                = gl.m_Range;
+    li.spotInnerCos         = cos(gl.m_SpotInnerConeAngle);
+    li.spotOuterCos         = cos(gl.m_SpotOuterConeAngle);
+    li.cosSunAngularRadius  = gl.m_CosSunAngularRadius;
+    li.lightType            = gl.m_Type;
     return li;
 }
 
@@ -383,11 +386,20 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
 
     if (lightInfo.lightType == 0) // Directional / sun
     {
-        s.direction    = lightInfo.direction;
-        s.distance     = 1e10;
-        s.radiance     = lightInfo.color * lightInfo.intensity;
-        s.solidAnglePdf = 1.0;
-        s.position     = surface.worldPos + lightInfo.direction * 1e6;
+        float3 direction = lightInfo.direction;
+        float  pdf       = 1.0;
+
+        if (lightInfo.cosSunAngularRadius < 1.0)
+        {
+            direction = SampleConeSolidAngle(lightInfo.direction, lightInfo.cosSunAngularRadius, uv);
+            pdf       = 1.0 / (2.0 * PI * (1.0 - lightInfo.cosSunAngularRadius));
+        }
+
+        s.direction     = direction;
+        s.distance      = 1e10;
+        s.radiance      = lightInfo.color * lightInfo.intensity;
+        s.solidAnglePdf  = pdf;
+        s.position      = surface.worldPos + direction * 1e10;
     }
     else // Point (1) or Spot (2)
     {

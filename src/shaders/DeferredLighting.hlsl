@@ -89,14 +89,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     {
         float3 p_atmo = GetAtmospherePos(worldPos);
 
-        if (g_Deferred.m_EnableSky)
-        {
-            // Use solar_irradiance * transmittance as the direct sun radiance at surface
-            lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity);
-            lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
-            lightingInputs.useSunRadiance = true;
-        }
-
         if (g_Deferred.m_UseReSTIRDI != 0)
         {
             // ReSTIR DI path: read precomputed direct radiance from the RTXDI shade-samples pass.
@@ -105,19 +97,24 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
         }
         else
         {
+            if (g_Deferred.m_EnableSky)
+            {
+                // Use solar_irradiance * transmittance as the direct sun radiance at surface
+                lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity);
+                lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+                lightingInputs.useSunRadiance = true;
+            }
+
             LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
             color = directLighting.diffuse + directLighting.specular;
-        }
-        
-        float3 ambient = 0.0;
 
-        // TODO: get rid of this when we have restir GI
-        if (g_Deferred.m_EnableSky)
-        {
-            ambient = GetAtmosphereSkyIrradiance(p_atmo, N, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity) * (baseColor / PI);
+            float3 ambient = 0.0;
+            if (g_Deferred.m_EnableSky)
+            {
+                ambient = GetAtmosphereSkyIrradiance(p_atmo, N, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity) * (baseColor / PI);
+            }
+            color += ambient + emissive;
         }
-
-        color += ambient + emissive;
     }
 
     // Debug visualizations

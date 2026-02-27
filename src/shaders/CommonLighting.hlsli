@@ -4,7 +4,6 @@
 #include "ShaderShared.h"
 #include "RaytracingCommon.hlsli"
 
-// Number of shadow-ray samples used for soft-shadow estimation (path-tracer mode only)
 #define LIGHT_SHADOW_SAMPLES 1
 
 // RNG for stochastic sampling — only present in path-tracer compute kernels, not rasterized passes
@@ -271,7 +270,6 @@ LightingComponents EvaluateDirectLight(LightingInputs inputs, float3 radiance, f
     return components;
 }
 
-// ─── Transmissive shadow for path tracer ──────────────────────────────────
 // with 'bWithTransmission', accumulates transmission through semi-transparent (ALPHA_MODE_BLEND) surfaces
 // during shadow ray tracing. Returns transmission factor: 1.0 = unshadowed, 
 // [0, 1) = partially transmitted light, 0.0 = fully blocked opaque geometry.
@@ -493,11 +491,6 @@ LightingComponents AccumulateDirectLighting(LightingInputs inputs, uint lightCou
     return total;
 }
 
-// ─── Path-tracer lighting path (stochastic, multi-sample soft shadows) ────────
-// All functions below require the RNG defined in PathTracerRNG.hlsli.
-// They are ONLY compiled when PATH_TRACER_MODE is defined (PathTracer.hlsl).
-// Rasterized passes MUST NOT define PATH_TRACER_MODE.
-
 // Samples a direction uniformly within a solid-angle cone cap around `dir`.
 // cosHalfAngle = cos(half-angle of cone); u = two uniform randoms in [0,1).
 // PDF = 1 / (2*PI*(1 - cosHalfAngle)); caller averages N samples so PDFs cancel.
@@ -684,7 +677,6 @@ LightingComponents ComputeSpotLighting(LightingInputs inputs, GPULight light, in
     return result;
 }
 
-// AccumulateDirectLighting — path-tracer version
 // Signature extended with cosSunAngularRadius and inout RNG rng.
 LightingComponents AccumulateDirectLighting(LightingInputs inputs, uint lightCount, float cosSunAngularRadius, inout RNG rng)
 {
