@@ -42,10 +42,11 @@ Texture2D<float2>                               g_GBufferNormals            : re
 Texture2D<float4>                               g_GBufferAlbedo             : register(t3);
 Texture2D<float2>                               g_GBufferORM                : register(t4);
 Texture2D<float3>                               g_GBufferMV                 : register(t5);
-Texture2D<float4>                               g_GBufferAlbedoHistory      : register(t8);
-Texture2D<float2>                               g_GBufferORMHistory         : register(t9);
 StructuredBuffer<GPULight>                      g_Lights                    : register(t6);
 RaytracingAccelerationStructure                 g_SceneAS                   : register(t7);
+Texture2D<float4>                               g_GBufferAlbedoHistory      : register(t8);
+Texture2D<float2>                               g_GBufferORMHistory         : register(t9);
+RaytracingAccelerationStructure                 g_SceneASHistory            : register(t10);
 
 RWStructuredBuffer<uint2>                       g_RTXDI_RISBuffer           : register(u0);
 RWStructuredBuffer<RTXDI_PackedDIReservoir>     g_RTXDI_LightReservoirBuffer: register(u1);
@@ -605,16 +606,44 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
     return RAB_GetConservativeVisibility(surface, ls);
 }
 
-bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surface previousSurface,
-    RAB_LightSample lightSample)
+// Helper function to test visibility against the previous frame's acceleration structure
+bool RAB_GetConservativeVisibilityPrevious(RAB_Surface surface, RAB_LightSample lightSample)
 {
-    return RAB_GetConservativeVisibility(currentSurface, lightSample);
+    float3 origin    = surface.worldPos + surface.normal * 0.005;
+    float3 direction = lightSample.direction;
+    float  maxDist   = lightSample.distance - 0.01;
+
+    RayDesc ray;
+    ray.Origin    = origin;
+    ray.Direction = direction;
+    ray.TMin      = 0.001;
+    ray.TMax      = max(maxDist, 0.01);
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+             RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
+             RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
+    q.TraceRayInline(g_SceneASHistory, RAY_FLAG_NONE, 0xFF, ray);
+    q.Proceed();
+
+    return q.CommittedStatus() == COMMITTED_NOTHING;
 }
 
-bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surface previousSurface,
-    float3 samplePosition)
+bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surface previousSurface, RAB_LightSample lightSample)
 {
-    return RAB_GetConservativeVisibility(currentSurface, samplePosition);
+    return RAB_GetConservativeVisibilityPrevious(previousSurface, lightSample);
+}
+
+bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surface previousSurface, float3 samplePosition)
+{
+    // Trace visibility ray using previous frame acceleration structure and previous surface position
+    float3 toSample = samplePosition - previousSurface.worldPos;
+    float  dist     = length(toSample);
+    RAB_LightSample ls = RAB_EmptyLightSample();
+    ls.direction = toSample / max(dist, 1e-5);
+    ls.distance  = dist;
+    
+    // Use the previous acceleration structure for ray tracing
+    return RAB_GetConservativeVisibilityPrevious(previousSurface, ls);
 }
 
 int RAB_TranslateLightIndex(uint lightIndex, bool currentToPrevious)
@@ -663,8 +692,7 @@ float RAB_EvaluateEnvironmentMapSamplingPdf(float3 direction)
 // Ray tracing helper stubs
 // ============================================================================
 
-bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, float tMax,
-    out uint o_lightIndex, out float2 o_randXY)
+bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, float tMax, out uint o_lightIndex, out float2 o_randXY)
 {
     o_lightIndex = 0;
     o_randXY     = float2(0.5, 0.5);

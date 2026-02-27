@@ -327,6 +327,7 @@ public:
             nvrhi::BindingSetItem::Texture_SRV(9,  ormHistoryTex),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_LightBuffer),
             nvrhi::BindingSetItem::RayTracingAccelStruct(7, renderer->m_Scene.m_TLAS),
+            nvrhi::BindingSetItem::RayTracingAccelStruct(10, renderer->m_Scene.m_TLAS), // TODO: Enable when previous frame TLAS is available
             nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_NeighborOffsetsBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_RISBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_LightReservoirBuffer),
