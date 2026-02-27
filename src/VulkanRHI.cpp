@@ -583,6 +583,7 @@ public:
             VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
             VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
             VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+            VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
         };
 
         // Filter to only supported extensions
@@ -607,8 +608,13 @@ public:
         deviceFeatures.shaderStorageImageReadWithoutFormat = VK_TRUE;
         deviceFeatures.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
+        vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR computeShaderDerivativesFeatures{};
+        computeShaderDerivativesFeatures.computeDerivativeGroupQuads = VK_TRUE;
+        computeShaderDerivativesFeatures.computeDerivativeGroupLinear = VK_TRUE;
+
         vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtPipelineFeatures{};
         rtPipelineFeatures.rayTracingPipeline = VK_TRUE;
+        rtPipelineFeatures.pNext = &computeShaderDerivativesFeatures;
 
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
         asFeatures.pNext = &rtPipelineFeatures;
