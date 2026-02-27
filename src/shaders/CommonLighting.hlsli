@@ -275,7 +275,8 @@ LightingComponents EvaluateDirectLight(LightingInputs inputs, float3 radiance, f
 // with 'bWithTransmission', accumulates transmission through semi-transparent (ALPHA_MODE_BLEND) surfaces
 // during shadow ray tracing. Returns transmission factor: 1.0 = unshadowed, 
 // [0, 1) = partially transmitted light, 0.0 = fully blocked opaque geometry.
-float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist, bool bWithTransmission = false)
+template <bool bWithTransmission = false>
+float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
 {
     if (!inputs.enableRTShadows) return 1.0f;
 
@@ -285,10 +286,13 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist, bool bWi
     ray.TMin = 0.1f;
     ray.TMax = maxDist;
 
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | (bWithTransmission ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH)> q;
     q.TraceRayInline(inputs.sceneAS, RAY_FLAG_NONE, 0xFF, ray);
 
     float transmission = 1.0f; // Accumulate transmission through translucent surfaces
+    bool inVolume = false;
+    float inVolumeStartT = 0.0f;
+    float3 sigmaT = 0.0f;
     
     while (q.Proceed())
     {
@@ -297,6 +301,7 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist, bool bWi
             uint instanceIndex = q.CandidateInstanceIndex();
             uint primitiveIndex = q.CandidatePrimitiveIndex();
             float2 bary = q.CandidateTriangleBarycentrics();
+            float hitT = q.CandidateTriangleRayT();
 
             PerInstanceData inst = inputs.instances[instanceIndex];
             MeshData mesh = inputs.meshData[inst.m_MeshDataIndex];
@@ -314,19 +319,52 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist, bool bWi
             }
             else if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
             {
+                // Surface coverage attenuation (alpha blend); transmissive materials should
+                // remain hittable and be handled as light filters instead of disappearing.
+                float2 uvSample = GetInterpolatedUV(primitiveIndex, bary, mesh, inputs.indices, inputs.vertices);
+                float alpha = mat.m_BaseColor.w;
+                if ((mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0)
+                {
+                    alpha *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                }
+                    
                 if (bWithTransmission)
                 {
-                    // Sample albedo texture and compute opacity for transmission
-                    float2 uvSample = GetInterpolatedUV(primitiveIndex, bary, mesh, inputs.indices, inputs.vertices);
-                    
-                    float opacity = mat.m_BaseColor.w * (1.0f - mat.m_TransmissionFactor);
-                    if ((mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0)
+
+
+                    float opacity = saturate(alpha * (1.0f - mat.m_TransmissionFactor));
+                    transmission *= (1.0f - opacity);
+
+                    // Volumetric attenuation for thick transmissive media.
+                    if (mat.m_TransmissionFactor > 0.0f && mat.m_IsThinSurface == 0)
                     {
-                        opacity *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                        TriangleVertices tv = GetTriangleVertices(primitiveIndex, mesh, inputs.indices, inputs.vertices);
+                        float3 localNormal = tv.v0.m_Normal * (1.0f - bary.x - bary.y) + tv.v1.m_Normal * bary.x + tv.v2.m_Normal * bary.y;
+                        float3 worldNormal = normalize(TransformNormal(localNormal, inst.m_World));
+                        bool isFrontFace = dot(worldNormal, ray.Direction) < 0.0f;
+
+                        if (isFrontFace)
+                        {
+                            inVolume = true;
+                            inVolumeStartT = hitT;
+                            sigmaT = mat.m_SigmaA + mat.m_SigmaS;
+                        }
+                        else if (inVolume)
+                        {
+                            float segmentDist = max(0.0f, hitT - inVolumeStartT);
+                            float3 tr = exp(-sigmaT * segmentDist);
+                            transmission *= dot(tr, float3(0.2126f, 0.7152f, 0.0722f));
+                            inVolume = false;
+                        }
                     }
-                    transmission *= (1.0f - opacity); // Accumulate transmission through surface
+
+                    if (transmission <= 1e-3f)
+                        q.CommitNonOpaqueTriangleHit();
                 }
-                // Do not commit hit; continue through translucent surface
+                else
+                {
+                    // Do not commit hit; continue through translucent surface
+                }
             }
             else if (mat.m_AlphaMode == ALPHA_MODE_OPAQUE)
             {
@@ -340,7 +378,14 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist, bool bWi
         return 0.0f;
     }
 
-    return transmission;
+    if (inVolume)
+    {
+        float segmentDist = max(0.0f, ray.TMax - inVolumeStartT);
+        float3 tr = exp(-sigmaT * segmentDist);
+        transmission *= dot(tr, float3(0.2126f, 0.7152f, 0.0722f));
+    }
+
+    return saturate(transmission);
 }
 
 // ─── Rasterized lighting path (deterministic, single-ray hard shadows) ────────
@@ -418,7 +463,7 @@ LightingComponents ComputeSpotLighting(LightingInputs inputs, GPULight light)
     inputs.L = L;
     PrepareLightingByproducts(inputs);
     
-    float shadow = CalculateRTShadow(inputs, L, dist, true);
+    float shadow = CalculateRTShadow<true>(inputs, L, dist);
 
     return EvaluateDirectLight(inputs, radiance, shadow);
 }
@@ -501,7 +546,7 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
         inputs.L = L_s;
         PrepareLightingByproducts(inputs);
 
-        float shadow = CalculateRTShadow(inputs, L_s, 1e10f, true);
+        float shadow = CalculateRTShadow<true>(inputs, L_s, 1e10f);
         LightingComponents comp = EvaluateDirectLight(inputs, radiance, shadow);
         result.diffuse  += comp.diffuse;
         result.specular += comp.specular;
@@ -560,7 +605,7 @@ LightingComponents ComputePointLighting(LightingInputs inputs, GPULight light, i
         inputs.L = L_s;
         PrepareLightingByproducts(inputs);
 
-        float shadow = CalculateRTShadow(inputs, L_s, sampleDist, true);
+        float shadow = CalculateRTShadow<true>(inputs, L_s, sampleDist);
         LightingComponents comp = EvaluateDirectLight(inputs, radiance, shadow);
         result.diffuse  += comp.diffuse;
         result.specular += comp.specular;
@@ -630,7 +675,7 @@ LightingComponents ComputeSpotLighting(LightingInputs inputs, GPULight light, in
         inputs.L = L_s;
         PrepareLightingByproducts(inputs);
 
-        float shadow = CalculateRTShadow(inputs, L_s, sampleDist, true);
+        float shadow = CalculateRTShadow<true>(inputs, L_s, sampleDist);
         LightingComponents comp = EvaluateDirectLight(inputs, radiance, shadow);
         result.diffuse  += comp.diffuse;
         result.specular += comp.specular;

@@ -12,20 +12,19 @@
 #include "meshoptimizer.h"
 
 // ─── glTF KHR_materials_volume helpers ───────────────────────────────────────
-// Converts glTF attenuationColor + attenuationDistance to an absorption coefficient sigmaA.
-// Includes thicknessFactor for backwards compatibility with old formula:
-//   old: transmittance = pow(attColor, thickness * attDist)
-//   new: transmittance = exp(-sigmaA * rayDist) where sigmaA = -log(attColor) * thickness / attDist
-// => sigmaA = -log(attenuationColor) * thicknessFactor / attenuationDistance
-static Vector3 ComputeSigmaAFromAttenuation(float attenuationDistance, Vector3 attenuationColor, float thicknessFactor)
+// Converts glTF attenuationColor + attenuationDistance to absorption coefficient sigmaA.
+// KHR_materials_volume convention:
+//   attenuationColor = exp(-sigmaA * attenuationDistance)
+// => sigmaA = -log(attenuationColor) / attenuationDistance
+static Vector3 ComputeSigmaAFromAttenuation(float attenuationDistance, Vector3 attenuationColor)
 {
 	constexpr float kMaxSigma = 100.0f;
-	if (attenuationDistance <= 0.0f || attenuationDistance >= FLT_MAX / 2.0f || thicknessFactor <= 0.0f)
+	if (attenuationDistance <= 0.0f || attenuationDistance >= FLT_MAX / 2.0f)
 		return Vector3{ 0.0f, 0.0f, 0.0f };
 	return Vector3{
-		std::min(-std::log(std::max(attenuationColor.x, 1e-6f)) * thicknessFactor / attenuationDistance, kMaxSigma),
-		std::min(-std::log(std::max(attenuationColor.y, 1e-6f)) * thicknessFactor / attenuationDistance, kMaxSigma),
-		std::min(-std::log(std::max(attenuationColor.z, 1e-6f)) * thicknessFactor / attenuationDistance, kMaxSigma)
+		std::min(-std::log(std::max(attenuationColor.x, 1e-6f)) / attenuationDistance, kMaxSigma),
+		std::min(-std::log(std::max(attenuationColor.y, 1e-6f)) / attenuationDistance, kMaxSigma),
+		std::min(-std::log(std::max(attenuationColor.z, 1e-6f)) / attenuationDistance, kMaxSigma)
 	};
 }
 struct JsonContext
@@ -727,8 +726,7 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 			// Thin-walled surfaces have zero thickness — no refraction bend, but still reflect via Fresnel
 			scene.m_Materials.back().m_IsThinSurface = (thicknessFactor == 0.0f);
 			// Compute physical absorption coefficient; sigmaS defaults to 0 (no scattering)
-			// Include thicknessFactor for backwards-compatible Beer-Lambert volumes
-			scene.m_Materials.back().m_SigmaA = ComputeSigmaAFromAttenuation(attDist, attColor, thicknessFactor);
+			scene.m_Materials.back().m_SigmaA = ComputeSigmaAFromAttenuation(attDist, attColor);
 		}
 	}
 

@@ -143,13 +143,15 @@ bool TraceRay(RayDesc ray, RNG rng, out RayHitInfo hit)
             }
             else if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
             {
-                float opacity = mat.m_BaseColor.w * (1.0f - mat.m_TransmissionFactor);
+                float alpha = mat.m_BaseColor.w;
                 if ((mat.m_TextureFlags & TEXFLAG_ALBEDO) != 0)
                 {
-                    opacity *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                    alpha *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
                 }
 
-                if (NextFloat(rng) < opacity)
+                // For transmissive materials, always keep the hit and let the BSDF branch
+                // decide reflection/transmission. Otherwise use stochastic alpha coverage.
+                if (mat.m_TransmissionFactor > 0.0f || NextFloat(rng) < saturate(alpha))
                     q.CommitNonOpaqueTriangleHit();
             }
         }
@@ -194,6 +196,10 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     RNG rng = InitRNG(dispatchThreadID.xy, g_PathTracer.m_AccumulationIndex);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 accumulatedRadiance = float3(0.0f, 0.0f, 0.0f);
+    bool inDielectricVolume = false;
+    float interiorIOR = 1.0f;
+    float3 interiorSigmaA = float3(0.0f, 0.0f, 0.0f);
+    float3 interiorSigmaS = float3(0.0f, 0.0f, 0.0f);
 
     int maxBounces = (int)g_PathTracer.m_MaxBounces;
 
@@ -208,14 +214,22 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             MeshData mesh         = g_MeshData[inst.m_MeshDataIndex];
             MaterialConstants mat = g_Materials[inst.m_MaterialIndex];
 
+            // Apply Beer-Lambert attenuation only while the current segment is in a medium.
+            if (inDielectricVolume)
+            {
+                throughput *= EvalTransmittance(interiorSigmaA, interiorSigmaS, hit.m_RayT);
+            }
+
             FullHitAttributes attr = GetFullHitAttributes(hit, ray, inst, mesh, g_Indices, g_Vertices);
             PBRAttributes     pbr  = GetPBRAttributes(attr, mat, 0.0f);
 
             // ── Next Event Estimation (direct lighting) ────────────────────
             float3 p_atmo = GetAtmospherePos(attr.m_WorldPos);
 
+            float3 Ng = normalize(attr.m_WorldNormal);
             float3 N = pbr.normal;
             float3 V = -ray.Direction;
+            bool isFrontFace = dot(Ng, ray.Direction) < 0.0f;
 
             // Flip normal for back-face hits so lighting is consistent
             if (dot(N, V) < 0.0f)
@@ -256,9 +270,12 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float effectiveAlpha     = (mat.m_AlphaMode == ALPHA_MODE_BLEND) ? pbr.alpha : 1.0f;
                 float transmissionFactor = max(mat.m_TransmissionFactor, 1.0f - effectiveAlpha);
 
-                // etaFresnel: always use real IOR for Fresnel (thin surfaces still reflect)
-                // etaRefract: thin surfaces pass through without bending (eta = 1)
-                float etaFresnel = 1.0f / mat.m_IOR;
+                float materialIOR = max(mat.m_IOR, 1.0001f);
+                float outsideIOR  = inDielectricVolume ? interiorIOR : 1.0f;
+                float etaSurface  = isFrontFace ? (outsideIOR / materialIOR) : (materialIOR / outsideIOR);
+
+                // etaFresnel uses the actual interface ratio; etaRefract is forced to 1 for thin surfaces.
+                float etaFresnel = etaSurface;
                 float etaRefract = (mat.m_IsThinSurface != 0) ? 1.0f : etaFresnel;
 
                 // Dielectric Fresnel at the geometry normal for lobe-selection probability
@@ -266,7 +283,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float F = EvalFresnelDielectric(etaFresnel, max(dot(N, V), 0.0f), cosThetaT_geo);
 
                 // Transmission probability: (1 - Fresnel) * transmissionFactor
-                float probT = (1.0f - F) * transmissionFactor;
+                float probT = saturate((1.0f - F) * transmissionFactor);
 
                 if (NextFloat(rng) < probT)
                 {
@@ -326,10 +343,25 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                         bsdfWeight = pbr.baseColor.rgb * (1.0f - F_mf) * G1_t * NdotL_t;
                     }
 
-                    // Beer-Lambert volume attenuation (sigmaA + sigmaS) over the in-medium path length
-                    float3 transmittance = EvalTransmittance(mat.m_SigmaA, mat.m_SigmaS, hit.m_RayT);
+                    throughput *= bsdfWeight;
 
-                    throughput *= bsdfWeight * transmittance;
+                    if (mat.m_IsThinSurface == 0)
+                    {
+                        if (isFrontFace)
+                        {
+                            inDielectricVolume = true;
+                            interiorIOR = materialIOR;
+                            interiorSigmaA = mat.m_SigmaA;
+                            interiorSigmaS = mat.m_SigmaS;
+                        }
+                        else
+                        {
+                            inDielectricVolume = false;
+                            interiorIOR = 1.0f;
+                            interiorSigmaA = float3(0.0f, 0.0f, 0.0f);
+                            interiorSigmaS = float3(0.0f, 0.0f, 0.0f);
+                        }
+                    }
 
                     // Advance ray: push the origin past the surface (opposite to geometry normal)
                     ray.Origin    = attr.m_WorldPos - N * 0.001f;
