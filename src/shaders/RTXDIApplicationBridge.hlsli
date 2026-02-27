@@ -22,6 +22,7 @@
 // ============================================================================
 #include "ShaderShared.h"
 #include "CommonLighting.hlsli"
+#include "Atmosphere.hlsli"
 
 // Pull in RTXDI parameter structs (defines RTXDI_PackedDIReservoir etc.)
 // This must come before any resource declaration that uses RTXDI types.
@@ -300,13 +301,12 @@ struct RAB_LightInfo
 {
     float3 position;
     float3 direction;
-    float3 color;
-    float  intensity;
+    float3 radiance;        // Pre-computed light radiance (color * intensity for analytic lights)
     float  range;
     float  spotInnerCos;
     float  spotOuterCos;
     float  cosSunAngularRadius;
-    uint   lightType; // 0=directional, 1=point, 2=spot
+    uint   lightType;       // 0=directional, 1=point, 2=spot
 };
 
 struct RAB_RayPayload
@@ -320,8 +320,7 @@ RAB_LightInfo RAB_EmptyLightInfo()
     RAB_LightInfo li;
     li.position             = float3(0.0, 0.0, 0.0);
     li.direction            = float3(0.0, 1.0, 0.0);
-    li.color                = float3(1.0, 1.0, 1.0);
-    li.intensity            = 0.0;
+    li.radiance             = float3(0.0, 0.0, 0.0);
     li.range                = 0.0;
     li.spotInnerCos         = 0.0;
     li.spotOuterCos         = 0.0;
@@ -336,13 +335,25 @@ RAB_LightInfo RAB_LoadLightInfo(uint lightIndex, bool previousFrame)
     RAB_LightInfo li;
     li.position             = gl.m_Position;
     li.direction            = lightIndex == 0 ? g_RTXDIConst.m_SunDirection : normalize(gl.m_Direction);
-    li.color                = gl.m_Color;
-    li.intensity            = gl.m_Intensity;
     li.range                = gl.m_Range;
     li.spotInnerCos         = cos(gl.m_SpotInnerConeAngle);
     li.spotOuterCos         = cos(gl.m_SpotOuterConeAngle);
     li.cosSunAngularRadius  = gl.m_CosSunAngularRadius;
     li.lightType            = gl.m_Type;
+
+    // Compute radiance upfront
+    if (lightIndex == 0 && li.lightType == 0 && g_RTXDIConst.m_EnableSky != 0)
+    {
+        // Directional light with sky enabled: use atmosphere-aware radiance
+        float3 p_atmo = GetAtmospherePos(float3(0.0, 0.0, 0.0));  // Observer at origin
+        li.radiance = GetAtmosphereSunRadiance(p_atmo, li.direction, gl.m_Intensity);
+    }
+    else
+    {
+        // Analytic light: simple color * intensity
+        li.radiance = gl.m_Color * gl.m_Intensity;
+    }
+
     return li;
 }
 
@@ -397,7 +408,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
 
         s.direction     = direction;
         s.distance      = 1e10;
-        s.radiance      = lightInfo.color * lightInfo.intensity;
+        s.radiance      = lightInfo.radiance;
         s.solidAnglePdf  = pdf;
         s.position      = surface.worldPos + direction * 1e10;
     }
@@ -428,7 +439,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
             attenuation *= spotFactor;
         }
 
-        s.radiance      = lightInfo.color * lightInfo.intensity * attenuation;
+        s.radiance      = lightInfo.radiance * attenuation;
         s.solidAnglePdf = 1.0;
     }
 

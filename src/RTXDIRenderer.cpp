@@ -247,6 +247,7 @@ public:
         cb.m_SpatialResamplingInputBufferIndex   = bix.spatialResamplingInputBufferIndex;
         cb.m_SpatialResamplingOutputBufferIndex  = bix.spatialResamplingOutputBufferIndex;
         cb.m_ShadingInputBufferIndex             = bix.shadingInputBufferIndex;
+        cb.m_EnableSky                           = renderer->m_EnableSky ? 1u : 0u;
 
         // View matrices
         cb.m_View     = renderer->m_Scene.m_View;

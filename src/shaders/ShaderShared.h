@@ -576,7 +576,7 @@ struct RTXDIConstants
     uint32_t m_SpatialResamplingInputBufferIndex;
     uint32_t m_SpatialResamplingOutputBufferIndex;
     uint32_t m_ShadingInputBufferIndex;
-    uint32_t m_BufferIdxPad1;
+    uint32_t m_EnableSky;
     uint32_t m_BufferIdxPad2;
 
     // ---- Camera: current & previous frame view matrices for reprojection ----
