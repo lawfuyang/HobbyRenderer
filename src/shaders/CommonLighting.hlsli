@@ -330,8 +330,6 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
                     
                 if (bWithTransmission)
                 {
-
-
                     float opacity = saturate(alpha * (1.0f - mat.m_TransmissionFactor));
                     transmission *= (1.0f - opacity);
 
