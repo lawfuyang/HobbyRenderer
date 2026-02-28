@@ -15,6 +15,7 @@
 #include "RTXDIApplicationBridge.hlsli"
 
 // RTXDI SDK
+#include "Rtxdi/Utils/Checkerboard.hlsli"
 #include "Rtxdi/Utils/Math.hlsli"
 #include "Rtxdi/DI/BoilingFilter.hlsli"
 #include "Rtxdi/DI/TemporalResampling.hlsli"
@@ -43,14 +44,15 @@ void CSMain(
     uint2 GlobalIndex : SV_DispatchThreadID,
     uint2 LocalIndex  : SV_GroupThreadID)
 {
-    uint2 viewportSize = g_RTXDIConst.m_ViewportSize;
-    if (any(GlobalIndex >= viewportSize))
-        return;
-
     RTXDI_RuntimeParameters        rtParams = GetRuntimeParams();
     RTXDI_ReservoirBufferParameters rbp      = GetReservoirBufferParams();
 
-    uint2 pixelPosition = GlobalIndex;
+    uint2 reservoirPosition = GlobalIndex;
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(reservoirPosition, rtParams.activeCheckerboardField);
+    uint2 viewportSize = g_RTXDIConst.m_ViewportSize;
+    if (any(pixelPosition >= viewportSize))
+        return;
+
     int2  iPixel        = int2(pixelPosition);
 
     RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelPosition, 2u);
@@ -58,36 +60,40 @@ void CSMain(
     // Load current surface
     RAB_Surface surface = RAB_GetGBufferSurface(iPixel, false);
 
-    // Load the reservoir produced by the initial sampling pass (current frame's new candidates)
-    RTXDI_DIReservoir curReservoir = RTXDI_LoadDIReservoir(rbp, pixelPosition,
-        g_RTXDIConst.m_InitialSamplingOutputBufferIndex);
+    RTXDI_DIReservoir outReservoir = RTXDI_EmptyDIReservoir();
+    if (RAB_IsSurfaceValid(surface))
+    {
+        // Load the reservoir produced by the initial sampling pass (current frame's new candidates)
+        RTXDI_DIReservoir curReservoir = RTXDI_LoadDIReservoir(rbp, reservoirPosition,
+            g_RTXDIConst.m_InitialSamplingOutputBufferIndex);
 
-    // Motion vector — stored as pixel-space velocity (dx, dy).
-    float3 mv = g_GBufferMV.Load(int3(iPixel, 0)).xyz;
-    float3 pixelMotion = ConvertMotionVectorToPixelSpace(g_RTXDIConst.m_View, g_RTXDIConst.m_PrevView, iPixel, mv);
+        // Motion vector — stored as pixel-space velocity (dx, dy).
+        float3 mv = g_GBufferMV.Load(int3(iPixel, 0)).xyz;
+        float3 pixelMotion = ConvertMotionVectorToPixelSpace(g_RTXDIConst.m_View, g_RTXDIConst.m_PrevView, iPixel, mv);
 
-    RTXDI_DITemporalResamplingParameters tparams;
-    tparams.screenSpaceMotion       = pixelMotion;
-    tparams.sourceBufferIndex       = g_RTXDIConst.m_TemporalResamplingInputBufferIndex;
-    tparams.maxHistoryLength        = 20u;
-    tparams.biasCorrectionMode      = RTXDI_BIAS_CORRECTION_BASIC;
-    tparams.depthThreshold          = 0.1;
-    tparams.normalThreshold         = 0.5;
-    tparams.enableVisibilityShortcut = false;
-    tparams.enablePermutationSampling = true;
-    tparams.uniformRandomNumber     = g_RTXDIConst.m_FrameIndex * 2699u;
+        RTXDI_DITemporalResamplingParameters tparams;
+        tparams.screenSpaceMotion        = pixelMotion;
+        tparams.sourceBufferIndex        = g_RTXDIConst.m_TemporalResamplingInputBufferIndex;
+        tparams.maxHistoryLength         = 20u;
+        tparams.biasCorrectionMode       = RTXDI_BIAS_CORRECTION_BASIC;
+        tparams.depthThreshold           = 0.1;
+        tparams.normalThreshold          = 0.5;
+        tparams.enableVisibilityShortcut = false;
+        tparams.enablePermutationSampling = true;
+        tparams.uniformRandomNumber      = RTXDI_JenkinsHash(g_RTXDIConst.m_FrameIndex);
 
-    RAB_LightSample selectedSample = RAB_EmptyLightSample();
-    int2 temporalPixelPos;
+        RAB_LightSample selectedSample = RAB_EmptyLightSample();
+        int2 temporalPixelPos;
 
-    RTXDI_DIReservoir outReservoir = RTXDI_DITemporalResampling(
-        pixelPosition, surface, curReservoir, rng,
-        rtParams, rbp, tparams,
-        temporalPixelPos, selectedSample);
+        outReservoir = RTXDI_DITemporalResampling(
+            pixelPosition, surface, curReservoir, rng,
+            rtParams, rbp, tparams,
+            temporalPixelPos, selectedSample);
+    }
 
     // Boiling filter (operates within the 8×8 group)
     RTXDI_BoilingFilter(LocalIndex, RAB_GetBoilingFilterStrength(), outReservoir);
 
-    RTXDI_StoreDIReservoir(outReservoir, rbp, pixelPosition,
+    RTXDI_StoreDIReservoir(outReservoir, rbp, reservoirPosition,
         g_RTXDIConst.m_TemporalResamplingOutputBufferIndex);
 }

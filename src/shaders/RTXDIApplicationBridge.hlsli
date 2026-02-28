@@ -224,14 +224,16 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
     // NOTE: pixelPosition is already the reprojected previous-frame pixel position when
     // previousFrame == true (computed internally by the RTXDI SDK via screenSpaceMotion).
     // Do NOT re-apply the motion vector here — that causes double-reprojection.
-    //
-    // We don't have separate history depth/normal buffers, so we read the current frame's
-    // G-buffer at the reprojected position and always use the current-frame view for world-pos
-    // reconstruction. This keeps depth and world-pos mutually consistent and is a good
-    // approximation for mostly-static geometry.
-    PlanarViewConstants view = g_RTXDIConst.m_View;
+    if (any(pixelPosition < int2(0, 0)) || any(pixelPosition >= int2(g_RTXDIConst.m_ViewportSize)))
+        return RAB_EmptySurface();
 
-    int2 samplePos = clamp(pixelPosition, int2(0, 0), int2(g_RTXDIConst.m_ViewportSize) - int2(1, 1));
+    PlanarViewConstants view = g_RTXDIConst.m_View;
+    if (previousFrame)
+    {
+        view = g_RTXDIConst.m_PrevView;
+    }
+
+    int2 samplePos = pixelPosition;
 
     float depth = g_Depth.Load(int3(samplePos, 0));
 
@@ -252,8 +254,19 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
     s.linearDepth = length(s.worldPos - camPos);
     s.viewDir     = normalize(camPos - s.worldPos);
 
-    float4 albedoSample = g_GBufferAlbedo.Load(int3(samplePos, 0));
-    float2 orm          = g_GBufferORM.Load(int3(samplePos, 0));
+    float4 albedoSample;
+    float2 orm;
+
+    if (previousFrame)
+    {
+        albedoSample = g_GBufferAlbedoHistory.Load(int3(samplePos, 0));
+        orm          = g_GBufferORMHistory.Load(int3(samplePos, 0));
+    }
+    else
+    {
+        albedoSample = g_GBufferAlbedo.Load(int3(samplePos, 0));
+        orm          = g_GBufferORM.Load(int3(samplePos, 0));
+    }
     float  roughness    = orm.r;
     float  metallic     = orm.g;
     float3 baseColor    = albedoSample.rgb;

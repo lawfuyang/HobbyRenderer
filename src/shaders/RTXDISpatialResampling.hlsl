@@ -12,6 +12,7 @@
 #include "RTXDIApplicationBridge.hlsli"
 
 // RTXDI SDK
+#include "Rtxdi/Utils/Checkerboard.hlsli"
 #include "Rtxdi/Utils/Math.hlsli"
 #include "Rtxdi/DI/SpatialResampling.hlsli"
 #include "Rtxdi/DI/Reservoir.hlsli"
@@ -37,14 +38,15 @@ RTXDI_ReservoirBufferParameters GetReservoirBufferParams()
 [numthreads(8, 8, 1)]
 void CSMain(uint2 GlobalIndex : SV_DispatchThreadID)
 {
-    uint2 viewportSize = g_RTXDIConst.m_ViewportSize;
-    if (any(GlobalIndex >= viewportSize))
-        return;
-
     RTXDI_RuntimeParameters         rtParams = GetRuntimeParams();
     RTXDI_ReservoirBufferParameters rbp      = GetReservoirBufferParams();
 
-    uint2 pixelPosition = GlobalIndex;
+    uint2 reservoirPosition = GlobalIndex;
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(reservoirPosition, rtParams.activeCheckerboardField);
+    uint2 viewportSize = g_RTXDIConst.m_ViewportSize;
+    if (any(pixelPosition >= viewportSize))
+        return;
+
     int2  iPixel        = int2(pixelPosition);
 
     // Use pass index 3 (distinct from initial=1, temporal=2) for decorrelated RNG
@@ -58,7 +60,7 @@ void CSMain(uint2 GlobalIndex : SV_DispatchThreadID)
     if (RAB_IsSurfaceValid(surface))
     {
         // Load the centre pixel's reservoir (temporal output, or initial output if temporal is off)
-        RTXDI_DIReservoir centerReservoir = RTXDI_LoadDIReservoir(rbp, pixelPosition,
+        RTXDI_DIReservoir centerReservoir = RTXDI_LoadDIReservoir(rbp, reservoirPosition,
             g_RTXDIConst.m_SpatialResamplingInputBufferIndex);
 
         RTXDI_DISpatialResamplingParameters sparams;
@@ -79,6 +81,6 @@ void CSMain(uint2 GlobalIndex : SV_DispatchThreadID)
             rng, rtParams, rbp, sparams, selectedSample);
     }
 
-    RTXDI_StoreDIReservoir(outReservoir, rbp, pixelPosition,
+    RTXDI_StoreDIReservoir(outReservoir, rbp, reservoirPosition,
         g_RTXDIConst.m_SpatialResamplingOutputBufferIndex);
 }

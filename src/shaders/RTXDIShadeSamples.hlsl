@@ -10,6 +10,7 @@
 #include "RTXDIApplicationBridge.hlsli"
 
 // RTXDI SDK — reservoir load/store utilities
+#include "Rtxdi/Utils/Checkerboard.hlsli"
 #include "Rtxdi/DI/Reservoir.hlsli"
 
 // ============================================================================
@@ -25,17 +26,21 @@ RTXDI_ReservoirBufferParameters GetReservoirBufferParams()
 [numthreads(8, 8, 1)]
 void CSMain(uint2 GlobalIndex : SV_DispatchThreadID)
 {
+    RTXDI_ReservoirBufferParameters rbp = GetReservoirBufferParams();
+    RTXDI_RuntimeParameters rtParams;
+    rtParams.neighborOffsetMask      = g_RTXDIConst.m_NeighborOffsetMask;
+    rtParams.activeCheckerboardField = g_RTXDIConst.m_ActiveCheckerboardField;
+
+    uint2 reservoirPosition = GlobalIndex;
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(reservoirPosition, rtParams.activeCheckerboardField);
     uint2 viewportSize = g_RTXDIConst.m_ViewportSize;
-    if (any(GlobalIndex >= viewportSize))
+    if (any(pixelPosition >= viewportSize))
         return;
 
-    RTXDI_ReservoirBufferParameters rbp = GetReservoirBufferParams();
-
-    uint2 pixelPosition = GlobalIndex;
     int2  iPixel        = int2(pixelPosition);
 
     // Load the final shading reservoir (temporal or initial output, depending on which passes ran)
-    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(rbp, pixelPosition,
+    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(rbp, reservoirPosition,
         g_RTXDIConst.m_ShadingInputBufferIndex);
 
     float3 radiance = float3(0.0, 0.0, 0.0);
