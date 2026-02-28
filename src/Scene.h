@@ -164,7 +164,7 @@ public:
         float m_SpotInnerConeAngle = 0.0f;
         float m_SpotOuterConeAngle = DirectX::XM_PIDIV4; // 45deg
         float m_AngularSize = 0.533f; // For directional lights (degree)
-        int m_NodeIndex = -1;
+        int m_NodeIndex = -1; // Must be valid - references the Node containing this light's transform
     };
 
     struct DirectionalLight

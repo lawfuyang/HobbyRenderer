@@ -97,6 +97,48 @@ static Quaternion json_get_quat(const JsonContext& ctx, int tokenIdx)
 	return Quaternion(json_get_float(ctx, tokenIdx + 1), json_get_float(ctx, tokenIdx + 2), json_get_float(ctx, tokenIdx + 3), json_get_float(ctx, tokenIdx + 4));
 }
 
+// Convert quaternion to forward direction vector (applies rotation to default forward -Z axis)
+static Vector3 QuaternionToDirection(const Quaternion& q)
+{
+	// Create rotation matrix from quaternion and apply to forward direction [0, 0, -1]
+	DirectX::XMVECTOR quat = DirectX::XMLoadFloat4(&q);
+	DirectX::XMMATRIX rotMatrix = DirectX::XMMatrixRotationQuaternion(quat);
+	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
+	DirectX::XMVECTOR direction = DirectX::XMVector3Transform(forward, rotMatrix);
+	
+	// Normalize the direction
+	DirectX::XMVECTOR normalized = DirectX::XMVector3NormalizeEst(direction);
+	
+	Vector3 result;
+	DirectX::XMStoreFloat3(&result, normalized);
+	return result;
+}
+
+// Convert direction vector to quaternion rotation (rotates default forward [0,0,-1] to target direction)
+static Quaternion DirectionToQuaternion(const Vector3& direction)
+{
+	DirectX::XMVECTOR dirVec = DirectX::XMLoadFloat3(&direction);
+	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
+	DirectX::XMVECTOR axis = DirectX::XMVector3Cross(forward, dirVec);
+	float dot = DirectX::XMVectorGetX(DirectX::XMVector3Dot(forward, dirVec));
+	float angle = std::atan2(DirectX::XMVectorGetX(DirectX::XMVector3Length(axis)), dot);
+	
+	if (DirectX::XMVectorGetX(DirectX::XMVector3Length(axis)) > 0.001f)
+	{
+		DirectX::XMVECTOR normalizedAxis = DirectX::XMVector3Normalize(axis);
+		DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationAxis(normalizedAxis, angle);
+		Quaternion result;
+		DirectX::XMStoreFloat4(&result, quat);
+		return result;
+	}
+	else if (dot < 0.0f)
+	{
+		// 180 degree rotation around Y axis
+		return Quaternion(0.0f, 1.0f, 0.0f, 0.0f);
+	}
+	return Quaternion(0.0f, 0.0f, 0.0f, 1.0f); // identity
+}
+
 static bool json_strcmp(const JsonContext& ctx, int tokenIdx, const char* str)
 {
 	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_STRING)
@@ -369,6 +411,8 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							if (json_strcmp(ctx, ct, "irradiance")) light.m_Intensity = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "angularSize")) light.m_AngularSize = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "color")) light.m_Color = json_get_vec3(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "rotation")) newNode.m_Rotation = json_get_quat(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "direction")) newNode.m_Rotation = DirectionToQuaternion(json_get_vec3(ctx, ct + 1));
 							ct = cgltf_skip_json(tokens.data(), ct + 1);
 						}
 					}
@@ -390,6 +434,9 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							else if (json_strcmp(ctx, ct, "radius")) light.m_Radius = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "range")) light.m_Range = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "color")) light.m_Color = json_get_vec3(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "translation")) newNode.m_Translation = json_get_vec3(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "rotation")) newNode.m_Rotation = json_get_quat(ctx, ct + 1);
+							else if (json_strcmp(ctx, ct, "direction")) newNode.m_Rotation = DirectionToQuaternion(json_get_vec3(ctx, ct + 1));
 							ct = cgltf_skip_json(tokens.data(), ct + 1);
 						}
 					}
@@ -1690,6 +1737,10 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 
 	for (const Scene::Light& light : scene.m_Lights)
 	{
+		// Every light must have an associated Node
+		SDL_assert(light.m_NodeIndex >= 0 && light.m_NodeIndex < (int)scene.m_Nodes.size());
+		const Scene::Node& node = scene.m_Nodes[light.m_NodeIndex];
+
 		GPULight gl;
 		gl.m_Type = (uint32_t)light.m_Type;
 		gl.m_Color = light.m_Color;
@@ -1699,32 +1750,17 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 		gl.m_SpotInnerConeAngle = light.m_SpotInnerConeAngle;
 		gl.m_SpotOuterConeAngle = light.m_SpotOuterConeAngle;
 		gl.m_CosSunAngularRadius = 1.0f;
+		
+		// Extract position from node's world transform
+		gl.m_Position = node.m_Translation;
+		
+		// Derive direction from node's rotation quaternion
+		gl.m_Direction = QuaternionToDirection(node.m_Rotation);
 
 		if (light.m_Type == Scene::Light::Type::Directional)
 		{
 			const float halfAngleRad = light.m_AngularSize * 0.5f * (DirectX::XM_PI / 180.0f);
 			gl.m_CosSunAngularRadius = cosf(halfAngleRad);
-		}
-
-		if (light.m_NodeIndex != -1)
-		{
-			const Scene::Node& node = scene.m_Nodes[light.m_NodeIndex];
-			DirectX::XMMATRIX worldM = DirectX::XMLoadFloat4x4(&node.m_WorldTransform);
-
-			DirectX::XMVECTOR worldPosVec, worldScaleVec, worldRotVec;
-			DirectX::XMMatrixDecompose(&worldScaleVec, &worldRotVec, &worldPosVec, worldM);
-
-			DirectX::XMStoreFloat3(&gl.m_Position, worldPosVec);
-
-			DirectX::XMVECTOR localDirVec = DirectX::XMVectorSet(0, 0, -1, 0); // GLTF forward is -Z
-			DirectX::XMVECTOR worldDirVec = DirectX::XMVector3TransformNormal(localDirVec, worldM);
-			worldDirVec = DirectX::XMVector3Normalize(worldDirVec);
-			DirectX::XMStoreFloat3(&gl.m_Direction, worldDirVec);
-		}
-		else
-		{
-			gl.m_Position = Vector3(0, 0, 0);
-			gl.m_Direction = Vector3(0, -1, 0);
 		}
 
 		gpuLights.push_back(gl);
