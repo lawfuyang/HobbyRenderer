@@ -43,18 +43,17 @@ public:
     // ------------------------------------------------------------------
     // Persistent GPU buffers (survive across frames)
     // ------------------------------------------------------------------
-    nvrhi::BufferHandle m_NeighborOffsetsBuffer;
-    nvrhi::BufferHandle m_RISBuffer;
-    nvrhi::BufferHandle m_LightReservoirBuffer;
+    RGBufferHandle m_RG_NeighborOffsetsBuffer;
+    RGBufferHandle m_RG_RISBuffer;
+    RGBufferHandle m_RG_LightReservoirBuffer;
+
+    // Track if neighbor offsets buffer was newly allocated (needs initial fill)
+    bool m_NeighborOffsetsBufferIsNew = false;
 
     // Compact light info buffer written by the presample pass and read by
     // the initial sampling pass (via RAB_LoadCompactLightInfo).
     // Layout: k_CompactSlotsPerEntry × uint4 per RIS tile entry.
     RGBufferHandle m_RG_RISLightDataBuffer;
-
-    // RIS buffer segment parameters for local lights (set once, never changes
-    // because light count is fixed after scene load).
-    RTXDI_RISBufferSegmentParameters m_LocalLightsRISSegmentParams{};
 
     // Local-light PDF texture for power-importance presampling.
     // Square, power-of-2, R32_FLOAT with a full mip chain.
@@ -123,65 +122,6 @@ public:
             initial.enableInitialVisibility = false;
             m_Context->SetInitialSamplingParameters(initial);
         }
-
-        // ---- Neighbor offsets buffer --------------------------------
-        {
-            const uint32_t count = staticParams.NeighborOffsetCount;
-            std::vector<uint8_t> offsets(count * 2); // two int8/uint8 per entry
-            rtxdi::FillNeighborOffsetBuffer(offsets.data(), count);
-
-            nvrhi::BufferDesc bd;
-            bd.byteSize = offsets.size();
-            bd.structStride = sizeof(uint8_t) * 2;
-            bd.format = nvrhi::Format::RG8_SNORM;
-            bd.initialState = nvrhi::ResourceStates::ShaderResource;
-            bd.keepInitialState = true;
-            bd.debugName = "RTXDI_NeighborOffsets";
-            m_NeighborOffsetsBuffer = device->createBuffer(bd);
-
-            // Upload immediately via a transient command list
-            nvrhi::CommandListHandle cl = renderer->AcquireCommandList();
-            ScopedCommandList scopeCl {cl, "Upload RTXDI Neighbor Offsets"};
-            scopeCl->writeBuffer(m_NeighborOffsetsBuffer, offsets.data(), offsets.size());
-        }
-
-        // ---- RIS buffer segment for local lights ----------------------
-        // One segment: offset 0, tileCount tiles of tileSize samples each.
-        m_LocalLightsRISSegmentParams.bufferOffset = 0u;
-        m_LocalLightsRISSegmentParams.tileSize     = k_RISTileSize;
-        m_LocalLightsRISSegmentParams.tileCount    = k_RISTileCount;
-        m_LocalLightsRISSegmentParams.pad1         = 0u;
-
-        const uint32_t totalRISEntries = k_RISTileSize * k_RISTileCount; // 131 072
-
-        // ---- RIS buffer -----------------------------------------------
-        // Sized for all presampled local light tiles.
-        {
-            nvrhi::BufferDesc bd;
-            bd.byteSize     = static_cast<uint64_t>(totalRISEntries) * sizeof(uint32_t) * 2;
-            bd.structStride = sizeof(uint32_t) * 2;
-            bd.format       = nvrhi::Format::RG32_UINT;
-            bd.canHaveUAVs  = true;
-            bd.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            bd.keepInitialState = true;
-            bd.debugName    = "RTXDI_RISBuffer";
-            m_RISBuffer = device->createBuffer(bd);
-        }
-
-        // ---- Light reservoir buffer --------------------------------
-        {
-            RTXDI_ReservoirBufferParameters rbp = m_Context->GetReservoirBufferParameters();
-            const uint32_t totalReservoirs = rbp.reservoirArrayPitch * rtxdi::c_NumReSTIRDIReservoirBuffers;
-
-            nvrhi::BufferDesc bd;
-            bd.byteSize = static_cast<uint64_t>(totalReservoirs) * sizeof(RTXDI_PackedDIReservoir);
-            bd.structStride = sizeof(RTXDI_PackedDIReservoir);
-            bd.canHaveUAVs = true;
-            bd.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            bd.keepInitialState = true;
-            bd.debugName = "RTXDI_LightReservoirBuffer";
-            m_LightReservoirBuffer = device->createBuffer(bd);
-        }
     }
 
     void PostSceneLoad() override
@@ -221,6 +161,8 @@ public:
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
+        const uint32_t totalRISEntries = k_RISTileSize * k_RISTileCount; // 131 072
+
         // ------------------------------------------------------------------
         // Declare / retrieve the DI output texture (persistent across frames)
         // ------------------------------------------------------------------
@@ -258,13 +200,50 @@ public:
             m_ORMHistoryIsNew = renderGraph.DeclarePersistentTexture(desc, m_GBufferORMHistory);
         }
 
+        // ---- Neighbor offsets buffer (persistent) ----
+        // Filled once per allocation. Track if newly created.
+        {
+            RGBufferDesc bd;
+            bd.m_NvrhiDesc.byteSize = m_Context->GetStaticParameters().NeighborOffsetCount * 2; // two int8/uint8 per entry
+            bd.m_NvrhiDesc.structStride = sizeof(uint8_t) * 2;
+            bd.m_NvrhiDesc.format = nvrhi::Format::RG8_SNORM;
+            bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            bd.m_NvrhiDesc.debugName = "RTXDI_NeighborOffsets";
+            m_NeighborOffsetsBufferIsNew = renderGraph.DeclarePersistentBuffer(bd, m_RG_NeighborOffsetsBuffer);
+        }
+
+        // ---- RIS buffer (transient) -----------------------------------------------
+        // Sized for all presampled local light tiles.
+        {
+            RGBufferDesc bd;
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(totalRISEntries) * sizeof(uint32_t) * 2;
+            bd.m_NvrhiDesc.structStride = sizeof(uint32_t) * 2;
+            bd.m_NvrhiDesc.format       = nvrhi::Format::RG32_UINT;
+            bd.m_NvrhiDesc.canHaveUAVs  = true;
+            bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bd.m_NvrhiDesc.debugName    = "RTXDI_RISBuffer";
+            renderGraph.DeclareBuffer(bd, m_RG_RISBuffer);
+        }
+
+        // ---- Light reservoir buffer (transient) --------------------------------
+        {
+            RTXDI_ReservoirBufferParameters rbp = m_Context->GetReservoirBufferParameters();
+            const uint32_t totalReservoirs = rbp.reservoirArrayPitch * rtxdi::c_NumReSTIRDIReservoirBuffers;
+
+            RGBufferDesc bd;
+            bd.m_NvrhiDesc.byteSize = static_cast<uint64_t>(totalReservoirs) * sizeof(RTXDI_PackedDIReservoir);
+            bd.m_NvrhiDesc.structStride = sizeof(RTXDI_PackedDIReservoir);
+            bd.m_NvrhiDesc.canHaveUAVs = true;
+            bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bd.m_NvrhiDesc.debugName = "RTXDI_LightReservoirBuffer";
+            renderGraph.DeclareBuffer(bd, m_RG_LightReservoirBuffer);
+        }
+
         // ---- Compact light data buffer --------------------------------
         // Stores k_CompactSlotsPerEntry × uint4 per RIS tile entry.
         // Written by the presample pass, read by the initial sampling pass.
         // Must be updated every frame because light properties can change.
         {
-            const uint32_t totalRISEntries = k_RISTileSize * k_RISTileCount; // 131 072
-
             const uint64_t numUint4s = static_cast<uint64_t>(totalRISEntries) * k_CompactSlotsPerEntry;
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize = numUint4s * sizeof(uint32_t) * 4; // each uint4 = 16 bytes
@@ -402,9 +381,9 @@ public:
         cb.m_LocalLightPDFTextureSize = { m_PDFTexSize, m_PDFTexSize };
 
         // ---- RIS buffer segment parameters for presampling ----
-        cb.m_LocalRISBufferOffset = m_LocalLightsRISSegmentParams.bufferOffset;
-        cb.m_LocalRISTileSize     = m_LocalLightsRISSegmentParams.tileSize;
-        cb.m_LocalRISTileCount    = m_LocalLightsRISSegmentParams.tileCount;
+        cb.m_LocalRISBufferOffset = 0u;
+        cb.m_LocalRISTileSize     = k_RISTileSize;
+        cb.m_LocalRISTileCount    = k_RISTileCount;
         cb.m_LocalRISPad          = 0u;
 
         // Environment lights are not presampled — leave these as zeros.
@@ -438,6 +417,9 @@ public:
         nvrhi::TextureHandle diOutput   = renderGraph.GetTexture(g_RG_RTXDIDIOutput,         RGResourceAccessMode::Write);
         nvrhi::TextureHandle albedoHistoryTex = renderGraph.GetTexture(m_GBufferAlbedoHistory, RGResourceAccessMode::Write);
         nvrhi::TextureHandle ormHistoryTex    = renderGraph.GetTexture(m_GBufferORMHistory,    RGResourceAccessMode::Write);
+        nvrhi::BufferHandle neighborOffsetsBuffer = renderGraph.GetBuffer(m_RG_NeighborOffsetsBuffer, RGResourceAccessMode::Read);
+        nvrhi::BufferHandle risBuffer = renderGraph.GetBuffer(m_RG_RISBuffer, RGResourceAccessMode::Read);
+        nvrhi::BufferHandle lightReservoirBuffer = renderGraph.GetBuffer(m_RG_LightReservoirBuffer, RGResourceAccessMode::Read);
         nvrhi::BufferHandle risLightDataBuffer = renderGraph.GetBuffer(m_RG_RISLightDataBuffer, RGResourceAccessMode::Write);
         nvrhi::TextureHandle localLightPDFTex  = renderGraph.GetTexture(m_RG_LocalLightPDFTexture, RGResourceAccessMode::Write);
 
@@ -453,6 +435,17 @@ public:
             commandList->copyTexture(ormHistoryTex, nvrhi::TextureSlice{}, ormTex, nvrhi::TextureSlice{});
         }
 
+        // ------------------------------------------------------------------
+        // Initialize neighbor offsets buffer on first allocation
+        // ------------------------------------------------------------------
+        if (m_NeighborOffsetsBufferIsNew)
+        {
+            const uint32_t count = m_Context->GetStaticParameters().NeighborOffsetCount;
+            std::vector<uint8_t> offsets(count * 2); // two int8/uint8 per entry
+            rtxdi::FillNeighborOffsetBuffer(offsets.data(), count);
+            commandList->writeBuffer(neighborOffsetsBuffer, offsets.data(), offsets.size());
+        }
+
         nvrhi::BindingSetDesc bset;
         bset.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(1, rtxdiCB),
@@ -466,9 +459,9 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_LightBuffer),
             nvrhi::BindingSetItem::RayTracingAccelStruct(7, renderer->m_Scene.m_TLAS),
             nvrhi::BindingSetItem::RayTracingAccelStruct(10, m_TLASHistory),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_NeighborOffsetsBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_RISBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_LightReservoirBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, neighborOffsetsBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, risBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, lightReservoirBuffer),
             nvrhi::BindingSetItem::Texture_UAV(2, diOutput),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(3, risLightDataBuffer),
             nvrhi::BindingSetItem::Texture_SRV(11, localLightPDFTex),
