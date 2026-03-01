@@ -224,6 +224,7 @@ struct Renderer
     bool m_ReSTIRDI_EnableTemporal = true;
     bool m_ReSTIRDI_EnableSpatial = true;
     int  m_ReSTIRDI_SpatialSamples = 1;
+    bool m_ReSTIRDI_EnableCheckerboard = true;
     float m_BloomKnee = 0.1f;
     float m_UpsampleRadius = 0.85f;
 

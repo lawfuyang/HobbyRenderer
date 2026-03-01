@@ -92,10 +92,18 @@ public:
     // ------------------------------------------------------------------
     std::unique_ptr<rtxdi::ReSTIRDIContext> m_Context;
 
-    void Initialize() override
+    // Tracks whether the context was created with checkerboard mode enabled,
+    // so we can detect when the user toggles it and recreate the context.
+    bool m_CheckerboardEnabled = false;
+
+    void CreateRTXDIContext()
     {
         Renderer* renderer = Renderer::GetInstance();
-        nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
+
+        m_CheckerboardEnabled = renderer->m_ReSTIRDI_EnableCheckerboard;
+        const rtxdi::CheckerboardMode newMode = m_CheckerboardEnabled
+            ? rtxdi::CheckerboardMode::Black
+            : rtxdi::CheckerboardMode::Off;
 
         const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
@@ -104,28 +112,13 @@ public:
         rtxdi::ReSTIRDIStaticParameters staticParams;
         staticParams.RenderWidth = width;
         staticParams.RenderHeight = height;
+        staticParams.CheckerboardSamplingMode = newMode;
         m_Context = std::make_unique<rtxdi::ReSTIRDIContext>(staticParams);
+    }
 
-        // Tweak default resampling settings
-        {
-            ReSTIRDI_TemporalResamplingParameters temporal = m_Context->GetTemporalResamplingParameters();
-            temporal.maxHistoryLength = 20;
-            temporal.enableBoilingFilter = true;
-            temporal.boilingFilterStrength = 0.25f;
-            m_Context->SetTemporalResamplingParameters(temporal);
-
-            ReSTIRDI_SpatialResamplingParameters spatial = m_Context->GetSpatialResamplingParameters();
-            spatial.numSpatialSamples = 1;
-            m_Context->SetSpatialResamplingParameters(spatial);
-
-            ReSTIRDI_InitialSamplingParameters initial = m_Context->GetInitialSamplingParameters();
-            initial.numPrimaryLocalLightSamples = 1;
-            initial.numPrimaryInfiniteLightSamples = 1;
-            initial.numPrimaryBrdfSamples = 0;
-            initial.numPrimaryEnvironmentSamples = 0;
-            initial.enableInitialVisibility = false;
-            m_Context->SetInitialSamplingParameters(initial);
-        }
+    void Initialize() override
+    {
+        CreateRTXDIContext();
     }
 
     void PostSceneLoad() override
@@ -164,6 +157,15 @@ public:
         nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+
+        // Recreate the context when the user toggles checkerboard mode, because
+        // CheckerboardSamplingMode is a static parameter that changes reservoir
+        // buffer layout.  (The reservoir buffer is transient and will be
+        // automatically resized in the same Setup() call.)
+        if (renderer->m_ReSTIRDI_EnableCheckerboard != m_CheckerboardEnabled)
+        {
+            CreateRTXDIContext();
+        }
 
         const uint32_t totalRISEntries = k_RISTileSize * k_RISTileCount; // 131 072
 
@@ -370,6 +372,11 @@ public:
 
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+
+        // In checkerboard mode each frame operates on half the horizontal pixels;
+        // the shader uses activeCheckerboardField to select which half.
+        const bool checkerboard = m_Context->GetStaticParameters().CheckerboardSamplingMode != rtxdi::CheckerboardMode::Off;
+        const uint32_t dispatchWidth = checkerboard ? width / 2 : width;
 
         RTXDIConstants cb{};
         cb.m_ViewportSize                        = { width, height };
@@ -584,8 +591,8 @@ public:
                 .shaderName   = "RTXDIGenerateInitialSamples_CSMain",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  8u),
-                    .y = DivideAndRoundUp(height, 8u),
+                    .x = DivideAndRoundUp(dispatchWidth, 8u),
+                    .y = DivideAndRoundUp(height,        8u),
                     .z = 1u
                 }
             };
@@ -602,8 +609,8 @@ public:
                 .shaderName   = "RTXDITemporalResampling_CSMain",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  8u),
-                    .y = DivideAndRoundUp(height, 8u),
+                    .x = DivideAndRoundUp(dispatchWidth, 8u),
+                    .y = DivideAndRoundUp(height,        8u),
                     .z = 1u
                 }
             };
@@ -620,8 +627,8 @@ public:
                 .shaderName   = "RTXDISpatialResampling_CSMain",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  8u),
-                    .y = DivideAndRoundUp(height, 8u),
+                    .x = DivideAndRoundUp(dispatchWidth, 8u),
+                    .y = DivideAndRoundUp(height,        8u),
                     .z = 1u
                 }
             };
@@ -637,8 +644,8 @@ public:
                 .shaderName   = "RTXDIShadeSamples_CSMain",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  8u),
-                    .y = DivideAndRoundUp(height, 8u),
+                    .x = DivideAndRoundUp(dispatchWidth, 8u),
+                    .y = DivideAndRoundUp(height,        8u),
                     .z = 1u
                 }
             };

@@ -113,6 +113,7 @@ void ImGuiLayer::UpdateFrame()
                 {
                     ImGui::SliderInt("Spatial Samples", &renderer->m_ReSTIRDI_SpatialSamples, 1, 8);
                 }
+                ImGui::Checkbox("Checkerboard Sampling", &renderer->m_ReSTIRDI_EnableCheckerboard);
                 ImGui::Unindent();
             }
 
