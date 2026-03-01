@@ -564,13 +564,18 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
     }
     else // Point (1) or Spot (2)
     {
+        s.position = lightInfo.position;
+        s.direction = float3(0.0, 0.0, 1.0);
+        s.distance = 1e-5;
+        s.radiance = lightInfo.radiance;
+        s.solidAnglePdf = 1.0;
+
         float3 toLight = lightInfo.position - surface.worldPos;
         float  dist    = length(toLight);
         if (dist < 1e-5) return s;
 
         float3 L = toLight / dist;
         s.direction = L;
-        s.position  = lightInfo.position;
         s.distance  = dist;
 
         // Inverse-square attenuation with optional range falloff
@@ -589,8 +594,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
             attenuation *= spotFactor;
         }
 
-        s.radiance      = lightInfo.radiance * attenuation;
-        s.solidAnglePdf = 1.0;
+        s.radiance = lightInfo.radiance * attenuation;
     }
 
     return s;
