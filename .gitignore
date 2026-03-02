@@ -126,3 +126,5 @@ external/MathLib
 
 # symlink to NRD shader config (generated)
 src/shaders/NRDShaders.cfg
+src/shaders/NRD.hlsli
+src/shaders/NRDConfig.hlsli

@@ -84,11 +84,7 @@ set(SDL3_URL "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3
 download_library("SDL3" "${SDL3_VERSION}" "${SDL3_URL}" "SDL3-*")
 set(SDL3_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/SDL3")
 if(WIN32)
-    set(SDL3_DLL_PATH "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll")
-    set(SDL3_DLL_LINK "${CMAKE_SOURCE_DIR}/bin/SDL3.dll")
-    file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E remove -f "${SDL3_DLL_LINK}")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "${SDL3_DLL_PATH}" "${SDL3_DLL_LINK}")
+    file(CREATE_LINK "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll" "${CMAKE_SOURCE_DIR}/bin/SDL3.dll" SYMBOLIC)
 endif()
 
 # Agility SDK Configuration
@@ -144,16 +140,24 @@ set(NRD_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/NRD")
 set(NRD_SUBDIR "NRD-${NRD_VERSION}")
 set(NRD_SRC_DIR "${NRD_INSTALL_DIR}/${NRD_SUBDIR}")
 if(WIN32)
-    set(NRD_SHADERSCFG_PATH "${NRD_SRC_DIR}/Shaders/Shaders.cfg")
-    set(NRD_SHADERSCFG_LINK "${CMAKE_SOURCE_DIR}/src/Shaders/NRDShaders.cfg")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E remove -f "${NRD_SHADERSCFG_LINK}")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "${NRD_SHADERSCFG_PATH}" "${NRD_SHADERSCFG_LINK}")
+    file(CREATE_LINK "${NRD_SRC_DIR}/Shaders/Shaders.cfg" "${CMAKE_SOURCE_DIR}/src/Shaders/NRDShaders.cfg" SYMBOLIC)
+    file(CREATE_LINK "${NRD_SRC_DIR}/Shaders/NRD.hlsli" "${CMAKE_SOURCE_DIR}/src/Shaders/NRD.hlsli" SYMBOLIC)
+    file(CREATE_LINK "${NRD_SRC_DIR}/Shaders/NRDConfig.hlsli" "${CMAKE_SOURCE_DIR}/src/Shaders/NRDConfig.hlsli" SYMBOLIC)
 endif()
 
 set(SHADERMAKE_FIND_FXC OFF)
 set(SHADERMAKE_FIND_DXC OFF)
-
 add_subdirectory(external/ShaderMake)
+
+add_subdirectory(${ML_SRC_DIR})
+
+set(NRD_STATIC_LIBRARY ON)
+set(NRD_DISABLE_SHADER_COMPILATION ON)
+set(NRD_EMBEDS_SPIRV_SHADERS OFF)
+set(NRD_EMBEDS_DXIL_SHADERS OFF)
+set(NRD_EMBEDS_DXBC_SHADERS OFF)
+add_subdirectory(${NRD_SRC_DIR})
+
 add_subdirectory(external/nvrhi)
 add_subdirectory(external/meshoptimizer)
 add_subdirectory(external/microprofile)
@@ -237,6 +241,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CGLTF_SRC_DIR}")
 
 # meshoptimizer Include
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external/meshoptimizer/src")
+
+# NRD
+target_link_libraries(${PROJECT_NAME} PRIVATE NRD)
+target_include_directories(${PROJECT_NAME} PRIVATE "${NRD_SRC_DIR}/Include")
 
 # ============================================================================
 # ShaderMake Integration (offline HLSL -> SPIRV compilation)

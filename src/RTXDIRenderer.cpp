@@ -13,6 +13,7 @@
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
+#include "DenoiserHelper.h"
 
 #include "shaders/ShaderShared.h"
 
@@ -441,6 +442,9 @@ public:
     // so we can detect when the user toggles it and recreate the context.
     bool m_CheckerboardEnabled = false;
 
+    std::unique_ptr<DenoiserHelper> m_DenoiserHelper;
+    nrd::RelaxSettings m_NRDRelaxSettings;
+
     void CreateRTXDIContext()
     {
         Renderer* renderer = Renderer::GetInstance();
@@ -463,6 +467,8 @@ public:
 
     void Initialize() override
     {
+        Renderer* renderer = Renderer::GetInstance();
+
         // Initialize ReSTIR DI parameter structs to library defaults
         g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
         g_ReSTIRDI_TemporalResamplingParams = rtxdi::GetDefaultReSTIRDITemporalResamplingParams();
@@ -477,6 +483,18 @@ public:
         ApplyReSTIRDIPreset(g_ReSTIRDI_CurrentPreset);
 
         CreateRTXDIContext();
+
+        m_DenoiserHelper = std::make_unique<DenoiserHelper>(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
+        m_DenoiserHelper->Initialize();
+
+        // default settings: follow RTXDI sample
+        m_NRDRelaxSettings.diffuseMaxFastAccumulatedFrameNum = 1;
+        m_NRDRelaxSettings.specularMaxFastAccumulatedFrameNum = 1;
+        m_NRDRelaxSettings.diffusePhiLuminance = 1.0f;
+        m_NRDRelaxSettings.spatialVarianceEstimationHistoryThreshold = 1;
+        m_NRDRelaxSettings.enableAntiFirefly = true;
+        m_NRDRelaxSettings.diffusePrepassBlurRadius = 30.0f;
+        m_NRDRelaxSettings.specularPrepassBlurRadius = 30.0f;
     }
 
     void PostSceneLoad() override
@@ -685,6 +703,9 @@ public:
         renderGraph.ReadTexture(g_RG_GBufferNormals);
         renderGraph.ReadTexture(g_RG_GBufferORM);
         renderGraph.ReadTexture(g_RG_GBufferMotionVectors);
+
+        // Setup denoiser internal resources
+        m_DenoiserHelper->Setup(renderGraph);
 
         return true;
     }

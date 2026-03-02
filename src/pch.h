@@ -65,8 +65,6 @@ using Vector2I = DirectX::XMINT2;
 using Vector3U = DirectX::XMUINT3;
 using Vector3I = DirectX::XMINT3;
 
-using Color = DirectX::XMFLOAT4;
-
 using Sphere = DirectX::BoundingSphere;
 using AABB = DirectX::BoundingBox;
 using OBB = DirectX::BoundingOrientedBox;
