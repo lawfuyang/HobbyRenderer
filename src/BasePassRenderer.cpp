@@ -383,6 +383,7 @@ protected:
         cb.m_P00 = cb.m_View.m_MatViewToClipNoOffset._11;
         cb.m_P11 = cb.m_View.m_MatViewToClipNoOffset._22;
         cb.m_OpaqueColorDimensions = Vector2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height };
+        cb.m_OpaqueColorMipCount = opaqueColor->getDesc().mipLevels;
         cb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;
         cb.m_SunDirection = renderer->m_Scene.m_SunDirection;
         cb.m_RenderingMode = (uint32_t)renderer->m_Mode;

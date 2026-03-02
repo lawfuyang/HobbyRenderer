@@ -307,6 +307,8 @@ struct ForwardLightingPerFrameData
   //
   uint32_t m_RenderingMode;
   uint32_t m_RadianceMipCount;
+  uint32_t m_OpaqueColorMipCount;  // Mip count for g_OpaqueColor texture (for LOD clamping)
+  uint32_t pad1;
 };
 
 struct SkyConstants

@@ -102,9 +102,9 @@ FfxFloat32x4 SpdLoad(FfxInt32x2 tex, FfxUInt32 slice)
 {
     // SPD uses this to load from mip 5 when processing more than 6 mips
 #if SPD_NUM_CHANNELS == 3
-    return float4(g_Out6.Load(tex).xyz, 0);
+    return float4(g_Out6[tex].xyz, 0);
 #else
-    return g_Out6.Load(tex).xxxx;
+    return g_Out6[tex].xxxx;
 #endif
 }
 
