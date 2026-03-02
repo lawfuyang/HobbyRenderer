@@ -458,15 +458,12 @@ void Renderer::LoadShaders()
                 // Keyed by logical name with sorted defines (e.g., "ForwardLighting_PSMain_AlphaTest_KEY1_VAL1_KEY2_VAL2")
                 std::string key = metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
 
-                // only append defines to the key if there are multiple permutations, otherwise it's just noise
-                if (metadata->defines.size() > 1)
+                for (const std::string& define : metadata->defines)
                 {
-                    for (const std::string& define : metadata->defines)
-                    {
-                        key += "_" + define;
-                    }
+                    key += "_" + define;
                 }
 
+                SDL_assert(!m_ShaderCache.contains(key));
                 m_ShaderCache[key] = handle;
                 
                 SDL_Log("[Init] Loaded shader: %s (key=%s, permutations=%zu)", 
@@ -501,6 +498,8 @@ void Renderer::LoadShaders()
 
                 // Keyed by logical name (e.g., "ForwardLighting_PSMain_AlphaTest") for easy retrieval
                 const std::string key = metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
+
+                SDL_assert(!m_ShaderCache.contains(key));
                 m_ShaderCache[key] = handle;
                 
                 SDL_Log("[Init] Loaded shader: %s (key=%s, no permutations)", 
@@ -1568,9 +1567,12 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferH
     // Atomic counter always at slot 12
     spdBset.bindings.push_back(nvrhi::BindingSetItem::StructuredBuffer_UAV(12, spdAtomicCounter));
 
+    std::string shaderName = "SPD_SPD_CSMain_SPD_NUM_CHANNELS=";
+    shaderName += numChannels == 3 ? "3" : "1";
+
     Renderer::RenderPassParams params{
         .commandList = commandList,
-        .shaderName = (numChannels == 3) ? "SPD_SPD_CSMain_3Channel" : "SPD_SPD_CSMain_1Channel",
+        .shaderName = shaderName,
         .bindingSetDesc = spdBset,
         .pushConstants = &spdData,
         .pushConstantsSize = sizeof(spdData),

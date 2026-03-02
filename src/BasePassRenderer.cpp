@@ -51,6 +51,44 @@ struct ScopedBasePassPipelineQuery
     }
 };
 
+// TODO: move this to Renderer?
+static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi::TextureHandle inputTexture, nvrhi::TextureHandle outputTexture, uint32_t samplerIdx)
+{
+    PROFILE_FUNCTION();
+
+    Renderer* renderer = Renderer::GetInstance();
+
+    nvrhi::utils::ScopedMarker commandListMarker{ commandList, "DownsampleTextureToPow2" };
+
+    ResizeToNextLowestPowerOfTwoConstants consts;
+    consts.m_Width = outputTexture->getDesc().width;
+    consts.m_Height = outputTexture->getDesc().height;
+    consts.m_SamplerIdx = samplerIdx;
+
+    nvrhi::BindingSetDesc bindingSetDesc;
+    bindingSetDesc.bindings =
+    {
+        nvrhi::BindingSetItem::PushConstants(0, sizeof(ResizeToNextLowestPowerOfTwoConstants)),
+        nvrhi::BindingSetItem::Texture_SRV(0, inputTexture),
+        nvrhi::BindingSetItem::Texture_UAV(0, outputTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1})
+    };
+
+    const uint32_t dispatchX = DivideAndRoundUp(consts.m_Width, 8);
+    const uint32_t dispatchY = DivideAndRoundUp(consts.m_Height, 8);
+
+    std::string shaderName = "ResizeToNextLowestPowerOfTwo_CS_ResizeToNextLowestPowerOfTwo_NUM_CHANNELS=";
+    shaderName += nvrhi::getFormatInfo(outputTexture->getDesc().format).hasBlue ? "3" : "1";
+
+    Renderer::RenderPassParams params;
+    params.commandList = commandList;
+    params.shaderName = shaderName;
+    params.bindingSetDesc = bindingSetDesc;
+    params.dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 };
+    params.pushConstants = &consts;
+    params.pushConstantsSize = sizeof(consts);
+    renderer->AddComputePass(params);
+}
+
 static void GenerateHZBMips(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph, nvrhi::BufferHandle spdAtomicCounter)
 {
     PROFILE_FUNCTION();
@@ -65,37 +103,10 @@ static void GenerateHZBMips(nvrhi::CommandListHandle commandList, const RenderGr
     nvrhi::TextureHandle depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
     nvrhi::TextureHandle hzb = renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write);
 
-    nvrhi::utils::ScopedMarker commandListMarker{ commandList, "Generate HZB Mips" };
-
     // First, build HZB mip 0 from depth texture
-    {
-        nvrhi::utils::ScopedMarker hzbFromDepthMarker{ commandList, "HZB From Depth" };
+    DownsampleTextureToPow2(commandList, depth, hzb, SAMPLER_MIN_REDUCTION_INDEX);
 
-        HZBFromDepthConstants hzbFromDepthData;
-        hzbFromDepthData.m_Width = hzb->getDesc().width;
-        hzbFromDepthData.m_Height = hzb->getDesc().height;
-
-        nvrhi::BindingSetDesc hzbFromDepthBset;
-        hzbFromDepthBset.bindings =
-        {
-            nvrhi::BindingSetItem::PushConstants(0, sizeof(HZBFromDepthConstants)),
-            nvrhi::BindingSetItem::Texture_SRV(0, depth),
-            nvrhi::BindingSetItem::Texture_UAV(0, hzb,  nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1})
-        };
-
-        const uint32_t dispatchX = DivideAndRoundUp(hzbFromDepthData.m_Width, 8);
-        const uint32_t dispatchY = DivideAndRoundUp(hzbFromDepthData.m_Height, 8);
-
-        Renderer::RenderPassParams params;
-        params.commandList = commandList;
-        params.shaderName = "HZBFromDepth_HZBFromDepth_CSMain";
-        params.bindingSetDesc = hzbFromDepthBset;
-        params.dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 };
-        params.pushConstants = &hzbFromDepthData;
-        params.pushConstantsSize = sizeof(hzbFromDepthData);
-        renderer->AddComputePass(params);
-    }
-
+    // Then generate the rest of the mip chain using SPD
     renderer->GenerateMipsUsingSPD(hzb, spdAtomicCounter, commandList, "Generate HZB Mips", SPD_REDUCTION_MIN);
 }
 
@@ -410,8 +421,8 @@ protected:
             renderState.depthStencilState.stencilRefValue = 1;
         }
 
-        const char* psName = bUseAlphaTest ? "BasePass_GBuffer_PSMain_AlphaTest_AlphaTest" : 
-                            bUseAlphaBlend ? "BasePass_Forward_PSMain_Forward_Transparent" : 
+        const char* psName = bUseAlphaTest ? "BasePass_GBuffer_PSMain_AlphaTest_AlphaTest_ALPHA_TEST=1" : 
+                            bUseAlphaBlend ? "BasePass_Forward_PSMain_Forward_Transparent_FORWARD_TRANSPARENT=1" : 
                             "BasePass_GBuffer_PSMain";
 
         if (renderer->m_UseMeshletRendering)
@@ -700,20 +711,23 @@ public:
         const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
-        // Opaque Color Texture (used for transmission/refract1ion)
+        // Opaque Color Texture (used for transmission/refraction)
+        // Resize to next lowest power of 2 for efficient mip generation
         {
             RGTextureDesc desc;
-            desc.m_NvrhiDesc.width = width;
-            desc.m_NvrhiDesc.height = height;
+            const uint32_t pow2Width = NextLowerPow2(width);
+            const uint32_t pow2Height = NextLowerPow2(height);
+            desc.m_NvrhiDesc.width = pow2Width;
+            desc.m_NvrhiDesc.height = pow2Height;
             desc.m_NvrhiDesc.format = Renderer::HDR_COLOR_FORMAT;
             desc.m_NvrhiDesc.debugName = "OpaqueColorTexture_RG";
             desc.m_NvrhiDesc.isUAV = true;
             desc.m_NvrhiDesc.isRenderTarget = false;
             desc.m_NvrhiDesc.useClearValue = false;
-            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::CopyDest;
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
 
             // Calculate mip levels for transmission LOD sampling
-            uint32_t maxDim = std::max(width, height);
+            uint32_t maxDim = std::max(pow2Width, pow2Height);
             uint32_t mipLevels = 0;
             while (maxDim > 0) {
                 mipLevels++;
@@ -769,12 +783,13 @@ public:
 
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
         handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
-        handles.hdr = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
+        handles.hdr = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
         handles.opaque = renderGraph.GetTexture(g_RG_OpaqueColor, RGResourceAccessMode::Write);
 
-        // Capture the opaque scene for refraction
-        commandList->copyTexture(handles.opaque, nvrhi::TextureSlice(), handles.hdr, nvrhi::TextureSlice());
+        // Downsample HDR to pow2 opaque texture via linear interpolation shader
+        DownsampleTextureToPow2(commandList, handles.hdr, handles.opaque, SAMPLER_LINEAR_CLAMP_INDEX);
 
+        // Generate mips for opaque color using SPD
         nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
         renderer->GenerateMipsUsingSPD(handles.opaque, spdAtomicCounter, commandList, "Generate Mips for Opaque Color", SPD_REDUCTION_AVERAGE);
 

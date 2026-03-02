@@ -463,10 +463,11 @@ struct CullingConstants
   uint32_t m_InstanceBaseIndex;
 };
 
-struct HZBFromDepthConstants
+struct ResizeToNextLowestPowerOfTwoConstants
 {
   uint32_t m_Width;
   uint32_t m_Height;
+  uint32_t m_SamplerIdx;
 };
 
 enum SpdReductionType
