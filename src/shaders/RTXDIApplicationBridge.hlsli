@@ -639,7 +639,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
         // Spot cone falloff
         if (lightInfo.lightType == 2)
         {
-            float cosTheta  = dot(-L, lightInfo.direction);
+            float cosTheta  = dot(L, lightInfo.direction);
             float spotFactor = smoothstep(lightInfo.spotOuterCos, lightInfo.spotInnerCos, cosTheta);
             attenuation *= spotFactor;
         }
