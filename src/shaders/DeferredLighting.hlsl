@@ -119,13 +119,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 
             LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
             color = directLighting.diffuse + directLighting.specular;
-
-            float3 ambient = 0.0;
-            if (g_Deferred.m_EnableSky)
-            {
-                ambient = GetAtmosphereSkyIrradiance(p_atmo, N, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity) * (baseColor / PI);
-            }
-            color += ambient + emissive;
+            color +=  emissive;
         }
     }
 
