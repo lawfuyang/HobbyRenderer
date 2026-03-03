@@ -1073,7 +1073,7 @@ public:
             {
                 Renderer::RenderPassParams params{
                     .commandList  = commandList,
-                    .shaderName   = "RTXDI_Master_RTXDI_ShadeSamples_Main_RELAX_DENOISING",
+                    .shaderName   = "RTXDI_Master_RTXDI_ShadeSamples_Main_RTXDI_ENABLE_RELAX_DENOISING=1",
                     .bindingSetDesc = denoiseBset,
                     .dispatchParams = {
                         .x = DivideAndRoundUp(dispatchWidth, 8u),
@@ -1088,7 +1088,7 @@ public:
             {
                 Renderer::RenderPassParams params{
                     .commandList  = commandList,
-                    .shaderName   = "RTXDI_Master_RTXDI_GenerateViewZ_Main_RELAX_DENOISING",
+                    .shaderName   = "RTXDI_Master_RTXDI_GenerateViewZ_Main_RTXDI_ENABLE_RELAX_DENOISING=1",
                     .bindingSetDesc = denoiseBset,
                     .dispatchParams = {
                         .x = DivideAndRoundUp(width,  8u),
@@ -1112,12 +1112,19 @@ public:
 
                 denoiseDesc.resources[kDiff]    = diffuseOutputTex;
                 denoiseDesc.resources[kSpec]    = specularOutputTex;
-                denoiseDesc.resources[kViewZ]   = renderGraph.GetTexture(g_RG_RTXDILinearDepth,       RGResourceAccessMode::Read);
-                denoiseDesc.resources[kMV]      = renderGraph.GetTexture(g_RG_GBufferMotionVectors,   RGResourceAccessMode::Read);
+                denoiseDesc.resources[kViewZ]   = linearDepthTex;
+                denoiseDesc.resources[kMV]      = motionTex;
                 denoiseDesc.resources[kOutDiff] = diffuseOutputTex;
                 denoiseDesc.resources[kOutSpec] = specularOutputTex;
 
                 FillNRDCommonSettingsHelper(denoiseDesc.commonSettings);
+
+                m_NRDRelaxSettings.checkerboardMode = nrd::CheckerboardMode::OFF;
+                if (g_ReSTIRDI_EnableCheckerboard && 0) // TODO: debug why everything is skewed and scaled to a corner
+                {
+                    m_NRDRelaxSettings.checkerboardMode = m_Context->GetStaticParameters().CheckerboardSamplingMode == rtxdi::CheckerboardMode::Black ? nrd::CheckerboardMode::WHITE : nrd::CheckerboardMode::BLACK;
+                }
+                
                 denoiseDesc.denoiserSettings = &m_NRDRelaxSettings;
 
                 m_DenoiserHelper->Execute(commandList, renderGraph, denoiseDesc);
@@ -1128,7 +1135,7 @@ public:
             // ---- Non-denoising path: combined radiance to g_RTXDIDIOutput ----
             Renderer::RenderPassParams params{
                 .commandList  = commandList,
-                .shaderName   = "RTXDI_Master_RTXDI_ShadeSamples_Main",
+                .shaderName   = "RTXDI_Master_RTXDI_ShadeSamples_Main_RTXDI_ENABLE_RELAX_DENOISING=0",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
                     .x = DivideAndRoundUp(dispatchWidth, 8u),

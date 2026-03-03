@@ -130,8 +130,18 @@ struct Renderer
         nvrhi::CommandListHandle commandList;
         std::string_view shaderName;
         nvrhi::BindingSetDesc bindingSetDesc;
+        uint32_t registerSpace = 0;
+
+        struct BindingSetDescAndRegisterSpace
+        {
+            nvrhi::BindingSetDesc bindingSetDesc;
+            uint32_t registerSpace = 0;
+        };
+        std::vector<BindingSetDescAndRegisterSpace> additionalBindingSets;
+
         const void* pushConstants = nullptr;
         size_t pushConstantsSize = 0;
+        bool bIncludeBindlessResources = true;
         // Compute specific
         ComputeDispatchParams dispatchParams;
         // Graphics specific

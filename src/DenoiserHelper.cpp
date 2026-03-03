@@ -404,23 +404,15 @@ void DenoiserHelper::Execute(nvrhi::CommandListHandle commandList, const RenderG
         const std::string shaderKey = BuildShaderCacheKey(pipelineDesc.shaderIdentifier);
 
         // -----------------------------------------------------------------
-        // Prepare binding set descriptors for AddComputePass
-        // -----------------------------------------------------------------
-        // We need to combine both binding sets into a single descriptor for AddComputePass.
-        // Since AddComputePass uses a single BindingSetDesc, we need to merge the descriptors.
-        nvrhi::BindingSetDesc mergedBindingSetDesc = resourceBindingSetDesc;
-        for (const nvrhi::BindingSetItem& item : constantBindingSetDesc.bindings)
-        {
-            mergedBindingSetDesc.bindings.push_back(item);
-        }
-
-        // -----------------------------------------------------------------
         // Call AddComputePass to handle pipeline creation and dispatch
         // -----------------------------------------------------------------
         Renderer::RenderPassParams passParams{};
         passParams.commandList = commandList;
         passParams.shaderName = shaderKey;
-        passParams.bindingSetDesc = mergedBindingSetDesc;
+        passParams.bindingSetDesc = resourceBindingSetDesc;
+        passParams.registerSpace = instanceDesc->resourcesSpaceIndex;
+        passParams.additionalBindingSets.push_back({ constantBindingSetDesc, instanceDesc->constantBufferAndSamplersSpaceIndex });
+        passParams.bIncludeBindlessResources = false; // NRD shaders use explicit bindings for all resources, so no need to bind the global tables
         passParams.dispatchParams.x = dispatchDesc.gridWidth;
         passParams.dispatchParams.y = dispatchDesc.gridHeight;
         passParams.dispatchParams.z = 1;
@@ -499,15 +491,10 @@ std::string DenoiserHelper::BuildShaderCacheKey(const char* nrdShaderIdentifier)
         }
     }
 
-    // Match Renderer::LoadShaders: only append defines when there are 2 or more
-    // (single-define shaders keep just the stem_main key).
-    if (permutations.size() > 1)
-    {
-        // Sort alphabetically to match the std::map iteration order used at load time.
-        std::ranges::sort(permutations);
-        for (const std::string& perm : permutations)
-            key += "_" + perm;
-    }
+    // Sort alphabetically to match the std::map iteration order used at load time.
+    std::ranges::sort(permutations);
+    for (const std::string& perm : permutations)
+        key += "_" + perm;
 
     return key;
 }
@@ -612,13 +599,7 @@ void FillNRDCommonSettingsHelper(nrd::CommonSettings& settings)
     settings.cameraJitter[1]     = view.m_PixelOffset.y / static_cast<float>(height);
     settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x / static_cast<float>(width);
     settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y / static_cast<float>(height);
-
-    // TODO: remove this when we have TAA
-    settings.cameraJitter[0]     = 0.0f;
-    settings.cameraJitter[1]     = 0.0f;
-    settings.cameraJitterPrev[0] = 0.0f;
-    settings.cameraJitterPrev[1] = 0.0f;
-
+    
     // -------------------------------------------------------------------------
     // Frame index and accumulation mode
     // -------------------------------------------------------------------------

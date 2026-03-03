@@ -832,6 +832,7 @@ void Renderer::Run()
 
         int windowW, windowH;
         SDL_GetWindowSize(m_Window, &windowW, &windowH);
+        m_Scene.m_ViewPrev = m_Scene.m_View;
         m_Scene.m_Camera.FillPlanarViewConstants(m_Scene.m_View, (float)windowW, (float)windowH);
 
         const int readIndex = m_FrameNumber % 2;
@@ -1423,17 +1424,29 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
 
     std::vector<nvrhi::BindingSetHandle> bindingSets;
 
-    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc);
+    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc, params.registerSpace);
     const nvrhi::BindingSetHandle bindingSet = m_RHI->m_NvrhiDevice->createBindingSet(params.bindingSetDesc, layout);
 
     desc.bindingLayouts.push_back(layout);
     bindingSets.push_back(bindingSet);
 
-    desc.bindingLayouts.push_back(GetStaticTextureBindingLayout());
-    bindingSets.push_back(GetStaticTextureDescriptorTable());
+    for (const RenderPassParams::BindingSetDescAndRegisterSpace& bsetAndSpace : params.additionalBindingSets)
+    {
+        const nvrhi::BindingLayoutHandle additionalLayout = GetOrCreateBindingLayoutFromBindingSetDesc(bsetAndSpace.bindingSetDesc, bsetAndSpace.registerSpace);
+        const nvrhi::BindingSetHandle additionalBindingSet = m_RHI->m_NvrhiDevice->createBindingSet(bsetAndSpace.bindingSetDesc, additionalLayout);
 
-    desc.bindingLayouts.push_back(GetStaticSamplerBindingLayout());
-    bindingSets.push_back(GetStaticSamplerDescriptorTable());
+        desc.bindingLayouts.push_back(additionalLayout);
+        bindingSets.push_back(additionalBindingSet);
+    }
+
+    if (params.bIncludeBindlessResources)
+    {
+        desc.bindingLayouts.push_back(GetStaticTextureBindingLayout());
+        bindingSets.push_back(GetStaticTextureDescriptorTable());
+
+        desc.bindingLayouts.push_back(GetStaticSamplerBindingLayout());
+        bindingSets.push_back(GetStaticSamplerDescriptorTable());
+    }
 
     desc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
     desc.renderState.depthStencilState = params.depthStencilState ? *params.depthStencilState : CommonResources::GetInstance().DepthDisabled;
@@ -1476,17 +1489,29 @@ void Renderer::AddComputePass(const RenderPassParams& params)
     nvrhi::BindingLayoutVector layouts;
     std::vector<nvrhi::BindingSetHandle> bindingSets;
 
-    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc);
+    const nvrhi::BindingLayoutHandle layout = GetOrCreateBindingLayoutFromBindingSetDesc(params.bindingSetDesc, params.registerSpace);
     const nvrhi::BindingSetHandle bindingSet = m_RHI->m_NvrhiDevice->createBindingSet(params.bindingSetDesc, layout);
 
     layouts.push_back(layout);
     bindingSets.push_back(bindingSet);
 
-    layouts.push_back(GetStaticTextureBindingLayout());
-    bindingSets.push_back(GetStaticTextureDescriptorTable());
+    for (const RenderPassParams::BindingSetDescAndRegisterSpace& bsetAndSpace : params.additionalBindingSets)
+    {
+        const nvrhi::BindingLayoutHandle additionalLayout = GetOrCreateBindingLayoutFromBindingSetDesc(bsetAndSpace.bindingSetDesc, bsetAndSpace.registerSpace);
+        const nvrhi::BindingSetHandle additionalBindingSet = m_RHI->m_NvrhiDevice->createBindingSet(bsetAndSpace.bindingSetDesc, additionalLayout);
 
-    layouts.push_back(GetStaticSamplerBindingLayout());
-    bindingSets.push_back(GetStaticSamplerDescriptorTable());
+        layouts.push_back(additionalLayout);
+        bindingSets.push_back(additionalBindingSet);
+    }
+
+    if (params.bIncludeBindlessResources)
+    {
+        layouts.push_back(GetStaticTextureBindingLayout());
+        bindingSets.push_back(GetStaticTextureDescriptorTable());
+
+        layouts.push_back(GetStaticSamplerBindingLayout());
+        bindingSets.push_back(GetStaticSamplerDescriptorTable());
+    }
 
     nvrhi::ComputeState state;
     state.pipeline = GetOrCreateComputePipeline(GetShaderHandle(params.shaderName), layouts);
