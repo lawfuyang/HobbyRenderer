@@ -125,6 +125,8 @@ public:
             SDL_LOG_ASSERT_FAIL("featureSupport.Init failed", "featureSupport.Init failed: 0x%08X", hr);
         }
 
+        m_Device->SetStablePowerState(true); // for consistent profiling results
+
         if (Config::Get().m_EnableValidation)
         {
             ComPtr<ID3D12InfoQueue> infoQueue;
