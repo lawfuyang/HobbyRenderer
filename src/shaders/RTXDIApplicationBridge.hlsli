@@ -50,6 +50,7 @@ RaytracingAccelerationStructure                 g_SceneASHistory            : re
 Texture2D                                       g_RTXDI_LocalLightPDFTexture: register(t11);
 Texture2D<float>                                g_DepthHistory              : register(t17);
 Texture2D<float2>                               g_GBufferNormalsHistory     : register(t18);
+Texture2D                                       g_RTXDI_EnvLightPDFTexture  : register(t19); // environment-light PDF mip chain (Texture2D = float4 default, matches RTXDI_TEX2D)
 
 // Scene geometry/material buffers — used by GetFinalVisibility for alpha testing.
 StructuredBuffer<PerInstanceData>               g_RTXDI_Instances           : register(t12);
@@ -84,6 +85,33 @@ RWTexture2D<float>  g_RTXDILinearDepth    : register(u7); // RELAX IN_VIEWZ (wri
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER   g_RTXDI_NeighborOffsets
 #define RTXDI_RIS_BUFFER                g_RTXDI_RISBuffer
 #define RTXDI_LIGHT_RESERVOIR_BUFFER    g_RTXDI_LightReservoirBuffer
+
+float2 directionToEquirectUV(float3 normalizedDirection)
+{
+    float elevation = asin(normalizedDirection.y);
+    float azimuth = 0;
+    if (abs(normalizedDirection.y) < 1.0)
+        azimuth = atan2(normalizedDirection.z, normalizedDirection.x);
+
+    float2 uv;
+    uv.x = azimuth / (2.0 * PI) - 0.25;
+    uv.y = 0.5 - elevation / PI;
+
+    return uv;
+}
+
+float3 equirectUVToDirection(float2 uv, out float cosElevation)
+{
+    float azimuth = (uv.x + 0.25) * (2.0 * PI);
+    float elevation = (0.5 - uv.y) * PI;
+    cosElevation = cos(elevation);
+
+    return float3(
+        cos(azimuth) * cosElevation,
+        sin(elevation),
+        sin(azimuth) * cosElevation
+    );
+}
 
 // ============================================================================
 // RAB_RandomSamplerState — robust PCG-based RNG
@@ -370,14 +398,31 @@ float RAB_GetLightSampleTargetPdfForSurface(RAB_LightSample lightSample, RAB_Sur
         return 0.0;
 
     // Target pdf = reflected luminance / solidAnglePdf.
-    // Dividing by solidAnglePdf is required so that the resampling weights
-    // correctly cancel the sampling PDF, matching the reference implementation.
-    // Omitting this division biases the reservoir toward lights with small
-    // solid angles (e.g. a tiny distant point light) over physically brighter
-    // but wider area lights.
-    float NdotL = max(0.0, dot(surface.normal, lightSample.direction));
-    float lum   = Luminance(lightSample.radiance);
-    return (lum * NdotL) / lightSample.solidAnglePdf;
+    // This matches the FullSample: RAB_GetReflectedLuminanceForSurface / lightSample.solidAnglePdf.
+    // The solidAnglePdf (sr^-1) normalises the importance weight so that all light types
+    // (local, directional, environment) are on the same scale in the reservoir.
+    float3 N = surface.normal;
+    float3 V = surface.viewDir;
+    float3 L = normalize(lightSample.position - surface.worldPos);
+
+    float NdotL = max(0.0, dot(N, L));
+    if (NdotL <= 0.0)
+        return 0.0;
+
+    float3 H    = normalize(V + L);
+    float NdotH = max(0.0, dot(N, H));
+    float NdotV = max(0.0, dot(N, V));
+    float VdotH = max(0.0, dot(V, H));
+
+    float3 F0 = surface.material.specularF0;
+    float3 F  = F_Schlick(F0, VdotH);
+    float  kD = 1.0 - Luminance(F0);
+
+    float3 diffuse  = kD * surface.material.diffuseAlbedo * (NdotL / PI);
+    float3 specular = ComputeSpecularBRDF(F, NdotH, NdotV, NdotL, surface.roughness);
+
+    float3 reflectedRadiance = lightSample.radiance * (diffuse + specular);
+    return Luminance(reflectedRadiance) / lightSample.solidAnglePdf;
 }
 
 void RAB_GetLightDirDistance(RAB_Surface surface, RAB_LightSample lightSample,
@@ -385,6 +430,55 @@ void RAB_GetLightDirDistance(RAB_Surface surface, RAB_LightSample lightSample,
 {
     lightDir      = lightSample.direction;
     lightDistance = lightSample.distance;
+}
+
+// ============================================================================
+// Environment map helpers (Bruneton procedural sky → equirectangular PDF)
+// ============================================================================
+
+// Convert world direction → equirectangular [0,1]² UV
+float2 RAB_GetEnvironmentMapRandXYFromDir(float3 direction)
+{
+    float elevation = asin(direction.y);
+    float azimuth = 0;
+    if (abs(direction.y) < 1.0)
+        azimuth = atan2(direction.z, direction.x);
+
+    float2 uv;
+    uv.x = azimuth / (2.0 * PI) - 0.25;
+    uv.y = 0.5 - elevation / PI;
+    return frac(uv); // stay in [0,1]
+}
+
+// Evaluate the PDF of sampling direction `L` from the env RIS segment.
+// Returns the DISCRETE probability (dimensionless, in [0,1]) of selecting this texel.
+// This matches the FullSample: texelValue / sum.
+// NOTE: RAB_SamplePolymorphicLight for env lights uses the SOLID-ANGLE PDF
+// (texels per steradian = W*H / (2*pi*pi*cosElevation)), which is a different quantity.
+// RAB_EvaluateEnvironmentMapSamplingPdf is only used by the RTXDI SDK internally
+// for MIS weight computation in RTXDI_SampleLightsForSurface.
+float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
+{
+    if (g_RTXDIConst.m_EnvLightPresent == 0u)
+        return 1.0;
+
+    float2 uv = RAB_GetEnvironmentMapRandXYFromDir(L);
+    uint2  pdfSize     = g_RTXDIConst.m_EnvPDFTextureSize;
+    uint2  texelPos    = uint2(float2(pdfSize) * uv);
+    float  texelValue  = g_RTXDI_EnvLightPDFTexture[texelPos].r;
+
+    // The last mip is 1×1 and holds the average of all mip-0 texels (padded to square).
+    int lastMip = max(0, int(floor(log2(float(max(pdfSize.x, pdfSize.y))))));
+    float averageValue = g_RTXDI_EnvLightPDFTexture.mips[lastMip][uint2(0, 0)].r;
+
+    // Sum of all texels in the square PDF texture (same formula as FullSample)
+    float squareSide = float(1u << uint(lastMip));
+    float sum   = averageValue * squareSide * squareSide;
+
+    if (sum <= 0.0)
+        return 1.0;
+
+    return texelValue / sum;
 }
 
 // ============================================================================
@@ -424,6 +518,15 @@ RAB_LightInfo RAB_EmptyLightInfo()
 
 RAB_LightInfo RAB_LoadLightInfo(uint lightIndex, bool previousFrame)
 {
+    // Virtual env-light index: not backed by a real GPULight entry
+    if (g_RTXDIConst.m_EnvLightPresent != 0u && lightIndex == g_RTXDIConst.m_EnvLightIndex)
+    {
+        RAB_LightInfo li = RAB_EmptyLightInfo();
+        li.lightType = 3u; // Environment
+        li.radiance  = float3(1.0, 1.0, 1.0); // Will be evaluated per-UV in SamplePolymorphicLight
+        return li;
+    }
+
     GPULight gl = g_Lights[lightIndex];
     RAB_LightInfo li;
     li.position             = gl.m_Position;
@@ -568,6 +671,11 @@ float RAB_GetLightTargetPdfForVolume(RAB_LightInfo lightInfo, float3 volumeCente
 
 float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
 {
+    // If environment sampling is enabled, we only want sky and emissive lights.
+    // Local lights (point, spot, etc.) from the global light buffer are filtered out.
+    if (g_RTXDIConst.m_EnvSamplingMode != 0u)
+        return 0.0;
+
     // For a uniform distribution over all lights
     uint total = g_RTXDIConst.m_LocalLightCount;
     if (total == 0)
@@ -588,14 +696,38 @@ float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
     return (1.0 + luminance) / float(total);
 }
 
-// ============================================================================
-// RAB_SamplePolymorphicLight
-// ============================================================================
+// Samples a polymorphic light relative to the given receiver surface.
+// For most light types, the "uv" parameter is just a pair of uniform random numbers, originally
+// produced by the RAB_GetNextRandom function and then stored in light reservoirs.
+// For importance sampled environment lights, the "uv" parameter has the texture coordinates
+// in the PDF texture, normalized to the (0..1) range.
 RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface surface, float2 uv)
 {
     RAB_LightSample s = RAB_EmptyLightSample();
 
-    if (lightInfo.lightType == 0) // Directional / sun
+    if (lightInfo.lightType == 3u) // Environment (Bruneton procedural sky)
+    {
+        float2 directionUV = uv;
+        
+        float cosElevation;
+        float3 dir = equirectUVToDirection(directionUV, cosElevation);
+
+        // Radiance matching our building weighting: GetAtmosphereSkyRadiance
+        float3 sampleRadiance = GetAtmosphereSkyRadiance(float3(0.0, 0.0, 0.0), dir, g_RTXDIConst.m_SunDirection, g_RTXDIConst.m_SunIntensity, true);
+
+        // Solid-angle PDF: inverse of the solid angle of one texel in the equirectangular map.
+        // This matches FullSample's EnvironmentLight::calcSample (importanceSampled branch):
+        //   solidAnglePdf = (W * H) / (2 * pi * pi * cosElevation)
+        // Units: sr^-1 (inverse steradians). Must match what RAB_GetLightSampleTargetPdfForSurface divides by.
+        uint2 pdfSize = g_RTXDIConst.m_EnvPDFTextureSize;
+        s.solidAnglePdf = float(pdfSize.x * pdfSize.y) / (2.0 * PI * PI * max(cosElevation, 1e-4));
+
+        s.direction = dir;
+        s.position  = surface.worldPos + dir * 10000.0; // DISTANT_LIGHT_DISTANCE
+        s.radiance  = sampleRadiance;
+        return s;
+    }
+    else if (lightInfo.lightType == 0) // Directional / sun
     {
         float3 direction = lightInfo.direction;
         float  pdf       = 1.0;
@@ -862,36 +994,6 @@ int2 RAB_ClampSamplePositionIntoView(int2 pixelPosition, bool previousFrame)
 }
 
 float RAB_GetBoilingFilterStrength() { return 0.25; }
-
-// ============================================================================
-// Environment map stubs (using Bruneton sky instead of texture)
-// ============================================================================
-float2 RAB_GetEnvironmentMapRandXYFromDir(float3 direction)
-{
-    float2 uv;
-    uv.x = atan2(direction.z, direction.x) / (2.0 * PI) + 0.5;
-    uv.y = acos(clamp(direction.y, -1.0, 1.0)) / PI;
-    return uv;
-}
-
-float RAB_EvaluateEnvironmentMapSamplingPdf(float3 direction)
-{
-    // For Bruneton sky, use a simple cosine-weighted PDF centered on the sun
-    // This biases sampling towards the sun direction
-    float sunCosThreshold = 0.5;  // Cosine of ~60 degrees
-    float cosSunDir = max(0.0, dot(direction, g_RTXDIConst.m_SunDirection));
-    
-    if (cosSunDir > sunCosThreshold)
-    {
-        // Higher probability for directions near sun
-        return 0.8 * cosSunDir / PI;
-    }
-    else
-    {
-        // Lower probability for directions away from sun
-        return 0.2 / (4.0 * PI);
-    }
-}
 
 // ============================================================================
 // Ray tracing helper stubs

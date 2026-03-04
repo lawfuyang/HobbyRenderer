@@ -599,13 +599,14 @@ struct RTXDIConstants
     uint32_t m_EnvRISTileSize;
     //
     uint32_t m_EnvRISTileCount;
-    uint32_t m_EnvRISPad;
-    Vector2 pad1;
+    uint32_t m_EnvSamplingMode;          // 0=Off  1=BRDF(uniform)  2=ReSTIR-DI(importance)
+    Vector2U m_EnvPDFTextureSize;        // (width, height) of env PDF mip-0
 
     // ---- Camera: current & previous frame view matrices for reprojection ----
     PlanarViewConstants m_View;
     PlanarViewConstants m_PrevView;
 
     Vector3 m_SunDirection;
-    uint32_t pad2;
+    float m_SunIntensity;
+    uint32_t m_NumEnvSamples;            // numEnvironmentMapSamples drawn per pixel
 };

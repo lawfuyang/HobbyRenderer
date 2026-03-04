@@ -3,6 +3,7 @@
 // ============================================================================
 #define RTXDI_ENABLE_BOILING_FILTER    1
 #define RTXDI_BOILING_FILTER_GROUP_SIZE 8
+#define RTXDI_PRESAMPLING_GROUP_SIZE    256
 
 // ============================================================================
 // SECTION 2: Common includes
@@ -12,9 +13,12 @@
 #include "CommonLighting.hlsli"
 
 // ============================================================================
-// SECTION 2B: Additional resources for RTXDIBuildLocalLightPDF_Main
+// SECTION 2B: Additional resources for RTXDIBuildLocalLightPDF_Main and RTXDIBuildEnvLightPDF_Main
 // ============================================================================
-RWTexture2D<float> g_PDFMip0 : register(u4);   // mip 0 of the PDF texture
+RWTexture2D<float> g_PDFMip0    : register(u4);  // mip 0 of the local-light PDF texture
+RWTexture2D<float> g_EnvPDFMip0 : register(u8);  // mip 0 of the environment-light PDF texture
+
+// Note: g_RTXDI_EnvLightPDFTexture (t19) is declared in RTXDIApplicationBridge.hlsli
 
 #include "Rtxdi/Utils/Checkerboard.hlsli"
 #include "Rtxdi/Utils/Math.hlsli"
@@ -136,6 +140,69 @@ void RTXDI_BuildLocalLightPDF_Main(uint2 gid : SV_DispatchThreadID)
 }
 
 // ============================================================================
+// SECTION 4B: RTXDIBuildEnvLightPDF
+// Writes luminance(sky) * sin(theta) (or just sin(theta) for BRDF mode)
+// into mip-0 of the environment PDF texture so RTXDI_PresampleEnvironmentMap
+// can build an importance-sampled env-light RIS buffer.
+// ============================================================================
+
+[numthreads(8, 8, 1)]
+void RTXDI_BuildEnvLightPDF_Main(uint2 gid : SV_DispatchThreadID)
+{
+    uint2 pdfSize = g_RTXDIConst.m_EnvPDFTextureSize;
+    if (any(gid >= pdfSize))
+        return;
+
+    // Map texel to spherical direction (equirectangular lat-long).
+    // Matching RTXDI FullSample equirectUVToDirection: 
+    //   Azimuth = (uv.x + 0.25) * 2pi
+    //   Elevation = (0.5 - uv.y) * pi
+    float2 uv    = (float2(gid) + 0.5) / float2(pdfSize);
+
+    float cosElevation;
+    float3 dir = equirectUVToDirection(uv, cosElevation);
+
+    // Full luminance * relative solid-angle importance sampling.
+    // FullSample's getPixelWeight uses: luma * cos(elevation)
+    float3 radiance = GetAtmosphereSkyRadiance(
+        float3(0.0, 0.0, 0.0), dir, g_RTXDIConst.m_SunDirection, g_RTXDIConst.m_SunIntensity, true);
+    float weight = max(Luminance(radiance) * cosElevation, 1e-8);
+
+    g_EnvPDFMip0[gid] = weight;
+}
+
+// ============================================================================
+// SECTION 4C: RTXDIPresampleEnvironmentMap
+// Fills the env-light RIS tile segment by importance-sampling the env PDF
+// mip chain (RTXDI_PresampleEnvironmentMap from PresamplingFunctions.hlsli).
+// Dispatch: (DivUp(k_EnvRISTileSize,256), k_EnvRISTileCount, 1)
+// ============================================================================
+
+[numthreads(RTXDI_PRESAMPLING_GROUP_SIZE, 1, 1)]
+void RTXDI_PresampleEnvironmentMap_Main(uint2 GlobalIndex : SV_DispatchThreadID)
+{
+    const uint sampleInTile = GlobalIndex.x;
+    const uint tileIndex    = GlobalIndex.y;
+
+    if (sampleInTile >= g_RTXDIConst.m_EnvRISTileSize ||
+        tileIndex    >= g_RTXDIConst.m_EnvRISTileCount)
+        return;
+
+    // Per-entry RNG: mix (tileIndex, sample) with frame index for temporal decorrelation.
+    RAB_RandomSamplerState rng = RAB_InitRandomSampler(
+        uint2(sampleInTile + tileIndex * g_RTXDIConst.m_EnvRISTileSize,
+              g_RTXDIConst.m_FrameIndex), 0u);
+
+    RTXDI_PresampleEnvironmentMap(
+        rng,
+        g_RTXDI_EnvLightPDFTexture,
+        g_RTXDIConst.m_EnvPDFTextureSize,
+        tileIndex,
+        sampleInTile,
+        GetEnvLightRISBufferSegmentParams());
+}
+
+// ============================================================================
 // SECTION 5: RTXDIGenerateInitialSamples
 // ============================================================================
 
@@ -165,7 +232,8 @@ void RTXDI_GenerateInitialSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
     RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
         /*numLocalLightSamples=*/  max(1u, lbp.localLightBufferRegion.numLights > 0 ? 1u : 0u),
         /*numInfiniteLightSamples=*/ (lbp.infiniteLightBufferRegion.numLights > 0 ? 1u : 0u),
-        /*numEnvironmentMapSamples=*/ 0u,
+        /*numEnvironmentMapSamples=*/ (g_RTXDIConst.m_EnvSamplingMode >= 1u && g_RTXDIConst.m_EnvLightPresent != 0u)
+                                       ? g_RTXDIConst.m_NumEnvSamples : 0u,
         /*numBrdfSamples=*/          0u);
 
     // Build RIS segment parameters from the constant buffer.
@@ -191,8 +259,6 @@ void RTXDI_GenerateInitialSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 // ============================================================================
 // SECTION 6: RTXDIPresampleLights
 // ============================================================================
-
-#define RTXDI_PRESAMPLING_GROUP_SIZE 256
 
 [numthreads(RTXDI_PRESAMPLING_GROUP_SIZE, 1, 1)]
 void RTXDI_PresampleLights_Main(uint2 GlobalIndex : SV_DispatchThreadID)
@@ -404,41 +470,41 @@ void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 
             if (visible)
             {
-                // Evaluate BRDF at the selected light direction
-                float3 V = RAB_GetSurfaceViewDirection(surface);
-                float3 L = lightSample.direction;
+                // Scale radiance by the reservoir weight and divide by the solid-angle PDF.
+                // This matches FullSample's ShadingHelpers.hlsli:
+                //   lightSample.radiance *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
+                // The solidAnglePdf (sr^-1) converts the per-steradian radiance into the
+                // correct irradiance contribution. Without this division the env-light
+                // contribution is inflated by ~(W*H)/(2*pi^2) — thousands of times too bright.
+                float invPdf = RTXDI_GetDIReservoirInvPdf(reservoir);
+                float solidAnglePdf = max(lightSample.solidAnglePdf, 1e-10);
+                float3 scaledRadiance = lightSample.radiance * (invPdf / solidAnglePdf);
 
-                float  NdotL   = max(0.0, dot(RAB_GetSurfaceNormal(surface), L));
-                float  weight  = RTXDI_GetDIReservoirInvPdf(reservoir);
-
-                if (weight > 0.0 && NdotL > 0.0)
+                if (any(scaledRadiance > 0.0))
                 {
+                    float3 V = RAB_GetSurfaceViewDirection(surface);
+                    float3 L = lightSample.direction;
+
 #if RTXDI_ENABLE_RELAX_DENOISING
                     // Split BRDF into diffuse and specular so each can be denoised separately.
                     float3 diffBrdf  = RAB_EvaluateBrdfDiffuseOnly(surface, L);
                     float3 specBrdf  = RAB_EvaluateBrdfSpecularOnly(surface, L, V);
-                    diffuseRadiance  = lightSample.radiance * diffBrdf  * weight;
-                    specularRadiance = lightSample.radiance * specBrdf  * weight;
+                    diffuseRadiance  = scaledRadiance * diffBrdf;
+                    specularRadiance = scaledRadiance * specBrdf;
                     // Finite hit distance for point/spot lights; large sentinel for directional.
                     hitDistance      = (lightSample.distance < 1e9f) ? lightSample.distance : 1e6f;
                     radiance         = diffuseRadiance + specularRadiance;
 #else
                     // Combined BRDF — RAB_EvaluateBrdf already includes NdotL.
                     float3 brdf = RAB_EvaluateBrdf(surface, L, V);
-                    radiance    = lightSample.radiance * brdf * weight;
+                    radiance    = scaledRadiance * brdf;
 #endif
                 }
             }
         }
     }
 
-    // Clamp to prevent fireflies (very large single-sample contributions)
-    radiance = min(radiance, float3(100.0, 100.0, 100.0));
-
 #if RTXDI_ENABLE_RELAX_DENOISING
-    diffuseRadiance  = min(diffuseRadiance,  float3(100.0, 100.0, 100.0));
-    specularRadiance = min(specularRadiance, float3(100.0, 100.0, 100.0));
-
     // Pack for RELAX front-end.  hitDistance is in world units.
     g_RTXDIDiffuseOutput[pixelPosition]  = RELAX_FrontEnd_PackRadianceAndHitDist(diffuseRadiance,  hitDistance, true);
     g_RTXDISpecularOutput[pixelPosition] = RELAX_FrontEnd_PackRadianceAndHitDist(specularRadiance, hitDistance, true);

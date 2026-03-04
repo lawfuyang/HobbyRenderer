@@ -35,11 +35,16 @@ extern RGTextureHandle g_RG_GBufferMotionVectors;
 
 // ============================================================================
 
-// ---- Tile parameters for the presampling pass --------------------------------
+// Tile parameters for the presampling pass --------------------------------
 // These are fixed at startup. Increasing tileCount improves spatial diversity;
 // increasing tileSize reduces variance within a tile. Values match FullSample defaults.
-static constexpr uint32_t k_RISTileSize  = 1024u;  // samples per tile
-static constexpr uint32_t k_RISTileCount = 128u;   // number of tiles
+static constexpr uint32_t k_RISTileSize  = 1024u;  // local-light samples per tile
+static constexpr uint32_t k_RISTileCount = 128u;   // number of local-light tiles
+// Environment RIS: same tile geometry as local lights.
+static constexpr uint32_t k_EnvRISTileSize  = 1024u;
+static constexpr uint32_t k_EnvRISTileCount = 128u;
+// Environment PDF texture: square, power-of-2, equirectangular lat-long.
+static constexpr uint32_t k_EnvPDFTexSize = 1024u;
 // Compact buffer stride: 3 × uint4 per RIS entry (see RTXDIApplicationBridge.hlsli).
 static constexpr uint32_t k_CompactSlotsPerEntry = 3u;
 
@@ -424,6 +429,16 @@ public:
     // SPD atomic counter for mip generation
     RGBufferHandle       m_RG_SPDAtomicCounter;
 
+    // Environment-light PDF texture for sky importance sampling.
+    // Square (k_EnvPDFTexSize × k_EnvPDFTexSize), R32_FLOAT, full mip chain.
+    // Mip-0 is rebuilt every frame by RTXDI_BuildEnvLightPDF_Main;
+    // the mip chain feeds RTXDI_PresampleEnvironmentMap which fills the env RIS segment.
+    RGTextureHandle      m_RG_EnvLightPDFTexture;
+    uint32_t             m_EnvPDFMipCount = 0;
+
+    // SPD atomic counter for env PDF mip generation (separate from local PDF counter).
+    RGBufferHandle       m_RG_SPDEnvAtomicCounter;
+
     // ------------------------------------------------------------------
     // Persistent textures (G-buffer history for previous frame)
     // ------------------------------------------------------------------
@@ -556,7 +571,12 @@ public:
             CreateRTXDIContext();
         }
 
-        const uint32_t totalRISEntries = k_RISTileSize * k_RISTileCount; // 131 072
+        // RIS buffer capacity covers local-light tiles and env-light tiles.
+        // The env segment always reserves k_EnvRISTileSize × k_EnvRISTileCount
+        // even when env sampling is disabled, so the binding stays stable.
+        const uint32_t k_LocalRISEntries = k_RISTileSize  * k_RISTileCount;
+        const uint32_t k_EnvRISEntries   = k_EnvRISTileSize * k_EnvRISTileCount;
+        const uint32_t totalRISEntries   = k_LocalRISEntries + k_EnvRISEntries;
 
         // ------------------------------------------------------------------
         // RELAX denoising output textures (only when denoising is enabled)
@@ -770,6 +790,32 @@ public:
             renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
         }
 
+        // ---- Environment-light PDF texture (always declared, rebuilt when env enabled) ---
+        // Square, power-of-2, R32_FLOAT with a full mip chain.
+        // Mip-0 written each frame by RTXDI_BuildEnvLightPDF_Main;
+        // the full chain feeds RTXDI_PresampleEnvironmentMap.
+        {
+            m_EnvPDFMipCount = 1u;
+            for (uint32_t s = k_EnvPDFTexSize; s > 1u; s >>= 1u)
+                ++m_EnvPDFMipCount;
+
+            RGTextureDesc desc;
+            desc.m_NvrhiDesc.width     = k_EnvPDFTexSize;
+            desc.m_NvrhiDesc.height    = k_EnvPDFTexSize;
+            desc.m_NvrhiDesc.mipLevels = m_EnvPDFMipCount;
+            desc.m_NvrhiDesc.format    = nvrhi::Format::R32_FLOAT;
+            desc.m_NvrhiDesc.isUAV     = true;
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            desc.m_NvrhiDesc.debugName = "RTXDI_EnvLightPDFTexture";
+            renderGraph.DeclareTexture(desc, m_RG_EnvLightPDFTexture);
+        }
+
+        // ---- SPD atomic counter for env PDF mip generation ----
+        {
+            renderGraph.DeclareBuffer(RenderGraph::GetSPDAtomicCounterDesc("RTXDI Env PDF SPD Counter"), m_RG_SPDEnvAtomicCounter);
+            renderGraph.WriteBuffer(m_RG_SPDEnvAtomicCounter);
+        }
+
         // Register accesses
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.ReadTexture(g_RG_GBufferAlbedo);
@@ -853,17 +899,31 @@ public:
         // ---- Local-light PDF texture size ----
         cb.m_LocalLightPDFTextureSize = { m_PDFTexSize, m_PDFTexSize };
 
-        // ---- RIS buffer segment parameters for presampling ----
+        // ---- RIS buffer segment parameters for local-light presampling ----
         cb.m_LocalRISBufferOffset = 0u;
         cb.m_LocalRISTileSize     = k_RISTileSize;
         cb.m_LocalRISTileCount    = k_RISTileCount;
         cb.m_LocalRISPad          = 0u;
 
-        // Environment lights are not presampled — leave these as zeros.
-        cb.m_EnvRISBufferOffset   = 0u;
-        cb.m_EnvRISTileSize       = 0u;
-        cb.m_EnvRISTileCount      = 0u;
-        cb.m_EnvRISPad            = 0u;
+        // ---- Environment-light sampling ----
+        cb.m_EnvPDFTextureSize = { k_EnvPDFTexSize, k_EnvPDFTexSize };
+        cb.m_EnvSamplingMode   = renderer->m_EnableSky ? 1u : 0u;
+        cb.m_NumEnvSamples     = renderer->m_EnableSky ? std::max(1u, g_ReSTIRDI_InitialSamplingParams.numPrimaryEnvironmentSamples) : 0u;
+
+        if (renderer->m_EnableSky)
+        {
+            // Env RIS segment immediately follows the local-light RIS segment.
+            cb.m_EnvRISBufferOffset = k_RISTileSize * k_RISTileCount;
+            cb.m_EnvRISTileSize     = k_EnvRISTileSize;
+            cb.m_EnvRISTileCount    = k_EnvRISTileCount;
+        }
+        else
+        {
+            // Leave env RIS slot empty — initial sampling sees tileSize=0 and skips env.
+            cb.m_EnvRISBufferOffset = 0u;
+            cb.m_EnvRISTileSize     = 0u;
+            cb.m_EnvRISTileCount    = 0u;
+        }
 
         // Spatial resampling parameters
         const ReSTIRDI_SpatialResamplingParameters& spatialParams = m_Context->GetSpatialResamplingParameters();
@@ -875,6 +935,7 @@ public:
         cb.m_PrevView = renderer->m_Scene.m_ViewPrev;
 
         cb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        cb.m_SunIntensity = renderer->m_Scene.GetSunIntensity();
 
         // Upload constant buffer (volatile — recreated every frame)
         const nvrhi::BufferHandle rtxdiCB = device->createBuffer(
@@ -897,6 +958,7 @@ public:
         nvrhi::BufferHandle lightReservoirBuffer = renderGraph.GetBuffer(m_RG_LightReservoirBuffer, RGResourceAccessMode::Read);
         nvrhi::BufferHandle risLightDataBuffer = renderGraph.GetBuffer(m_RG_RISLightDataBuffer, RGResourceAccessMode::Write);
         nvrhi::TextureHandle localLightPDFTex = renderGraph.GetTexture(m_RG_LocalLightPDFTexture, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle envLightPDFTex   = renderGraph.GetTexture(m_RG_EnvLightPDFTexture,   RGResourceAccessMode::Write);
 
         // ------------------------------------------------------------------
         // Initialize history textures on first frame
@@ -955,6 +1017,7 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(16, renderer->m_Scene.m_IndexBuffer),
             nvrhi::BindingSetItem::Texture_SRV(17, depthHistoryTex),   // previous-frame depth
             nvrhi::BindingSetItem::Texture_SRV(18, normalsHistoryTex), // previous-frame normals
+            nvrhi::BindingSetItem::Texture_SRV(19, envLightPDFTex),    // environment PDF mip chain
         };
 
         // ------------------------------------------------------------------
@@ -1013,6 +1076,63 @@ public:
                     .dispatchParams = {
                         .x = presampleGroupsX,
                         .y = k_RISTileCount,
+                        .z = 1u
+                    }
+                };
+                renderer->AddComputePass(params);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Build Environment-Light PDF, generate mip chain, and presample
+        // the env RIS segment (runs only when env sampling is enabled).
+        // ------------------------------------------------------------------
+        if (renderer->m_EnableSky)
+        {
+            // Step 1: fill mip-0 with luminance × sin(θ) weights (ReSTIR-DI)
+            //         or solid-angle-only weights (BRDF mode).
+            {
+                nvrhi::BindingSetDesc buildEnvPDFBset;
+                buildEnvPDFBset.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(1, rtxdiCB),
+                    // u8: env PDF mip-0 UAV
+                    nvrhi::BindingSetItem::Texture_UAV(8, envLightPDFTex,
+                        nvrhi::Format::UNKNOWN,
+                        nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
+                };
+                Renderer::RenderPassParams params{
+                    .commandList = commandList,
+                    .shaderName  = "RTXDI_Master_RTXDI_BuildEnvLightPDF_Main",
+                    .bindingSetDesc = buildEnvPDFBset,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(k_EnvPDFTexSize, 8u),
+                        .y = DivideAndRoundUp(k_EnvPDFTexSize, 8u),
+                        .z = 1u
+                    }
+                };
+                renderer->AddComputePass(params);
+            }
+
+            // Step 2: generate env PDF mip chain via SPD.
+            if (m_EnvPDFMipCount > 1u)
+            {
+                nvrhi::BufferHandle spdEnvCounter = renderGraph.GetBuffer(
+                    m_RG_SPDEnvAtomicCounter, RGResourceAccessMode::Write);
+                renderer->GenerateMipsUsingSPD(
+                    envLightPDFTex, spdEnvCounter, commandList,
+                    "Generate Env Light PDF Mips", SPD_REDUCTION_AVERAGE);
+            }
+
+            // Step 3: presample the env RIS segment.
+            {
+                const uint32_t presampleGroupsX = DivideAndRoundUp(k_EnvRISTileSize, 256u);
+                Renderer::RenderPassParams params{
+                    .commandList    = commandList,
+                    .shaderName     = "RTXDI_Master_RTXDI_PresampleEnvironmentMap_Main",
+                    .bindingSetDesc = bset,
+                    .dispatchParams = {
+                        .x = presampleGroupsX,
+                        .y = k_EnvRISTileCount,
                         .z = 1u
                     }
                 };
@@ -1147,13 +1267,6 @@ public:
                 denoiseDesc.resources[kOutSpec] = denoisedSpecularOutputTex;
 
                 FillNRDCommonSettingsHelper(denoiseDesc.commonSettings);
-
-                m_NRDRelaxSettings.checkerboardMode = nrd::CheckerboardMode::OFF;
-                if (g_ReSTIRDI_EnableCheckerboard && 0) // TODO: debug why everything is skewed and scaled to a corner
-                {
-                    m_NRDRelaxSettings.checkerboardMode = m_Context->GetStaticParameters().CheckerboardSamplingMode == rtxdi::CheckerboardMode::Black ? nrd::CheckerboardMode::WHITE : nrd::CheckerboardMode::BLACK;
-                }
-                
                 denoiseDesc.denoiserSettings = &m_NRDRelaxSettings;
 
                 m_DenoiserHelper->Execute(commandList, renderGraph, denoiseDesc);
@@ -1203,6 +1316,13 @@ private:
         RTXDI_LightBufferParameters lbp{};
         const uint32_t totalLights = renderer->m_Scene.m_LightCount;
 
+        // Environment light: present and presampled when sky is enabled.
+        // The virtual env-light index is one
+        // past the end of the real lights array so it never aliases a GPULight.
+        const bool bEnvPresent = renderer->m_EnableSky;
+        lbp.environmentLightParams.lightPresent = bEnvPresent ? 1u : 0u;
+        lbp.environmentLightParams.lightIndex = bEnvPresent ? totalLights : 0u;
+
         if (totalLights == 0)
             return lbp;
 
@@ -1217,9 +1337,7 @@ private:
             lbp.localLightBufferRegion.numLights       = totalLights - 1;
         }
 
-        // No environment map in Phase 1
-        lbp.environmentLightParams.lightPresent = 0;
-        lbp.environmentLightParams.lightIndex   = 0;
+
 
         return lbp;
     }
