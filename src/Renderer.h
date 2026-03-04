@@ -217,7 +217,7 @@ struct Renderer
 
     // Rendering options
     bool m_UseMeshletRendering = true;
-    int m_ForcedLOD = -1;
+    int m_ForcedLOD = 0; // force all mesh LOD to 0, because i dont want to deal with RT Shadows issues (all BLAS built on LOD 0 for now)
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;
     uint32_t m_PathTracerMaxBounces = 8;
