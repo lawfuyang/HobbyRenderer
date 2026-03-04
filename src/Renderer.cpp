@@ -731,6 +731,15 @@ void Renderer::Run()
             }
         };
 
+        SDL_WindowFlags flags = SDL_GetWindowFlags(m_Window);
+        const bool bWindowIsInFocus = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
+
+        if (!bWindowIsInFocus)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue; // Skip rendering when window is not in focus to save resources
+        }
+
         if (m_RequestedShaderReload)
         {
             ReloadShaders();
