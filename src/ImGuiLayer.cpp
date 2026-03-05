@@ -467,6 +467,130 @@ void ImGuiLayer::UpdateFrame()
 
             std::string text = (node.m_Name.empty() ? "Node" : node.m_Name) + " [" + std::to_string(renderer->m_SelectedNodeIndex) + "]";
             drawList->AddText(ImVec2(cx, cy - radiusPx - 20), IM_COL32(255, 255, 0, 255), text.c_str());
+
+            // --- Spotlight cone visualization ---
+            if (node.m_LightIndex >= 0)
+            {
+                const Scene::Light& light = scene.m_Lights[node.m_LightIndex];
+                if (light.m_Type == Scene::Light::Spot)
+                {
+                    // In glTF, spotlights point along the node's local -Z axis.
+                    // m_WorldTransform row 2 (0-indexed) is the Z-axis; negate for forward.
+                    const Matrix& wt = node.m_WorldTransform;
+                    DirectX::XMVECTOR vForward = DirectX::XMVectorSet(-wt._31, -wt._32, -wt._33, 0.0f);
+                    vForward = DirectX::XMVector3Normalize(vForward);
+
+                    // Build two orthogonal vectors perpendicular to the forward direction
+                    DirectX::XMVECTOR vUp = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+                    if (fabsf(DirectX::XMVectorGetY(vForward)) > 0.99f)
+                        vUp = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+                    DirectX::XMVECTOR vSide = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(vForward, vUp));
+                    vUp = DirectX::XMVector3Cross(vSide, vForward);
+
+                    // Cone length: use range if set, otherwise a reasonable world-space fallback
+                    float coneLength = (light.m_Range > 1e-4f) ? light.m_Range : 3.0f;
+
+                    // Light origin in world space (from node transform translation)
+                    DirectX::XMVECTOR vOrigin = DirectX::XMVectorSet(wt._41, wt._42, wt._43, 1.0f);
+
+                    // Helper: project a world point to screen, returns false if behind camera
+                    auto ProjectToScreen = [&](DirectX::XMVECTOR vWorld, ImVec2& outScreen) -> bool
+                    {
+                        DirectX::XMVECTOR vS = DirectX::XMVector3Project(vWorld, 0.0f, 0.0f, viewportWidth, viewportHeight, 0.0f, 1.0f, proj, view, DirectX::XMMatrixIdentity());
+                        DirectX::XMFLOAT3 s;
+                        DirectX::XMStoreFloat3(&s, vS);
+                        outScreen = ImVec2(s.x, s.y);
+                        return (s.z >= 0.0f && s.z <= 1.0f);
+                    };
+
+                    // Draw a cone ring: project N points around the rim circle at the given half-angle
+                    auto DrawConeRing = [&](float halfAngle, ImU32 color, float thickness, int segments = 24)
+                    {
+                        float rimRadius = coneLength * tanf(halfAngle);
+                        DirectX::XMVECTOR vTip = DirectX::XMVectorAdd(vOrigin, DirectX::XMVectorScale(vForward, coneLength));
+
+                        ImVec2 prevScreen;
+                        bool prevValid = false;
+                        ImVec2 firstScreen;
+                        bool firstValid = false;
+
+                        for (int s = 0; s <= segments; ++s)
+                        {
+                            float theta = (float)s / (float)segments * DirectX::XM_2PI;
+                            DirectX::XMVECTOR vRimPoint = DirectX::XMVectorAdd(
+                                vTip,
+                                DirectX::XMVectorAdd(
+                                    DirectX::XMVectorScale(vSide, rimRadius * cosf(theta)),
+                                    DirectX::XMVectorScale(vUp,   rimRadius * sinf(theta))
+                                )
+                            );
+
+                            ImVec2 screenRim;
+                            bool valid = ProjectToScreen(vRimPoint, screenRim);
+
+                            if (s == 0) { firstScreen = screenRim; firstValid = valid; }
+
+                            if (prevValid && valid)
+                                drawList->AddLine(prevScreen, screenRim, color, thickness);
+
+                            prevScreen = screenRim;
+                            prevValid = valid;
+                        }
+
+                        // Draw 4 lines from origin to rim (at cardinal directions around the cone)
+                        for (int s = 0; s < 4; ++s)
+                        {
+                            float theta = (float)s / 4.0f * DirectX::XM_2PI;
+                            DirectX::XMVECTOR vRimPoint = DirectX::XMVectorAdd(
+                                vTip,
+                                DirectX::XMVectorAdd(
+                                    DirectX::XMVectorScale(vSide, rimRadius * cosf(theta)),
+                                    DirectX::XMVectorScale(vUp,   rimRadius * sinf(theta))
+                                )
+                            );
+                            ImVec2 screenRim;
+                            bool valid = ProjectToScreen(vRimPoint, screenRim);
+                            ImVec2 screenOrigin;
+                            bool originValid = ProjectToScreen(vOrigin, screenOrigin);
+                            if (valid && originValid)
+                                drawList->AddLine(screenOrigin, screenRim, color, thickness);
+                        }
+                    };
+
+                    // Draw direction arrow from origin along forward axis
+                    {
+                        float arrowLen = coneLength * 0.25f;
+                        DirectX::XMVECTOR vArrowTip = DirectX::XMVectorAdd(vOrigin, DirectX::XMVectorScale(vForward, arrowLen));
+                        ImVec2 screenOrigin, screenArrowTip;
+                        bool o = ProjectToScreen(vOrigin, screenOrigin);
+                        bool t = ProjectToScreen(vArrowTip, screenArrowTip);
+                        if (o && t)
+                        {
+                            drawList->AddLine(screenOrigin, screenArrowTip, IM_COL32(255, 200, 50, 255), 2.5f);
+                            // Small arrowhead triangle
+                            float adx = screenArrowTip.x - screenOrigin.x;
+                            float ady = screenArrowTip.y - screenOrigin.y;
+                            float alen = sqrtf(adx * adx + ady * ady);
+                            if (alen > 1e-4f) { adx /= alen; ady /= alen; }
+                            float headSize = 8.0f;
+                            float perpX = -ady, perpY = adx;
+                            ImVec2 ah1 = ImVec2(screenArrowTip.x + headSize * adx,  screenArrowTip.y + headSize * ady);
+                            ImVec2 ah2 = ImVec2(screenArrowTip.x + headSize * 0.5f * perpX - headSize * 0.5f * adx,
+                                                screenArrowTip.y + headSize * 0.5f * perpY - headSize * 0.5f * ady);
+                            ImVec2 ah3 = ImVec2(screenArrowTip.x - headSize * 0.5f * perpX - headSize * 0.5f * adx,
+                                                screenArrowTip.y - headSize * 0.5f * perpY - headSize * 0.5f * ady);
+                            drawList->AddTriangleFilled(ah1, ah2, ah3, IM_COL32(255, 200, 50, 255));
+                        }
+                    }
+
+                    // Outer cone (solid yellow)
+                    DrawConeRing(light.m_SpotOuterConeAngle, IM_COL32(255, 255, 0, 200), 1.5f);
+
+                    // Inner cone (brighter, thinner)
+                    if (light.m_SpotInnerConeAngle > 1e-4f)
+                        DrawConeRing(light.m_SpotInnerConeAngle, IM_COL32(255, 255, 180, 160), 1.0f);
+                }
+            }
         }
         else
         {
