@@ -28,6 +28,10 @@
 // This must come before any resource declaration that uses RTXDI types.
 #include "Rtxdi/RtxdiParameters.h"
 
+// Z-curve utilities (RTXDI_LinearIndexToZCurve, RTXDI_ZCurveToLinearIndex) used
+// by RAB_EvaluateLocalLightSourcePdf and RTXDI_BuildLocalLightPDF_Main.
+#include "Rtxdi/Utils/Math.hlsli"
+
 // ============================================================================
 // Resource declarations
 // ============================================================================
@@ -698,29 +702,30 @@ float RAB_GetLightTargetPdfForVolume(RAB_LightInfo lightInfo, float3 volumeCente
 
 float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
 {
-    // If environment sampling is enabled, we only want sky and emissive lights.
-    // Local lights (point, spot, etc.) from the global light buffer are filtered out.
-    if (g_RTXDIConst.m_EnvSamplingMode != 0u)
+    if (g_RTXDIConst.m_LocalLightCount == 0)
         return 0.0;
 
-    // For a uniform distribution over all lights
-    uint total = g_RTXDIConst.m_LocalLightCount;
-    if (total == 0)
-        return 0.0;
-    
-    // In a full implementation, this would read from a PDF texture
-    // built during light preprocessing, similar to environment map PDF
-    // For now, use uniform distribution with importance weighting
-    
-    // Load the light to check its importance
-    RAB_LightInfo lightInfo = RAB_LoadLightInfo(lightIndex, false);
-    
-    // Use a simple heuristic: brighter lights get higher probability
-    float luminance = Luminance(lightInfo.radiance);
-    
-    // This is simplified - a proper implementation would pre-compute
-    // the sum of all light weights for normalization
-    return (1.0 + luminance) / float(total);
+    // lightIndex is the global light index as used by RAB_LoadLightInfo.
+    // The PDF texture is indexed by the LOCAL index (0-based within the local light region),
+    // matching the convention used in RTXDI_BuildLocalLightPDF_Main.
+    const uint localIndex = lightIndex - g_RTXDIConst.m_LocalLightFirstIndex;
+
+    uint2 pdfTextureSize = g_RTXDIConst.m_LocalLightPDFTextureSize;
+    uint2 texelPosition  = RTXDI_LinearIndexToZCurve(localIndex);
+    float texelValue     = g_RTXDI_LocalLightPDFTexture[texelPosition].r;
+
+    // The last mip level holds a single texel whose value is the average of all mip-0
+    // texels (padded to a square). Multiplying by the square of the padded side length
+    // recovers the total unnormalized weight sum — matching the FullSample normalization.
+    int   lastMipLevel = max(0, int(floor(log2(float(max(pdfTextureSize.x, pdfTextureSize.y))))));
+    float averageValue = g_RTXDI_LocalLightPDFTexture.mips[lastMipLevel][uint2(0, 0)].r;
+    float squareSide   = float(1u << uint(lastMipLevel));
+    float sum          = averageValue * squareSide * squareSide;
+
+    if (sum <= 0.0)
+        return 1.0 / float(g_RTXDIConst.m_LocalLightCount);
+
+    return texelValue / sum;
 }
 
 // Samples a polymorphic light relative to the given receiver surface.

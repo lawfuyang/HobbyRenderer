@@ -128,12 +128,23 @@ void RTXDI_BuildLocalLightPDF_Main(uint2 gid : SV_DispatchThreadID)
         const uint  globalIndex = lightIndex + g_RTXDIConst.m_LocalLightFirstIndex;
         const GPULight gl       = g_Lights[globalIndex];
 
-        // Pre-computed radiance depends on light type (same logic as RAB_LoadLightInfo).
-        // For the PDF we only need relative luminance, so we use color * intensity.
-        // Sky-adjusted sun radiance is expensive to compute here; the sun is an
-        // infinite light anyway and is handled by a separate path (not presampled).
+        // Type-aware flux (power) computation, matching FullSample PolymorphicLight::getPower.
+        // This ensures the PDF texture correctly weights lights by total emitted power,
+        // not just a simplified luminance heuristic.
         const float3 radiance = gl.m_Color * gl.m_Intensity;
-        weight = max(Luminance(radiance), 1e-8f); // small epsilon: never fully zero
+        const float  lum      = Luminance(radiance);
+
+        if (gl.m_Type == 1u) // Point light: isotropic flux = luminance * 4π
+        {
+            weight = max(lum * 4.0f * PI, 1e-8f);
+        }
+        else if (gl.m_Type == 2u) // Spot light: cone flux = luminance * 2π * (1 - cos(outerAngle))
+        {
+            float cosOuter = cos(gl.m_SpotOuterConeAngle);
+            weight = max(lum * 2.0f * PI * (1.0f - cosOuter), 1e-8f);
+        }
+        // Type 0 (directional) → weight stays 0: directional lights are infinite lights,
+        // handled separately and never presampled via the local light PDF texture.
     }
 
     g_PDFMip0[gid] = weight;
