@@ -265,7 +265,11 @@ void PrepareLightingByproducts(inout LightingInputs inputs)
     inputs.NdotV = saturate(dot(inputs.N, inputs.V));
     inputs.NdotL = saturate(dot(inputs.N, inputs.L));
 
-    float3 H = normalize(inputs.V + inputs.L);
+    // Guard against degenerate half-vector when V ≈ -L (viewer looking away from light).
+    // normalize(0) produces NaN in HLSL which propagates to bright/white pixels.
+    float3 VplusL = inputs.V + inputs.L;
+    float  VplusLLen = dot(VplusL, VplusL);
+    float3 H = (VplusLLen > 1e-8f) ? (VplusL * rsqrt(VplusLLen)) : inputs.N;
     inputs.NdotH = saturate(dot(inputs.N, H));
     inputs.VdotH = saturate(dot(inputs.V, H));
     inputs.LdotV = saturate(dot(inputs.L, inputs.V));
@@ -296,12 +300,14 @@ LightingComponents EvaluateDirectLight(LightingInputs inputs, float3 radiance, f
 {
     LightingComponents components;
 
+    // DisneyBurleyDiffuse already returns Fd * NdotL / PI — do NOT multiply by NdotL again.
     float diffuseTerm = DisneyBurleyDiffuse(inputs.NdotL, inputs.NdotV, inputs.LdotH, inputs.roughness);
     float3 diffuse = diffuseTerm * inputs.kD * inputs.baseColor;
 
+    // ComputeSpecularBRDF returns D*G*F / (4*NdotV*NdotL) — multiply by NdotL once here.
     float3 spec = ComputeSpecularBRDF(inputs.F, inputs.NdotH, inputs.NdotV, inputs.NdotL, inputs.roughness);
 
-    components.diffuse = diffuse * inputs.NdotL * radiance * shadow;
+    components.diffuse = diffuse * radiance * shadow;
     components.specular = spec * inputs.NdotL * radiance * shadow;
 
     return components;
