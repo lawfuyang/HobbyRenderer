@@ -551,27 +551,41 @@ RAB_LightInfo RAB_LoadLightInfo(uint lightIndex, bool previousFrame)
     li.lightType            = gl.m_Type;
 
     // Compute radiance upfront
-    if (lightIndex == 0 && li.lightType == 0 && g_RTXDIConst.m_EnableSky != 0)
+    // RTXDI's shading formula: finalContrib = lightSample.radiance * invPdf / solidAnglePdf
+    // After RIS normalisation for a single infinite light: invPdf ≈ numInfiniteLights = 1,
+    // so  finalContrib = radiance * solidAngle.
+    // For the result to equal irradiance (the quantity the scene stores in color*intensity),
+    // we need: li.radiance = irradiance / solidAngle  (W/m²/sr).
+    // This matches the FullSample's ConvertLight: radiance = color * irradiance / solidAngle.
+    if (li.lightType == 0u) // Directional sun light (type 0 — infinite/directional)
     {
-        // GetAtmosphereSunRadiance returns solar IRRADIANCE (W/m²):
-        //   solar_irradiance * transmittance * intensity
-        // RTXDI's shading formula is:
-        //   finalRadiance = lightSample.radiance * invPdf / solidAnglePdf
-        // where solidAnglePdf = 1 / solidAngle_sun.
-        // So finalRadiance = lightSample.radiance * solidAngle_sun.
-        // For the result to equal the correct irradiance contribution (solar_irradiance * transmittance),
-        // we need lightSample.radiance = irradiance / solidAngle_sun  (i.e., per-steradian radiance).
-        // This matches the FullSample's DirectionalLight which stores radiance = flux / solidAngle.
-        float3 p_atmo = GetAtmospherePos(float3(0.0, 0.0, 0.0));
-        float3 solarIrradiance = GetAtmosphereSunRadiance(p_atmo, li.direction, gl.m_Intensity);
         // Sun solid angle = 2π(1 - cos(halfAngle))
         float solidAngle = 2.0 * PI * (1.0 - li.cosSunAngularRadius);
-        // Guard against degenerate (point-like) sun with zero solid angle
-        li.radiance = (solidAngle > 1e-10) ? (solarIrradiance / solidAngle) : solarIrradiance;
+
+        if (lightIndex == 0 && g_RTXDIConst.m_EnableSky != 0)
+        {
+            // Sky enabled: use atmosphere-computed irradiance.
+            // GetAtmosphereSunRadiance returns solar IRRADIANCE (W/m²): solar_irradiance * transmittance * intensity
+            float3 p_atmo = GetAtmospherePos(float3(0.0, 0.0, 0.0));
+            float3 solarIrradiance = GetAtmosphereSunRadiance(p_atmo, li.direction, gl.m_Intensity);
+            // Guard against degenerate (point-like) sun with zero solid angle
+            li.radiance = (solidAngle > 1e-10) ? (solarIrradiance / solidAngle) : solarIrradiance;
+        }
+        else
+        {
+            // Sky disabled: use scene light's color * intensity as irradiance (W/m²) and
+            // convert to per-steradian radiance (W/m²/sr) by dividing by solid angle —
+            // exactly what FullSample's ConvertLight does for DirectionalLight.
+            // Without this division the sun contribution is multiplied by solidAngle in shading
+            // (≈ 6.5e-5 sr for a realistic sun disk) and appears black.
+            li.radiance = (solidAngle > 1e-10) ? (gl.m_Color * gl.m_Intensity / solidAngle)
+                                               : (gl.m_Color * gl.m_Intensity);
+        }
     }
     else
     {
-        // Analytic light: simple color * intensity
+        // Point / spot lights: color * intensity is already in the units expected by
+        // RAB_SamplePolymorphicLight (attenuation and 1/r² are applied there).
         li.radiance = gl.m_Color * gl.m_Intensity;
     }
 
