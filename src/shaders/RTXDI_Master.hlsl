@@ -344,16 +344,21 @@ void RTXDI_TemporalResampling_Main(
         float3 mv = g_GBufferMV.Load(int3(iPixel, 0)).xyz;
         float3 pixelMotion = ConvertMotionVectorToPixelSpace(g_RTXDIConst.m_View, g_RTXDIConst.m_PrevView, iPixel, mv);
 
+        // Permutation sampling: enabled by the constant buffer flag, but disabled
+        // for complex (low-roughness) surfaces to avoid noise on mirror-like materials.
+        bool usePermutationSampling = (g_RTXDIConst.m_TemporalEnablePermutationSampling != 0u)
+            && !IsComplexSurface(iPixel, surface);
+
         RTXDI_DITemporalResamplingParameters tparams;
         tparams.screenSpaceMotion        = pixelMotion;
         tparams.sourceBufferIndex        = g_RTXDIConst.m_TemporalResamplingInputBufferIndex;
-        tparams.maxHistoryLength         = 20u;
-        tparams.biasCorrectionMode       = RTXDI_BIAS_CORRECTION_BASIC;
-        tparams.depthThreshold           = 0.1;
-        tparams.normalThreshold          = 0.5;
-        tparams.enableVisibilityShortcut = false;
-        tparams.enablePermutationSampling = true;
-        tparams.uniformRandomNumber      = RTXDI_JenkinsHash(g_RTXDIConst.m_FrameIndex);
+        tparams.maxHistoryLength         = g_RTXDIConst.m_TemporalMaxHistoryLength;
+        tparams.biasCorrectionMode       = g_RTXDIConst.m_TemporalBiasCorrectionMode;
+        tparams.depthThreshold           = g_RTXDIConst.m_TemporalDepthThreshold;
+        tparams.normalThreshold          = g_RTXDIConst.m_TemporalNormalThreshold;
+        tparams.enableVisibilityShortcut = g_RTXDIConst.m_TemporalEnableVisibilityShortcut != 0u;
+        tparams.enablePermutationSampling = usePermutationSampling;
+        tparams.uniformRandomNumber      = g_RTXDIConst.m_TemporalUniformRandomNumber;
 
         RAB_LightSample selectedSample = RAB_EmptyLightSample();
         int2 temporalPixelPos;
@@ -362,10 +367,21 @@ void RTXDI_TemporalResampling_Main(
             pixelPosition, surface, curReservoir, rng,
             rtParams, rbp, tparams,
             temporalPixelPos, selectedSample);
+
+        // Write the reprojected pixel position for gradient/confidence denoising passes.
+        g_RTXDITemporalSamplePositions[reservoirPosition] = temporalPixelPos;
+    }
+    else
+    {
+        // Sky / invalid pixel: write sentinel (-1, -1) so denoising passes can skip it.
+        g_RTXDITemporalSamplePositions[reservoirPosition] = int2(-1, -1);
     }
 
     // Boiling filter (operates within the 8×8 group)
-    RTXDI_BoilingFilter(LocalIndex, RAB_GetBoilingFilterStrength(), outReservoir);
+    if (g_RTXDIConst.m_TemporalEnableBoilingFilter != 0u)
+    {
+        RTXDI_BoilingFilter(LocalIndex, g_RTXDIConst.m_TemporalBoilingFilterStrength, outReservoir);
+    }
 
     RTXDI_StoreDIReservoir(outReservoir, rbp, reservoirPosition,
         g_RTXDIConst.m_TemporalResamplingOutputBufferIndex);
@@ -406,14 +422,14 @@ void RTXDI_SpatialResampling_Main(uint2 GlobalIndex : SV_DispatchThreadID)
         RTXDI_DISpatialResamplingParameters sparams;
         sparams.sourceBufferIndex             = g_RTXDIConst.m_SpatialResamplingInputBufferIndex;
         sparams.numSamples                    = g_RTXDIConst.m_SpatialNumSamples;
-        sparams.numDisocclusionBoostSamples   = 0;
-        sparams.targetHistoryLength           = 20u;   // match temporal maxHistoryLength
-        sparams.biasCorrectionMode            = RTXDI_BIAS_CORRECTION_BASIC;
+        sparams.numDisocclusionBoostSamples   = g_RTXDIConst.m_SpatialNumDisocclusionBoostSamples;
+        sparams.targetHistoryLength           = g_RTXDIConst.m_TemporalMaxHistoryLength; // match temporal, per FullSample
+        sparams.biasCorrectionMode            = g_RTXDIConst.m_SpatialBiasCorrectionMode;
         sparams.samplingRadius                = g_RTXDIConst.m_SpatialSamplingRadius;
-        sparams.depthThreshold                = 0.1f;
-        sparams.normalThreshold               = 0.5f;
+        sparams.depthThreshold                = g_RTXDIConst.m_SpatialDepthThreshold;
+        sparams.normalThreshold               = g_RTXDIConst.m_SpatialNormalThreshold;
         sparams.enableMaterialSimilarityTest  = true;
-        sparams.discountNaiveSamples          = false;
+        sparams.discountNaiveSamples          = g_RTXDIConst.m_SpatialDiscountNaiveSamples != 0u;
 
         RAB_LightSample selectedSample = RAB_EmptyLightSample();
         outReservoir = RTXDI_DISpatialResampling(

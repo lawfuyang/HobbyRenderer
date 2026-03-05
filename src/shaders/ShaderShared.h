@@ -608,8 +608,37 @@ struct RTXDIConstants
 
     Vector3 m_SunDirection;
     float m_SunIntensity;
+
+    //
     uint32_t m_NumEnvSamples;            // numEnvironmentMapSamples drawn per pixel
     uint32_t m_NumLocalLightSamples;     // numPrimaryLocalLightSamples
     uint32_t m_NumInfiniteLightSamples;  // numPrimaryInfiniteLightSamples
     uint32_t m_NumBrdfSamples;           // numPrimaryBrdfSamples
+
+    // ---- Temporal resampling parameters (from ReSTIRDI_TemporalResamplingParameters) ----
+    uint32_t m_TemporalMaxHistoryLength;          // maxHistoryLength
+    uint32_t m_TemporalBiasCorrectionMode;        // temporalBiasCorrection (ReSTIRDI_TemporalBiasCorrectionMode)
+    float    m_TemporalDepthThreshold;            // temporalDepthThreshold
+    float    m_TemporalNormalThreshold;           // temporalNormalThreshold
+    //
+    uint32_t m_TemporalEnableVisibilityShortcut;  // discardInvisibleSamples
+    uint32_t m_TemporalEnablePermutationSampling; // enablePermutationSampling
+    uint32_t m_TemporalUniformRandomNumber;       // uniformRandomNumber (JenkinsHash(frameIndex))
+    uint32_t m_TemporalEnableBoilingFilter;       // enableBoilingFilter
+    //
+    float    m_TemporalBoilingFilterStrength;     // boilingFilterStrength
+    uint32_t m_TemporalPad0;
+    uint32_t m_TemporalPad1;
+    uint32_t m_TemporalPad2;
+
+    // ---- Spatial resampling parameters (from ReSTIRDI_SpatialResamplingParameters) ----
+    uint32_t m_SpatialNumDisocclusionBoostSamples; // numDisocclusionBoostSamples
+    uint32_t m_SpatialBiasCorrectionMode;          // spatialBiasCorrection (ReSTIRDI_SpatialBiasCorrectionMode)
+    float    m_SpatialDepthThreshold;              // spatialDepthThreshold
+    float    m_SpatialNormalThreshold;             // spatialNormalThreshold
+    //
+    uint32_t m_SpatialDiscountNaiveSamples;        // discountNaiveSamples
+    uint32_t m_SpatialPad0;
+    uint32_t m_SpatialPad1;
+    uint32_t m_SpatialPad2;
 };

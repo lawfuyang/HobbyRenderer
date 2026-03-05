@@ -85,6 +85,11 @@ RWTexture2D<float4> g_RTXDISpecularOutput : register(u6); // RELAX IN/OUT_SPEC_R
 RWTexture2D<float>  g_RTXDILinearDepth    : register(u7); // RELAX IN_VIEWZ (written by GenerateViewZ pass)
 #endif
 
+// u8 is reserved for g_EnvPDFMip0 (BuildEnvLightPDF pass).
+// Temporal sample positions: screen-sized int2 UAV written by the temporal resampling pass.
+// Stores the reprojected pixel position for each reservoir, used by gradient/confidence denoising passes.
+RWTexture2D<int2> g_RTXDITemporalSamplePositions : register(u9);
+
 // Hook up the RTXDI SDK macro names to our resources
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER   g_RTXDI_NeighborOffsets
 #define RTXDI_RIS_BUFFER                g_RTXDI_RISBuffer
@@ -1043,6 +1048,21 @@ int2 RAB_ClampSamplePositionIntoView(int2 pixelPosition, bool previousFrame)
 }
 
 float RAB_GetBoilingFilterStrength() { return 0.25; }
+
+// ============================================================================
+// IsComplexSurface — gates permutation sampling on surface complexity.
+// Returns true for surfaces where permutation sampling would increase noise:
+// very smooth (low roughness) surfaces have high-frequency specular lobes that
+// are sensitive to sample position perturbation.
+// Matches FullSample's IsComplexSurface heuristic (roughness threshold).
+// ============================================================================
+bool IsComplexSurface(int2 pixelPosition, RAB_Surface surface)
+{
+    // Surfaces with roughness below 0.1 are considered "complex" (mirror-like).
+    // Permutation sampling on such surfaces causes visible noise because the
+    // specular lobe is very narrow and small position offsets land outside it.
+    return surface.roughness < 0.1f;
+}
 
 // ============================================================================
 // Ray tracing helper stubs

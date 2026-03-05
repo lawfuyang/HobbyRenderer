@@ -173,7 +173,7 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
         // my own settings
     case ReSTIRDIQualityPreset::Custom:
         g_ReSTIRDI_EnableCheckerboard = false;
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::None;
+        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
         g_ReSTIRDI_NumLocalLightUniformSamples = 8;
         g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
@@ -450,6 +450,11 @@ public:
     RGTextureHandle m_RG_RTXDIRawDiffuseOutput;  // IN_DIFF_RADIANCE_HITDIST
     RGTextureHandle m_RG_RTXDIRawSpecularOutput; // IN_SPEC_RADIANCE_HITDIST
 
+    // Temporal sample positions UAV — written by the temporal resampling pass.
+    // Screen-sized RG32_SINT texture storing the reprojected pixel position for each reservoir.
+    // Used by gradient/confidence denoising passes.
+    RGTextureHandle m_RG_RTXDITemporalSamplePositions;
+
     // Track if history textures are newly created in current frame
     bool m_AlbedoHistoryIsNew = false;
     bool m_ORMHistoryIsNew    = false;
@@ -650,6 +655,21 @@ public:
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             desc.m_NvrhiDesc.debugName = "RTXDIDIOutput";
             renderGraph.DeclareTexture(desc, g_RG_RTXDIDIOutput);
+        }
+
+        // ------------------------------------------------------------------
+        // Temporal sample positions UAV (written by temporal resampling pass)
+        // RG32_SINT: stores the reprojected pixel position (int2) per reservoir.
+        // ------------------------------------------------------------------
+        {
+            RGTextureDesc desc;
+            desc.m_NvrhiDesc.width  = width;
+            desc.m_NvrhiDesc.height = height;
+            desc.m_NvrhiDesc.format = nvrhi::Format::RG32_SINT;
+            desc.m_NvrhiDesc.isUAV  = true;
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            desc.m_NvrhiDesc.debugName    = "RTXDITemporalSamplePositions";
+            renderGraph.DeclareTexture(desc, m_RG_RTXDITemporalSamplePositions);
         }
 
         // ------------------------------------------------------------------
@@ -929,9 +949,29 @@ public:
         }
 
         // Spatial resampling parameters
-        const ReSTIRDI_SpatialResamplingParameters& spatialParams = m_Context->GetSpatialResamplingParameters();
+        const ReSTIRDI_SpatialResamplingParameters spatialParams = m_Context->GetSpatialResamplingParameters();
         cb.m_SpatialNumSamples        = spatialParams.numSpatialSamples;
         cb.m_SpatialSamplingRadius    = spatialParams.spatialSamplingRadius;
+
+        // Temporal resampling parameters — forwarded from the ReSTIRDI context
+        // (the context already calls JenkinsHash(frameIndex) to compute uniformRandomNumber)
+        const ReSTIRDI_TemporalResamplingParameters temporalParams = m_Context->GetTemporalResamplingParameters();
+        cb.m_TemporalMaxHistoryLength          = temporalParams.maxHistoryLength;
+        cb.m_TemporalBiasCorrectionMode        = static_cast<uint32_t>(temporalParams.temporalBiasCorrection);
+        cb.m_TemporalDepthThreshold            = temporalParams.temporalDepthThreshold;
+        cb.m_TemporalNormalThreshold           = temporalParams.temporalNormalThreshold;
+        cb.m_TemporalEnableVisibilityShortcut  = temporalParams.discardInvisibleSamples;
+        cb.m_TemporalEnablePermutationSampling = temporalParams.enablePermutationSampling;
+        cb.m_TemporalUniformRandomNumber       = temporalParams.uniformRandomNumber;
+        cb.m_TemporalEnableBoilingFilter       = temporalParams.enableBoilingFilter;
+        cb.m_TemporalBoilingFilterStrength     = temporalParams.boilingFilterStrength;
+
+        // Spatial resampling parameters — forwarded from the ReSTIRDI context
+        cb.m_SpatialNumDisocclusionBoostSamples = spatialParams.numDisocclusionBoostSamples;
+        cb.m_SpatialBiasCorrectionMode          = static_cast<uint32_t>(spatialParams.spatialBiasCorrection);
+        cb.m_SpatialDepthThreshold              = spatialParams.spatialDepthThreshold;
+        cb.m_SpatialNormalThreshold             = spatialParams.spatialNormalThreshold;
+        cb.m_SpatialDiscountNaiveSamples        = spatialParams.discountNaiveSamples;
 
         // View matrices
         cb.m_View     = renderer->m_Scene.m_View;
@@ -962,6 +1002,7 @@ public:
         nvrhi::BufferHandle risLightDataBuffer = renderGraph.GetBuffer(m_RG_RISLightDataBuffer, RGResourceAccessMode::Write);
         nvrhi::TextureHandle localLightPDFTex = renderGraph.GetTexture(m_RG_LocalLightPDFTexture, RGResourceAccessMode::Write);
         nvrhi::TextureHandle envLightPDFTex   = renderGraph.GetTexture(m_RG_EnvLightPDFTexture,   RGResourceAccessMode::Write);
+        nvrhi::TextureHandle temporalSamplePosTex = renderGraph.GetTexture(m_RG_RTXDITemporalSamplePositions, RGResourceAccessMode::Write);
 
         // ------------------------------------------------------------------
         // Initialize history textures on first frame
@@ -1021,6 +1062,7 @@ public:
             nvrhi::BindingSetItem::Texture_SRV(17, depthHistoryTex),   // previous-frame depth
             nvrhi::BindingSetItem::Texture_SRV(18, normalsHistoryTex), // previous-frame normals
             nvrhi::BindingSetItem::Texture_SRV(19, envLightPDFTex),    // environment PDF mip chain
+            nvrhi::BindingSetItem::Texture_UAV(9, temporalSamplePosTex), // temporal sample positions (written by temporal resampling pass)
         };
 
         // ------------------------------------------------------------------
