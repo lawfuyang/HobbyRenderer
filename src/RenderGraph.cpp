@@ -967,7 +967,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         }
 
         bool aliased = false;
-        if (m_AliasingEnabled && !bIsBuffer && !resource->m_IsPersistent) // TODO: figure out why the fuck aliasing buffers is buggy
+        if (m_AliasingEnabled && !resource->m_IsPersistent)
         {
             for (uint32_t candidateIdx : sortedIndices)
             {

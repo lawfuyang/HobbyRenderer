@@ -6,8 +6,6 @@
 
 extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_BloomUpPyramid;
-RGBufferHandle g_RG_LuminanceHistogram;
-RGBufferHandle g_RG_ExposureBuffer;
 
 static constexpr float kMinLogLuminance = -10.0f;
 static constexpr float kMaxLogLuminance = 20.0f;
@@ -15,6 +13,9 @@ static constexpr float kMaxLogLuminance = 20.0f;
 class HDRRenderer : public IRenderer
 {
 public:
+    RGBufferHandle m_RG_LuminanceHistogram;
+    RGBufferHandle m_RG_ExposureBuffer;
+
     bool Setup(RenderGraph& renderGraph) override
     {
         Renderer* renderer = Renderer::GetInstance();
@@ -28,7 +29,7 @@ public:
             desc.m_NvrhiDesc.debugName = "LuminanceHistogram_RG";
             desc.m_NvrhiDesc.canHaveUAVs = true;
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            renderGraph.DeclareBuffer(desc, g_RG_LuminanceHistogram);
+            renderGraph.DeclareBuffer(desc, m_RG_LuminanceHistogram);
         }
 
         // Exposure Buffer
@@ -40,14 +41,9 @@ public:
             desc.m_NvrhiDesc.debugName = "ExposureBuffer_RG";
             desc.m_NvrhiDesc.canHaveUAVs = true;
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            renderGraph.DeclareBuffer(desc, g_RG_ExposureBuffer);
+            renderGraph.DeclarePersistentBuffer(desc, m_RG_ExposureBuffer);
         }
 
-        if (renderer->m_EnableAutoExposure)
-        {
-            renderGraph.WriteBuffer(g_RG_LuminanceHistogram);
-        }
-        renderGraph.WriteBuffer(g_RG_ExposureBuffer);
         renderGraph.ReadTexture(g_RG_HDRColor);
         if (renderer->m_EnableBloom && renderer->m_Mode != RenderingMode::ReferencePathTracer)
         {
@@ -64,8 +60,8 @@ public:
 
         nvrhi::utils::ScopedMarker marker(commandList, "HDR Post-Processing");
 
-        nvrhi::BufferHandle luminanceHistogram = renderer->m_EnableAutoExposure ? renderGraph.GetBuffer(g_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
-        nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(g_RG_ExposureBuffer, RGResourceAccessMode::Write);
+        nvrhi::BufferHandle luminanceHistogram = renderer->m_EnableAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
+        nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(m_RG_ExposureBuffer, RGResourceAccessMode::Write);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
         nvrhi::TextureHandle bloomUpPyramid = (renderer->m_EnableBloom && renderer->m_Mode != RenderingMode::ReferencePathTracer) ? renderGraph.GetTexture(g_RG_BloomUpPyramid, RGResourceAccessMode::Read) : nullptr;
 
