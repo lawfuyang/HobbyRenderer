@@ -1029,6 +1029,9 @@ RayDesc SetupShadowRay(float3 originWorldPos, float3 surfaceNormal, float3 sampl
 // if unsure", so resampling keeps potentially good samples alive.
 bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSample)
 {
+    if (g_RTXDIConst.m_EnableRTShadows == 0u)
+        return true;
+
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, lightSample.position);
 
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE |
@@ -1042,6 +1045,9 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSam
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 {
+    if (g_RTXDIConst.m_EnableRTShadows == 0u)
+        return true;
+
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition);
 
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE |
@@ -1060,6 +1066,9 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 // 0.001 to reduce self-intersection noise at the cost of slightly softer contact shadows.
 bool GetFinalVisibility(RaytracingAccelerationStructure accelStruct, float3 originWorldPos, float3 surfaceNormal, float3 samplePosition)
 {
+    if (g_RTXDIConst.m_EnableRTShadows == 0u)
+        return true;
+
     RayDesc ray = SetupShadowRay(originWorldPos, surfaceNormal, samplePosition, 0.01);
 
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
@@ -1102,6 +1111,9 @@ bool GetFinalVisibility(RaytracingAccelerationStructure accelStruct, float3 orig
 // Previous-frame helpers (temporal resampling)
 bool RAB_GetConservativeVisibilityPrevious(RAB_Surface surface, RAB_LightSample lightSample)
 {
+    if (g_RTXDIConst.m_EnableRTShadows == 0u)
+        return true;
+
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, lightSample.position);
 
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE |
@@ -1120,6 +1132,9 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surfa
 
 bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surface previousSurface, float3 samplePosition)
 {
+    if (g_RTXDIConst.m_EnableRTShadows == 0u)
+        return true;
+
     RayDesc ray = SetupShadowRay(previousSurface.worldPos, previousSurface.normal, samplePosition);
 
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE |

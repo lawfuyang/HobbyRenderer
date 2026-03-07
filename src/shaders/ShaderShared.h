@@ -634,5 +634,5 @@ struct RTXDIConstants
     uint32_t m_DiscardInvisibleSamples;
     uint32_t m_FinalVisibilityMaxAge;
     float    m_FinalVisibilityMaxDistance;
-    uint32_t _padEnd;                    // final 16-byte alignment
+    uint32_t m_EnableRTShadows;          // enables ray-traced shadows in visibility functions
 };

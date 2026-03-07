@@ -980,6 +980,7 @@ public:
         cb.m_DiscardInvisibleSamples    = temporalParams.discardInvisibleSamples;
         cb.m_FinalVisibilityMaxAge      = shadingParams.finalVisibilityMaxAge;
         cb.m_FinalVisibilityMaxDistance = shadingParams.finalVisibilityMaxDistance;
+        cb.m_EnableRTShadows            = renderer->m_EnableRTShadows ? 1u : 0u;
 
         // View matrices
         cb.m_View     = renderer->m_Scene.m_View;
