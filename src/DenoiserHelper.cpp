@@ -600,27 +600,12 @@ void FillNRDCommonSettingsHelper(nrd::CommonSettings& settings)
     // -------------------------------------------------------------------------
     // Camera jitter (TAA sub-pixel offset in [-0.5, 0.5] range)
     // -------------------------------------------------------------------------
-    // If no TAA jitter is in use (all zeros), keep jitter inputs at zero.
-    const bool bHasJitter =
-        fabsf(view.m_PixelOffset.x) > 1e-6f || fabsf(view.m_PixelOffset.y) > 1e-6f ||
-        fabsf(prevView.m_PixelOffset.x) > 1e-6f || fabsf(prevView.m_PixelOffset.y) > 1e-6f;
+    // TODO: uncomment when TAA is implemented
+    // settings.cameraJitter[0] = view.m_PixelOffset.x;
+    // settings.cameraJitter[1] = view.m_PixelOffset.y;
+    // settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x;
+    // settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y;
 
-    if (bHasJitter)
-    {
-        // m_PixelOffset is sub-pixel jitter in pixel units; convert to UV.
-        settings.cameraJitter[0]     = view.m_PixelOffset.x / static_cast<float>(width);
-        settings.cameraJitter[1]     = view.m_PixelOffset.y / static_cast<float>(height);
-        settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x / static_cast<float>(width);
-        settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y / static_cast<float>(height);
-    }
-    else
-    {
-        settings.cameraJitter[0] = 0.0f;
-        settings.cameraJitter[1] = 0.0f;
-        settings.cameraJitterPrev[0] = 0.0f;
-        settings.cameraJitterPrev[1] = 0.0f;
-    }
-    
     // -------------------------------------------------------------------------
     // Frame index and accumulation mode
     // -------------------------------------------------------------------------
