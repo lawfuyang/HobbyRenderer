@@ -904,11 +904,6 @@ public:
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
-        // In checkerboard mode each frame operates on half the horizontal pixels;
-        // the shader uses activeCheckerboardField to select which half.
-        const bool checkerboard = m_Context->GetStaticParameters().CheckerboardSamplingMode != rtxdi::CheckerboardMode::Off;
-        const uint32_t dispatchWidth = checkerboard ? width / 2 : width;
-
         RTXDIConstants cb{};
         cb.m_ViewportSize                        = { width, height };
         cb.m_FrameIndex                          = renderer->m_FrameNumber;
@@ -1241,8 +1236,8 @@ public:
                 .shaderName   = "RTXDI_Master_RTXDI_GenerateInitialSamples_Main",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(dispatchWidth, 8u),
-                    .y = DivideAndRoundUp(height,        8u),
+                    .x = DivideAndRoundUp(width, 8u),
+                    .y = DivideAndRoundUp(height, 8u),
                     .z = 1u
                 }
             };
@@ -1264,8 +1259,8 @@ public:
                 .shaderName   = "RTXDI_Master_RTXDI_TemporalResampling_Main",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(dispatchWidth, 8u),
-                    .y = DivideAndRoundUp(height,        8u),
+                    .x = DivideAndRoundUp(width, 8u),
+                    .y = DivideAndRoundUp(height, 8u),
                     .z = 1u
                 }
             };
@@ -1287,8 +1282,8 @@ public:
                 .shaderName   = "RTXDI_Master_RTXDI_SpatialResampling_Main",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(dispatchWidth, 8u),
-                    .y = DivideAndRoundUp(height,        8u),
+                    .x = DivideAndRoundUp(width, 8u),
+                    .y = DivideAndRoundUp(height, 8u),
                     .z = 1u
                 }
             };
@@ -1322,8 +1317,8 @@ public:
                     .shaderName   = "RTXDI_Master_RTXDI_ShadeSamples_Main_RTXDI_ENABLE_RELAX_DENOISING=1",
                     .bindingSetDesc = denoiseBset,
                     .dispatchParams = {
-                        .x = DivideAndRoundUp(dispatchWidth, 8u),
-                        .y = DivideAndRoundUp(height,        8u),
+                        .x = DivideAndRoundUp(width, 8u),
+                        .y = DivideAndRoundUp(height, 8u),
                         .z = 1u
                     }
                 };
@@ -1382,8 +1377,8 @@ public:
                 .shaderName   = "RTXDI_Master_RTXDI_ShadeSamples_Main_RTXDI_ENABLE_RELAX_DENOISING=0",
                 .bindingSetDesc = bset,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(dispatchWidth, 8u),
-                    .y = DivideAndRoundUp(height,        8u),
+                    .x = DivideAndRoundUp(width, 8u),
+                    .y = DivideAndRoundUp(height, 8u),
                     .z = 1u
                 }
             };
