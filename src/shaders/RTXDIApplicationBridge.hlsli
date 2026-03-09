@@ -221,21 +221,13 @@ bool RAB_AreMaterialsSimilar(RAB_Material a, RAB_Material b)
     const float reflectivityThreshold = 0.25;
     const float albedoThreshold      = 0.25;
 
-    // Compare roughness with relative difference
-    float roughnessRelDiff = abs(a.roughness - b.roughness) / max(max(a.roughness, b.roughness), 0.01);
-    if (roughnessRelDiff > roughnessThreshold)
+    if (!RTXDI_CompareRelativeDifference(a.roughness, b.roughness, roughnessThreshold))
         return false;
 
-    // Compare reflectivity using luminance
-    float lumA = Luminance(a.specularF0);
-    float lumB = Luminance(b.specularF0);
-    if (abs(lumA - lumB) > reflectivityThreshold)
+    if (abs(Luminance(a.specularF0) - Luminance(b.specularF0)) > reflectivityThreshold)
         return false;
 
-    // Compare albedo using luminance
-    float albedoLumA = Luminance(a.diffuseAlbedo);
-    float albedoLumB = Luminance(b.diffuseAlbedo);
-    if (abs(albedoLumA - albedoLumB) > albedoThreshold)
+    if (abs(Luminance(a.diffuseAlbedo) - Luminance(b.diffuseAlbedo)) > albedoThreshold)
         return false;
 
     return true;
@@ -457,7 +449,18 @@ RAB_LightSample RAB_EmptyLightSample()
     return s;
 }
 
-bool  RAB_IsAnalyticLightSample(RAB_LightSample s) { return true; } // TODO: if we have non-analytic light types (point, spot, or directional), change this
+// IMPORTANT:
+// Only finite-distance lights (point/spot/directional) are treated as "analytic".
+// Environment samples are non-analytic for RTXDI MIS and must return false here,
+// otherwise RTXDI_LightBrdfMisWeight skips BRDF MIS blending and the shading path
+// divides by solidAnglePdf again, which can massively over-amplify radiance.
+bool RAB_IsAnalyticLightSample(RAB_LightSample s)
+{
+    // Environment samples use the sentinel distance from RAB_EmptyLightSample (1e10),
+    // while our directional lights use DISTANT_LIGHT_DISTANCE = 10000.
+    return s.distance < 1e9;
+}
+
 float RAB_LightSampleSolidAnglePdf(RAB_LightSample s) { return s.solidAnglePdf; }
 
 float RAB_GetLightSampleTargetPdfForSurface(RAB_LightSample lightSample, RAB_Surface surface)
@@ -543,7 +546,7 @@ float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
 
     float2 uv = RAB_GetEnvironmentMapRandXYFromDir(L);
     uint2  pdfSize     = g_RTXDIConst.m_EnvPDFTextureSize;
-    uint2  texelPos    = uint2(float2(pdfSize) * uv);
+    uint2 texelPos = min(uint2(float2(pdfSize) * uv), pdfSize - 1);
     float  texelValue  = g_RTXDI_EnvLightPDFTexture[texelPos].r;
 
     // The last mip is 1×1 and holds the average of all mip-0 texels (padded to square).
@@ -836,7 +839,6 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
         s.direction = dir;
         s.position  = surface.worldPos + dir * 10000.0; // DISTANT_LIGHT_DISTANCE
         s.radiance  = sampleRadiance;
-        return s;
     }
     else if (lightInfo.lightType == 0) // Directional / sun
     {
@@ -1064,12 +1066,12 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 // with ray-space UV gradients, matching CalculateRTShadow / AlphaTestGrad.
 // Uses offset=0.01 (matching FullSample's GetFinalVisibility) — larger than the conservative
 // 0.001 to reduce self-intersection noise at the cost of slightly softer contact shadows.
-bool GetFinalVisibility(RaytracingAccelerationStructure accelStruct, float3 originWorldPos, float3 surfaceNormal, float3 samplePosition)
+bool GetFinalVisibility(RaytracingAccelerationStructure accelStruct, RAB_Surface surface, float3 samplePosition)
 {
     if (g_RTXDIConst.m_EnableRTShadows == 0u)
         return true;
 
-    RayDesc ray = SetupShadowRay(originWorldPos, surfaceNormal, samplePosition, 0.01);
+    RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition, 0.01);
 
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
     q.TraceRayInline(accelStruct, RAY_FLAG_NONE, 0xFF, ray);
@@ -1095,12 +1097,9 @@ bool GetFinalVisibility(RaytracingAccelerationStructure accelStruct, float3 orig
                     q.CommitNonOpaqueTriangleHit(); // opaque: blocks light
                 // else: transparent texel — do not commit, continue traversal
             }
-            else
+            else if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
             {
-                // ALPHA_MODE_OPAQUE non-opaque BLAS entry (shouldn't normally
-                // happen) or ALPHA_MODE_BLEND: treat as a full occluder for
-                // shadow purposes (blend surfaces are rare in shadow paths).
-                q.CommitNonOpaqueTriangleHit();
+                // Do not commit hit; continue through translucent surface
             }
         }
     }
@@ -1167,8 +1166,6 @@ int2 RAB_ClampSamplePositionIntoView(int2 pixelPosition, bool previousFrame)
     return pixelPosition;
 }
 
-float RAB_GetBoilingFilterStrength() { return 0.25; }
-
 // ============================================================================
 // IsComplexSurface — gates permutation sampling on surface complexity.
 // Returns true for surfaces where permutation sampling would increase noise:
@@ -1188,9 +1185,12 @@ bool IsComplexSurface(int2 pixelPosition, RAB_Surface surface)
 // Ray tracing helper stubs
 // ============================================================================
 
+// Return true if anything was hit. If false, RTXDI will do environment map sampling.
+// o_lightIndex: must be a valid light index for RAB_LoadLightInfo if a local light was hit,
+//               or RTXDI_InvalidLightIndex if no local light was hit.
 bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, float tMax, out uint o_lightIndex, out float2 o_randXY)
 {
-    o_lightIndex = 0;
+    o_lightIndex = RTXDI_InvalidLightIndex;
     o_randXY     = float2(0.5, 0.5);
     
     RayDesc ray;
@@ -1206,15 +1206,15 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
 
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
-        // Ray hit a triangle — for now, return a dummy light index
-        // In a full implementation, you'd look up the primitive -> light mapping
-        // For this stub, just indicate a hit was found
-        o_lightIndex = 0;  // Could be non-zero if you have light mapping data
-        
+        // No geometry-to-light mapping available in this application yet.
+        // Return RTXDI_InvalidLightIndex to indicate no local light was found,
+        // which tells RTXDI to fall back to environment map sampling.
+        // o_lightIndex stays RTXDI_InvalidLightIndex.
+
         // Use barycentric coordinates as random values
         float2 bary = q.CommittedTriangleBarycentrics();
         o_randXY = normalize(float2(bary.x, bary.y));
-        
+
         return true;
     }
 

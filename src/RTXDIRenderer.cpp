@@ -62,7 +62,6 @@ enum class ReSTIRDIQualityPreset : uint32_t
     Reference = 5
 };
 
-bool g_ReSTIRDI_EnableCheckerboard   = false;
 bool g_ReSTIRDI_ShowAdvancedSettings = false;
 uint32_t g_ReSTIRDI_VisualizationMode = RTXDI_VIS_MODE_NONE; // current visualization mode
 
@@ -93,7 +92,6 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
     switch (preset)
     {
     case ReSTIRDIQualityPreset::Fast:
-        g_ReSTIRDI_EnableCheckerboard = true;
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
         g_ReSTIRDI_NumLocalLightUniformSamples = 4;
@@ -113,7 +111,6 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
         break;
 
     case ReSTIRDIQualityPreset::Medium:
-        g_ReSTIRDI_EnableCheckerboard = false;
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
         g_ReSTIRDI_NumLocalLightUniformSamples = 8;
@@ -133,7 +130,6 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
         break;
 
     case ReSTIRDIQualityPreset::Unbiased:
-        g_ReSTIRDI_EnableCheckerboard = false;
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Uniform;
         g_ReSTIRDI_NumLocalLightUniformSamples = 8;
@@ -153,7 +149,6 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
         break;
 
     case ReSTIRDIQualityPreset::Ultra:
-        g_ReSTIRDI_EnableCheckerboard = false;
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
         g_ReSTIRDI_NumLocalLightUniformSamples = 16;
@@ -173,7 +168,6 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
         break;
 
     case ReSTIRDIQualityPreset::Reference:
-        g_ReSTIRDI_EnableCheckerboard = false;
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::None;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Uniform;
         g_ReSTIRDI_NumLocalLightUniformSamples = 16;
@@ -188,7 +182,6 @@ void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
 
         // my own settings
     case ReSTIRDIQualityPreset::Custom:
-        g_ReSTIRDI_EnableCheckerboard = false;
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
         g_ReSTIRDI_NumLocalLightUniformSamples = 8;
@@ -224,13 +217,6 @@ void RTXDIIMGUISettings()
         ApplyReSTIRDIPreset(g_ReSTIRDI_CurrentPreset);
     }
     ImGui::PopItemWidth();
-
-    // ---- Static context settings (checkerboard changes buffer layout) -------
-    if (ImGui::TreeNode("Static Context Settings"))
-    {
-        ImGui::Checkbox("Checkerboard Rendering", &g_ReSTIRDI_EnableCheckerboard);
-        ImGui::TreePop();
-    }
 
     // ---- Resampling mode -------------------------------------------------------
     ImGui::PushItemWidth(200.f);
@@ -524,21 +510,12 @@ public:
     // ------------------------------------------------------------------
     std::unique_ptr<rtxdi::ReSTIRDIContext> m_Context;
 
-    // Tracks whether the context was created with checkerboard mode enabled,
-    // so we can detect when the user toggles it and recreate the context.
-    bool m_CheckerboardEnabled = false;
-
     std::unique_ptr<DenoiserHelper> m_DenoiserHelper;
     nrd::RelaxSettings m_NRDRelaxSettings;
 
     void CreateRTXDIContext()
     {
         Renderer* renderer = Renderer::GetInstance();
-
-        m_CheckerboardEnabled = g_ReSTIRDI_EnableCheckerboard;
-        const rtxdi::CheckerboardMode newMode = m_CheckerboardEnabled
-            ? rtxdi::CheckerboardMode::Black
-            : rtxdi::CheckerboardMode::Off;
 
         const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
@@ -547,7 +524,6 @@ public:
         rtxdi::ReSTIRDIStaticParameters staticParams;
         staticParams.RenderWidth = width;
         staticParams.RenderHeight = height;
-        staticParams.CheckerboardSamplingMode = newMode;
         m_Context = std::make_unique<rtxdi::ReSTIRDIContext>(staticParams);
     }
 
@@ -619,15 +595,6 @@ public:
         nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
-
-        // Recreate the context when the user toggles checkerboard mode, because
-        // CheckerboardSamplingMode is a static parameter that changes reservoir
-        // buffer layout.  (The reservoir buffer is transient and will be
-        // automatically resized in the same Setup() call.)
-        if (g_ReSTIRDI_EnableCheckerboard != m_CheckerboardEnabled)
-        {
-            CreateRTXDIContext();
-        }
 
         // RIS buffer capacity covers local-light tiles and env-light tiles.
         // The env segment always reserves k_EnvRISTileSize × k_EnvRISTileCount

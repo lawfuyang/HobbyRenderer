@@ -532,8 +532,7 @@ void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
                 if (!visibilityReused)
                 {
                     // Full shadow ray — handles alpha-masked geometry correctly.
-                    bool visible = GetFinalVisibility(g_SceneAS, surface.worldPos,
-                        RAB_GetSurfaceNormal(surface), lightSample.position);
+                    bool visible = GetFinalVisibility(g_SceneAS, surface, lightSample.position);
                     visibility = visible ? 1.0 : 0.0;
                     RTXDI_StoreVisibilityInDIReservoir(reservoir, visibility,
                         g_RTXDIConst.m_DiscardInvisibleSamples != 0u);
@@ -595,8 +594,11 @@ void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 
 #if RTXDI_ENABLE_RELAX_DENOISING
     // Pack for RELAX front-end.  hitDistance is in world units.
-    g_RTXDIDiffuseOutput[pixelPosition]  = RELAX_FrontEnd_PackRadianceAndHitDist(diffuseRadiance,  hitDistance, true);
-    g_RTXDISpecularOutput[pixelPosition] = RELAX_FrontEnd_PackRadianceAndHitDist(specularRadiance, hitDistance, true);
+    // Write to reservoirPosition (not pixelPosition) to match FullSample's StoreShadingOutput
+    // convention: when denoiser is on, output is in reservoir space (identical to pixel space
+    // when checkerboard is off, but correct for checkerboard mode).
+    g_RTXDIDiffuseOutput[reservoirPosition]  = RELAX_FrontEnd_PackRadianceAndHitDist(diffuseRadiance,  hitDistance, true);
+    g_RTXDISpecularOutput[reservoirPosition] = RELAX_FrontEnd_PackRadianceAndHitDist(specularRadiance, hitDistance, true);
 #else
     g_RTXDIDIOutput[pixelPosition] = float4(radiance, 1.0);
 #endif
