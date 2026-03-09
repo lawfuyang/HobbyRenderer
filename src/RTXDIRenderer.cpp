@@ -13,7 +13,7 @@
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
-#include "DenoiserHelper.h"
+#include "NrdIntegration.h"
 
 #include "shaders/ShaderShared.h"
 
@@ -510,7 +510,7 @@ public:
     // ------------------------------------------------------------------
     std::unique_ptr<rtxdi::ReSTIRDIContext> m_Context;
 
-    std::unique_ptr<DenoiserHelper> m_DenoiserHelper;
+    std::unique_ptr<NrdIntegration> m_NrdIntegration;
     nrd::RelaxSettings m_NRDRelaxSettings;
 
     void CreateRTXDIContext()
@@ -546,8 +546,8 @@ public:
 
         CreateRTXDIContext();
 
-        m_DenoiserHelper = std::make_unique<DenoiserHelper>(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR);
-        m_DenoiserHelper->Initialize();
+        m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR);
+        m_NrdIntegration->Initialize(renderer->m_RHI->m_SwapchainExtent.x, renderer->m_RHI->m_SwapchainExtent.y);
 
         // default settings: follow RTXDI sample
         m_NRDRelaxSettings.diffuseMaxFastAccumulatedFrameNum = 1;
@@ -862,9 +862,6 @@ public:
         renderGraph.ReadTexture(g_RG_GBufferNormals);
         renderGraph.ReadTexture(g_RG_GBufferORM);
         renderGraph.ReadTexture(g_RG_GBufferMotionVectors);
-
-        // Setup denoiser internal resources
-        m_DenoiserHelper->Setup(renderGraph);
 
         return true;
     }
@@ -1342,29 +1339,25 @@ public:
                 renderer->AddComputePass(params);
             }
 
-            // Execute RELAX denoiser.
-            // Use separate textures for IN_* and OUT_* to avoid SRV+UAV aliasing
-            // of the same subresource in a single dispatch chain.
+            // Execute RELAX denoiser via NrdIntegration.
+            // Separate textures for IN_* and OUT_* avoid SRV+UAV aliasing.
+            // NrdIntegration packs normals+roughness internally before dispatching.
             {
-                DenoisePassDesc denoiseDesc;
-                const uint32_t  kDiff = static_cast<uint32_t>(nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST);
-                const uint32_t  kSpec = static_cast<uint32_t>(nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST);
-                const uint32_t  kViewZ = static_cast<uint32_t>(nrd::ResourceType::IN_VIEWZ);
-                const uint32_t  kMV   = static_cast<uint32_t>(nrd::ResourceType::IN_MV);
-                const uint32_t  kOutDiff = static_cast<uint32_t>(nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST);
-                const uint32_t  kOutSpec = static_cast<uint32_t>(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST);
+                nrd::CommonSettings commonSettings{};
+                FillNRDCommonSettings(commonSettings);
 
-                denoiseDesc.resources[kDiff]    = rawDiffuseOutputTex;
-                denoiseDesc.resources[kSpec]    = rawSpecularOutputTex;
-                denoiseDesc.resources[kViewZ]   = linearDepthTex;
-                denoiseDesc.resources[kMV]      = motionTex;
-                denoiseDesc.resources[kOutDiff] = denoisedDiffuseOutputTex;
-                denoiseDesc.resources[kOutSpec] = denoisedSpecularOutputTex;
-
-                FillNRDCommonSettingsHelper(denoiseDesc.commonSettings);
-                denoiseDesc.denoiserSettings = &m_NRDRelaxSettings;
-
-                m_DenoiserHelper->Execute(commandList, renderGraph, denoiseDesc);
+                m_NrdIntegration->RunDenoiserPasses(
+                    commandList,
+                    normalsTex,                 // IN_NORMAL_ROUGHNESS (packed internally)
+                    ormTex,                     // roughness source for pack pass
+                    rawDiffuseOutputTex,        // IN_DIFF_RADIANCE_HITDIST
+                    rawSpecularOutputTex,       // IN_SPEC_RADIANCE_HITDIST
+                    linearDepthTex,             // IN_VIEWZ
+                    motionTex,                  // IN_MV
+                    denoisedDiffuseOutputTex,   // OUT_DIFF_RADIANCE_HITDIST
+                    denoisedSpecularOutputTex,  // OUT_SPEC_RADIANCE_HITDIST
+                    commonSettings,
+                    &m_NRDRelaxSettings);
             }
         }
         else
