@@ -337,6 +337,11 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 				{
 					newNode.m_Scale = json_get_vec3(ctx, t + 1);
 				}
+				else if (json_strcmp(ctx, t, "scaling"))
+				{
+					const float f = json_get_float(ctx, t + 1);
+					newNode.m_Scale = Vector3{ f, f, f };
+				}
 				else if (json_strcmp(ctx, t, "model"))
 				{
 					modelIdx = (int)json_get_float(ctx, t + 1);
