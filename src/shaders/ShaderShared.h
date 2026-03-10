@@ -334,9 +334,12 @@ struct DeferredLightingConstants
   uint32_t m_RenderingMode;
   //
   uint32_t m_RadianceMipCount;
-  uint32_t m_UseReSTIRDI;         // 1 = read g_RTXDIDIOutput instead of computing direct lighting
-  uint32_t m_UseReSTIRDIDenoised; // 1 = t8=denoised diffuse (RELAX), t9=denoised specular; combine at back-end
-  uint32_t pad0;
+  uint32_t m_UseReSTIRDI;         // 1 = read ReSTIR DI illumination textures instead of computing direct lighting
+  uint32_t m_UseReSTIRDIDenoised; // 1 = t8/t9 are RELAX-denoised diffuse/specular illumination
+  float m_NoiseMix;               // mirrors FullSample CompositingPass.noiseMix
+  //
+  float m_NoiseClampLow;          // mirrors FullSample CompositingPass.noiseClampLow
+  float m_NoiseClampHigh;         // mirrors FullSample CompositingPass.noiseClampHigh
 };
 
 struct PathTracerConstants
@@ -534,8 +537,8 @@ struct BloomConstants
 #define RTXDI_VIS_MODE_NONE                0
 #define RTXDI_VIS_MODE_COMPOSITED_COLOR    1  // luminance of the composited HDR output
 #define RTXDI_VIS_MODE_RESOLVED_COLOR      2  // same as composited (no TAA distinction)
-#define RTXDI_VIS_MODE_DIFFUSE             3  // raw RTXDI diffuse (or combined DI in non-denoised mode)
-#define RTXDI_VIS_MODE_SPECULAR            4  // raw RTXDI specular (denoised mode only)
+#define RTXDI_VIS_MODE_DIFFUSE             3  // raw RTXDI diffuse illumination
+#define RTXDI_VIS_MODE_SPECULAR            4  // raw RTXDI specular illumination
 #define RTXDI_VIS_MODE_DENOISED_DIFFUSE    5  // RELAX-denoised diffuse
 #define RTXDI_VIS_MODE_DENOISED_SPECULAR   6  // RELAX-denoised specular
 #define RTXDI_VIS_MODE_RESERVOIR_WEIGHT    7  // DI reservoir weightSum

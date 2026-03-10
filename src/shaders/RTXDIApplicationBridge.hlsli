@@ -75,13 +75,14 @@ RWTexture2D<float4>                             g_RTXDIDIOutput             : re
 //   slot 2 (uint4): direction.xyz (f32), packHalf2x16(spotInnerCos, spotOuterCos)
 RWStructuredBuffer<uint4>                       g_RTXDI_RISLightDataBuffer  : register(u3);
 
-// ---- RELAX denoising outputs (u5/u6/u7 — bound only when RTXDI_ENABLE_RELAX_DENOISING=1) ---------
+// ---- DI illumination outputs / RELAX IO (u5/u6/u7) ---------
 // u4 is reserved for g_PDFMip0 (BuildLocalLightPDF pass) so we start at u5.
+VK_IMAGE_FORMAT_UNKNOWN
+RWTexture2D<float4> g_RTXDISpecularOutput : register(u6); // non-denoised: demodulated specular, denoised: RELAX IN_SPEC_RADIANCE_HITDIST
+
 #if RTXDI_ENABLE_RELAX_DENOISING
 VK_IMAGE_FORMAT_UNKNOWN
 RWTexture2D<float4> g_RTXDIDiffuseOutput  : register(u5); // RELAX IN/OUT_DIFF_RADIANCE_HITDIST
-VK_IMAGE_FORMAT_UNKNOWN
-RWTexture2D<float4> g_RTXDISpecularOutput : register(u6); // RELAX IN/OUT_SPEC_RADIANCE_HITDIST
 RWTexture2D<float>  g_RTXDILinearDepth    : register(u7); // RELAX IN_VIEWZ (written by GenerateViewZ pass)
 #endif
 
@@ -305,10 +306,12 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
     float  roughness    = orm.r;
     float  metallic     = orm.g;
     float3 baseColor    = albedoSample.rgb;
-    float3 F0           = ComputeF0(baseColor, metallic, 1.5);
+    float3 diffuseAlbedo;
+    float3 specularF0;
+    GetReflectivityFromMetallic(metallic, baseColor, diffuseAlbedo, specularF0);
 
-    s.material.diffuseAlbedo = baseColor * (1.0 - metallic);
-    s.material.specularF0    = F0;
+    s.material.diffuseAlbedo = diffuseAlbedo;
+    s.material.specularF0    = specularF0;
     s.material.roughness     = roughness;
     s.roughness              = roughness;
     // geoNormal: use the shading normal as a proxy (we don't store a separate geometric normal
@@ -436,18 +439,12 @@ float RAB_ComputeTargetPdf(float3 L, float3 sampleRadiance, RAB_Surface surface)
     if (NdotL <= 0.0)
         return 0.0;
 
-    float d = NdotL;
+    float d = LambertOverPi(N, L);
 
     static const float kMinRoughness = 0.05;
-    float3 H    = normalize(V + L);
-    float NdotH = max(0.0, dot(N, H));
-    float NdotV = max(0.0, dot(N, V));
-    float VdotH = max(0.0, dot(V, H));
-    float3 F0 = surface.material.specularF0;
-    float3 F  = F_Schlick(F0, VdotH);
     float3 s  = (surface.material.roughness == 0.0)
-              ? float3(0,0,0)
-              : ComputeSpecularBRDF(F, NdotH, NdotV, NdotL, max(surface.material.roughness, kMinRoughness)) * NdotL;
+              ? float3(0, 0, 0)
+              : GGXTimesNdotL_Exact(V, L, N, max(surface.material.roughness, kMinRoughness), surface.material.specularF0);
 
     float3 reflectedRadiance = sampleRadiance * (d * surface.material.diffuseAlbedo + s);
     return Luminance(reflectedRadiance);
@@ -869,102 +866,6 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
     }
 
     return s;
-}
-
-// ============================================================================
-// BRDF evaluation
-// ============================================================================
-
-float3 RAB_EvaluateBrdf(RAB_Surface surface, float3 inDirection, float3 outDirection)
-{
-    // Final shading BRDF — used for the non-denoised path (RTXDI_ENABLE_RELAX_DENOISING=0).
-    // Uses Disney Burley diffuse for better visual quality (retroreflection, roughness-dependent
-    // darkening at grazing angles). The target PDF (RAB_GetLightSampleTargetPdfForSurface) uses
-    // simple Lambert for RIS weight consistency with FullSample — that mismatch is acceptable
-    // because the target PDF only needs to be *proportional* to the integrand, not exact.
-    float3 N  = surface.normal;
-    float3 L  = inDirection;
-    float3 V  = outDirection;
-    float3 H  = normalize(V + L);
-
-    float NdotL = max(0.0, dot(N, L));
-    float NdotV = max(0.0, dot(N, V));
-    float NdotH = max(0.0, dot(N, H));
-    float VdotH = max(0.0, dot(V, H));
-    float LdotH = max(0.0, dot(L, H));
-
-    // Disney Burley diffuse — returns Fd * NdotL / PI (already includes NdotL and 1/PI).
-    // Multiply by diffuseAlbedo and kD=(1-metallic) to get the full diffuse contribution.
-    float kD = 1.0 - Luminance(surface.material.specularF0); // approximate (1-metallic)
-    float3 diffuse = DisneyBurleyDiffuse(NdotL, NdotV, LdotH, surface.roughness)
-                   * surface.material.diffuseAlbedo * kD;
-
-    // GGX specular × NdotL
-    static const float kMinRoughness = 0.05;
-    float3 F0 = surface.material.specularF0;
-    float3 F  = F_Schlick(F0, VdotH);
-    float3 specular = (surface.roughness == 0.0)
-        ? float3(0, 0, 0)
-        : ComputeSpecularBRDF(F, NdotH, NdotV, NdotL, max(surface.roughness, kMinRoughness)) * NdotL;
-
-    return (diffuse + specular);
-}
-
-// ---- Separated BRDF components for NRD denoising -----------------------------------------------
-// These mirror RAB_EvaluateBrdf but return only the diffuse or specular lobe, respectively.
-// Both include the NdotL cosine factor (matching RAB_EvaluateBrdf convention).
-
-float3 RAB_EvaluateBrdfDiffuseOnly(RAB_Surface surface, float3 L)
-{
-    // Demodulated diffuse for NRD RELAX.
-    // Returns the Disney Burley diffuse lobe WITHOUT albedo, so the denoiser sees a
-    // signal in a normalised range and the compositing pass can re-modulate by albedo.
-    //
-    // Why Disney Burley here instead of plain NdotL?
-    //   - RAB_GetLightSampleTargetPdfForSurface uses Lambert (NdotL) for RIS weight
-    //     consistency with FullSample — that is fine because the target PDF only needs
-    //     to be proportional to the integrand.
-    //   - But the *shading* output (what the denoiser and compositing see) should use
-    //     the physically correct BRDF for best image quality. Disney Burley adds
-    //     retroreflection and roughness-dependent darkening that Lambert lacks.
-    //   - The mismatch between target PDF (Lambert) and shading BRDF (Burley) is a
-    //     standard RIS approximation — it introduces no bias, only slightly sub-optimal
-    //     variance (which is negligible in practice).
-    //
-    // DisneyBurleyDiffuse returns Fd * NdotL / PI.
-    // The compositing pass multiplies by diffuseAlbedo to recover the full contribution.
-    float3 N    = surface.normal;
-    float3 V    = surface.viewDir;
-    float3 H    = normalize(V + L);
-    float NdotL = max(0.0, dot(N, L));
-    float NdotV = max(0.0, dot(N, V));
-    float LdotH = max(0.0, dot(L, H));
-    float fd    = DisneyBurleyDiffuse(NdotL, NdotV, LdotH, surface.roughness);
-    return float3(fd, fd, fd);
-}
-
-float3 RAB_EvaluateBrdfSpecularOnly(RAB_Surface surface, float3 L, float3 V)
-{
-    // Demodulated specular for NRD RELAX: divide out specularF0 so the denoiser
-    // sees a signal normalised to [0,1] range. The compositing pass re-modulates
-    // by multiplying with specularF0.
-    // Must clamp roughness to kMinRoughness to match RAB_EvaluateBrdf and
-    // RAB_GetLightSampleTargetPdfForSurface — prevents D(NdotH)→∞ on mirror-like
-    // surfaces which would produce extreme firefly spikes.
-    static const float kMinRoughness = 0.05;
-    float3 N  = surface.normal;
-    float3 H  = normalize(V + L);
-    float NdotL = max(0.0, dot(N, L));
-    float NdotV = max(0.0, dot(N, V));
-    float NdotH = max(0.0, dot(N, H));
-    float VdotH = max(0.0, dot(V, H));
-    float3 F0 = surface.material.specularF0;
-    float3 F  = F_Schlick(F0, VdotH);
-    float3 specular = (surface.roughness == 0.0)
-        ? float3(0, 0, 0)
-        : ComputeSpecularBRDF(F, NdotH, NdotV, NdotL, max(surface.roughness, kMinRoughness)) * NdotL;
-    // Demodulate: divide by max(F0, 0.01) per-channel to avoid division by zero on black metals.
-    return specular / max(F0, float3(0.01, 0.01, 0.01));
 }
 
 // ============================================================================

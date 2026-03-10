@@ -22,10 +22,10 @@ StructuredBuffer<VertexQuantized> g_Vertices : register(t12);
 StructuredBuffer<MeshData> g_MeshData : register(t13);
 StructuredBuffer<uint> g_Indices : register(t14);
 StructuredBuffer<GPULight> g_Lights : register(t6);
-Texture3D g_SkyVisibility : register(t15);
-Texture2D<float4> g_RTXDIDIOutput : register(t8); // ReSTIR DI radiance output (black when disabled)
-                                                  // In denoised mode: packed denoised diffuse (RELAX output)
-Texture2D<float4> g_RTXDISpecularOutput : register(t9); // In denoised mode: packed denoised specular (RELAX output)
+Texture2D<float4> g_RTXDIDiffuseOutput : register(t8);       // diffuse illumination (raw or denoised)
+Texture2D<float4> g_RTXDISpecularOutput : register(t9);      // specular illumination (raw or denoised)
+Texture2D<float4> g_RTXDIRawDiffuseOutput : register(t16);   // noisy diffuse illumination (denoised mode only)
+Texture2D<float4> g_RTXDIRawSpecularOutput : register(t17);  // noisy specular illumination (denoised mode only)
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -91,27 +91,37 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     {
         if (g_Deferred.m_UseReSTIRDI != 0)
         {
+            float3 diffuseIllumination = g_RTXDIDiffuseOutput.Load(uint3(uvInt, 0)).rgb;
+            float3 specularIllumination = g_RTXDISpecularOutput.Load(uint3(uvInt, 0)).rgb;
+
             if (g_Deferred.m_UseReSTIRDIDenoised != 0)
             {
-                // Denoised path: t8 = RELAX-denoised diffuse, t9 = RELAX-denoised specular.
-                // The RTXDI shading pass outputs DEMODULATED signals:
-                //   diffuse  = NdotL  (Lambert, no PI, no albedo — matches FullSample's Lambert() = max(0,NdotL))
-                //   specular = GGX * NdotL / specularF0  (divided out F0 for denoiser normalisation)
-                // Re-modulate here to recover the final lit colour:
-                //   finalDiffuse  = denoisedDiffuse  * diffuseAlbedo
-                //   finalSpecular = denoisedSpecular * specularF0
-                float3 F0        = ComputeF0(baseColor, metallic, 1.5f);
-                float3 diffAlbedo = baseColor * (1.0f - metallic);
+                float3 rawDiffuse = g_RTXDIRawDiffuseOutput.Load(uint3(uvInt, 0)).rgb;
+                float3 rawSpecular = g_RTXDIRawSpecularOutput.Load(uint3(uvInt, 0)).rgb;
 
-                float3 denoisedDiffuse  = g_RTXDIDIOutput.Load(uint3(uvInt, 0)).rgb;
-                float3 denoisedSpecular = g_RTXDISpecularOutput.Load(uint3(uvInt, 0)).rgb;
-                color = denoisedDiffuse * diffAlbedo + denoisedSpecular * F0;
+                diffuseIllumination = lerp(
+                    diffuseIllumination,
+                    clamp(rawDiffuse,
+                        diffuseIllumination * g_Deferred.m_NoiseClampLow,
+                        diffuseIllumination * g_Deferred.m_NoiseClampHigh),
+                    g_Deferred.m_NoiseMix);
+
+                specularIllumination = lerp(
+                    specularIllumination,
+                    clamp(rawSpecular,
+                        specularIllumination * g_Deferred.m_NoiseClampLow,
+                        specularIllumination * g_Deferred.m_NoiseClampHigh),
+                    g_Deferred.m_NoiseMix);
             }
-            else
-            {
-                // Non-denoised path: t8 = combined ReSTIR DI radiance.
-                color = g_RTXDIDIOutput.Load(uint3(uvInt, 0)).rgb;
-            }
+
+            float3 diffuseAlbedo;
+            float3 F0;
+            GetReflectivityFromMetallic(metallic, baseColor, diffuseAlbedo, F0);
+
+            diffuseIllumination *= diffuseAlbedo;
+            specularIllumination *= max(float3(0.01f, 0.01f, 0.01f), F0);
+
+            color = diffuseIllumination + specularIllumination + emissive;
         }
         else
         {
@@ -127,7 +137,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 
             LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
             color = directLighting.diffuse + directLighting.specular;
-            color +=  emissive;
+            color += emissive;
         }
     }
 

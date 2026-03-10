@@ -42,6 +42,52 @@ float3 ComputeF0(float3 baseColor, float metallic, float ior)
     return lerp(float3(dielectricF0, dielectricF0, dielectricF0), baseColor, metallic);
 }
 
+// FullSample-compatible metallic workflow split.
+void GetReflectivityFromMetallic(float metalness, float3 baseColor, out float3 diffuseAlbedo, out float3 specularF0)
+{
+    const float dielectricSpecular = 0.04f;
+    diffuseAlbedo = lerp(baseColor * (1.0f - dielectricSpecular), float3(0.0f, 0.0f, 0.0f), metalness);
+    specularF0 = lerp(float3(dielectricSpecular, dielectricSpecular, dielectricSpecular), baseColor, metalness);
+}
+
+float LambertOverPi(float3 N, float3 L)
+{
+    return max(0.0f, dot(N, L)) / PI;
+}
+
+// Exact Smith G term used by FullSample's donut::shaders::brdf.hlsli GGX_times_NdotL.
+float G_SmithOverNdotV_Exact(float roughness, float NdotV, float NdotL)
+{
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float g1 = NdotV * sqrt(alpha2 + (1.0f - alpha2) * NdotL * NdotL);
+    float g2 = NdotL * sqrt(alpha2 + (1.0f - alpha2) * NdotV * NdotV);
+    return 2.0f * NdotL / max(g1 + g2, 1e-6f);
+}
+
+float3 GGXTimesNdotL_Exact(float3 V, float3 L, float3 N, float roughness, float3 F0)
+{
+    float3 H = normalize(V + L);
+
+    float NdotL = saturate(dot(N, L));
+    if (NdotL <= 0.0f)
+        return 0.0f;
+
+    float VdotH = saturate(dot(V, H));
+    float NdotV = saturate(dot(N, V));
+    float NdotH = saturate(dot(N, H));
+
+    float G = G_SmithOverNdotV_Exact(roughness, NdotV, NdotL);
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float denom = NdotH * NdotH * alpha2 + (1.0f - NdotH * NdotH);
+    float D = alpha2 / (PI * denom * denom);
+    float Fc = pow(max(1.0f - VdotH, 0.0f), 5.0f);
+    float3 F = F0 + (1.0f - F0) * Fc;
+
+    return F * (D * G * 0.25f);
+}
+
 float DistributionGGX(float NdotH, float roughness)
 {
     float a = roughness*roughness;

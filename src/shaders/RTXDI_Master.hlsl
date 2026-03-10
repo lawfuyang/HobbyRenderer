@@ -20,7 +20,7 @@ RWTexture2D<float> g_EnvPDFMip0 : register(u8);  // mip 0 of the environment-lig
 
 // ---- Visualization-only resources (only accessed by RTXDI_Visualize_Main) ----
 // t20-t23: input signals to visualize; bound per-pass by RTXDIVisualizationRenderer
-Texture2D<float4> g_RTXDI_VizRawDiffuse   : register(t20); // raw RTXDI diffuse (or combined DI output)
+Texture2D<float4> g_RTXDI_VizRawDiffuse   : register(t20); // raw RTXDI diffuse illumination
 Texture2D<float4> g_RTXDI_VizRawSpecular  : register(t21); // raw RTXDI specular
 Texture2D<float4> g_RTXDI_VizDenoisedDiff : register(t22); // RELAX-denoised diffuse
 Texture2D<float4> g_RTXDI_VizDenoisedSpec : register(t23); // RELAX-denoised specular
@@ -483,9 +483,7 @@ void RTXDI_SpatialResampling_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 {
     RTXDI_ReservoirBufferParameters rbp = GetReservoirBufferParams();
-    RTXDI_RuntimeParameters rtParams;
-    rtParams.neighborOffsetMask      = g_RTXDIConst.m_NeighborOffsetMask;
-    rtParams.activeCheckerboardField = g_RTXDIConst.m_ActiveCheckerboardField;
+    RTXDI_RuntimeParameters rtParams = GetRuntimeParams();
 
     uint2 reservoirPosition = GlobalIndex;
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(reservoirPosition, rtParams.activeCheckerboardField);
@@ -493,40 +491,30 @@ void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
     if (any(pixelPosition >= viewportSize))
         return;
 
-    int2  iPixel        = int2(pixelPosition);
+    int2 iPixel = int2(pixelPosition);
+
+    RAB_Surface surface = RAB_GetGBufferSurface(iPixel, false);
+    bool surfaceValid = RAB_IsSurfaceValid(surface);
 
     // Load the final shading reservoir (temporal or initial output, depending on which passes ran)
-    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(rbp, reservoirPosition,
-        g_RTXDIConst.m_ShadingInputBufferIndex);
+    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(rbp, reservoirPosition, g_RTXDIConst.m_ShadingInputBufferIndex);
 
-    float3 radiance = float3(0.0, 0.0, 0.0);
-#if RTXDI_ENABLE_RELAX_DENOISING
-    float3 diffuseRadiance  = float3(0.0, 0.0, 0.0);
-    float3 specularRadiance = float3(0.0, 0.0, 0.0);
-    float  hitDistance      = 1e6f;
-#endif
+    float3 diffuseDemodulated = float3(0.0, 0.0, 0.0);
+    float3 specularDemodulated = float3(0.0, 0.0, 0.0);
+    float hitDistance = 0.0;
+    bool needToStore = false;
 
-    if (RTXDI_IsValidDIReservoir(reservoir))
+    if (surfaceValid && RTXDI_IsValidDIReservoir(reservoir))
     {
-        // Fetch G-buffer surface
-        RAB_Surface surface = RAB_GetGBufferSurface(iPixel, false);
+        // Reconstruct the selected light sample from the reservoir.
+        uint lightIndex = RTXDI_GetDIReservoirLightIndex(reservoir);
+        float2 randXY = RTXDI_GetDIReservoirSampleUV(reservoir);
 
-        if (RAB_IsSurfaceValid(surface))
+        RAB_LightInfo lightInfo = RAB_LoadLightInfo(lightIndex, false);
+        RAB_LightSample lightSample = RAB_SamplePolymorphicLight(lightInfo, surface, randXY);
+
+        if (lightSample.solidAnglePdf > 0.0)
         {
-            // Reconstruct the selected light sample from the reservoir
-            uint lightIndex = RTXDI_GetDIReservoirLightIndex(reservoir);
-            float2 randXY   = RTXDI_GetDIReservoirSampleUV(reservoir);
-
-            RAB_LightInfo   lightInfo   = RAB_LoadLightInfo(lightIndex, false);
-            RAB_LightSample lightSample = RAB_SamplePolymorphicLight(lightInfo, surface, randXY);
-
-            bool needToStore = false;
-
-            // Final visibility — mirrors FullSample's ShadeSurfaceWithLightSample logic:
-            //   1. Optionally reuse a cached visibility result from a previous frame
-            //      (RTXDI_GetDIReservoirVisibility) to avoid re-tracing the same ray.
-            //   2. If not reused, trace a full shadow ray (GetFinalVisibility) and
-            //      store the result back into the reservoir for future reuse.
             if (g_RTXDIConst.m_EnableFinalVisibility != 0u)
             {
                 float3 visibility = 0;
@@ -542,7 +530,6 @@ void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 
                 if (!visibilityReused)
                 {
-                    // Full shadow ray — handles alpha-masked geometry correctly.
                     bool visible = GetFinalVisibility(g_SceneAS, surface, lightSample.position);
                     visibility = visible ? 1.0 : 0.0;
                     RTXDI_StoreVisibilityInDIReservoir(reservoir, visibility,
@@ -553,65 +540,59 @@ void RTXDI_ShadeSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
                 lightSample.radiance *= visibility;
             }
 
-        // Scale radiance by the reservoir weight and divide by the solid-angle PDF.
-            // Matches FullSample's ShadingHelpers.hlsli:
-            //   lightSample.radiance *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
-            lightSample.radiance *= RTXDI_GetDIReservoirInvPdf(reservoir)
-                                  / max(lightSample.solidAnglePdf, 1e-10);
+            lightSample.radiance *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
 
             if (any(lightSample.radiance > 0.0))
             {
                 float3 V = RAB_GetSurfaceViewDirection(surface);
                 float3 L = lightSample.direction;
 
-#if RTXDI_ENABLE_RELAX_DENOISING
-                // Split BRDF into diffuse and specular so each can be denoised separately.
-                float3 diffBrdf  = RAB_EvaluateBrdfDiffuseOnly(surface, L);
-                float3 specBrdf  = RAB_EvaluateBrdfSpecularOnly(surface, L, V);
-                diffuseRadiance  = lightSample.radiance * diffBrdf;
-                specularRadiance = lightSample.radiance * specBrdf;
-                // Hit distance for RELAX denoiser.
-                // Matches FullSample's ShadingHelpers.hlsli StoreShadingOutput:
-                //   lightDistance = length(lightSample.position - surface.worldPos)
-                // For point/spot lights this is the actual world-space distance.
-                // For directional/sun lights, lightSample.position = worldPos + dir * DISTANT_LIGHT_DISTANCE,
-                // so lightDistance = DISTANT_LIGHT_DISTANCE = 10000.0 — a fixed constant.
-                //
-                // IMPORTANT: Do NOT use surface.linearDepth for directional lights.
-                // RELAX uses hitDist to estimate the penumbra blur radius. If you pass
-                // linearDepth (camera-to-surface distance), the blur radius changes as
-                // the camera moves, making the penumbra shrink when zooming in and grow
-                // when zooming out — exactly the camera-distance-dependent artifact.
-                // Passing a fixed large constant (10000.0) gives a camera-independent
-                // penumbra that is purely determined by the sun's angular size and the
-                // occluder geometry, which is the physically correct behaviour.
-                hitDistance = length(lightSample.position - surface.worldPos);
-                radiance    = diffuseRadiance + specularRadiance;
-#else
-                // Combined BRDF — RAB_EvaluateBrdf already includes NdotL.
-                float3 brdf = RAB_EvaluateBrdf(surface, L, V);
-                radiance    = lightSample.radiance * brdf;
-#endif
-            }
+                diffuseDemodulated = lightSample.radiance * LambertOverPi(surface.normal, L);
 
-            // Write back the reservoir if visibility was freshly traced and stored.
-            if (needToStore)
-            {
-                RTXDI_StoreDIReservoir(reservoir, rbp, reservoirPosition,
-                    g_RTXDIConst.m_ShadingInputBufferIndex);
+                static const float kMinRoughness = 0.05;
+                float3 specular = GGXTimesNdotL_Exact(
+                    V,
+                    L,
+                    surface.normal,
+                    max(surface.material.roughness, kMinRoughness),
+                    surface.material.specularF0);
+
+                specularDemodulated = lightSample.radiance * specular / max(surface.material.specularF0, float3(0.01, 0.01, 0.01));
+
+                hitDistance = length(lightSample.position - surface.worldPos);
             }
         }
     }
 
+    // Write back the reservoir if visibility was freshly traced and stored.
+    if (needToStore)
+    {
+        RTXDI_StoreDIReservoir(reservoir, rbp, reservoirPosition,
+            g_RTXDIConst.m_ShadingInputBufferIndex);
+    }
+
 #if RTXDI_ENABLE_RELAX_DENOISING
-    // Pack for RELAX front-end.  hitDistance is in world units.
-    // Write to reservoirPosition (not pixelPosition) to match FullSample's StoreShadingOutput
-    // convention: when denoiser is on, output is in reservoir space (identical to pixel space
-    // when checkerboard is off, but correct for checkerboard mode).
-    g_RTXDIDiffuseOutput[reservoirPosition]  = RELAX_FrontEnd_PackRadianceAndHitDist(diffuseRadiance,  hitDistance, true);
-    g_RTXDISpecularOutput[reservoirPosition] = RELAX_FrontEnd_PackRadianceAndHitDist(specularRadiance, hitDistance, true);
+    // In denoiser mode, shading output is in reservoir space to match checkerboard behavior.
+    g_RTXDIDiffuseOutput[reservoirPosition]  = RELAX_FrontEnd_PackRadianceAndHitDist(diffuseDemodulated, hitDistance, true);
+    g_RTXDISpecularOutput[reservoirPosition] = RELAX_FrontEnd_PackRadianceAndHitDist(specularDemodulated, hitDistance, true);
 #else
-    g_RTXDIDIOutput[pixelPosition] = float4(radiance, 1.0);
+    g_RTXDIDIOutput[pixelPosition] = float4(diffuseDemodulated, 1.0);
+    g_RTXDISpecularOutput[pixelPosition] = float4(specularDemodulated, 1.0);
+
+    // we never enable checkerboard copying in RELAX mode, so no need for the extra complexity of writing to the other field's pixel
+#if 0
+    if (rtParams.activeCheckerboardField != 0u)
+    {
+        int2 otherFieldPixel = int2(pixelPosition);
+        otherFieldPixel.x += ((rtParams.activeCheckerboardField == 1u) == ((pixelPosition.y & 1u) != 0u)) ? 1 : -1;
+
+        if (all(otherFieldPixel >= int2(0, 0)) && all(otherFieldPixel < int2(viewportSize)))
+        {
+            g_RTXDIDIOutput[otherFieldPixel] = float4(diffuseDemodulated, 1.0);
+            g_RTXDISpecularOutput[otherFieldPixel] = float4(specularDemodulated, 1.0);
+        }
+    }
+#endif
 #endif
 }
 
