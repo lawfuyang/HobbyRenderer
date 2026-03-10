@@ -174,47 +174,6 @@ RAB_Material RAB_EmptyMaterial()
     return m;
 }
 
-RAB_Material RAB_GetGBufferMaterial(int2 pixelPosition, bool previousFrame)
-{
-    RAB_Material material = RAB_EmptyMaterial();
-
-    // NOTE: pixelPosition is already the reprojected position (computed by the RTXDI SDK).
-    // Do NOT apply the motion vector again here — that would cause double-reprojection.
-    int2 samplePos = clamp(pixelPosition, int2(0, 0), int2(g_RTXDIConst.m_ViewportSize) - int2(1, 1));
-
-    // Bounds check
-    if (any(pixelPosition < int2(0, 0)) || any(pixelPosition >= int2(g_RTXDIConst.m_ViewportSize)))
-        return material;
-
-    // Load from respective G-buffers
-    float4 albedoSample;
-    float2 orm;
-    
-    if (previousFrame)
-    {
-        // Load from history buffers (previous frame data)
-        albedoSample = g_GBufferAlbedoHistory.Load(int3(samplePos, 0));
-        orm          = g_GBufferORMHistory.Load(int3(samplePos, 0));
-    }
-    else
-    {
-        // Load from current frame G-buffers
-        albedoSample = g_GBufferAlbedo.Load(int3(samplePos, 0));
-        orm          = g_GBufferORM.Load(int3(samplePos, 0));
-    }
-
-    float  roughness    = orm.r;
-    float  metallic     = orm.g;
-    float3 baseColor    = albedoSample.rgb;
-    float3 F0           = ComputeF0(baseColor, metallic, 1.5);
-
-    material.diffuseAlbedo = baseColor * (1.0 - metallic);
-    material.specularF0    = F0;
-    material.roughness     = roughness;
-
-    return material;
-}
-
 bool RAB_AreMaterialsSimilar(RAB_Material a, RAB_Material b)
 {
     const float roughnessThreshold   = 0.5;
