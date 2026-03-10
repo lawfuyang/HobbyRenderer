@@ -220,12 +220,16 @@ void RTXDIIMGUISettings()
 
     // ---- Resampling mode -------------------------------------------------------
     ImGui::PushItemWidth(200.f);
+    if (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
+    {
+        // Fused spatiotemporal is not implemented in this renderer path.
+        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+    }
     ImGui::Combo("Resampling Mode", (int*)&g_ReSTIRDI_ResamplingMode,
         "None\0"
         "Temporal\0"
         "Spatial\0"
-        "Temporal + Spatial\0"
-        "Fused Spatiotemporal\0");
+        "Temporal + Spatial\0");
     ImGui::PopItemWidth();
 
     // ---- RELAX Denoising toggle -------------------------------------------
@@ -292,8 +296,7 @@ void RTXDIIMGUISettings()
     // ---- Temporal Resampling --------------------------------------------------
     const bool hasTemporalMode =
         g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Temporal ||
-        g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial ||
-        g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal;
+        g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
     if (hasTemporalMode && ImGui::TreeNode("Temporal Resampling"))
     {
         bool enablePermutation = g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling != 0;
@@ -332,8 +335,7 @@ void RTXDIIMGUISettings()
     // ---- Spatial Resampling ---------------------------------------------------
     const bool hasSpatialMode =
         g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Spatial ||
-        g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial ||
-        g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal;
+        g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
     if (hasSpatialMode && ImGui::TreeNode("Spatial Resampling"))
     {
         if (g_ReSTIRDI_ResamplingMode != rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
@@ -347,7 +349,7 @@ void RTXDIIMGUISettings()
             (int*)&g_ReSTIRDI_SpatialResamplingParams.numSpatialSamples, 1, 32);
 
         if (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial ||
-            g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
+            g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial)
         {
             ImGui::SliderInt("Disocclusion Boost Samples",
                 (int*)&g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples, 1, 32);
@@ -878,8 +880,15 @@ public:
         // Advance the frame index so the context produces fresh buffer indices
         m_Context->SetFrameIndex(renderer->m_FrameNumber);
 
-        // Apply all ReSTIR DI parameters from renderer settings to the context
-        m_Context->SetResamplingMode(g_ReSTIRDI_ResamplingMode);
+        // Apply all ReSTIR DI parameters from renderer settings to the context.
+        // Fused spatiotemporal mode is not implemented in this shader path, so map
+        // it to TemporalAndSpatial to keep runtime/UI and dispatch behavior consistent.
+        const rtxdi::ReSTIRDI_ResamplingMode effectiveResamplingMode =
+            (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
+            ? rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial
+            : g_ReSTIRDI_ResamplingMode;
+
+        m_Context->SetResamplingMode(effectiveResamplingMode);
         m_Context->SetInitialSamplingParameters(g_ReSTIRDI_InitialSamplingParams);
         m_Context->SetTemporalResamplingParameters(g_ReSTIRDI_TemporalResamplingParams);
         m_Context->SetSpatialResamplingParameters(g_ReSTIRDI_SpatialResamplingParams);
@@ -947,7 +956,7 @@ public:
 
         // ---- Environment-light sampling ----
         cb.m_EnvPDFTextureSize = { k_EnvPDFTexSize, k_EnvPDFTexSize };
-        cb.m_EnvSamplingMode   = renderer->m_EnableSky ? 1u : 0u;
+        cb.m_EnvSamplingMode   = renderer->m_EnableSky ? 2u : 0u;
         cb.m_NumEnvSamples          = renderer->m_EnableSky ? g_ReSTIRDI_InitialSamplingParams.numPrimaryEnvironmentSamples : 0u;
         cb.m_NumLocalLightSamples   = g_ReSTIRDI_InitialSamplingParams.numPrimaryLocalLightSamples;
         cb.m_NumInfiniteLightSamples= g_ReSTIRDI_InitialSamplingParams.numPrimaryInfiniteLightSamples;
@@ -984,6 +993,7 @@ public:
         cb.m_TemporalNormalThreshold           = temporalParams.temporalNormalThreshold;
         cb.m_TemporalEnableVisibilityShortcut  = temporalParams.discardInvisibleSamples;
         cb.m_TemporalEnablePermutationSampling = temporalParams.enablePermutationSampling;
+        cb.m_TemporalPermutationSamplingThreshold = temporalParams.permutationSamplingThreshold;
         cb.m_TemporalUniformRandomNumber       = temporalParams.uniformRandomNumber;
         cb.m_TemporalEnableBoilingFilter       = temporalParams.enableBoilingFilter;
         cb.m_TemporalBoilingFilterStrength     = temporalParams.boilingFilterStrength;
@@ -1248,9 +1258,8 @@ public:
         // ------------------------------------------------------------------
         // Temporal Resampling (conditional)
         // ------------------------------------------------------------------
-        const bool doTemporal = (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Temporal ||
-                                  g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial ||
-                                  g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal);
+        const bool doTemporal = (effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Temporal ||
+                      effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
         if (doTemporal)
         {
             PROFILE_SCOPED("Temporal Resampling");
@@ -1271,9 +1280,8 @@ public:
         // ------------------------------------------------------------------
         // Spatial Resampling (conditional)
         // ------------------------------------------------------------------
-        const bool doSpatial = (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Spatial ||
-                                 g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial ||
-                                 g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal);
+        const bool doSpatial = (effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Spatial ||
+                     effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
         if (doSpatial)
         {
             PROFILE_SCOPED("Spatial Resampling");

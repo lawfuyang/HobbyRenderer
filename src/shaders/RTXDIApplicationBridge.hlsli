@@ -508,7 +508,7 @@ float2 RAB_GetEnvironmentMapRandXYFromDir(float3 direction)
 // for MIS weight computation in RTXDI_SampleLightsForSurface.
 float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
 {
-    if (g_RTXDIConst.m_EnvLightPresent == 0u)
+    if (g_RTXDIConst.m_EnvLightPresent == 0u || g_RTXDIConst.m_EnvSamplingMode != 2u)
         return 1.0;
 
     float2 uv = RAB_GetEnvironmentMapRandXYFromDir(L);
