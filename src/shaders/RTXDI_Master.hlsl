@@ -236,7 +236,7 @@ void RTXDI_GenerateInitialSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
 
     // Initialise RNG
     RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelPosition, 1u);
-    RAB_RandomSamplerState coherentRng = RAB_InitRandomSampler(pixelPosition / 16u, 1u);
+    RAB_RandomSamplerState coherentRng = RAB_InitRandomSampler(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS, 1u);
 
     // Fetch G-buffer surface for this pixel
     RAB_Surface surface = RAB_GetGBufferSurface(iPixel, false);
@@ -249,21 +249,21 @@ void RTXDI_GenerateInitialSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
     //                             numPrimaryEnvironmentSamples, numPrimaryBrdfSamples, ...)
     uint numLocalSamples = (lbp.localLightBufferRegion.numLights > 0u)
         ? g_RTXDIConst.m_NumLocalLightSamples : 0u;
-    // Always sample at least 1 infinite light (sun) when the region is non-empty.
-    // m_NumInfiniteLightSamples defaults to 0 if the CPU-side params were zero-initialized
-    // before a preset was applied — guard against that here so the sun is never silently dropped.
     uint numInfiniteSamples = (lbp.infiniteLightBufferRegion.numLights > 0u)
-        ? max(1u, g_RTXDIConst.m_NumInfiniteLightSamples) : 0u;
-    uint numEnvSamples = (g_RTXDIConst.m_EnvSamplingMode >= 1u && g_RTXDIConst.m_EnvLightPresent != 0u)
+        ? g_RTXDIConst.m_NumInfiniteLightSamples : 0u;
+    uint numEnvSamples = (g_RTXDIConst.m_EnvLightPresent != 0u)
         ? g_RTXDIConst.m_NumEnvSamples : 0u;
     uint numBrdfSamples = g_RTXDIConst.m_NumBrdfSamples;
+
+    ReSTIRDI_LocalLightSamplingMode localLightSamplingMode =
+        (ReSTIRDI_LocalLightSamplingMode)g_RTXDIConst.m_LocalLightSamplingMode;
 
     RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
         numLocalSamples,
         numInfiniteSamples,
         numEnvSamples,
         numBrdfSamples,
-        /*brdfCutoff=*/   0.001f,
+        g_RTXDIConst.m_BrdfCutoff,
         /*randomThreshold=*/ 0.001f);
 
     // Build RIS segment parameters from the constant buffer.
@@ -273,12 +273,10 @@ void RTXDI_GenerateInitialSamples_Main(uint2 GlobalIndex : SV_DispatchThreadID)
     RAB_LightSample selectedSample;
     RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(
         rng, coherentRng, surface, sampleParams, lbp,
+        localLightSamplingMode,
         #if RTXDI_ENABLE_PRESAMPLING
-            ReSTIRDI_LocalLightSamplingMode_POWER_RIS,
             localRISParams,
             envRISParams,
-        #else
-            ReSTIRDI_LocalLightSamplingMode_UNIFORM,
         #endif
         selectedSample);
 

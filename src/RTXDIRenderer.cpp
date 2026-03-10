@@ -948,10 +948,12 @@ public:
         // ---- Environment-light sampling ----
         cb.m_EnvPDFTextureSize = { k_EnvPDFTexSize, k_EnvPDFTexSize };
         cb.m_EnvSamplingMode   = renderer->m_EnableSky ? 1u : 0u;
-        cb.m_NumEnvSamples     = renderer->m_EnableSky ? std::max(1u, g_ReSTIRDI_InitialSamplingParams.numPrimaryEnvironmentSamples) : 0u;
-        cb.m_NumLocalLightSamples    = g_ReSTIRDI_InitialSamplingParams.numPrimaryLocalLightSamples;
-        cb.m_NumInfiniteLightSamples = g_ReSTIRDI_InitialSamplingParams.numPrimaryInfiniteLightSamples;
-        cb.m_NumBrdfSamples          = g_ReSTIRDI_InitialSamplingParams.numPrimaryBrdfSamples;
+        cb.m_NumEnvSamples          = renderer->m_EnableSky ? g_ReSTIRDI_InitialSamplingParams.numPrimaryEnvironmentSamples : 0u;
+        cb.m_NumLocalLightSamples   = g_ReSTIRDI_InitialSamplingParams.numPrimaryLocalLightSamples;
+        cb.m_NumInfiniteLightSamples= g_ReSTIRDI_InitialSamplingParams.numPrimaryInfiniteLightSamples;
+        cb.m_NumBrdfSamples         = g_ReSTIRDI_InitialSamplingParams.numPrimaryBrdfSamples;
+        cb.m_LocalLightSamplingMode = static_cast<uint32_t>(g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode);
+        cb.m_BrdfCutoff             = g_ReSTIRDI_InitialSamplingParams.brdfCutoff;
 
         if (renderer->m_EnableSky)
         {

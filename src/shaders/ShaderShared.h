@@ -584,13 +584,19 @@ struct RTXDIConstants
     uint32_t m_NumLocalLightSamples;     // numPrimaryLocalLightSamples
     uint32_t m_NumInfiniteLightSamples;  // numPrimaryInfiniteLightSamples
 
-    // Row 4: sample counts + buffer indices (part 1)
+    // Row 4: sample counts + initial-sampling controls
     uint32_t m_NumEnvSamples;            // numEnvironmentMapSamples drawn per pixel
     uint32_t m_NumBrdfSamples;           // numPrimaryBrdfSamples
+    uint32_t m_LocalLightSamplingMode;   // ReSTIRDI_LocalLightSamplingMode_*
+    float    m_BrdfCutoff;               // ReSTIRDI_InitialSamplingParameters.brdfCutoff
+
+    // Row 5: buffer indices (part 1)
     uint32_t m_InitialSamplingOutputBufferIndex;
     uint32_t m_TemporalResamplingInputBufferIndex;
+    uint32_t pad0;
+    uint32_t pad1;
 
-    // Row 5: buffer indices (part 2)
+    // Row 6: buffer indices (part 2)
     uint32_t m_TemporalResamplingOutputBufferIndex;
     uint32_t m_SpatialResamplingInputBufferIndex;
     uint32_t m_SpatialResamplingOutputBufferIndex;
