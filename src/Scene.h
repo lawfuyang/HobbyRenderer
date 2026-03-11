@@ -61,7 +61,9 @@ public:
         {
             Linear,
             Step,
-            CubicSpline
+            CubicSpline,
+            Slerp,      // quaternion spherical linear interpolation (JSON animations)
+            CatmullRom, // Catmull-Rom spline (JSON animations)
         };
         Interpolation m_Interpolation = Interpolation::Linear;
         std::vector<float> m_Inputs; // Time points
@@ -75,11 +77,18 @@ public:
             Translation,
             Rotation,
             Scale,
-            Weights
+            Weights,
+            EmissiveIntensity, // JSON animations: material emissive scale (scalar)
         };
-        Path m_Path;
-        int m_NodeIndex = -1;
+        Path m_Path = Path::Translation;
         int m_SamplerIndex = -1;
+
+        // Node targets (single glTF node stored as one-element vector, or multiple JSON targets)
+        std::vector<int> m_NodeIndices;
+        std::vector<int> m_MaterialIndices; // Material targets (EmissiveIntensity path)
+        // Base emissive factor per material, captured at load time so the animated
+        // scalar multiplies the authored colour rather than replacing it.
+        std::vector<Vector3> m_BaseEmissiveFactor;
     };
 
     struct Animation
@@ -184,6 +193,8 @@ public:
     std::vector<Camera> m_Cameras;
     std::vector<Light> m_Lights;
     std::vector<Animation> m_Animations;
+    std::vector<int> m_DynamicMaterialIndices; // Material indices targeted by emissive animations
+    std::pair<uint32_t, uint32_t> m_MaterialDirtyRange = { UINT32_MAX, 0 }; // Dirty range for material GPU upload
     std::vector<int> m_DynamicNodeIndices; // Topologically sorted
 
     ::Camera m_Camera;

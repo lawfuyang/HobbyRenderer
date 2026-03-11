@@ -34,6 +34,9 @@ struct JsonContext
 	int numTokens;
 };
 
+// Forward declaration – defined later in this file
+static void ParseJSONAnimations(Scene& scene, const JsonContext& ctx, const jsmntok_t* tokens, int animationsTokenIdx);
+
 static std::string json_get_string(const JsonContext& ctx, int tokenIdx)
 {
 	if (tokenIdx < 0 || tokenIdx >= ctx.numTokens || ctx.tokens[tokenIdx].type != JSMN_STRING)
@@ -216,6 +219,7 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 
 	int modelsTokenIdx = -1;
 	int graphTokenIdx = -1;
+	int animationsTokenIdx = -1;
 
 	for (int i = 1; i < tokenCount; )
 	{
@@ -227,6 +231,11 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 		else if (json_strcmp(ctx, i, "graph"))
 		{
 			graphTokenIdx = i + 1;
+			i = cgltf_skip_json(tokens.data(), i + 1);
+		}
+		else if (json_strcmp(ctx, i, "animations"))
+		{
+			animationsTokenIdx = i + 1;
 			i = cgltf_skip_json(tokens.data(), i + 1);
 		}
 		else
@@ -498,6 +507,12 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 
 	SortLightsAddDefaultDirectionalLight(scene);
 
+	// 3. Parse JSON animations (after graph is built so node/material references can be resolved)
+	if (animationsTokenIdx != -1 && tokens[animationsTokenIdx].type == JSMN_ARRAY)
+	{
+		ParseJSONAnimations(scene, ctx, tokens.data(), animationsTokenIdx);
+	}
+
 	// Compute world transforms for all roots
 	for (size_t i = 0; i < scene.m_Nodes.size(); ++i)
 	{
@@ -517,6 +532,480 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 
 	SDL_Log("[Scene] JSON scene loaded successfully");
 	return true;
+}
+
+// ─── JSON Animation Parsing ───────────────────────────────────────────────────
+
+// Resolve a node path like "/Bistro/RootNode/Level/...".
+// Returns -1 if the path cannot be resolved.
+static int ResolveNodePath(const Scene& scene, const std::string& path)
+{
+	if (path.empty()) return -1;
+
+	auto SplitPath = [](const std::string& p)
+	{
+		std::vector<std::string> out;
+		std::string seg;
+		for (char c : p)
+		{
+			if (c == '/')
+			{
+				if (!seg.empty()) { out.push_back(seg); seg.clear(); }
+			}
+			else
+			{
+				seg += c;
+			}
+		}
+		if (!seg.empty()) out.push_back(seg);
+		return out;
+	};
+
+	const std::vector<std::string> parts = SplitPath(path);
+	if (parts.empty()) return -1;
+
+	// Fast strict hierarchical walk first.
+	int current = -1;
+	for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+	{
+		if (scene.m_Nodes[i].m_Parent == -1 && scene.m_Nodes[i].m_Name == parts[0])
+		{
+			current = i;
+			break;
+		}
+	}
+	if (current == -1)
+	{
+		for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+		{
+			if (scene.m_Nodes[i].m_Name == parts[0])
+			{
+				current = i;
+				break;
+			}
+		}
+	}
+
+	if (current != -1)
+	{
+		bool strictOk = true;
+		for (int p = 1; p < (int)parts.size(); ++p)
+		{
+			const std::string& seg = parts[p];
+			int found = -1;
+			for (int childIdx : scene.m_Nodes[current].m_Children)
+			{
+				if (scene.m_Nodes[childIdx].m_Name == seg)
+				{
+					found = childIdx;
+					break;
+				}
+			}
+			if (found == -1)
+			{
+				for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+				{
+					if (scene.m_Nodes[i].m_Parent == current && scene.m_Nodes[i].m_Name == seg)
+					{
+						found = i;
+						break;
+					}
+				}
+			}
+			if (found == -1)
+			{
+				strictOk = false;
+				break;
+			}
+			current = found;
+		}
+		if (strictOk)
+			return current;
+	}
+
+	// Fallback: suffix match against ancestor name chain.
+	for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+	{
+		std::vector<std::string> chain;
+		for (int n = i; n != -1; n = scene.m_Nodes[n].m_Parent)
+			chain.push_back(scene.m_Nodes[n].m_Name);
+		std::reverse(chain.begin(), chain.end());
+
+		if (chain.size() < parts.size())
+			continue;
+
+		bool suffixMatches = true;
+		for (int p = 0; p < (int)parts.size(); ++p)
+		{
+			const std::string& a = chain[chain.size() - parts.size() + p];
+			const std::string& b = parts[p];
+			if (a != b)
+			{
+				suffixMatches = false;
+				break;
+			}
+		}
+		if (suffixMatches)
+			return i;
+	}
+
+	return -1;
+}
+
+// Resolve a material by name.  Returns -1 if not found.
+static int ResolveMaterialByName(const Scene& scene, const std::string& name)
+{
+	for (int i = 0; i < (int)scene.m_Materials.size(); ++i)
+	{
+		if (scene.m_Materials[i].m_Name == name)
+			return i;
+	}
+
+	SDL_LOG_ASSERT_FAIL("Failed to resolve material by name", "[SceneLoader] Failed to resolve material by name: %s", name.c_str());
+	return -1;
+}
+
+static void ParseJSONAnimations(Scene& scene, const JsonContext& ctx, const jsmntok_t* tokens, int animationsTokenIdx)
+{
+	if (tokens[animationsTokenIdx].type != JSMN_ARRAY) return;
+
+	SCOPED_TIMER("[Scene] ParseJSONAnimations");
+
+	const int numAnims = tokens[animationsTokenIdx].size;
+	SDL_Log("[Scene] Parsing %d JSON animations", numAnims);
+
+	int animToken = animationsTokenIdx + 1;
+	for (int ai = 0; ai < numAnims; ++ai)
+	{
+		if (tokens[animToken].type != JSMN_OBJECT)
+		{
+			SDL_Log("[Scene] Animation %d: expected object, skipping", ai);
+			animToken = cgltf_skip_json(tokens, animToken);
+			continue;
+		}
+
+		Scene::Animation anim;
+		anim.m_Name = "Animation_" + std::to_string(ai);
+
+		int channelsTokenIdx = -1;
+		int numKeys = tokens[animToken].size;
+		int t = animToken + 1;
+		for (int k = 0; k < numKeys; ++k)
+		{
+			if (json_strcmp(ctx, t, "name"))
+			{
+				anim.m_Name = json_get_string(ctx, t + 1);
+			}
+			else if (json_strcmp(ctx, t, "channels"))
+			{
+				channelsTokenIdx = t + 1;
+			}
+			t = cgltf_skip_json(tokens, t + 1);
+		}
+
+		if (channelsTokenIdx == -1 || tokens[channelsTokenIdx].type != JSMN_ARRAY)
+		{
+			SDL_Log("[Scene] Animation '%s': no channels array, skipping", anim.m_Name.c_str());
+			animToken = cgltf_skip_json(tokens, animToken);
+			continue;
+		}
+
+		const int numChannels = tokens[channelsTokenIdx].size;
+		int chanToken = channelsTokenIdx + 1;
+
+		for (int ci = 0; ci < numChannels; ++ci)
+		{
+			if (tokens[chanToken].type != JSMN_OBJECT)
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: expected object, skipping", anim.m_Name.c_str(), ci);
+				chanToken = cgltf_skip_json(tokens, chanToken);
+				continue;
+			}
+
+			// ── Parse channel fields ──────────────────────────────────────────
+			std::string targetStr;
+			std::vector<std::string> targetsVec;
+			std::string attributeStr;
+			std::string modeStr;
+			int dataTokenIdx = -1;
+			bool hasTarget = false;
+			bool hasTargets = false;
+
+			int numChanKeys = tokens[chanToken].size;
+			int ct = chanToken + 1;
+			for (int ck = 0; ck < numChanKeys; ++ck)
+			{
+				if (json_strcmp(ctx, ct, "target"))
+				{
+					targetStr = json_get_string(ctx, ct + 1);
+					hasTarget = true;
+				}
+				else if (json_strcmp(ctx, ct, "targets"))
+				{
+					if (tokens[ct + 1].type == JSMN_ARRAY)
+					{
+						int numT = tokens[ct + 1].size;
+						int tt = ct + 2;
+						for (int ti = 0; ti < numT; ++ti)
+						{
+							targetsVec.push_back(json_get_string(ctx, tt));
+							tt = cgltf_skip_json(tokens, tt);
+						}
+						hasTargets = true;
+					}
+				}
+				else if (json_strcmp(ctx, ct, "attribute"))
+				{
+					attributeStr = json_get_string(ctx, ct + 1);
+				}
+				else if (json_strcmp(ctx, ct, "mode"))
+				{
+					modeStr = json_get_string(ctx, ct + 1);
+				}
+				else if (json_strcmp(ctx, ct, "data"))
+				{
+					dataTokenIdx = ct + 1;
+				}
+				ct = cgltf_skip_json(tokens, ct + 1);
+			}
+
+			// ── Validate required fields ──────────────────────────────────────
+			if (attributeStr.empty())
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: missing 'attribute', skipping", anim.m_Name.c_str(), ci);
+				chanToken = cgltf_skip_json(tokens, chanToken);
+				continue;
+			}
+			if (!hasTarget && !hasTargets)
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: missing 'target'/'targets', skipping", anim.m_Name.c_str(), ci);
+				chanToken = cgltf_skip_json(tokens, chanToken);
+				continue;
+			}
+			if (dataTokenIdx == -1 || tokens[dataTokenIdx].type != JSMN_ARRAY)
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: missing or malformed 'data', skipping", anim.m_Name.c_str(), ci);
+				chanToken = cgltf_skip_json(tokens, chanToken);
+				continue;
+			}
+
+			// ── Warn on ambiguous target + targets ────────────────────────────
+			if (hasTarget && hasTargets)
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: both 'target' and 'targets' present; 'targets' takes precedence", anim.m_Name.c_str(), ci);
+				hasTarget = false; // targets wins
+			}
+
+			// ── Skip camera targets ───────────────────────────────────────────
+			// Scene files (e.g. bistro-rtxdi.scene.json) embed benchmarking camera
+			// fly-through animations whose targets reference camera nodes (names
+			// containing "Cameras"). We intentionally ignore these: the renderer
+			// drives its own camera and does not consume scene-authored camera anims.
+			{
+				const std::string& primaryTarget = hasTargets ? targetsVec[0] : targetStr;
+				if (primaryTarget.find("Cameras") != std::string::npos)
+				{
+					chanToken = cgltf_skip_json(tokens, chanToken);
+					continue;
+				}
+			}
+
+			// ── Parse attribute ───────────────────────────────────────────────
+			Scene::AnimationChannel::Path path;
+			if (attributeStr == "translation")
+				path = Scene::AnimationChannel::Path::Translation;
+			else if (attributeStr == "rotation")
+				path = Scene::AnimationChannel::Path::Rotation;
+			else if (attributeStr == "emissiveIntensity")
+				path = Scene::AnimationChannel::Path::EmissiveIntensity;
+			else
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: unknown attribute '%s', skipping", anim.m_Name.c_str(), ci, attributeStr.c_str());
+				chanToken = cgltf_skip_json(tokens, chanToken);
+				continue;
+			}
+
+			// ── Parse interpolation mode ──────────────────────────────────────
+			Scene::AnimationSampler::Interpolation interp = Scene::AnimationSampler::Interpolation::Linear;
+			if (modeStr == "step")
+				interp = Scene::AnimationSampler::Interpolation::Step;
+			else if (modeStr == "linear")
+				interp = Scene::AnimationSampler::Interpolation::Linear;
+			else if (modeStr == "slerp")
+				interp = Scene::AnimationSampler::Interpolation::Slerp;
+			else if (modeStr == "catmull-rom")
+				interp = Scene::AnimationSampler::Interpolation::CatmullRom;
+			else if (!modeStr.empty())
+			{
+				SDL_Log("[Scene] Animation '%s' channel %d: unknown mode '%s', falling back to 'linear'", anim.m_Name.c_str(), ci, modeStr.c_str());
+			}
+
+			// ── Parse keyframe data ───────────────────────────────────────────
+			Scene::AnimationSampler sampler;
+			sampler.m_Interpolation = interp;
+			const int numKF = tokens[dataTokenIdx].size;
+			int kfToken = dataTokenIdx + 1;
+
+			for (int ki = 0; ki < numKF; ++ki)
+			{
+				if (tokens[kfToken].type != JSMN_OBJECT)
+				{
+					SDL_LOG_ASSERT_FAIL("Malformed keyframe data", "[Scene] Animation '%s' channel %d keyframe %d: expected object", anim.m_Name.c_str(), ci, ki);
+				}
+
+				float kfTime = 0.0f;
+				Vector4 kfValue{ 0.0f, 0.0f, 0.0f, 1.0f };
+				bool hasTime = false;
+				bool hasValue = false;
+
+				int numKFKeys = tokens[kfToken].size;
+				int kft = kfToken + 1;
+				for (int kk = 0; kk < numKFKeys; ++kk)
+				{
+					if (json_strcmp(ctx, kft, "time"))
+					{
+						kfTime = json_get_float(ctx, kft + 1);
+						hasTime = true;
+					}
+					else if (json_strcmp(ctx, kft, "value"))
+					{
+						const int valTok = kft + 1;
+						if (tokens[valTok].type == JSMN_ARRAY)
+						{
+							const int numVals = tokens[valTok].size;
+							float vals[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+							int vt = valTok + 1;
+							for (int vi = 0; vi < numVals && vi < 4; ++vi)
+							{
+								vals[vi] = json_get_float(ctx, vt);
+								vt = cgltf_skip_json(tokens, vt);
+							}
+							kfValue = Vector4{ vals[0], vals[1], vals[2], vals[3] };
+						}
+						else if (tokens[valTok].type == JSMN_PRIMITIVE)
+						{
+							// Scalar value (e.g. emissiveIntensity)
+							kfValue = Vector4{ json_get_float(ctx, valTok), 0.0f, 0.0f, 0.0f };
+						}
+						else
+						{
+							SDL_LOG_ASSERT_FAIL("Malformed keyframe value", "[Scene] Animation '%s' channel %d keyframe %d: expected array or primitive for value", anim.m_Name.c_str(), ci, ki);
+						}
+						hasValue = true;
+					}
+					kft = cgltf_skip_json(tokens, kft + 1);
+				}
+
+				if (!hasTime || !hasValue)
+				{
+					SDL_LOG_ASSERT_FAIL("Keyframe missing time or value", "[Scene] Animation '%s' channel %d keyframe %d: missing time or value", anim.m_Name.c_str(), ci, ki);
+				}
+
+				sampler.m_Inputs.push_back(kfTime);
+				sampler.m_Outputs.push_back(kfValue);
+
+				// Advance past this keyframe object to the next one
+				kfToken = cgltf_skip_json(tokens, kfToken);
+			}
+
+			if (sampler.m_Inputs.empty())
+			{
+				SDL_LOG_ASSERT_FAIL("Empty keyframe data", "[Scene] Animation '%s' channel %d: no valid keyframes found", anim.m_Name.c_str(), ci);
+			}
+
+			// Compute duration contribution
+			float chanDuration = sampler.m_Inputs.back();
+			if (chanDuration > anim.m_Duration)
+				anim.m_Duration = chanDuration;
+
+			// ── Resolve targets ───────────────────────────────────────────────
+			Scene::AnimationChannel channel;
+			channel.m_Path         = path;
+			channel.m_SamplerIndex = (int)anim.m_Samplers.size(); // will be pushed below
+
+			// Collect all target strings to resolve
+			std::vector<std::string> allTargets;
+			if (hasTargets)
+				allTargets = targetsVec;
+			else
+				allTargets.push_back(targetStr);
+
+			for (const std::string& tgt : allTargets)
+			{
+				if (path == Scene::AnimationChannel::Path::EmissiveIntensity)
+				{
+					// Material target: "material:MaterialName"
+					const std::string prefix = "material:";
+					if (tgt.size() > prefix.size() && tgt.substr(0, prefix.size()) == prefix)
+					{
+						const std::string matName = tgt.substr(prefix.size());
+						int matIdx = ResolveMaterialByName(scene, matName);
+						if (matIdx == -1)
+						{
+							SDL_LOG_ASSERT_FAIL("Failed to resolve material target", "[Scene] Animation '%s' channel %d: failed to resolve material target '%s'", anim.m_Name.c_str(), ci, matName.c_str());
+						}
+						else
+						{
+							channel.m_MaterialIndices.push_back(matIdx);
+							channel.m_BaseEmissiveFactor.push_back(scene.m_Materials[matIdx].m_EmissiveFactor);
+						}
+					}
+					else
+					{
+						SDL_LOG_ASSERT_FAIL("Failed to resolve emissiveIntensity target", "[Scene] Animation '%s' channel %d: emissiveIntensity target '%s' must use 'material:' prefix, skipping", anim.m_Name.c_str(), ci, tgt.c_str());
+					}
+				}
+				else
+				{
+					// Node path target
+					int nodeIdx = ResolveNodePath(scene, tgt);
+					if (nodeIdx == -1)
+					{
+						SDL_LOG_ASSERT_FAIL("Failed to resolve animation target node", "[Scene] Animation '%s' channel %d: failed to resolve target node path '%s'", anim.m_Name.c_str(), ci, tgt.c_str());
+					}
+					else
+					{
+						channel.m_NodeIndices.push_back(nodeIdx);
+						scene.m_Nodes[nodeIdx].m_IsAnimated = true;
+					}
+				}
+			}
+
+			// Only add channel if at least one target was resolved
+			if (channel.m_NodeIndices.empty() && channel.m_MaterialIndices.empty())
+			{
+				SDL_LOG_ASSERT_FAIL("Failed to resolve any animation targets", "[Scene] Animation '%s' channel %d: failed to resolve any targets, skipping channel", anim.m_Name.c_str(), ci);
+			}
+
+			anim.m_Samplers.push_back(std::move(sampler));
+			anim.m_Channels.push_back(std::move(channel));
+
+			chanToken = cgltf_skip_json(tokens, chanToken);
+		}
+
+		if (!anim.m_Channels.empty())
+		{
+			SDL_Log("[Scene] Loaded JSON animation '%s': %zu channels, duration %.2fs", anim.m_Name.c_str(), anim.m_Channels.size(), anim.m_Duration);
+
+			for (const Scene::AnimationChannel& chan : anim.m_Channels)
+			{
+				for (int nodeIdx : chan.m_NodeIndices)
+				{
+					SDL_Log("  Channel targeting node '%s' (index %d)", scene.m_Nodes[nodeIdx].m_Name.c_str(), nodeIdx);
+				}
+				for (int matIdx : chan.m_MaterialIndices)
+				{
+					SDL_Log("  Channel targeting material '%s' (index %d)", scene.m_Materials[matIdx].m_Name.c_str(), matIdx);
+				}
+			}
+
+			scene.m_Animations.push_back(std::move(anim));
+		}
+
+		animToken = cgltf_skip_json(tokens, animToken);
+	}
+
+	SDL_Log("[Scene] JSON animations parsed: %zu animations loaded", scene.m_Animations.size());
 }
 
 void SceneLoader::ApplyEnvironmentLights(Scene& scene)
@@ -881,6 +1370,38 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 	}
 }
 
+MaterialConstants MaterialConstantsFromMaterial(const Scene::Material& mat, const std::vector<Scene::Texture>& textures)
+{
+	MaterialConstants mc{};
+	mc.m_BaseColor = mat.m_BaseColorFactor;
+	mc.m_EmissiveFactor = Vector4{ mat.m_EmissiveFactor.x, mat.m_EmissiveFactor.y, mat.m_EmissiveFactor.z, 1.0f };
+	mc.m_RoughnessMetallic = Vector2{ mat.m_RoughnessFactor, mat.m_MetallicFactor };
+	mc.m_TextureFlags = 0;
+	if (mat.m_BaseColorTexture != -1) mc.m_TextureFlags |= TEXFLAG_ALBEDO;
+	if (mat.m_NormalTexture != -1) mc.m_TextureFlags |= TEXFLAG_NORMAL;
+	if (mat.m_MetallicRoughnessTexture != -1) mc.m_TextureFlags |= TEXFLAG_ROUGHNESS_METALLIC;
+	if (mat.m_EmissiveTexture != -1) mc.m_TextureFlags |= TEXFLAG_EMISSIVE;
+	mc.m_AlbedoTextureIndex = mat.m_AlbedoTextureIndex;
+	mc.m_NormalTextureIndex = mat.m_NormalTextureIndex;
+	mc.m_RoughnessMetallicTextureIndex = mat.m_RoughnessMetallicTextureIndex;
+	mc.m_EmissiveTextureIndex = mat.m_EmissiveTextureIndex;
+	mc.m_AlphaMode = mat.m_AlphaMode;
+	mc.m_AlphaCutoff = mat.m_AlphaCutoff;
+	mc.m_IOR = mat.m_IOR;
+	mc.m_TransmissionFactor = mat.m_TransmissionFactor;
+	mc.m_ThicknessFactor = mat.m_ThicknessFactor;
+	mc.m_AttenuationDistance = mat.m_AttenuationDistance;
+	mc.m_AttenuationColor = mat.m_AttenuationColor;
+	mc.m_SigmaA = mat.m_SigmaA;
+	mc.m_SigmaS = mat.m_SigmaS;
+	mc.m_IsThinSurface = mat.m_IsThinSurface ? 1u : 0u;
+	mc.m_AlbedoSamplerIndex    = (mat.m_BaseColorTexture != -1)        ? (uint32_t)textures[mat.m_BaseColorTexture].m_Sampler        : (uint32_t)Scene::Texture::Wrap;
+	mc.m_NormalSamplerIndex    = (mat.m_NormalTexture != -1)           ? (uint32_t)textures[mat.m_NormalTexture].m_Sampler           : (uint32_t)Scene::Texture::Wrap;
+	mc.m_RoughnessSamplerIndex = (mat.m_MetallicRoughnessTexture != -1)? (uint32_t)textures[mat.m_MetallicRoughnessTexture].m_Sampler : (uint32_t)Scene::Texture::Wrap;
+	mc.m_EmissiveSamplerIndex  = (mat.m_EmissiveTexture != -1)         ? (uint32_t)textures[mat.m_EmissiveTexture].m_Sampler         : (uint32_t)Scene::Texture::Wrap;
+	return mc;
+}
+
 void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
 {
 	SCOPED_TIMER("[Scene] MaterialConstants");
@@ -901,50 +1422,7 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* rend
 	materialConstants.reserve(scene.m_Materials.size());
 	for (const Scene::Material& mat : scene.m_Materials)
 	{
-		MaterialConstants mc{};
-		mc.m_BaseColor = mat.m_BaseColorFactor;
-		mc.m_EmissiveFactor = Vector4{ mat.m_EmissiveFactor.x, mat.m_EmissiveFactor.y, mat.m_EmissiveFactor.z, 1.0f };
-		mc.m_RoughnessMetallic = Vector2{ mat.m_RoughnessFactor, mat.m_MetallicFactor };
-		mc.m_TextureFlags = 0;
-		if (mat.m_BaseColorTexture != -1) mc.m_TextureFlags |= TEXFLAG_ALBEDO;
-		if (mat.m_NormalTexture != -1) mc.m_TextureFlags |= TEXFLAG_NORMAL;
-		if (mat.m_MetallicRoughnessTexture != -1) mc.m_TextureFlags |= TEXFLAG_ROUGHNESS_METALLIC;
-		if (mat.m_EmissiveTexture != -1) mc.m_TextureFlags |= TEXFLAG_EMISSIVE;
-		mc.m_AlbedoTextureIndex = mat.m_AlbedoTextureIndex;
-		mc.m_NormalTextureIndex = mat.m_NormalTextureIndex;
-		mc.m_RoughnessMetallicTextureIndex = mat.m_RoughnessMetallicTextureIndex;
-		mc.m_EmissiveTextureIndex = mat.m_EmissiveTextureIndex;
-		mc.m_AlphaMode = mat.m_AlphaMode;
-		mc.m_AlphaCutoff = mat.m_AlphaCutoff;
-		mc.m_IOR = mat.m_IOR;
-		mc.m_TransmissionFactor = mat.m_TransmissionFactor;
-		mc.m_ThicknessFactor = mat.m_ThicknessFactor;
-		mc.m_AttenuationDistance = mat.m_AttenuationDistance;
-		mc.m_AttenuationColor = mat.m_AttenuationColor;
-		mc.m_SigmaA = mat.m_SigmaA;
-		mc.m_SigmaS = mat.m_SigmaS;
-		mc.m_IsThinSurface = mat.m_IsThinSurface ? 1u : 0u;
-		// Per-texture sampler indices (do not assume they are the same)
-		if (mat.m_BaseColorTexture != -1)
-			mc.m_AlbedoSamplerIndex = (uint32_t)scene.m_Textures[mat.m_BaseColorTexture].m_Sampler;
-		else
-			mc.m_AlbedoSamplerIndex = (uint32_t)Scene::Texture::Wrap;
-
-		if (mat.m_NormalTexture != -1)
-			mc.m_NormalSamplerIndex = (uint32_t)scene.m_Textures[mat.m_NormalTexture].m_Sampler;
-		else
-			mc.m_NormalSamplerIndex = (uint32_t)Scene::Texture::Wrap;
-
-		if (mat.m_MetallicRoughnessTexture != -1)
-			mc.m_RoughnessSamplerIndex = (uint32_t)scene.m_Textures[mat.m_MetallicRoughnessTexture].m_Sampler;
-		else
-			mc.m_RoughnessSamplerIndex = (uint32_t)Scene::Texture::Wrap;
-
-		if (mat.m_EmissiveTexture != -1)
-			mc.m_EmissiveSamplerIndex = (uint32_t)scene.m_Textures[mat.m_EmissiveTexture].m_Sampler;
-		else
-			mc.m_EmissiveSamplerIndex = (uint32_t)Scene::Texture::Wrap;
-		materialConstants.push_back(mc);
+		materialConstants.push_back(MaterialConstantsFromMaterial(mat, scene.m_Textures));
 	}
 
 	if (!materialConstants.empty())
@@ -1089,7 +1567,7 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const 
 			Scene::AnimationChannel channel;
 			channel.m_SamplerIndex = (int)cgltf_animation_sampler_index(&cgAnim, cgChannel.sampler);
 			int nodeIdx = (int)cgltf_node_index(data, cgChannel.target_node) + offsets.nodeOffset;
-			channel.m_NodeIndex = nodeIdx;
+			channel.m_NodeIndices.push_back(nodeIdx);
 			scene.m_Nodes[nodeIdx].m_IsAnimated = true;
 
 			switch (cgChannel.target_path)

@@ -801,6 +801,28 @@ void Renderer::Run()
             m_Scene.m_LightsDirty = false;
         }
 
+        // Upload material constants for materials changed by emissive intensity animations
+        if (m_Scene.m_MaterialDirtyRange.first <= m_Scene.m_MaterialDirtyRange.second && m_Scene.m_MaterialConstantsBuffer)
+        {
+            PROFILE_SCOPED("Upload Animated Materials");
+            const uint32_t firstMat = m_Scene.m_MaterialDirtyRange.first;
+            const uint32_t lastMat  = m_Scene.m_MaterialDirtyRange.second;
+            const uint32_t count    = lastMat - firstMat + 1;
+
+            std::vector<MaterialConstants> materialConstants(count);
+            for (uint32_t i = 0; i < count; ++i)
+                materialConstants[i] = MaterialConstantsFromMaterial(m_Scene.m_Materials[firstMat + i], m_Scene.m_Textures);
+
+            nvrhi::CommandListHandle cmd = AcquireCommandList();
+            ScopedCommandList scopedCmd{ cmd, "Upload Animated Material Constants" };
+            scopedCmd->writeBuffer(m_Scene.m_MaterialConstantsBuffer,
+                materialConstants.data(),
+                count * sizeof(MaterialConstants),
+                firstMat * sizeof(MaterialConstants));
+
+            m_Scene.m_MaterialDirtyRange = { UINT32_MAX, 0 };
+        }
+
         // Update camera (camera retrieves frame time internally)
         m_Scene.m_ViewPrev = m_Scene.m_View;
         m_Scene.m_Camera.Update();

@@ -247,6 +247,31 @@ void Scene::FinalizeLoadedScene()
     SCOPED_TIMER("[Scene] Finalize Scene");
 
     // 1. Identify dynamic nodes and sort them topologically
+    // Mark nodes targeted by animations as animated before the dynamic pass.
+    // Also collect dynamic material indices for emissive intensity animations.
+    m_DynamicMaterialIndices.clear();
+    for (const Animation& anim : m_Animations)
+    {
+        for (const AnimationChannel& chan : anim.m_Channels)
+        {
+            // Primary single-node target (glTF) and multi-node targets (JSON)
+            for (int ni : chan.m_NodeIndices)
+            {
+                if (ni >= 0 && ni < (int)m_Nodes.size())
+                    m_Nodes[ni].m_IsAnimated = true;
+            }
+            // Material targets (EmissiveIntensity)
+            for (int mi : chan.m_MaterialIndices)
+            {
+                if (mi >= 0 && mi < (int)m_Materials.size())
+                    m_DynamicMaterialIndices.push_back(mi);
+            }
+        }
+    }
+    // Deduplicate dynamic material indices
+    std::sort(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end());
+    m_DynamicMaterialIndices.erase(std::unique(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end()), m_DynamicMaterialIndices.end());
+
     m_DynamicNodeIndices.clear();
     std::function<void(int, bool)> IdentifyDynamic = [&](int idx, bool parentDynamic)
     {
@@ -361,8 +386,74 @@ void Scene::FinalizeLoadedScene()
     SDL_Log("[Scene] Finalized: Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
 }
 
+// ─── Animation evaluation helper ─────────────────────────────────────────────
+
+// Evaluate an AnimationSampler at time t.
+// Returns a Vector4; for scalar attributes only .x is meaningful.
+static Vector4 EvaluateAnimSampler(const Scene::AnimationSampler& sampler, float t)
+{
+    const auto& inputs  = sampler.m_Inputs;
+    const auto& outputs = sampler.m_Outputs;
+
+    if (inputs.empty()) return Vector4{ 0,0,0,1 };
+    if (inputs.size() == 1) return outputs[0];
+
+    // Clamp to authored range
+    if (t <= inputs.front()) return outputs.front();
+    if (t >= inputs.back())  return outputs.back();
+
+    // Find surrounding keyframe pair
+    uint32_t k0 = 0;
+    for (uint32_t i = 0; i < (uint32_t)inputs.size() - 1; ++i)
+    {
+        if (t >= inputs[i]) k0 = i;
+    }
+    uint32_t k1 = k0 + 1;
+
+    float dt    = inputs[k1] - inputs[k0];
+    float alpha = (dt > 0.0f) ? (t - inputs[k0]) / dt : 0.0f;
+
+    using namespace DirectX;
+    XMVECTOR v0 = XMLoadFloat4(&outputs[k0]);
+    XMVECTOR v1 = XMLoadFloat4(&outputs[k1]);
+
+    XMVECTOR result;
+    switch (sampler.m_Interpolation)
+    {
+    case Scene::AnimationSampler::Interpolation::Step:
+        result = v0;
+        break;
+
+    case Scene::AnimationSampler::Interpolation::Slerp:
+        result = XMQuaternionSlerp(XMQuaternionNormalize(v0), XMQuaternionNormalize(v1), alpha);
+        break;
+
+    case Scene::AnimationSampler::Interpolation::CatmullRom:
+    {
+        uint32_t km1 = (k0 > 0) ? k0 - 1 : k0;
+        uint32_t k2  = (k1 < (uint32_t)inputs.size() - 1) ? k1 + 1 : k1;
+        XMVECTOR vm1 = XMLoadFloat4(&outputs[km1]);
+        XMVECTOR v2  = XMLoadFloat4(&outputs[k2]);
+        result = XMVectorCatmullRom(vm1, v0, v1, v2, alpha);
+        break;
+    }
+
+    case Scene::AnimationSampler::Interpolation::Linear:
+    case Scene::AnimationSampler::Interpolation::CubicSpline:
+    default:
+        result = XMVectorLerp(v0, v1, alpha);
+        break;
+    }
+
+    Vector4 out;
+    XMStoreFloat4(&out, result);
+    return out;
+}
+
 void Scene::Update(float deltaTime)
 {
+	PROFILE_FUNCTION();
+
 	// Save current worlds as previous worlds for all instances
 	for (PerInstanceData& inst : m_InstanceData)
 	{
@@ -370,7 +461,6 @@ void Scene::Update(float deltaTime)
 	}
 
 	if (m_Animations.empty()) return;
-	PROFILE_FUNCTION();
 
 	for (Animation& anim : m_Animations)
 	{
@@ -380,65 +470,72 @@ void Scene::Update(float deltaTime)
 	}
 
 	m_InstanceDirtyRange = { UINT32_MAX, 0 };
+	m_MaterialDirtyRange = { UINT32_MAX, 0 };
 
 	for (const Animation& anim : m_Animations)
 	{
-		for (const Scene::AnimationChannel& channel : anim.m_Channels)
+		const float animTime = anim.m_CurrentTime;
+
+		for (const AnimationChannel& channel : anim.m_Channels)
 		{
 			const AnimationSampler& sampler = anim.m_Samplers[channel.m_SamplerIndex];
 			if (sampler.m_Inputs.empty()) continue;
 
-			// GLTF spec: Animations are implicitly clamped to the range of their input values.
-			// This ensures shorter channels don't loop until the entire animation duration is reached.
-			float sampleTime = anim.m_CurrentTime;
-			if (sampleTime < sampler.m_Inputs.front()) sampleTime = sampler.m_Inputs.front();
-			if (sampleTime > sampler.m_Inputs.back()) sampleTime = sampler.m_Inputs.back();
+			const Vector4 val = EvaluateAnimSampler(sampler, animTime);
 
-			// Find keyframes
-			uint32_t key0 = 0;
-			for (uint32_t i = 0; i < (uint32_t)sampler.m_Inputs.size() - 1; ++i)
+			if (channel.m_Path == AnimationChannel::Path::EmissiveIntensity)
 			{
-				if (sampleTime >= sampler.m_Inputs[i])
-					key0 = i;
+				// Material emissive intensity: scale base emissive factor by animated scalar
+				const float intensity = val.x;
+				for (int mi = 0; mi < (int)channel.m_MaterialIndices.size(); ++mi)
+				{
+					const int matIdx = channel.m_MaterialIndices[mi];
+					if (matIdx < 0 || matIdx >= (int)m_Materials.size()) continue;
+					const Vector3& base = channel.m_BaseEmissiveFactor[mi];
+					m_Materials[matIdx].m_EmissiveFactor = Vector3{
+						base.x * intensity,
+						base.y * intensity,
+						base.z * intensity
+					};
+					// Track dirty range using the position of matIdx in m_DynamicMaterialIndices
+					const auto it = std::lower_bound(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end(), matIdx);
+					if (it != m_DynamicMaterialIndices.end() && *it == matIdx)
+					{
+						const uint32_t slot = (uint32_t)std::distance(m_DynamicMaterialIndices.begin(), it);
+						m_MaterialDirtyRange.first  = std::min(m_MaterialDirtyRange.first,  (uint32_t)matIdx);
+						m_MaterialDirtyRange.second = std::max(m_MaterialDirtyRange.second, (uint32_t)matIdx);
+						(void)slot;
+					}
+				}
 			}
-			uint32_t key1 = (key0 + 1 < (uint32_t)sampler.m_Inputs.size()) ? key0 + 1 : key0;
+			else
+			{
+				using namespace DirectX;
 
-			float t = 0.0f;
-			if (sampler.m_Interpolation == AnimationSampler::Interpolation::Step)
-			{
-				t = 0.0f;
-			}
-			else if (key0 != key1)
-			{
-				float dt = sampler.m_Inputs[key1] - sampler.m_Inputs[key0];
-				t = (sampleTime - sampler.m_Inputs[key0]) / dt;
-			}
+				// Collect all node targets: primary (glTF) + multi-target (JSON)
+				auto ApplyToNode = [&](int nodeIdx)
+				{
+					if (nodeIdx < 0 || nodeIdx >= (int)m_Nodes.size()) return;
+					Node& node = m_Nodes[nodeIdx];
+					node.m_IsDirty = true;
 
-			Node& node = m_Nodes[channel.m_NodeIndex];
-			node.m_IsDirty = true; // Mark as dirty when TRS is changed by animation
+					if (channel.m_Path == AnimationChannel::Path::Translation)
+					{
+						XMStoreFloat3(&node.m_Translation, XMLoadFloat4(&val));
+					}
+					else if (channel.m_Path == AnimationChannel::Path::Rotation)
+					{
+						XMStoreFloat4(&node.m_Rotation, XMQuaternionNormalize(XMLoadFloat4(&val)));
+					}
+					else if (channel.m_Path == AnimationChannel::Path::Scale)
+					{
+						XMStoreFloat3(&node.m_Scale, XMLoadFloat4(&val));
+					}
+				};
 
-			using namespace DirectX;
-			if (channel.m_Path == AnimationChannel::Path::Translation)
-			{
-				Vector v0 = XMLoadFloat4(&sampler.m_Outputs[key0]);
-				Vector v1 = XMLoadFloat4(&sampler.m_Outputs[key1]);
-				XMStoreFloat3(&node.m_Translation, XMVectorLerp(v0, v1, t));
-			}
-			else if (channel.m_Path == AnimationChannel::Path::Rotation)
-			{
-				Vector q0 = XMLoadFloat4(&sampler.m_Outputs[key0]);
-				Vector q1 = XMLoadFloat4(&sampler.m_Outputs[key1]);
-				// For rotation, we should always use Slerp when not Step
-				if (sampler.m_Interpolation == AnimationSampler::Interpolation::Step)
-					XMStoreFloat4(&node.m_Rotation, q0);
-				else
-					XMStoreFloat4(&node.m_Rotation, XMQuaternionSlerp(q0, q1, t));
-			}
-			else if (channel.m_Path == AnimationChannel::Path::Scale)
-			{
-				Vector v0 = XMLoadFloat4(&sampler.m_Outputs[key0]);
-				Vector v1 = XMLoadFloat4(&sampler.m_Outputs[key1]);
-				XMStoreFloat3(&node.m_Scale, XMVectorLerp(v0, v1, t));
+				// All node targets (glTF single or JSON multi-target)
+				for (int ni : channel.m_NodeIndices)
+					ApplyToNode(ni);
 			}
 		}
 	}
@@ -539,6 +636,7 @@ void Scene::Shutdown()
 	m_Cameras.clear();
 	m_Lights.clear();
 	m_Animations.clear();
+	m_DynamicMaterialIndices.clear();
 	m_DynamicNodeIndices.clear();
 	m_InstanceData.clear();
 }

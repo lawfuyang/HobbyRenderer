@@ -3,7 +3,7 @@
 #include "meshoptimizer.h"
 
 static constexpr uint32_t kSceneCacheMagic = 0x59464C52; // "RLFY"
-static constexpr uint32_t kSceneCacheVersion = 25;
+static constexpr uint32_t kSceneCacheVersion = 26;
 
 // --- Binary Serialization Helpers ---
 template<typename T>
@@ -239,7 +239,16 @@ void Scene::SaveToCache(const std::string& cachePath, const std::vector<uint32_t
 			WriteVector(os, sampler.m_Inputs);
 			WriteVector(os, sampler.m_Outputs);
 		}
-		WriteVector(os, anim.m_Channels);
+
+		WritePOD(os, anim.m_Channels.size());
+		for (const AnimationChannel& chan : anim.m_Channels)
+		{
+			WritePOD(os, chan.m_Path);
+			WritePOD(os, chan.m_SamplerIndex);
+			WriteVector(os, chan.m_NodeIndices);
+			WriteVector(os, chan.m_MaterialIndices);
+			WriteVector(os, chan.m_BaseEmissiveFactor);
+		}
 	}
 }
 
@@ -405,7 +414,18 @@ bool Scene::LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& a
 			ReadVector(is, sampler.m_Inputs);
 			ReadVector(is, sampler.m_Outputs);
 		}
-		ReadVector(is, anim.m_Channels);
+
+		size_t chanCount;
+		ReadPOD(is, chanCount);
+		anim.m_Channels.resize(chanCount);
+		for (AnimationChannel& chan : anim.m_Channels)
+		{
+			ReadPOD(is, chan.m_Path);
+			ReadPOD(is, chan.m_SamplerIndex);
+			ReadVector(is, chan.m_NodeIndices);
+			ReadVector(is, chan.m_MaterialIndices);
+			ReadVector(is, chan.m_BaseEmissiveFactor);
+		}
 	}
 
 	return true;
