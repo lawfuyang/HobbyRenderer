@@ -91,141 +91,12 @@ RTXDI_ShadingParameters                g_ReSTIRDI_ShadingParams            = rtx
 uint32_t g_ReSTIRDI_NumLocalLightUniformSamples = 8;
 uint32_t g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
 uint32_t g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
-ReSTIRDIQualityPreset g_ReSTIRDI_CurrentPreset = ReSTIRDIQualityPreset::Custom;
-
-void ApplyReSTIRDIPreset(ReSTIRDIQualityPreset preset)
-{
-    g_ReSTIRDI_CurrentPreset = preset;
-
-    switch (preset)
-    {
-    case ReSTIRDIQualityPreset::Fast:
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 4;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 4;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 4;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 4;
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 0;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
-        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
-        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Off;
-        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Off;
-        g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
-        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
-        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-        break;
-
-    case ReSTIRDIQualityPreset::Medium:
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 8;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 8;
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 2;
-        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
-        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Basic;
-        g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
-        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
-        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-        break;
-
-    case ReSTIRDIQualityPreset::Unbiased:
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Uniform;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 8;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 16;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 8;
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 2;
-        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 0u;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 0u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.0f;
-        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
-        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
-        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 0u;
-        break;
-
-    case ReSTIRDIQualityPreset::Ultra:
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 16;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 16;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 16;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 16;
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 16;
-        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 0u;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 0u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.0f;
-        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.numSamples = 4;
-        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 16;
-        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 0u;
-        break;
-
-    case ReSTIRDIQualityPreset::Reference:
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::None;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Uniform;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 16;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 16;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 0;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 16;
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 16;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 0u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.0f;
-        break;
-
-        // my own settings
-    case ReSTIRDIQualityPreset::Custom:
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 8;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 8;
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
-        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
-        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
-        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
-        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
-        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-    default:
-        break;
-    }
-}
 
 void RTXDIIMGUISettings()
 {
     Renderer* renderer = Renderer::GetInstance();
 
     ImGui::Indent();
-
-    // ---- Preset Selection -----------------------------------------------
-    ImGui::PushItemWidth(200.f);
-    if (ImGui::Combo("Preset", (int*)&g_ReSTIRDI_CurrentPreset,
-        "(Custom)\0Fast\0Medium\0Unbiased\0Ultra\0Reference\0"))
-    {
-        ApplyReSTIRDIPreset(g_ReSTIRDI_CurrentPreset);
-    }
-    ImGui::PopItemWidth();
 
     // ---- Resampling mode -------------------------------------------------------
     ImGui::PushItemWidth(200.f);
@@ -551,12 +422,25 @@ public:
         g_ReSTIRDI_SpatialResamplingParams = rtxdi::GetDefaultReSTIRDISpatialResamplingParams();
         g_ReSTIRDI_ShadingParams = rtxdi::GetDefaultReSTIRDIShadingParams();
 
-        // Sync per-mode sample counts with initial sampling params default
-        g_ReSTIRDI_NumLocalLightUniformSamples = g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples;
+        // "medium" preset from FullSample as base, with my own changes
+        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
+        g_ReSTIRDI_NumLocalLightUniformSamples = 8;
+        g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
+        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
+        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = 8;
+        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
+        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
+        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
+        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
+        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
+        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
+        g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
+        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
+        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
 
-        ApplyReSTIRDIPreset(g_ReSTIRDI_CurrentPreset);
+        g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
 
         CreateRTXDIContext();
 
