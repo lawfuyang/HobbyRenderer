@@ -7,7 +7,7 @@
 #define LIGHT_SHADOW_SAMPLES 1
 
 // RNG for stochastic sampling — only present in path-tracer compute kernels, not rasterized passes
-#include "PathTracerRNG.hlsli"
+#include "RNG.hlsli"
 
 float Luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
