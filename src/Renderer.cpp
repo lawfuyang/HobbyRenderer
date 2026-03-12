@@ -846,7 +846,11 @@ void Renderer::Run()
             m_ActiveDebugMode = m_DebugMode;
         }
 
-        if (m_DebugMode != DEBUG_MODE_NONE)
+        // Check if reservoir subfield viz mode is active (declared in RTXDIRenderer.cpp)
+        extern uint32_t g_ReservoirSubfieldVizMode;
+        const bool bReservoirVizActive = (g_ReservoirSubfieldVizMode != 0);
+
+        if (m_DebugMode != DEBUG_MODE_NONE || bReservoirVizActive)
         {
             // Lock settings in debug mode for consistent raw output
             m_EnableBloom = false;

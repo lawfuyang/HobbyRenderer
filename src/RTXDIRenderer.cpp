@@ -16,6 +16,7 @@
 #include "NrdIntegration.h"
 
 #include "shaders/ShaderShared.h"
+#include "shaders/DIReservoirVizParameters.h"
 
 #include <Rtxdi/DI/ReSTIRDI.h>
 #include <Rtxdi/RtxdiUtils.h>
@@ -51,6 +52,24 @@ static constexpr uint32_t k_EnvRISTileCount = 128u;
 static constexpr uint32_t k_EnvPDFTexSize = 1024u;
 // Compact buffer stride: 3 × uint4 per RIS entry (see RTXDIApplicationBridge.hlsli).
 static constexpr uint32_t k_CompactSlotsPerEntry = 3u;
+
+// ============================================================================
+// ReservoirSubfieldVizMode — selects which reservoir type to visualize.
+// GIReservoir and PTReservoir are stubs (not yet implemented).
+// ============================================================================
+enum class ReservoirSubfieldVizMode : uint32_t
+{
+    Off         = 0,
+    DIReservoir = 1,
+    GIReservoir = 2, // stub — not yet implemented
+    PTReservoir = 3  // stub — not yet implemented
+};
+
+// Global state for reservoir subfield visualization
+uint32_t         g_ReservoirSubfieldVizMode = (uint32_t)ReservoirSubfieldVizMode::Off;
+DIReservoirField g_DIReservoirVizField      = DIReservoirField::DI_RESERVOIR_FIELD_LIGHT_DATA;
+
+// ============================================================================
 
 enum class ReSTIRDIQualityPreset : uint32_t
 {
@@ -391,6 +410,51 @@ void RTXDIIMGUISettings()
                 &g_ReSTIRDI_ShadingParams.finalVisibilityMaxDistance, 0.0f, 32.0f);
             ImGui::SliderInt("Final Visibility Max Age",
                 (int*)&g_ReSTIRDI_ShadingParams.finalVisibilityMaxAge, 0, 16);
+        }
+
+        ImGui::TreePop();
+    }
+
+    // ---- Reservoir Subfield Visualization ----------------------------------------
+    ImGui::Separator();
+    if (ImGui::TreeNode("Reservoir Subfield Viz"))
+    {
+        ImGui::PushItemWidth(220.f);
+        ImGui::Combo("Reservoir Type", (int*)&g_ReservoirSubfieldVizMode,
+            "Off\0"
+            "DI Reservoirs\0"
+            "GI Reservoirs (N/A)\0"
+            "PT Reservoirs (N/A)\0");
+        ImGui::PopItemWidth();
+
+        if (g_ReservoirSubfieldVizMode != (uint32_t)ReservoirSubfieldVizMode::Off)
+        {
+            ImGui::TextDisabled("  Note: RELAX denoising output is bypassed while viz mode is active.");
+        }
+
+        switch ((ReservoirSubfieldVizMode)g_ReservoirSubfieldVizMode)
+        {
+        case ReservoirSubfieldVizMode::DIReservoir:
+            ImGui::PushItemWidth(220.f);
+            ImGui::Combo("DI Reservoir Field", (int*)&g_DIReservoirVizField,
+                "Light data\0"
+                "UV data\0"
+                "Target Pdf\0"
+                "M\0"
+                "Packed visibility\0"
+                "Spatial distance\0"
+                "Age\0"
+                "Canonical weight\0");
+            ImGui::PopItemWidth();
+            break;
+        case ReservoirSubfieldVizMode::GIReservoir:
+            ImGui::TextDisabled("  GI Reservoir visualization is not yet implemented.");
+            break;
+        case ReservoirSubfieldVizMode::PTReservoir:
+            ImGui::TextDisabled("  PT Reservoir visualization is not yet implemented.");
+            break;
+        default:
+            break;
         }
 
         ImGui::TreePop();
@@ -1400,16 +1464,45 @@ REGISTER_RENDERER(RTXDIRenderer);
 
 class RTXDIVisualizationRenderer : public IRenderer
 {
+    RGTextureHandle m_RG_RTXDIVizOutput;
+
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
         Renderer* renderer = Renderer::GetInstance();
 
-        // Only run when RTXDI is enabled and a visualization mode is active.
+        // Only run when RTXDI is enabled and DI visualization mode is active.
         if (!renderer->m_EnableReSTIRDI)
             return false;
-            
-        return false;
+
+        if (g_ReservoirSubfieldVizMode == (uint32_t)ReservoirSubfieldVizMode::Off)
+            return false;
+
+        if (g_ReservoirSubfieldVizMode != (uint32_t)ReservoirSubfieldVizMode::DIReservoir)
+            return false; // GI/PT stubs — not yet implemented
+    
+        const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+
+        // Declare the viz output texture (RGBA16F, same dimensions as swapchain)
+        {
+            RGTextureDesc desc;
+            desc.m_NvrhiDesc.width        = width;
+            desc.m_NvrhiDesc.height       = height;
+            desc.m_NvrhiDesc.format       = Renderer::HDR_COLOR_FORMAT;
+            desc.m_NvrhiDesc.isUAV        = true;
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            desc.m_NvrhiDesc.debugName    = "RTXDIVizOutput";
+            renderGraph.DeclareTexture(desc, m_RG_RTXDIVizOutput);
+        }
+
+        // Read the DI reservoir buffer (populated by RTXDIRenderer)
+        renderGraph.ReadBuffer(g_RG_RTXDILightReservoirBuffer);
+
+        // We will blit the viz output to HDR color in Render()
+        renderGraph.WriteTexture(g_RG_HDRColor);
+
+        return true;
     }
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
@@ -1417,6 +1510,70 @@ public:
         PROFILE_FUNCTION();
         Renderer* renderer = Renderer::GetInstance();
         nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
+
+        const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+
+        // Retrieve the RTXDI context from the RTXDIRenderer instance
+        extern IRenderer* g_RTXDIRenderer;
+        RTXDIRenderer* rtxdiRenderer = static_cast<RTXDIRenderer*>(g_RTXDIRenderer);
+
+        const RTXDI_ReservoirBufferParameters rbp = rtxdiRenderer->m_Context->GetReservoirBufferParameters();
+        const RTXDI_RuntimeParameters         rtp = rtxdiRenderer->m_Context->GetRuntimeParams();
+        const RTXDI_DIBufferIndices           bix = rtxdiRenderer->m_Context->GetBufferIndices();
+
+        // Build the DIReservoirVizParameters constant buffer
+        DIReservoirVizParameters vizCB{};
+        vizCB.view                 = renderer->m_Scene.m_View;
+        vizCB.runtimeParams        = rtp;
+        vizCB.reservoirBufferParams = rbp;
+        vizCB.bufferIndices        = bix;
+        vizCB.diReservoirField     = g_DIReservoirVizField;
+        vizCB.maxLightsInBuffer    = renderer->m_Scene.m_LightCount;
+        vizCB.pad1                 = 0;
+        vizCB.pad2                 = 0;
+
+        nvrhi::BufferHandle vizCBHandle = device->createBuffer(
+            nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(DIReservoirVizParameters), "DIReservoirVizCB", 1));
+        commandList->writeBuffer(vizCBHandle, &vizCB, sizeof(vizCB));
+
+        // Build the RTXDIConstants constant buffer (for maxHistoryLength)
+        RTXDIConstants rtxdiCB{};
+        rtxdiCB.m_View                    = renderer->m_Scene.m_View;
+        rtxdiCB.m_TemporalMaxHistoryLength = rtxdiRenderer->m_Context->GetTemporalResamplingParameters().maxHistoryLength;
+
+        nvrhi::BufferHandle rtxdiCBHandle = device->createBuffer(
+            nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(RTXDIConstants), "RTXDIConstantsCB_Viz", 1));
+        commandList->writeBuffer(rtxdiCBHandle, &rtxdiCB, sizeof(rtxdiCB));
+
+        // Retrieve render graph resources
+        nvrhi::BufferHandle  reservoirBuffer = renderGraph.GetBuffer(g_RG_RTXDILightReservoirBuffer, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle vizOutput       = renderGraph.GetTexture(m_RG_RTXDIVizOutput, RGResourceAccessMode::Write);
+
+        // Dispatch the visualization compute shader
+        nvrhi::BindingSetDesc bsetDesc;
+        bsetDesc.bindings = {
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, reservoirBuffer),
+            nvrhi::BindingSetItem::Texture_UAV(1, vizOutput),
+            nvrhi::BindingSetItem::ConstantBuffer(0, vizCBHandle),
+            nvrhi::BindingSetItem::ConstantBuffer(1, rtxdiCBHandle)
+        };
+
+        renderer->AddComputePass({
+            .commandList    = commandList,
+            .shaderName     = "DIReservoirViz_main",
+            .bindingSetDesc = bsetDesc,
+            .bIncludeBindlessResources = false,
+            .dispatchParams = {
+                .x = (width  + 15) / 16,
+                .y = (height + 15) / 16,
+                .z = 1
+            }
+        });
+
+        // Blit the viz output to HDR color so downstream tone-mapping sees it
+        nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
+        commandList->copyTexture(hdrColor, nvrhi::TextureSlice{}, vizOutput, nvrhi::TextureSlice{});
     }
 
     const char* GetName() const override { return "RTXDIVisualization"; }
