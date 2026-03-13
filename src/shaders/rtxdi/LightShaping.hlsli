@@ -13,6 +13,8 @@
 #ifndef LIGHT_SHAPING_HLSLI
 #define LIGHT_SHAPING_HLSLI
 
+#include "../CommonLighting.hlsli"
+
 struct LightShaping
 {
     float cosConeAngle;
@@ -49,14 +51,13 @@ float evaluateIesProfile(int profileIndex, float3 emissionDirection_, float3 lig
     emissionDirection = normalize(emissionDirection);
 
     const float angle = acos(emissionDirection.z);
-    const float normAngle = angle / c_pi;
+    const float normAngle = angle / PI;
 
     const float tangentAngle = atan2(emissionDirection.y, emissionDirection.x);
-    const float normTangentAngle = tangentAngle * .5f / c_pi + .5f;
+    const float normTangentAngle = tangentAngle * .5f / PI + .5f;
 
-    Texture2D<float4> iesProfileTexture = t_BindlessTextures[NonUniformResourceIndex(profileIndex)];
-
-    float iesMultiplier = iesProfileTexture.SampleLevel(IES_SAMPLER, float2(normAngle, normTangentAngle), 0).x;
+    SamplerState iesSampler = IES_SAMPLER;
+    float iesMultiplier = GetBindlessTexture2D(profileIndex).SampleLevel(iesSampler, float2(normAngle, normTangentAngle), 0).x;
 
     return iesMultiplier;
 }
@@ -90,7 +91,7 @@ float3 getConeVertexForSphericalSource(float3 sphereCenter, float sphereRadius, 
 {
     // Compute the sine of the clamped half angle. When the angle is more than 90 degrees (half a pi),
     // the offset should be exactly one sphere radius.
-    float sinHalfAngle = sin(min(coneHalfAngle, c_pi * 0.5));
+    float sinHalfAngle = sin(min(coneHalfAngle, PI * 0.5));
     
     // Offset is the hypotenuse of a right triangle whose vertices are: the light center; the cone vertex; 
     // and any point on the circle where the cone touches the sphere.
@@ -158,7 +159,7 @@ float getShapingFluxFactor(LightShaping shaping)
 
     // TODO: account for IES profiles
 
-    return solidAngleOverTwoPi * 0.5; // (solidAngle / (4 * c_pi))
+    return solidAngleOverTwoPi * 0.5; // (solidAngle / (4 * PI))
 }
 
 #endif // LIGHT_SHAPING_HLSLI

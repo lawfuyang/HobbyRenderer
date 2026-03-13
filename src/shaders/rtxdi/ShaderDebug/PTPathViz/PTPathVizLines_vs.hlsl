@@ -115,7 +115,7 @@ void vs_main(
     }
 
     float4 pos = enabled ? float4(i_pos.xyz, 1.0) : float4(0.0, 0.0, 0.0, 0.0);
-	o_posClip = mul(g_Const.view.matWorldToClip, pos);
+    o_posClip = mul(g_Const.view.m_MatWorldToClip, pos);
 }
 
 

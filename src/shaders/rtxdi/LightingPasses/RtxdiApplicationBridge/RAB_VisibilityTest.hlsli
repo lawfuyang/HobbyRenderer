@@ -13,7 +13,6 @@
 #ifndef RAB_VISIBILITY_TEST_HLSLI
 #define RAB_VISIBILITY_TEST_HLSLI
 
-#include "../../SceneGeometry.hlsli"
 #include "RAB_LightSample.hlsli"
 
 RayDesc setupVisibilityRay(RAB_Surface surface, float3 samplePosition, float offset = 0.001)
@@ -33,7 +32,6 @@ bool GetConservativeVisibility(RaytracingAccelerationStructure accelStruct, RAB_
 {
     RayDesc ray = setupVisibilityRay(surface, samplePosition);
 
-#if USE_RAY_QUERY
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> rayQuery;
 
     rayQuery.TraceRayInline(accelStruct, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
@@ -41,15 +39,6 @@ bool GetConservativeVisibility(RaytracingAccelerationStructure accelStruct, RAB_
     rayQuery.Proceed();
 
     bool visible = (rayQuery.CommittedStatus() == COMMITTED_NOTHING);
-#else
-    RAB_RayPayload payload = (RAB_RayPayload)0;
-    payload.instanceID = ~0u;
-    payload.throughput = 1.0;
-
-    TraceRay(accelStruct, RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, INSTANCE_MASK_OPAQUE, 0, 0, 0, ray, payload);
-
-    bool visible = (payload.instanceID == ~0u);
-#endif
 
     REPORT_RAY(!visible);
 
@@ -99,7 +88,6 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure accelStruct, RAB_Surfa
     payload.instanceID = ~0u;
     payload.throughput = 1.0;
 
-#if USE_RAY_QUERY
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
 
     rayQuery.TraceRayInline(accelStruct, rayFlags, instanceMask, ray);
@@ -129,9 +117,6 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure accelStruct, RAB_Surfa
         payload.committedRayT = rayQuery.CommittedRayT();
         payload.frontFace = rayQuery.CommittedTriangleFrontFace();
     }
-#else
-    TraceRay(accelStruct, rayFlags, instanceMask, 0, 0, 0, ray, payload);
-#endif
 
     REPORT_RAY(payload.instanceID != ~0u);
 

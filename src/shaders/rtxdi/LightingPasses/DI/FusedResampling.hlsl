@@ -12,10 +12,8 @@
 
 #pragma pack_matrix(row_major)
 
-#if USE_RAY_QUERY
 #define RTXDI_ENABLE_BOILING_FILTER
 #define RTXDI_BOILING_FILTER_GROUP_SIZE RTXDI_SCREEN_SPACE_GROUP_SIZE
-#endif
 
 #include "../RtxdiApplicationBridge/RtxdiApplicationBridge.hlsli"
 
@@ -33,17 +31,9 @@
 
 #include "../ShadingHelpers.hlsli"
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
 
     const RTXDI_RuntimeParameters params = g_Const.runtimeParams;
 

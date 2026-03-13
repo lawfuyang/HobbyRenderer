@@ -27,7 +27,7 @@
 
 bool InvalidPixelPosition(int2 pixelPosition)
 {
-	return any(pixelPosition > int2(g_Const.view.viewportSize));
+    return any(pixelPosition > int2(g_Const.view.m_ViewportSize));
 }
 
 void InvalidateReservoirBuffer(RTXDI_ReservoirBufferParameters bufferParams, uint2 reservoirPosition, uint reservoirArrayIndex)
@@ -72,17 +72,9 @@ void CalculateDiffuseAndSpecular(SplitBrdf LightingSample, RAB_Surface primarySu
     specular = InvalidPixelGuard(specular);
 }
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 globalIndex : SV_DispatchThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    uint2 globalIndex = DispatchRaysIndex().xy;
-#endif
 
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(globalIndex, g_Const.runtimeParams.activeCheckerboardField);
 	const uint2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);

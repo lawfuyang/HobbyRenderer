@@ -1,46 +1,37 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2020-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
- *
- * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
- * property and proprietary rights in and to this material, related
- * documentation and any modifications thereto. Any use, reproduction,
- * disclosure or distribution of this material and related documentation
- * without an express license agreement from NVIDIA CORPORATION or
- * its affiliates is strictly prohibited.
  */
 
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/bindless.h>
-#include <donut/shaders/binding_helpers.hlsli>
-#include <donut/shaders/packing.hlsli>
+#include "../Packing.hlsli"
+#include "../Bindless.hlsli"
+#include "../RaytracingCommon.hlsli"
 #include <Rtxdi/Utils/Math.hlsli>
 #include "SharedShaderInclude/ShaderParameters.h"
 
-VK_PUSH_CONSTANT ConstantBuffer<PrepareLightsConstants> g_Const : register(b0);
-RWStructuredBuffer<PolymorphicLightInfo> u_LightDataBuffer : register(u0);
-RWBuffer<uint> u_LightIndexMappingBuffer : register(u1);
-RWTexture2D<float> u_LocalLightPdfTexture : register(u2);
-StructuredBuffer<PrepareLightsTask> t_TaskBuffer : register(t0);
-StructuredBuffer<PolymorphicLightInfo> t_PrimitiveLights : register(t1);
-StructuredBuffer<InstanceData> t_InstanceData : register(t2);
-StructuredBuffer<GeometryData> t_GeometryData : register(t3);
-StructuredBuffer<MaterialConstants> t_MaterialConstants : register(t4);
-SamplerState s_MaterialSampler : register(s0);
+// ---- Resource bindings (must match RTXDIRenderer.cpp PrepareLights binding set) ----
+ConstantBuffer<PrepareLightsConstants>      g_Const             : register(b0);
+RWStructuredBuffer<PolymorphicLightInfo>    u_LightDataBuffer   : register(u0);
+RWBuffer<uint>                              u_LightIndexMappingBuffer : register(u1);
+RWBuffer<uint>                              u_GeometryInstanceToLight : register(u2);
 
-VK_BINDING(0, 1) ByteAddressBuffer t_BindlessBuffers[] : register(t0, space1);
-VK_BINDING(1, 1) Texture2D t_BindlessTextures[] : register(t0, space2);
+StructuredBuffer<PrepareLightsTask>         t_TaskBuffer        : register(t0);
+StructuredBuffer<PerInstanceData>           t_InstanceData      : register(t26);
+StructuredBuffer<MeshData>                  t_GeometryData      : register(t27);
+StructuredBuffer<MaterialConstants>         t_MaterialConstants : register(t28);
 
-#define ENVIRONMENT_SAMPLER s_MaterialSampler // doesn't matter in this pass
-#define IES_SAMPLER s_MaterialSampler
+// Bindless scene geometry buffers (bound via bIncludeBindlessResources = true)
+StructuredBuffer<uint>                      t_SceneIndices      : register(t29);
+StructuredBuffer<VertexQuantized>           t_SceneVertices     : register(t30);
+
+#define ENVIRONMENT_SAMPLER SamplerDescriptorHeap[SAMPLER_LINEAR_CLAMP_INDEX]
+#define IES_SAMPLER         SamplerDescriptorHeap[SAMPLER_LINEAR_CLAMP_INDEX]
 #include "PolymorphicLight.hlsli"
 
 bool FindTask(uint dispatchThreadId, out PrepareLightsTask task)
 {
-    // Use binary search to find the task that contains the current thread's output index:
-    //   task.lightBufferOffset <= dispatchThreadId < (task.lightBufferOffset + task.triangleCount)
-
     int left = 0;
     int right = int(g_Const.numTasks) - 1;
 
@@ -49,30 +40,21 @@ bool FindTask(uint dispatchThreadId, out PrepareLightsTask task)
         int middle = (left + right) / 2;
         task = t_TaskBuffer[middle];
 
-        int tri = int(dispatchThreadId) - int(task.lightBufferOffset); // signed
+        int tri = int(dispatchThreadId) - int(task.lightBufferOffset);
 
         if (tri < 0)
-        {
-            // Go left
             right = middle - 1;
-        }
-        else if (tri < task.triangleCount)
-        {
-            // Found it!
+        else if (tri < int(task.triangleCount))
             return true;
-        }
         else
-        {
-            // Go right
             left = middle + 1;
-        }
     }
 
     return false;
 }
 
 [numthreads(256, 1, 1)]
-void main(uint dispatchThreadId : SV_DispatchThreadID, uint groupThreadId : SV_GroupThreadID)
+void main(uint dispatchThreadId : SV_DispatchThreadID)
 {
     PrepareLightsTask task = (PrepareLightsTask)0;
 
@@ -81,132 +63,122 @@ void main(uint dispatchThreadId : SV_DispatchThreadID, uint groupThreadId : SV_G
 
     uint triangleIdx = dispatchThreadId - task.lightBufferOffset;
     bool isPrimitiveLight = (task.instanceAndGeometryIndex & TASK_PRIMITIVE_LIGHT_BIT) != 0;
-    
+
     PolymorphicLightInfo lightInfo = (PolymorphicLightInfo)0;
 
     if (!isPrimitiveLight)
     {
-        InstanceData instance = t_InstanceData[task.instanceAndGeometryIndex >> 12];
-        GeometryData geometry = t_GeometryData[instance.firstGeometryIndex + task.instanceAndGeometryIndex & 0xfff];
-        MaterialConstants material = t_MaterialConstants[geometry.materialIndex];
+        // Decode instance index (high 19 bits) and geometry sub-index (low 12 bits)
+        uint instanceIndex  = (task.instanceAndGeometryIndex >> 12) & 0x7FFFFu;
+        uint geometrySubIdx = task.instanceAndGeometryIndex & 0xFFFu;
 
-        ByteAddressBuffer indexBuffer = t_BindlessBuffers[NonUniformResourceIndex(geometry.indexBufferIndex)];
-        ByteAddressBuffer vertexBuffer = t_BindlessBuffers[NonUniformResourceIndex(geometry.vertexBufferIndex)];
-        
-        uint3 indices = indexBuffer.Load3(geometry.indexOffset + triangleIdx * c_SizeOfTriangleIndices);
+        PerInstanceData instance = t_InstanceData[instanceIndex];
+        MeshData        geometry = t_GeometryData[instance.m_MeshDataIndex];
+        MaterialConstants material = t_MaterialConstants[instance.m_MaterialIndex];
+
+        // Get triangle vertex positions using the shared helper
+        uint lodIndex = instance.m_LODIndex;
+        TriangleVertices tv = GetTriangleVertices(triangleIdx, lodIndex, geometry, t_SceneIndices, t_SceneVertices);
 
         float3 positions[3];
+        positions[0] = MatrixMultiply(float4(tv.v0.m_Pos, 1.0f), instance.m_World).xyz;
+        positions[1] = MatrixMultiply(float4(tv.v1.m_Pos, 1.0f), instance.m_World).xyz;
+        positions[2] = MatrixMultiply(float4(tv.v2.m_Pos, 1.0f), instance.m_World).xyz;
 
-        positions[0] = asfloat(vertexBuffer.Load3(geometry.positionOffset + indices[0] * c_SizeOfPosition));
-        positions[1] = asfloat(vertexBuffer.Load3(geometry.positionOffset + indices[1] * c_SizeOfPosition));
-        positions[2] = asfloat(vertexBuffer.Load3(geometry.positionOffset + indices[2] * c_SizeOfPosition));
-        
-        positions[0] = mul(instance.transform, float4(positions[0], 1)).xyz;
-        positions[1] = mul(instance.transform, float4(positions[1], 1)).xyz;
-        positions[2] = mul(instance.transform, float4(positions[2], 1)).xyz;
+        // Emissive radiance
+        float3 radiance = material.m_EmissiveFactor.rgb;
 
-        float3 radiance = material.emissiveColor;
-
-        if (material.emissiveTextureIndex >= 0 && geometry.texCoord1Offset != ~0u && (material.flags & MaterialFlags_UseEmissiveTexture) != 0)
+        // Apply emissive texture if present
+        if ((material.m_TextureFlags & TEXFLAG_EMISSIVE) != 0)
         {
-            Texture2D emissiveTexture = t_BindlessTextures[NonUniformResourceIndex(material.emissiveTextureIndex)];
+            Texture2D emissiveTexture = GetBindlessTexture2D(material.m_EmissiveTextureIndex);
+            SamplerState emissiveSampler = GetBindlessSampler(material.m_EmissiveSamplerIndex);
 
-            // Load the vertex UVs
-            float2 uvs[3];
-            uvs[0] = asfloat(vertexBuffer.Load2(geometry.texCoord1Offset + indices[0] * c_SizeOfTexcoord));
-            uvs[1] = asfloat(vertexBuffer.Load2(geometry.texCoord1Offset + indices[1] * c_SizeOfTexcoord));
-            uvs[2] = asfloat(vertexBuffer.Load2(geometry.texCoord1Offset + indices[2] * c_SizeOfTexcoord));
+            // Interpolate UVs for the triangle centroid
+            float2 uv0 = tv.v0.m_Uv;
+            float2 uv1 = tv.v1.m_Uv;
+            float2 uv2 = tv.v2.m_Uv;
 
-            // Calculate the triangle edges and edge lengths in UV space
+            // Calculate UV-space gradients for anisotropic sampling
             float2 edges[3];
-            edges[0] = uvs[1] - uvs[0];
-            edges[1] = uvs[2] - uvs[1];
-            edges[2] = uvs[0] - uvs[2];
+            edges[0] = uv1 - uv0;
+            edges[1] = uv2 - uv1;
+            edges[2] = uv0 - uv2;
 
             float3 edgeLengths;
             edgeLengths[0] = length(edges[0]);
             edgeLengths[1] = length(edges[1]);
             edgeLengths[2] = length(edges[2]);
 
-            // Find the shortest edge and the other two (longer) edges
-            float2 shortEdge;
-            float2 longEdge1;
-            float2 longEdge2;
-
+            float2 shortEdge, longEdge1, longEdge2;
             if (edgeLengths[0] < edgeLengths[1] && edgeLengths[0] < edgeLengths[2])
             {
-                shortEdge = edges[0];
-                longEdge1 = edges[1];
-                longEdge2 = edges[2];
+                shortEdge = edges[0]; longEdge1 = edges[1]; longEdge2 = edges[2];
             }
             else if (edgeLengths[1] < edgeLengths[2])
             {
-                shortEdge = edges[1];
-                longEdge1 = edges[2];
-                longEdge2 = edges[0];
+                shortEdge = edges[1]; longEdge1 = edges[2]; longEdge2 = edges[0];
             }
             else
             {
-                shortEdge = edges[2];
-                longEdge1 = edges[0];
-                longEdge2 = edges[1];
+                shortEdge = edges[2]; longEdge1 = edges[0]; longEdge2 = edges[1];
             }
 
-            // Use anisotropic sampling with the sample ellipse axes parallel to the short edge
-            // and the median from the opposite vertex to the short edge.
-            // This ellipse is roughly inscribed into the triangle and approximates long or skinny
-            // triangles with highly anisotropic sampling, and is mostly round for usual triangles.
-            float2 shortGradient = shortEdge * (2.0 / 3.0);
-            float2 longGradient = (longEdge1 + longEdge2) / 3.0;
+            float2 shortGradient = shortEdge * (2.0f / 3.0f);
+            float2 longGradient  = (longEdge1 + longEdge2) / 3.0f;
+            float2 centerUV      = (uv0 + uv1 + uv2) / 3.0f;
 
-            // Sample
-            float2 centerUV = (uvs[0] + uvs[1] + uvs[2]) / 3.0;
-            float3 emissiveMask = emissiveTexture.SampleGrad(s_MaterialSampler, centerUV, shortGradient, longGradient).rgb;
-
+            float3 emissiveMask = emissiveTexture.SampleGrad(emissiveSampler, centerUV, shortGradient, longGradient).rgb;
             radiance *= emissiveMask;
         }
 
-        radiance.rgb = max(0, radiance.rgb);
+        radiance = max(0, radiance);
 
         TriangleLight triLight;
-        triLight.base = positions[0];
-        triLight.edge1 = positions[1] - positions[0];
-        triLight.edge2 = positions[2] - positions[0];
+        triLight.base     = positions[0];
+        triLight.edge1    = positions[1] - positions[0];
+        triLight.edge2    = positions[2] - positions[0];
         triLight.radiance = radiance;
+
+        float3 crossProduct = cross(triLight.edge1, triLight.edge2);
+        float crossLen = length(crossProduct);
+        triLight.normal      = (crossLen > 0.0f) ? (crossProduct / crossLen) : float3(0, 1, 0);
+        triLight.surfaceArea = crossLen * 0.5f;
 
         lightInfo = triLight.Store();
     }
     else
     {
-        uint primitiveLightIndex = task.instanceAndGeometryIndex & ~TASK_PRIMITIVE_LIGHT_BIT;
-        lightInfo = t_PrimitiveLights[primitiveLightIndex];
+        // Primitive (analytic) light — copy directly from the primitive light buffer
+        // NOTE: primitive lights are not yet supported in this path; stub out.
+        lightInfo = (PolymorphicLightInfo)0;
     }
 
     uint lightBufferPtr = task.lightBufferOffset + triangleIdx;
     u_LightDataBuffer[g_Const.currentFrameLightOffset + lightBufferPtr] = lightInfo;
 
-    // If this light has existed on the previous frame, write the index mapping information
-    // so that temporal resampling can be applied to the light correctly when it changes
-    // the index inside the light buffer.
+    // Write light index mapping for temporal resampling
     if (task.previousLightBufferOffset >= 0)
     {
-        uint prevBufferPtr = task.previousLightBufferOffset + triangleIdx;
+        uint prevBufferPtr = uint(task.previousLightBufferOffset) + triangleIdx;
 
-        // Mapping buffer for the previous frame points at the current frame.
-        // Add one to indicate that this is a valid mapping, zero is invalid.
-        u_LightIndexMappingBuffer[g_Const.previousFrameLightOffset + prevBufferPtr] = 
+        u_LightIndexMappingBuffer[g_Const.previousFrameLightOffset + prevBufferPtr] =
             g_Const.currentFrameLightOffset + lightBufferPtr + 1;
 
-        // Mapping buffer for the current frame points at the previous frame.
-        // Add one to indicate that this is a valid mapping, zero is invalid.
-        u_LightIndexMappingBuffer[g_Const.currentFrameLightOffset + lightBufferPtr] = 
+        u_LightIndexMappingBuffer[g_Const.currentFrameLightOffset + lightBufferPtr] =
             g_Const.previousFrameLightOffset + prevBufferPtr + 1;
     }
 
-    // Calculate the total flux
+    // Write the flux into the PDF texture via the geometry-instance-to-light mapping
     float emissiveFlux = PolymorphicLight::getPower(lightInfo);
-
-    // Write the flux into the PDF texture
     uint2 pdfTexturePosition = RTXDI_LinearIndexToZCurve(lightBufferPtr);
-    u_LocalLightPdfTexture[pdfTexturePosition] = emissiveFlux;
+    // Note: u_LocalLightPdfTexture is written by a separate BuildLocalLightPDF pass.
+    // Here we only write the geometry-instance-to-light mapping.
+    if (!isPrimitiveLight)
+    {
+        uint instanceIndex  = (task.instanceAndGeometryIndex >> 12) & 0x7FFFFu;
+        PerInstanceData instance = t_InstanceData[instanceIndex];
+        uint geometryInstanceIndex = instance.m_FirstGeometryInstanceIndex + (task.instanceAndGeometryIndex & 0xFFFu);
+        u_GeometryInstanceToLight[geometryInstanceIndex] = lightBufferPtr;
+    }
 }

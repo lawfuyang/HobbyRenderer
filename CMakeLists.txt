@@ -203,6 +203,8 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE src/pch.h)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE src)
+target_include_directories(${PROJECT_NAME} PRIVATE src/shaders)
+target_include_directories(${PROJECT_NAME} PRIVATE src/shaders/rtxdi/SharedShaderInclude/SharedShaderInclude)
 target_include_directories(${PROJECT_NAME} PUBLIC "${AGILITY_SDK_INSTALL_DIR}/build/native/include")
 
 # ImGui Include
@@ -281,9 +283,12 @@ add_custom_target(build_shaders
             --compiler "${DXC_EXE}"
             --shaderModel 6_8
             --hlsl2021
+            -D WITH_NRD=1
+            -X "-enable-16bit-types"
             --include "${CMAKE_SOURCE_DIR}/src/shaders"
             --include "${CMAKE_SOURCE_DIR}/external/rtxdi/Include"
             --include "${CMAKE_SOURCE_DIR}/external/nvrhi/include"
+            --include "${CMAKE_SOURCE_DIR}/src/shaders/rtxdi/SharedShaderInclude"
             --relaxedInclude "pch.h"
 
     # DXIL output for D3D12 for NRD

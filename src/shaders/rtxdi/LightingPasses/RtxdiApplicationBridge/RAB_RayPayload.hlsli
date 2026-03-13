@@ -13,8 +13,6 @@
 #ifndef RAB_RAY_PAYLOAD_HLSLI
 #define RAB_RAY_PAYLOAD_HLSLI
 
-#include "../../SceneGeometry.hlsli"
-
 struct RAB_RayPayload
 {
     float3 throughput;
@@ -49,18 +47,11 @@ bool RAB_RayPayloadIsTwoSided(RAB_RayPayload rayPayload)
 
 float3 RAB_RayPayloadGetEmittedRadiance(RAB_RayPayload rayPayload)
 {
-    GeometrySample gs = getGeometryFromHit(
-        rayPayload.instanceID,
-        rayPayload.geometryIndex,
-        rayPayload.primitiveIndex,
-        rayPayload.barycentrics,
-        GeomAttr_Normal | GeomAttr_TexCoord | GeomAttr_Position,
-        t_InstanceData, t_GeometryData, t_MaterialConstants);
-        
-    MaterialSample ms = sampleGeometryMaterial(gs, 0, 0, 0,
-        MatAttr_BaseColor | MatAttr_Emissive | MatAttr_MetalRough, s_MaterialSampler);
+    PerInstanceData instance = t_InstanceData[rayPayload.instanceID];
+    MaterialConstants mat    = t_MaterialConstants[instance.m_MaterialIndex];
 
-	return ms.emissiveColor;
+    // Return emissive color directly from material constants
+    return mat.m_EmissiveFactor.rgb;
 }
 
 #endif // RAB_RAY_PAYLOAD_HLSLI

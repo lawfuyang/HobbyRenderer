@@ -1,11 +1,12 @@
 ////////////////////////////////////////////////////////////////////////////////
-// NOTE TO FUTURE AI: This file is shared between C++ and HLSL. It uses #ifdef __cplusplus
+// This file is shared between C++ and HLSL. It uses #ifdef __cplusplus
 // to conditionally include C++ headers and define types. When modifying, ensure compatibility
 // for both languages. Structs are defined with the same layout for CPU/GPU data sharing.
 // Always test compilation in both C++ and HLSL contexts after changes.
 ////////////////////////////////////////////////////////////////////////////////
 
-#pragma once
+#ifndef SHADER_SHARED_H
+#define SHADER_SHARED_H
 
 // Minimal language-specific macro layer. The rest of this file uses the macros below so both C++ and HLSL follow the exact same code path.
 
@@ -108,6 +109,17 @@
 static const float3 kEarthCenter = float3(0.0f, -6360000.0f, 0.0f);
 #endif
 
+#ifdef __cplusplus
+// C++ aliases for HLSL scalar/vector types used in shared structs (ShaderParameters.h etc.)
+// Note: cstdint and DirectXMath.h must already be included by the including C++ translation unit.
+typedef uint32_t uint;
+typedef DirectX::XMUINT2 uint2;
+typedef DirectX::XMINT2  int2;
+typedef DirectX::XMFLOAT2 float2;
+typedef DirectX::XMFLOAT3 float3;
+typedef DirectX::XMFLOAT4 float4;
+#endif // __cplusplus
+
 struct ImGuiPushConstants
 {
 	Vector2 uScale;
@@ -115,6 +127,7 @@ struct ImGuiPushConstants
 };
 
 static const float PI = 3.14159265359f;
+static const float M_PI = PI;
 static const uint32_t kThreadsPerGroup = 32;
 static const uint32_t kMaxMeshletVertices = 64;
 static const uint32_t kMaxMeshletTriangles = 96;
@@ -211,6 +224,10 @@ struct PlanarViewConstants
 
     Vector2      m_ClipToWindowScale;
     Vector2      m_ClipToWindowBias;
+
+    // Camera world position — filled each frame from m_MatViewToWorld[3].
+    // FullSample accesses view.cameraDirectionOrPosition.xyz for camera position.
+    Vector4      m_CameraDirectionOrPosition;   // xyz = world pos, w = 1.0
 };
 
 struct VertexQuantized
@@ -406,6 +423,9 @@ struct PerInstanceData
   // Defaults to 0 so instances not yet processed by the culling pass use LOD 0.
   uint32_t m_LODIndex;
   Vector3 m_Center;
+  // Index of the first geometry instance in the RTXDI geometry-to-light mapping table.
+  // Used by RTXDI to map triangle hits to emissive light indices.
+  uint32_t m_FirstGeometryInstanceIndex;
 };
 
 struct DrawIndexedIndirectArguments
@@ -600,3 +620,5 @@ struct RTXDIConstants
     float    m_FinalVisibilityMaxDistance;
     uint32_t pad0;
 };
+
+#endif // SHADER_SHARED_H

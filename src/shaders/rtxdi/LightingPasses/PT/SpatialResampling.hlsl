@@ -19,17 +19,9 @@
 
 #include <Rtxdi/PT/SpatialResampling.hlsli>
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    const uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
     const uint2 PixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
     const uint2 ReservoirPosition = RTXDI_PixelPosToReservoirPos(PixelPosition, g_Const.runtimeParams.activeCheckerboardField);
 
@@ -42,9 +34,9 @@ void RayGen()
     RTXDI_PTSpatialResamplingRuntimeParameters srrParams = RTXDI_EmptyPTSpatialResamplingRuntimeParameters();
     srrParams.PixelPosition = PixelPosition;
     srrParams.ReservoirPosition = ReservoirPosition;
-    srrParams.cameraPos = g_Const.view.cameraDirectionOrPosition.xyz;
-    srrParams.prevCameraPos = g_Const.prevView.cameraDirectionOrPosition.xyz;
-    srrParams.prevPrevCameraPos = g_Const.prevPrevView.cameraDirectionOrPosition.xyz;
+    srrParams.cameraPos = g_Const.view.m_CameraDirectionOrPosition.xyz;
+    srrParams.prevCameraPos = g_Const.prevView.m_CameraDirectionOrPosition.xyz;
+    srrParams.prevPrevCameraPos = g_Const.prevPrevView.m_CameraDirectionOrPosition.xyz;
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(PixelPosition, g_Const.runtimeParams.frameIndex, RTXDI_PT_SPATIAL_RESAMPLING_RANDOM_SEED);
     RAB_PathTracerUserData ptud = RAB_EmptyPathTracerUserData();

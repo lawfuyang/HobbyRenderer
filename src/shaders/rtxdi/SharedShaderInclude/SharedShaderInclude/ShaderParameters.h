@@ -13,8 +13,8 @@
 #ifndef SHADER_PARAMETERS_H
 #define SHADER_PARAMETERS_H
 
-#include <donut/shaders/view_cb.h>
-#include <donut/shaders/sky_cb.h>
+// HobbyRenderer: use our own PlanarViewConstants from ShaderShared.h
+#include "ShaderShared.h"
 
 #include <Rtxdi/DI/ReSTIRDIParameters.h>
 #include <Rtxdi/GI/ReSTIRGIParameters.h>
@@ -50,9 +50,7 @@
 #define RAY_COUNT_TRACED(index) ((index) * 2)
 #define RAY_COUNT_HITS(index) ((index) * 2 + 1)
 
-#define REPORT_RAY(hit) if (g_PerPassConstants.rayCountBufferIndex >= 0) { \
-    InterlockedAdd(u_RayCountBuffer[RAY_COUNT_TRACED(g_PerPassConstants.rayCountBufferIndex)], 1); \
-    if (hit) InterlockedAdd(u_RayCountBuffer[RAY_COUNT_HITS(g_PerPassConstants.rayCountBufferIndex)], 1); }
+#define REPORT_RAY(hit) // ray counting removed (PerPassConstants removed)
 
 
 #define INDIRECT_LIGHTING_MODE_NONE 0
@@ -92,20 +90,6 @@ struct PrepareLightsTask
     uint triangleCount;
     uint lightBufferOffset;
     int previousLightBufferOffset; // -1 means no previous data
-};
-
-struct RenderEnvironmentMapConstants
-{
-    ProceduralSkyShaderParameters params;
-
-    float2 invTextureSize;
-};
-
-struct PreprocessEnvironmentMapConstants
-{
-    uint2 sourceSize;
-    uint sourceMipLevel;
-    uint numDestMipLevels;
 };
 
 struct GBufferConstants
@@ -211,7 +195,12 @@ struct SceneConstants
 
     uint enableAlphaTestedGeometry;
     uint enableTransparentGeometry;
-    uint2 pad1;
+    // HobbyRenderer: sun direction and intensity for Bruneton sky model
+    float sunIntensity;
+    uint pad1;
+
+    float3 sunDirection;
+    uint pad2;
 };
 
 struct ResamplingConstants

@@ -15,7 +15,7 @@
 
 #include "SharedShaderInclude/ShaderParameters.h"
 
-#include <donut/shaders/packing.hlsli>
+#include "../../Packing.hlsli"
 
 Texture2D<uint> t_PackedVecs : register(t0);
 RWTexture2D<float4> t_Output : register(u0);

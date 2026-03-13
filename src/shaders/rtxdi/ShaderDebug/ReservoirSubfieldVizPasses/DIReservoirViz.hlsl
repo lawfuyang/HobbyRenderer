@@ -13,7 +13,7 @@
 #ifndef DI_RESERVOIR_SUBFIELD_VIZ_HLSL
 #define DI_RESERVOIR_SUBFIELD_VIZ_HLSL
 
-#include <donut/shaders/utils.hlsli>
+#include "../../Packing.hlsli"
 #include <Rtxdi/DI/ReSTIRDIParameters.h>
 #include "SharedShaderInclude/ShaderParameters.h"
 #include "SharedShaderInclude/ShaderDebug/ReservoirSubfieldVizPasses/DIReservoirVizParameters.h"
@@ -37,7 +37,7 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
 #if 1
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
-    if (any(pixelPosition > int2(g_Const.view.viewportSize)))
+    if (any(pixelPosition > int2(g_Const.view.m_ViewportSize)))
         return;
 
     const uint2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);

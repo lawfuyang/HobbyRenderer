@@ -15,7 +15,7 @@
 
 struct ReSTIRShaderDebugParameters
 {
-    uint2 mouseSelectedPixel;
+    Vector2U mouseSelectedPixel;
     float spatialResamplingScreenSplitRatio;
     uint  outputDebugDirectLighting;
 

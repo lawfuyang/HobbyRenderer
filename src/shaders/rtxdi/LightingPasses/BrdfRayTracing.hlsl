@@ -13,6 +13,7 @@
 #pragma pack_matrix(row_major)
 
 #include "RtxdiApplicationBridge/RtxdiApplicationBridge.hlsli"
+#include "../../RaytracingCommon.hlsli"
 #include "../ShaderDebug/ShaderDebugPrint/ShaderDebugPrint.hlsli"
 #include "../ShaderDebug/PTPathViz/PTPathVizRecording.hlsli"
 
@@ -28,17 +29,9 @@
 
 static const float c_MaxIndirectRadiance = 10;
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
@@ -52,7 +45,7 @@ void RayGen()
     {
         Debug_EnablePTPathRecording();
     }
-    Debug_RecordPTCameraPosition(g_Const.view.cameraDirectionOrPosition.xyz);
+    Debug_RecordPTCameraPosition(g_Const.view.m_CameraDirectionOrPosition.xyz);
     Debug_SetPTVertexIndex(1);
     Debug_RecordPTIntersectionPosition(RAB_GetSurfaceWorldPos(surface));
     Debug_RecordPTIntersectionNormal(RAB_GetSurfaceNormal(surface));
@@ -63,7 +56,7 @@ void RayGen()
     float3 tangent, bitangent;
     branchlessONB(surface.normal, tangent, bitangent);
 
-    float distance = max(1, 0.1 * length(surface.worldPos - g_Const.view.cameraDirectionOrPosition.xyz));
+    float distance = max(1, 0.1 * length(surface.worldPos - g_Const.view.m_CameraDirectionOrPosition.xyz));
 
     RayDesc ray;
     ray.TMin = 0.001f * distance;
@@ -73,7 +66,7 @@ void RayGen()
     Rand.x = RTXDI_GetNextRandom(rng);
     Rand.y = RTXDI_GetNextRandom(rng);
 
-    float3 V = normalize(g_Const.view.cameraDirectionOrPosition.xyz - surface.worldPos);
+    float3 V = normalize(g_Const.view.m_CameraDirectionOrPosition.xyz - surface.worldPos);
 
     bool isSpecularRay = false;
     bool isDeltaSurface = surface.material.roughness < kMinRoughness;
@@ -101,7 +94,7 @@ void RayGen()
         float diffuse_BRDF_over_PDF;
         {
             float solidAnglePdf;
-            float3 localDirection = sampleCosHemisphere(Rand, solidAnglePdf);
+            float3 localDirection = SampleCosHemisphere(Rand, solidAnglePdf);
             diffuseDirection = tangent * localDirection.x + bitangent * localDirection.y + surface.normal * localDirection.z;
             diffuse_BRDF_over_PDF = 1.0;
         }
@@ -124,8 +117,8 @@ void RayGen()
         }
 
 		// Calculates PDF of individual respective lobes.
-        const float specularLobe_PDF = ImportanceSampleGGX_VNDF_PDF(surface.material.roughness, surface.normal, V, ray.Direction);
-        const float diffuseLobe_PDF = saturate(dot(ray.Direction, surface.normal)) / c_pi;
+        const float specularLobe_PDF = SampleGGX_VNDF_PDF(surface.material.roughness, surface.normal, V, ray.Direction);
+    const float diffuseLobe_PDF = saturate(dot(ray.Direction, surface.normal)) / PI;
 
         // For delta surfaces, we only pass the diffuse lobe to ReSTIR GI, and this pdf is for that.
         overall_PDF = isDeltaSurface ? diffuseLobe_PDF : lerp(diffuseLobe_PDF, specularLobe_PDF, specular_PDF);
@@ -153,7 +146,6 @@ void RayGen()
     if (g_Const.sceneConstants.enableTransparentGeometry)
         instanceMask |= INSTANCE_MASK_TRANSPARENT;
 
-#if USE_RAY_QUERY
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
 
     rayQuery.TraceRayInline(SceneBVH, RAY_FLAG_NONE, instanceMask, ray);
@@ -182,14 +174,6 @@ void RayGen()
         payload.barycentrics = rayQuery.CommittedTriangleBarycentrics();
         payload.committedRayT = rayQuery.CommittedRayT();
     }
-#else
-    TraceRay(SceneBVH, RAY_FLAG_NONE, instanceMask, 0, 0, 0, ray, payload);
-#endif
-
-    if (g_PerPassConstants.rayCountBufferIndex >= 0)
-    {
-        InterlockedAdd(u_RayCountBuffer[RAY_COUNT_TRACED(g_PerPassConstants.rayCountBufferIndex)], 1);
-    }
 
     uint gbufferIndex = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, GlobalIndex, 0);
 
@@ -210,43 +194,51 @@ void RayGen()
 
     if (payload.instanceID != ~0u)
     {
-        if (g_PerPassConstants.rayCountBufferIndex >= 0)
-        {
-            InterlockedAdd(u_RayCountBuffer[RAY_COUNT_HITS(g_PerPassConstants.rayCountBufferIndex)], 1);
-        }
+        PerInstanceData instance = t_InstanceData[payload.instanceID];
+        MeshData        geometry = t_GeometryData[instance.m_MeshDataIndex];
+        MaterialConstants mat    = t_MaterialConstants[instance.m_MaterialIndex];
 
-        GeometrySample gs = getGeometryFromHit(
-            payload.instanceID,
-            payload.geometryIndex,
-            payload.primitiveIndex,
-            payload.barycentrics,
-            GeomAttr_Normal | GeomAttr_TexCoord | GeomAttr_Position,
-            t_InstanceData, t_GeometryData, t_MaterialConstants);
+        // Build RayHitInfo for GetFullHitAttributes
+        RayHitInfo hit;
+        hit.m_InstanceIndex  = payload.instanceID;
+        hit.m_PrimitiveIndex = payload.primitiveIndex;
+        hit.m_Barycentrics   = payload.barycentrics;
+        hit.m_RayT           = payload.committedRayT;
 
-        MaterialSample ms = sampleGeometryMaterial(gs, 0, 0, 0,
-            MatAttr_BaseColor | MatAttr_Emissive | MatAttr_MetalRough, s_MaterialSampler);
+        FullHitAttributes attr = GetFullHitAttributes(hit, ray, instance, geometry, t_SceneIndices, t_SceneVertices);
+        PBRAttributes pbr      = GetPBRAttributes(attr, mat);
 
-        ms.shadingNormal = getBentNormal(gs.flatNormal, ms.shadingNormal, ray.Direction);
+        // Bent normal to avoid self-shadowing
+        float3 flatNormal = attr.m_WorldNormal; // GetFullHitAttributes already normalizes
+        pbr.normal = getBentNormal(flatNormal, pbr.normal, ray.Direction);
 
+        // Metallic workflow split
+        float3 diffuseAlbedo, specularF0;
+        getReflectivity(pbr.metallic, pbr.baseColor, diffuseAlbedo, specularF0);
+
+        // Material overrides
         if (g_Const.brdfPT.materialOverrideParams.roughnessOverride >= 0)
-            ms.roughness = g_Const.brdfPT.materialOverrideParams.roughnessOverride;
+            pbr.roughness = g_Const.brdfPT.materialOverrideParams.roughnessOverride;
 
         if (g_Const.brdfPT.materialOverrideParams.metalnessOverride >= 0)
         {
-            ms.metalness = g_Const.brdfPT.materialOverrideParams.metalnessOverride;
-            getReflectivity(ms.metalness, ms.baseColor, ms.diffuseAlbedo, ms.specularF0);
+            pbr.metallic = g_Const.brdfPT.materialOverrideParams.metalnessOverride;
+            getReflectivity(pbr.metallic, pbr.baseColor, diffuseAlbedo, specularF0);
         }
 
-        ms.roughness = max(ms.roughness, g_Const.brdfPT.materialOverrideParams.minSecondaryRoughness);
+        pbr.roughness = max(pbr.roughness, g_Const.brdfPT.materialOverrideParams.minSecondaryRoughness);
 
         if (includeEmissiveComponent)
-            radiance += ms.emissiveColor;
+            radiance += pbr.emissive;
+
+        // Geometry normal: face outward relative to ray
+        float3 geometryNormal = (dot(attr.m_WorldNormal, ray.Direction) < 0) ? attr.m_WorldNormal : -attr.m_WorldNormal;
 
         secondarySurface.position = ray.Origin + ray.Direction * payload.committedRayT;
-        secondarySurface.normal = (dot(gs.geometryNormal, ray.Direction) < 0) ? gs.geometryNormal : -gs.geometryNormal;
-        secondarySurface.diffuseAlbedo = ms.diffuseAlbedo;
-        secondarySurface.specularF0 = ms.specularF0;
-        secondarySurface.roughness = ms.roughness;
+        secondarySurface.normal = geometryNormal;
+        secondarySurface.diffuseAlbedo = diffuseAlbedo;
+        secondarySurface.specularF0 = specularF0;
+        secondarySurface.roughness = pbr.roughness;
         secondarySurface.isEnvironmentMap = false;
     }
     else

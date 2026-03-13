@@ -16,20 +16,12 @@
 
 #include <Rtxdi/GI/SpatialResampling.hlsli>
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
-    if (any(pixelPosition > int2(g_Const.view.viewportSize)))
+    if (any(pixelPosition > int2(g_Const.view.m_ViewportSize)))
         return;
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(GlobalIndex, g_Const.runtimeParams.frameIndex, RTXDI_GI_SPATIAL_RESAMPLING_RANDOM_SEED);

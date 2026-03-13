@@ -12,28 +12,17 @@
 
 #pragma pack_matrix(row_major)
 
-// Only enable the boiling filter for RayQuery (compute shader) mode because it requires shared memory
-#if USE_RAY_QUERY
 #define RTXDI_ENABLE_BOILING_FILTER
 #define RTXDI_BOILING_FILTER_GROUP_SIZE RTXDI_SCREEN_SPACE_GROUP_SIZE
-#endif
 
 #include "../RtxdiApplicationBridge/RtxdiApplicationBridge.hlsli"
 
 #include <Rtxdi/DI/BoilingFilter.hlsli>
 #include <Rtxdi/DI/TemporalResampling.hlsli>
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)] 
 void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupThreadID, uint2 GroupIdx : SV_GroupID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
 
     const RTXDI_RuntimeParameters params = g_Const.runtimeParams;
 

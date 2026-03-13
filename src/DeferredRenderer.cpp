@@ -10,9 +10,7 @@ extern RGTextureHandle g_RG_GBufferORM;
 extern RGTextureHandle g_RG_GBufferEmissive;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_HDRColor;
-extern RGTextureHandle g_RG_RTXDIDIOutput;
-extern RGTextureHandle g_RG_RTXDIDiffuseOutput;  // RELAX-denoised diffuse illumination
-extern RGTextureHandle g_RG_RTXDISpecularOutput; // non-denoised raw specular illumination or RELAX-denoised specular
+extern RGTextureHandle g_RG_RTXDIDIComposited;   // CompositingPass output — final DI + emissive composite
 
 class DeferredRenderer : public IRenderer
 {
@@ -31,20 +29,9 @@ public:
 
         renderGraph.WriteTexture(g_RG_HDRColor);
 
-        // Conditionally read the RTXDI DI output when ReSTIR DI is enabled
+        // Conditionally read the RTXDI composited output when ReSTIR DI is enabled
         if (renderer->m_EnableReSTIRDI)
-        {
-            if (renderer->m_EnableReSTIRDIRelaxDenoising)
-            {
-                renderGraph.ReadTexture(g_RG_RTXDIDiffuseOutput);
-                renderGraph.ReadTexture(g_RG_RTXDISpecularOutput);
-            }
-            else
-            {
-                renderGraph.ReadTexture(g_RG_RTXDIDIOutput);
-                renderGraph.ReadTexture(g_RG_RTXDISpecularOutput);
-            }
-        }
+            renderGraph.ReadTexture(g_RG_RTXDIDIComposited);
 
         return true;
     }
@@ -65,7 +52,7 @@ public:
 
         const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
         float skyVisFarPlane = renderer->m_Scene.GetSceneBoundingRadius();
-        const bool bUseRESTIRDIDenoised = renderer->m_EnableReSTIRDI && renderer->m_EnableReSTIRDIRelaxDenoising;
+
 
         // Deferred CB
         const nvrhi::BufferDesc deferredCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(DeferredLightingConstants), "DeferredCB", 1);
@@ -82,17 +69,12 @@ public:
         dcb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
         dcb.m_DebugMode = renderer->m_DebugMode;
         dcb.m_UseReSTIRDI = renderer->m_EnableReSTIRDI ? 1u : 0u;
-        dcb.m_UseReSTIRDIDenoised = bUseRESTIRDIDenoised ? 1u : 0u;
+        dcb.m_UseReSTIRDIDenoised = 0u; // compositing is done by CompositingPass
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
-        // t8/t9: DI diffuse/specular illumination (denoised or raw, depending on mode)
-        nvrhi::TextureHandle rtxdiDiffuseOutput = bUseRESTIRDIDenoised
-            ? renderGraph.GetTexture(g_RG_RTXDIDiffuseOutput,  RGResourceAccessMode::Read)
-            : (renderer->m_EnableReSTIRDI
-                ? renderGraph.GetTexture(g_RG_RTXDIDIOutput, RGResourceAccessMode::Read)
-                : CommonResources::GetInstance().DefaultTextureBlack);
-        nvrhi::TextureHandle rtxdiSpecularOutput = renderer->m_EnableReSTIRDI
-            ? renderGraph.GetTexture(g_RG_RTXDISpecularOutput, RGResourceAccessMode::Read)
+        // t8: RTXDI composited output (DI + emissive, already remodulated by CompositingPass)
+        nvrhi::TextureHandle rtxdiComposited = renderer->m_EnableReSTIRDI
+            ? renderGraph.GetTexture(g_RG_RTXDIDIComposited, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureBlack;
 
         nvrhi::BindingSetDesc bset;
@@ -111,8 +93,7 @@ public:
             nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_VertexBufferQuantized),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(13, renderer->m_Scene.m_MeshDataBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(8,  rtxdiDiffuseOutput),
-            nvrhi::BindingSetItem::Texture_SRV(9,  rtxdiSpecularOutput),
+            nvrhi::BindingSetItem::Texture_SRV(8,  rtxdiComposited),
         };
 
         nvrhi::FramebufferDesc fbDesc;

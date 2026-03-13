@@ -13,7 +13,7 @@
 #pragma pack_matrix(row_major)
 
 #include "SharedShaderInclude/ShaderParameters.h"
-#include "../HelperFunctions.hlsli"
+#include "../../CommonLighting.hlsli"
 #include "SharedShaderInclude/ShaderDebug/VisualizationOverlayMode.h"
 
 #include <Rtxdi/RtxdiParameters.h>

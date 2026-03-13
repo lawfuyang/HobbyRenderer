@@ -13,7 +13,7 @@
 #ifndef PT_PATH_VIZ_CONSTANTS_H
 #define PT_PATH_VIZ_CONSTANTS_H
 
-#include "donut/shaders/view_cb.h"
+#include "ShaderShared.h"
 
 struct PTPathVizPreprocessConstants
 {

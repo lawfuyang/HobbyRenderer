@@ -14,8 +14,7 @@
 #define PACKED_NORMAL_HLSL
 
 #include "SharedShaderInclude/ShaderParameters.h"
-
-#include <donut/shaders/utils.hlsli>
+#include "../../CommonLighting.hlsli"
 
 Texture2D<uint> t_Normals : register(t0);
 RWTexture2D<float4> t_Output : register(u0);

@@ -17,11 +17,8 @@
 #include "../RtxdiApplicationBridge/PathTracer/RAB_PathTracer.hlsli"
 #include "../../ShaderDebug/ShaderDebugPrint/ShaderDebugPrint.hlsli"
 
-// Only enable the boiling filter for RayQuery (compute shader) mode because it requires shared memory
-#if USE_RAY_QUERY
 #define RTXDI_ENABLE_BOILING_FILTER
 #define RTXDI_BOILING_FILTER_GROUP_SIZE RTXDI_SCREEN_SPACE_GROUP_SIZE
-#endif
 
 #include <Rtxdi/Utils/RandomSamplerPerPassSeeds.hlsli>
 
@@ -39,24 +36,16 @@ float3 LoadMotionVector(uint2 pixelPosition)
 	return motionVector;
 }
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    const uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
     RTXDI_PTTemporalResamplingRuntimeParameters trrParams = RTXDI_EmptyPTTemporalResamplingRuntimeParameters();
     trrParams.pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
     trrParams.reservoirPosition = RTXDI_PixelPosToReservoirPos(trrParams.pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
     trrParams.motionVector = LoadMotionVector(trrParams.pixelPosition);
-    trrParams.cameraPos = g_Const.view.cameraDirectionOrPosition.xyz;
-    trrParams.prevCameraPos = g_Const.prevView.cameraDirectionOrPosition.xyz;
-    trrParams.prevPrevCameraPos = g_Const.prevPrevView.cameraDirectionOrPosition.xyz;
+    trrParams.cameraPos = g_Const.view.m_CameraDirectionOrPosition.xyz;
+    trrParams.prevCameraPos = g_Const.prevView.m_CameraDirectionOrPosition.xyz;
+    trrParams.prevPrevCameraPos = g_Const.prevPrevView.m_CameraDirectionOrPosition.xyz;
 
 	ShaderDebug::SetDebugShaderPrintCurrentThreadCursorXY(trrParams.pixelPosition);
     if (all(trrParams.pixelPosition == g_Const.debug.mouseSelectedPixel))

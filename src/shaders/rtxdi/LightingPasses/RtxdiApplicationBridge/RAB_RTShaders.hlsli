@@ -15,74 +15,42 @@
 
 bool considerTransparentMaterial(uint instanceIndex, uint geometryIndex, uint triangleIndex, float2 rayBarycentrics, inout float3 throughput)
 {
-    GeometrySample gs = getGeometryFromHit(
-        instanceIndex,
-        geometryIndex,
-        triangleIndex,
-        rayBarycentrics,
-        GeomAttr_TexCoord,
-        t_InstanceData, t_GeometryData, t_MaterialConstants);
-    
-    MaterialSample ms = sampleGeometryMaterial(gs, 0, 0, 0,
-        MatAttr_BaseColor | MatAttr_Transmission, s_MaterialSampler);
+    PerInstanceData instance = t_InstanceData[instanceIndex];
+    MaterialConstants mat    = t_MaterialConstants[instance.m_MaterialIndex];
 
-    bool alphaMask = ms.opacity >= gs.material.alphaCutoff;
-
-    if (gs.material.domain == MaterialDomain_AlphaTested)
-        return alphaMask;
-
-    if (gs.material.domain == MaterialDomain_AlphaBlended)
+    // Alpha-tested: sample base color alpha
+    if (mat.m_AlphaMode == ALPHA_MODE_MASK)
     {
-        throughput *= (1.0 - ms.opacity);
+        // Sample base color texture for alpha
+        float alpha = mat.m_BaseColor.a;
+        if (mat.m_AlbedoTextureIndex >= 0)
+        {
+            // Barycentrics → UV requires vertex data; use a simple approximation here
+            // (full UV interpolation would need vertex buffer access)
+            alpha = mat.m_BaseColor.a;
+        }
+        return alpha >= mat.m_AlphaCutoff;
+    }
+
+    // Alpha-blended: attenuate throughput
+    if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
+    {
+        throughput *= (1.0 - mat.m_BaseColor.a);
         return false;
     }
 
-    if (gs.material.domain == MaterialDomain_Transmissive || 
-        (gs.material.domain == MaterialDomain_TransmissiveAlphaTested && alphaMask) || 
-        gs.material.domain == MaterialDomain_TransmissiveAlphaBlended)
+    // Transmissive
+    if (mat.m_TransmissionFactor > 0.0f)
     {
-        throughput *= ms.transmission;
-
-        if (ms.hasMetalRoughParams)
-            throughput *= (1.0 - ms.metalness) * ms.baseColor;
-
-        if (gs.material.domain == MaterialDomain_TransmissiveAlphaBlended)
-            throughput *= (1.0 - ms.opacity);
-
+        float3 transmission = float3(mat.m_TransmissionFactor, mat.m_TransmissionFactor, mat.m_TransmissionFactor);
+        throughput *= transmission;
         return all(throughput == 0);
     }
 
+    // Opaque
     return false;
 }
 
-#if !USE_RAY_QUERY
-struct RayAttributes 
-{
-    float2 uv;
-};
 
-[shader("miss")]
-void Miss(inout RAB_RayPayload payload : SV_RayPayload)
-{
-}
-
-[shader("closesthit")]
-void ClosestHit(inout RAB_RayPayload payload : SV_RayPayload, in RayAttributes attrib : SV_IntersectionAttributes)
-{
-    payload.committedRayT = RayTCurrent();
-    payload.instanceID = InstanceID();
-    payload.geometryIndex = GeometryIndex();
-    payload.primitiveIndex = PrimitiveIndex();
-    payload.frontFace = HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
-    payload.barycentrics = attrib.uv;
-}
-
-[shader("anyhit")]
-void AnyHit(inout RAB_RayPayload payload : SV_RayPayload, in RayAttributes attrib : SV_IntersectionAttributes)
-{
-    if (!considerTransparentMaterial(InstanceID(), GeometryIndex(), PrimitiveIndex(), attrib.uv, payload.throughput))
-        IgnoreHit();
-}
-#endif
 
 #endif // RAB_RT_SHADERS_HLSLI

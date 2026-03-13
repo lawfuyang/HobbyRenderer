@@ -14,6 +14,7 @@
 #define RAB_LIGHT_SAMPLING_HLSLI
 
 #include "RAB_RayPayload.hlsli"
+#include "../../Atmosphere.hlsli"
 
 float2 RAB_GetEnvironmentMapRandXYFromDir(float3 worldDir)
 {
@@ -122,18 +123,29 @@ bool RTXDI_CompareRelativeDifference(float reference, float candidate, float thr
 
 float3 GetEnvironmentRadiance(float3 direction)
 {
+    // HobbyRenderer uses the Bruneton precomputed atmosphere model instead of
+    // a simple environment map texture. The sky radiance is computed from the
+    // precomputed scattering tables via GetAtmosphereSkyRadiance().
+    //
+    // g_Const.sceneConstants.enableEnvironmentMap controls whether the sky is active.
+    // g_Const.sceneConstants.sunDirection / sunIntensity are filled by RTXDIRenderer.
+    //
+    // NOTE: We exclude the sun disk (bAddSunDisk=false) to avoid double-counting
+    // with the directional sun light which is handled as a separate RTXDI light.
     if (!g_Const.sceneConstants.enableEnvironmentMap)
         return 0;
 
-    Texture2D environmentLatLongMap = t_BindlessTextures[g_Const.sceneConstants.environmentMapTextureIndex];
+    // GetAtmosphereSkyRadiance is defined in Atmosphere.hlsli (included via
+    // RtxdiApplicationBridge.hlsli → SharedShaderInclude → ShaderParameters.h chain).
+    // Signature: GetAtmosphereSkyRadiance(cameraPos, viewRay, sunDirection, sunIntensity, bAddSunDisk)
+    float3 skyRadiance = GetAtmosphereSkyRadiance(
+        float3(0.0f, 0.0f, 0.0f),              // camera position (world origin)
+        direction,                               // view direction
+        g_Const.sceneConstants.sunDirection,    // sun direction (toward sun)
+        g_Const.sceneConstants.sunIntensity,    // sun intensity
+        false);                                  // excludeSun = true (sun handled separately)
 
-    float2 uv = directionToEquirectUV(direction);
-    uv.x -= g_Const.sceneConstants.environmentRotation;
-
-    float3 environmentRadiance = environmentLatLongMap.SampleLevel(s_EnvironmentSampler, uv, 0).rgb;
-    environmentRadiance *= g_Const.sceneConstants.environmentScale;
-
-    return environmentRadiance;
+    return skyRadiance;
 }
 
 float3 RAB_GetEnvironmentRadiance(float3 direction)
@@ -143,7 +155,6 @@ float3 RAB_GetEnvironmentRadiance(float3 direction)
 
 bool IsComplexSurface(int2 pixelPosition, RAB_Surface surface)
 {
-    // Use a simple classification of surfaces into simple and complex based on the roughness.
     // The PostprocessGBuffer pass modifies the surface roughness and writes the DenoiserNormalRoughness
     // channel where the roughness is preserved. The roughness stored in the regular G-buffer is modified
     // based on the surface curvature around the current pixel. If the surface is curved, roughness increases.
@@ -156,8 +167,8 @@ bool IsComplexSurface(int2 pixelPosition, RAB_Surface surface)
 uint getLightIndex(uint instanceID, uint geometryIndex, uint primitiveIndex)
 {
     uint lightIndex = RTXDI_InvalidLightIndex;
-    InstanceData hitInstance = t_InstanceData[instanceID];
-    uint geometryInstanceIndex = hitInstance.firstGeometryInstanceIndex + geometryIndex;
+    PerInstanceData hitInstance = t_InstanceData[instanceID];
+    uint geometryInstanceIndex = hitInstance.m_FirstGeometryInstanceIndex + geometryIndex;
     lightIndex = t_GeometryInstanceToLight[geometryInstanceIndex];
     if (lightIndex != RTXDI_InvalidLightIndex)
       lightIndex += primitiveIndex;
@@ -181,7 +192,6 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
 
     float2 hitUV;
     bool hitAnything;
-#if USE_RAY_QUERY
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
     rayQuery.TraceRayInline(SceneBVH, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
     rayQuery.Proceed();
@@ -192,19 +202,6 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
         o_lightIndex = getLightIndex(rayQuery.CommittedInstanceID(), rayQuery.CommittedGeometryIndex(), rayQuery.CommittedPrimitiveIndex());
         hitUV = rayQuery.CommittedTriangleBarycentrics();
     }
-#else
-    RAB_RayPayload payload = (RAB_RayPayload)0;
-    payload.instanceID = ~0u;
-    payload.throughput = 1.0;
-
-    TraceRay(SceneBVH, RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, INSTANCE_MASK_OPAQUE, 0, 0, 0, ray, payload);
-    hitAnything = payload.instanceID != ~0u;
-    if (hitAnything)
-    {
-        o_lightIndex = getLightIndex(payload.instanceID, payload.geometryIndex, payload.primitiveIndex);
-        hitUV = payload.barycentrics;
-    }
-#endif
 
     if (o_lightIndex != RTXDI_InvalidLightIndex)
     {

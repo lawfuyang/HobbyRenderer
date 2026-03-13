@@ -13,7 +13,7 @@
 #ifndef DI_RESERVOIR_VIZ_PARAMETERS_H
 #define DI_RESERVOIR_VIZ_PARAMETERS_H
 
-#include <donut/shaders/view_cb.h>
+#include "ShaderShared.h"
 #include <Rtxdi/RtxdiParameters.h>
 #include <Rtxdi/DI/ReSTIRDIParameters.h>
 

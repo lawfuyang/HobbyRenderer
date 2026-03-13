@@ -32,8 +32,6 @@ between the bridge functions.
 #define RTXDI_APPLICATION_BRIDGE_HLSLI
 
 #include "SharedShaderInclude/ShaderParameters.h"
-#include "../../SceneGeometry.hlsli"
-
 #include "RAB_Buffers.hlsli"
 
 // Debug includes
@@ -54,29 +52,7 @@ between the bridge functions.
 #include "RAB_VisibilityTest.hlsli"
 #include "../ShadingHelpers.hlsli"
 
-
-#if USE_RAY_QUERY == 1
-
 #define RTXDI_PATHTRACER_USE_REORDERING 0
 #define RAB_PATHTRACER_USE_REORDERING 0
-
-#elif USE_RAY_QUERY == 0
-
-#ifndef __spirv__
-
-#include "SharedShaderInclude/NvapiIntegration.h"
-#include "nvHLSLExtns.h"
-#define RTXDI_PATHTRACER_USE_REORDERING 0
-#define RAB_PATHTRACER_USE_REORDERING 1
-
-#else
-
-#define RTXDI_PATHTRACER_USE_REORDERING 0
-#define RAB_PATHTRACER_USE_REORDERING 0
-
-#endif
-
-
-#endif // !USE_RAY_QUERY
 
 #endif // RTXDI_APPLICATION_BRIDGE_HLSLI

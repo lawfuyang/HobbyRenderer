@@ -33,6 +33,18 @@ float4 SampleBindlessTextureGrad(uint textureIndex, uint samplerIndex, float2 uv
     return tex.SampleGrad(sam, uv, ddx_uv, ddy_uv);
 }
 
+// Returns the raw Texture2D object for cases where SampleGrad or other methods are needed directly.
+Texture2D<float4> GetBindlessTexture2D(uint textureIndex)
+{
+    return ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
+}
+
+// Returns the raw SamplerState object.
+SamplerState GetBindlessSampler(uint samplerIndex)
+{
+    return SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
+}
+
 // 3D Texture helpers
 float4 SampleBindlessTexture3DLevel(uint textureIndex, uint samplerIndex, float3 uvw, float lod)
 {

@@ -3,6 +3,7 @@
 
 #include "ShaderShared.h"
 #include "RaytracingCommon.hlsli"
+#include "Packing.hlsli"
 
 #define LIGHT_SHADOW_SAMPLES 1
 
@@ -10,6 +11,29 @@
 #include "RNG.hlsli"
 
 float Luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
+float calcLuminance(float3 c) { return Luminance(c); }
+
+// ---- Fresnel (scalar overload for FullSample compatibility) ----
+float Schlick_Fresnel(float F0, float cosTheta)
+{
+    return F0 + (1.0f - F0) * pow(max(1.0f - cosTheta, 0.0f), 5.0f);
+}
+
+// ---- Fresnel (float3 overload for specularF0 vectors) ----
+float3 Schlick_Fresnel(float3 F0, float cosTheta)
+{
+    return F0 + (1.0f - F0) * pow(max(1.0f - cosTheta, 0.0f), 5.0f);
+}
+
+// ---- Lambertian diffuse (FullSample: Lambert(N, L) = NdotL / PI) ----
+float Lambert(float3 N, float3 L)
+{
+    return max(0.0f, dot(N, L)) / M_PI;
+}
+
+// ---- ONB construction (Pixar branchless) ----
+// Alias: use BuildTangentFrame below for world-space ONB construction.
 
 // Octahedral encoding for normals
 // From: http://jcgt.org/published/0003/02/01/
@@ -48,11 +72,6 @@ void GetReflectivityFromMetallic(float metalness, float3 baseColor, out float3 d
     const float dielectricSpecular = 0.04f;
     diffuseAlbedo = lerp(baseColor * (1.0f - dielectricSpecular), float3(0.0f, 0.0f, 0.0f), metalness);
     specularF0 = lerp(float3(dielectricSpecular, dielectricSpecular, dielectricSpecular), baseColor, metalness);
-}
-
-float LambertOverPi(float3 N, float3 L)
-{
-    return max(0.0f, dot(N, L)) / PI;
 }
 
 // GGX normal distribution function.
@@ -920,6 +939,168 @@ IBLComponents ComputeIBL(LightingInputs inputs)
     components.ibl = (diffuseIBL + specularIBL);
 
     return components;
+}
+
+// ─── Bent normal: flip shading normal to the same hemisphere as flat normal ──
+float3 getBentNormal(float3 flatNormal, float3 shadingNormal, float3 rayDirection)
+{
+    float3 result = shadingNormal;
+    if (dot(result, flatNormal) < 0.0f)
+        result = reflect(result, flatNormal);
+    return normalize(result);
+}
+
+// ─── Orthonormal basis construction ──────────────────────────────────────────
+// Builds a right-handed ONB from a unit normal N.
+// Frisvad / Duff et al. branchless variant.
+void branchlessONB(float3 N, out float3 T, out float3 B)
+{
+    float s  = (N.z >= 0.0f) ? 1.0f : -1.0f;
+    float a  = -1.0f / (s + N.z);
+    float b  = N.x * N.y * a;
+    T = float3(1.0f + s * N.x * N.x * a, s * b, -s * N.x);
+    B = float3(b, s + N.y * N.y * a, -N.y);
+}
+
+// Alias used by RAB_Surface.hlsli
+void ConstructONB(float3 N, out float3 T, out float3 B)
+{
+    branchlessONB(N, T, B);
+}
+
+// ─── One-sided Smith G1 masking for GGX ──────────────────────────────────────
+float G1_Smith(float roughness, float NdotV)
+{
+    float alpha  = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float denom  = NdotV + sqrt(alpha2 + (1.0f - alpha2) * NdotV * NdotV);
+    return (denom > 0.0f) ? (2.0f * NdotV / denom) : 0.0f;
+}
+
+// ─── Triangle / barycentric helpers ──────────────────────────────────────────
+
+// Sample a random point on a triangle; returns barycentric coords (u,v,w).
+float3 sampleTriangle(float2 rndSample)
+{
+    float sqrtx = sqrt(rndSample.x);
+    return float3(1.0f - sqrtx, sqrtx * (1.0f - rndSample.y), sqrtx * rndSample.y);
+}
+
+// Maps ray hit UV (barycentrics from TraceRay) to (w, u, v) barycentric coords.
+float3 hitUVToBarycentric(float2 hitUV)
+{
+    return float3(1.0f - hitUV.x - hitUV.y, hitUV.x, hitUV.y);
+}
+
+// Inverse of sampleTriangle.
+float2 randomFromBarycentric(float3 barycentric)
+{
+    float sqrtx = 1.0f - barycentric.x;
+    return float2(sqrtx * sqrtx, barycentric.z / sqrtx);
+}
+
+// ─── Disk / sphere sampling ───────────────────────────────────────────────────
+
+// Uniform sample on a unit disk.
+float2 sampleDisk(float2 rand)
+{
+    float angle = 2.0f * PI * rand.x;
+    return float2(cos(angle), sin(angle)) * sqrt(rand.y);
+}
+
+// Cosine-weighted hemisphere sample in local tangent space (+Z = up).
+// Returns direction; solidAnglePdf = cos(theta) / PI.
+float3 SampleCosHemisphere(float2 rand, out float solidAnglePdf)
+{
+    float2 tangential = sampleDisk(rand);
+    float elevation   = sqrt(saturate(1.0f - rand.y));
+    solidAnglePdf     = elevation / PI;
+    return float3(tangential.xy, elevation);
+}
+
+// Uniform sphere sample in local tangent space (+Z = up).
+// solidAnglePdf = 1 / (4*PI).
+float3 sampleSphere(float2 rand, out float solidAnglePdf)
+{
+    rand.y = rand.y * 2.0f - 1.0f;
+    float2 tangential = sampleDisk(float2(rand.x, 1.0f - rand.y * rand.y));
+    solidAnglePdf     = 0.25f / PI;
+    return float3(tangential.xy, rand.y);
+}
+
+// ─── PDF conversion ───────────────────────────────────────────────────────────
+
+// Convert area-measure PDF to solid-angle-measure PDF.
+float pdfAtoW(float pdfA, float distance_, float cosTheta)
+{
+    return pdfA * (distance_ * distance_) / cosTheta;
+}
+
+// ─── Reflectivity helpers (RTXDI-compatible names) ───────────────────────────
+
+// Metallic workflow split — RTXDI bridge uses this name.
+// Equivalent to GetReflectivityFromMetallic above.
+void getReflectivity(float metalness, float3 baseColor, out float3 o_albedo, out float3 o_baseReflectivity)
+{
+    GetReflectivityFromMetallic(metalness, baseColor, o_albedo, o_baseReflectivity);
+}
+
+// Approximate metalness from diffuse albedo and specular F0.
+float getMetalness(float3 diffuseAlbedo, float3 specularF0)
+{
+    if (all(diffuseAlbedo == 0.0f)) return 1.0f;
+    float F0 = calcLuminance(specularF0);
+    return saturate(1.0417f * (F0 - 0.04f)); // 1/0.96 = 1.0417
+}
+
+// ─── GGX VNDF sampling in local tangent space (RTXDI bridge variant) ─────────
+// Input Ve is the view direction already transformed into local tangent space
+// (T=x, B=y, N=z). Returns the half-vector in the same local space.
+// Use SampleGGX_VNDF (world-space) for world-space callers.
+float3 sampleGGX_VNDF(float3 Ve, float roughness, float2 random)
+{
+    float alpha = roughness * roughness;
+
+    float3 Vh = normalize(float3(alpha * Ve.x, alpha * Ve.y, Ve.z));
+
+    float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    float3 T1   = lensq > 0.0f ? float3(-Vh.y, Vh.x, 0.0f) / sqrt(lensq) : float3(1.0f, 0.0f, 0.0f);
+    float3 T2   = cross(Vh, T1);
+
+    float r   = sqrt(random.x);
+    float phi = 2.0f * PI * random.y;
+    float t1  = r * cos(phi);
+    float t2  = r * sin(phi);
+    float s   = 0.5f * (1.0f + Vh.z);
+    t2        = (1.0f - s) * sqrt(max(0.0f, 1.0f - t1 * t1)) + s * t2;
+
+    float3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * Vh;
+    return float3(alpha * Nh.x, alpha * Nh.y, max(0.0f, Nh.z));
+}
+
+// ─── Equirectangular UV ↔ direction ──────────────────────────────────────────
+
+float2 directionToEquirectUV(float3 normalizedDirection)
+{
+    float elevation = asin(normalizedDirection.y);
+    float azimuth   = 0.0f;
+    if (abs(normalizedDirection.y) < 1.0f)
+        azimuth = atan2(normalizedDirection.z, normalizedDirection.x);
+    return float2(azimuth / (2.0f * PI) - 0.25f, 0.5f - elevation / PI);
+}
+
+float3 equirectUVToDirection(float2 uv, out float cosElevation)
+{
+    float azimuth   = (uv.x + 0.25f) * (2.0f * PI);
+    float elevation = (0.5f - uv.y) * PI;
+    cosElevation    = cos(elevation);
+    return float3(cos(azimuth) * cosElevation, sin(elevation), sin(azimuth) * cosElevation);
+}
+
+// ─── Spherical direction from angles and ONB axes ────────────────────────────
+float3 sphericalDirection(float sinTheta, float cosTheta, float sinPhi, float cosPhi, float3 x, float3 y, float3 z)
+{
+    return sinTheta * cosPhi * x + sinTheta * sinPhi * y + cosTheta * z;
 }
 
 #endif // COMMON_LIGHTING_HLSLI

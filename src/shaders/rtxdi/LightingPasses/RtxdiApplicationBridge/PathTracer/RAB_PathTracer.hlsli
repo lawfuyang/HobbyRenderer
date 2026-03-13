@@ -20,13 +20,11 @@
 #include "Rtxdi/PT/PathTracerRandomContext.hlsli"
 #include "Rtxdi/Utils/SampledLightData.hlsli"
 
-#include "../../../GBufferHelpers.hlsli"
-
 void InitializeDebugPathViz(const RTXDI_PathTracerContext ctx, const RAB_PathTracerUserData ptud)
 {
     Debug_BeginPath(ptud.pathType);
 
-    Debug_RecordPTCameraPosition(g_Const.view.cameraDirectionOrPosition.xyz);
+    Debug_RecordPTCameraPosition(g_Const.view.m_CameraDirectionOrPosition.xyz);
     Debug_SetPTVertexIndex(1);
     Debug_RecordPTIntersectionPosition(RAB_GetSurfaceWorldPos(ctx.GetIntersectionSurface()));
     Debug_RecordPTIntersectionNormal(RAB_GetSurfaceNormal(ctx.GetIntersectionSurface()));
@@ -181,7 +179,6 @@ RAB_RayPayload TraceNextBounce(const RayDesc continuationRay)
     if (g_Const.sceneConstants.enableTransparentGeometry)
         instanceMask |= INSTANCE_MASK_TRANSPARENT;
 
-#if USE_RAY_QUERY
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
 
     rayQuery.TraceRayInline(SceneBVH, RAY_FLAG_NONE, instanceMask, continuationRay);
@@ -211,9 +208,6 @@ RAB_RayPayload TraceNextBounce(const RayDesc continuationRay)
         traceResult.committedRayT = rayQuery.CommittedRayT();
         traceResult.frontFace = rayQuery.CommittedTriangleFrontFace();
     }
-#else
-    TraceRay(SceneBVH, RAY_FLAG_NONE, instanceMask, 0, 0, 0, continuationRay, traceResult);
-#endif
 	return traceResult;
 }
 
@@ -255,7 +249,7 @@ RAB_Surface LoadSurfaceFromRayPayload(RAB_RayPayload rayPayload, RayDesc ray, co
     surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
     surface.viewDepth = 1.0; // doesn't matter
 
-    UpdatePSRFromHit(psr, rayPayload.committedRayT, gs, ms, surface, prevSurface, g_Const.view.matWorldToView);
+    UpdatePSRFromHit(psr, rayPayload.committedRayT, gs, ms, surface, prevSurface, g_Const.view.m_MatWorldToView);
 
     return surface;
 }
@@ -317,12 +311,12 @@ void SampleDirectLightsForIndirectSurface(inout RTXDI_RandomSamplerState rng,
         // Try to find this secondary surface in the G-buffer. If found, resample the lights
         // from that G-buffer surface into the reservoir using the spatial resampling function.
 
-        float4 secondaryClipPos = mul(float4(secondarySurface.worldPos, 1.0), g_Const.view.matWorldToClip);
+    float4 secondaryClipPos = mul(float4(secondarySurface.worldPos, 1.0), g_Const.view.m_MatWorldToClip);
         secondaryClipPos.xyz /= secondaryClipPos.w;
 
         if (all(abs(secondaryClipPos.xy) < 1.0) && secondaryClipPos.w > 0)
         {
-            int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
+            int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.m_ClipToWindowScale + g_Const.view.m_ClipToWindowBias);
             RAB_Surface is = secondarySurface;
             is.viewDepth = secondaryClipPos.w;
 

@@ -22,8 +22,7 @@ StructuredBuffer<VertexQuantized> g_Vertices : register(t12);
 StructuredBuffer<MeshData> g_MeshData : register(t13);
 StructuredBuffer<uint> g_Indices : register(t14);
 StructuredBuffer<GPULight> g_Lights : register(t6);
-Texture2D<float4> g_RTXDIDiffuseOutput : register(t8);       // diffuse illumination (raw or denoised)
-Texture2D<float4> g_RTXDISpecularOutput : register(t9);      // specular illumination (raw or denoised)
+Texture2D<float4> g_RTXDIDIComposited : register(t8);  // CompositingPass output (DI + emissive, already remodulated)
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -89,17 +88,8 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     {
         if (g_Deferred.m_UseReSTIRDI != 0)
         {
-            float3 diffuseIllumination = g_RTXDIDiffuseOutput.Load(uint3(uvInt, 0)).rgb;
-            float3 specularIllumination = g_RTXDISpecularOutput.Load(uint3(uvInt, 0)).rgb;
-
-            float3 diffuseAlbedo;
-            float3 F0;
-            GetReflectivityFromMetallic(metallic, baseColor, diffuseAlbedo, F0);
-
-            diffuseIllumination *= diffuseAlbedo;
-            specularIllumination *= max(float3(0.01f, 0.01f, 0.01f), F0);
-
-            color = diffuseIllumination + specularIllumination + emissive;
+            // CompositingPass already remodulated DI by albedo and added emissive
+            color = g_RTXDIDIComposited.Load(uint3(uvInt, 0)).rgb;
         }
         else
         {

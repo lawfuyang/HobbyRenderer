@@ -192,14 +192,14 @@ void UpdatePSRFromRaySample(
 
 float3 GetPSRMotionVector(float4 virtualPos, float4 virtualPosPrev)
 {
-    float4 clipPos = mul(virtualPos, g_Const.view.matWorldToClip);
+    float4 clipPos = mul(virtualPos, g_Const.view.m_MatWorldToClip);
     clipPos.xyz /= clipPos.w;
-    float4 prevClipPos = mul(virtualPosPrev, g_Const.prevView.matWorldToClip);
+    float4 prevClipPos = mul(virtualPosPrev, g_Const.prevView.m_MatWorldToClip);
     prevClipPos.xyz /= prevClipPos.w;
 
     float3 motion;
-    motion.xy = (prevClipPos.xy - clipPos.xy) * g_Const.view.clipToWindowScale;
-    motion.xy += (g_Const.view.pixelOffset - g_Const.prevView.pixelOffset);
+    motion.xy = (prevClipPos.xy - clipPos.xy) * g_Const.view.m_ClipToWindowScale;
+    motion.xy += (g_Const.view.m_PixelOffset - g_Const.prevView.m_PixelOffset);
     motion.z = prevClipPos.w - clipPos.w;
 
     return motion;
@@ -208,8 +208,6 @@ float3 GetPSRMotionVector(float4 virtualPos, float4 virtualPosPrev)
 void UpdatePSRFromHit(
     inout PSRData psr,
     const float committedRayT,
-    const GeometrySample gs,
-    const MaterialSample ms,
     const RAB_Surface surface,
     const RAB_Surface prevSurface,
     const float4x4 matWorldToView)
@@ -226,7 +224,8 @@ void UpdatePSRFromHit(
     {
         psr.additionalViewZ += committedRayT;
 
-        float4 prevWorldPos = float4(mul(gs.instance.prevTransform, float4(gs.prevObjectSpacePosition, 1.0)), 1.0);
+        // Use prevSurface world position directly (GeometrySample removed)
+        float4 prevWorldPos = float4(prevSurface.worldPos, 1.0);
 
         float4 virtualPos = float4(psr.primarySurfaceWorldPos - (psr.additionalViewZ * psr.primarySurfaceViewDir), 1.0f);
         float4 virtualPosPrev = float4(virtualPos.xyz + prevWorldPos.xyz - surface.worldPos, 1.0f);

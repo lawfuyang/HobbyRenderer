@@ -33,20 +33,12 @@
 
 static const float c_MaxIndirectRadiance = 10;
 
-#if USE_RAY_QUERY
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
 {
-#if !USE_RAY_QUERY
-    uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
-    if (any(pixelPosition > int2(g_Const.view.viewportSize)))
+    if (any(pixelPosition > int2(g_Const.view.m_ViewportSize)))
         return;
 
     if(all(pixelPosition == g_Const.debug.mouseSelectedPixel))
@@ -108,12 +100,12 @@ void RayGen()
             // Try to find this secondary surface in the G-buffer. If found, resample the lights
             // from that G-buffer surface into the reservoir using the spatial resampling function.
 
-            float4 secondaryClipPos = mul(float4(secondaryGBufferData.worldPos, 1.0), g_Const.view.matWorldToClip);
+            float4 secondaryClipPos = mul(float4(secondaryGBufferData.worldPos, 1.0), g_Const.view.m_MatWorldToClip);
             secondaryClipPos.xyz /= secondaryClipPos.w;
 
             if (all(abs(secondaryClipPos.xy) < 1.0) && secondaryClipPos.w > 0)
             {
-                int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
+                int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.m_ClipToWindowScale + g_Const.view.m_ClipToWindowBias);
                 secondarySurface.viewDepth = secondaryClipPos.w;
                 uint sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
                 reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,

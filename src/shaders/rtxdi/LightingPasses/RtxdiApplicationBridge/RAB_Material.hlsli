@@ -13,8 +13,13 @@
 #ifndef RAB_MATERIAL_HLSLI
 #define RAB_MATERIAL_HLSLI
 
-#include "donut/shaders/brdf.hlsli"
+// brdf functions (Lambert, GGX_times_NdotL, Schlick_Fresnel, ConstructONB,
+// SampleCosHemisphere, ImportanceSampleGGX_VNDF, M_PI) are all in CommonLighting.hlsli
+// which is included transitively via ShaderParameters.h -> ShaderShared.h -> CommonLighting
+// (or directly by the top-level shader). No separate include needed here.
 #include "Rtxdi/Utils/RandomSamplerstate.hlsli"
+#include "../../CommonLighting.hlsli"
+#include "../../Packing.hlsli"
 
 static const float kMinRoughness = 0.03f;
 
@@ -73,7 +78,7 @@ RAB_Material GetGBufferMaterial(
 {
     RAB_Material material = RAB_EmptyMaterial();
 
-    if (any(pixelPosition >= view.viewportSize))
+    if (any(pixelPosition >= view.m_ViewportSize))
         return material;
 
     material.diffuseAlbedo = Unpack_R11G11B10_UFLOAT(diffuseAlbedoTexture[pixelPosition]).rgb;

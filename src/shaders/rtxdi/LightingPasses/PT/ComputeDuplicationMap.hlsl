@@ -29,7 +29,7 @@ groupshared uint s_sampleIDs[DUPMAP_TILE][DUPMAP_TILE];
 [numthreads(16, 16, 1)]
 void main(uint2 GroupID : SV_GroupID, uint2 ThreadID : SV_GroupThreadID)
 {
-    const int2 frameDim = int2(g_Const.view.viewportSize);
+    const int2 frameDim = int2(g_Const.view.m_ViewportSize);
     const int2 base = int2(GroupID) * 16 - DUPMAP_RAD;
 
     // Load 32x32 tile into LDS (each of 16x16 threads loads 2x2)

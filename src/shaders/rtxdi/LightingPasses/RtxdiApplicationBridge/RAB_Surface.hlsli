@@ -13,9 +13,9 @@
 #ifndef RTXDI_RAB_SURFACE_HLSLI
 #define RTXDI_RAB_SURFACE_HLSLI
 
-#include "../../GBufferHelpers.hlsli"
-#include "../../SceneGeometry.hlsli"
 #include "SharedShaderInclude/ShaderParameters.h"
+#include "../../CommonLighting.hlsli"
+#include "../../Packing.hlsli"
 
 #include "Rtxdi/Utils/BrdfRaySample.hlsli"
 #include "Rtxdi/Utils/Color.hlsli"
@@ -117,7 +117,7 @@ RAB_Surface GetGBufferSurface(
 {
     RAB_Surface surface = RAB_EmptySurface();
 
-    if (any(pixelPosition >= view.viewportSize))
+    if (any(pixelPosition >= int2(view.m_ViewportSize)))
         return surface;
 
     surface.viewDepth = depthTexture[pixelPosition];
@@ -129,8 +129,18 @@ RAB_Surface GetGBufferSurface(
 
     surface.geoNormal = octToNdirUnorm32(geoNormalsTexture[pixelPosition]);
     surface.normal = octToNdirUnorm32(normalsTexture[pixelPosition]);
-    surface.worldPos = viewDepthToWorldPos(view, pixelPosition, surface.viewDepth);
-    surface.viewDir = normalize(view.cameraDirectionOrPosition.xyz - surface.worldPos);
+
+    // Reconstruct world position from clip-space depth using HobbyRenderer's view constants
+    {
+        float2 uv = (float2(pixelPosition) + 0.5f) / float2(view.m_ViewportSize);
+        float4 clipPos = float4(uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), surface.viewDepth, 1.0f);
+        float4 worldPosFour = MatrixMultiply(clipPos, view.m_MatClipToWorldNoOffset);
+        surface.worldPos = worldPosFour.xyz / worldPosFour.w;
+    }
+
+    // Camera world position: 4th row of ViewToWorld (row-major)
+    float3 camPos = float3(view.m_MatViewToWorld._41, view.m_MatViewToWorld._42, view.m_MatViewToWorld._43);
+    surface.viewDir = normalize(camPos - surface.worldPos);
     surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
 
     return surface;
@@ -149,7 +159,7 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
             g_Const.prevView,
             t_PrevGBufferDepth, 
             t_PrevGBufferNormals, 
-            t_PrevGBufferGeoNormals);
+            t_PrevGBufferNormals);  // geo normals removed — use shading normals
     }
     else
     {
@@ -159,7 +169,7 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
             g_Const.view, 
             t_GBufferDepth, 
             t_GBufferNormals, 
-            t_GBufferGeoNormals);
+            t_GBufferNormals);  // geo normals removed — use shading normals
     }
 }
 
@@ -233,7 +243,7 @@ float3 RAB_SurfaceEvaluateBrdfTimesNoL(RAB_Surface surface, float3 L)
     float d = Lambert(N, -L);
     float3 s = float3(0.0f, 0.0f, 0.0f);
     if (surface.material.roughness >= kMinRoughness)
-        s = GGX_times_NdotL(V, L, N, max(surface.material.roughness, kMinRoughness), surface.material.specularF0);
+        s = GGXTimesNdotL_Exact(V, L, N, max(surface.material.roughness, kMinRoughness), surface.material.specularF0);
 
 	return d * surface.material.diffuseAlbedo + s;
 }
@@ -258,7 +268,7 @@ bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamp
     {
         // Glossy reflection
         float3 Ve = normalize(worldToTangent(surface, surface.viewDir));
-        float3 h = ImportanceSampleGGX_VNDF(rand.yz, max(surface.material.roughness, kMinRoughness), Ve, 1.0);
+            float3 h = sampleGGX_VNDF(Ve, max(surface.material.roughness, kMinRoughness), rand.yz);
         h = normalize(h);
         dir = reflect(-surface.viewDir, tangentToWorld(surface, h));
     }
@@ -274,7 +284,7 @@ float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, float3 dir)
 {
     float cosTheta = saturate(dot(surface.normal, dir));
     float diffusePdf = cosTheta / M_PI;
-    float specularPdf = ImportanceSampleGGX_VNDF_PDF(max(surface.material.roughness, kMinRoughness), surface.normal, surface.viewDir, dir);
+    float specularPdf = SampleGGX_VNDF_PDF(max(surface.material.roughness, kMinRoughness), surface.normal, surface.viewDir, dir);
     float pdf = cosTheta > 0.f ? lerp(specularPdf, diffusePdf, surface.diffuseProbability) : 0.f;
     return pdf;
 }
@@ -330,7 +340,7 @@ float3 RAB_SurfaceEvaluateBsdfTimesNoL(RAB_Surface surface, float3 L, bool isDel
     {
         d = Lambert(N, -L);
         if (surface.material.roughness >= kMinRoughness)
-        s = GGX_times_NdotL(V, L, N, surface.material.roughness, surface.material.specularF0);
+        s = GGXTimesNdotL_Exact(V, L, N, surface.material.roughness, surface.material.specularF0);
     }
 
 	return d * surface.material.diffuseAlbedo + s;
@@ -370,7 +380,7 @@ bool RAB_SurfaceImportanceSampleBsdf(RAB_Surface surface, inout RTXDI_RandomSamp
         else
         {
             float3 Ve = normalize(worldToTangent(surface, surface.viewDir));
-            float3 h = ImportanceSampleGGX_VNDF(rand.yz, max(surface.material.roughness, kMinRoughness), Ve, 1.0);
+            float3 h = sampleGGX_VNDF(Ve, max(surface.material.roughness, kMinRoughness), rand.yz);
             h = normalize(h);
             dir = reflect(-surface.viewDir, tangentToWorld(surface, h));
             brsp.SetContinuous();
@@ -391,7 +401,7 @@ float RAB_SurfaceEvaluateBsdfPdf(RAB_Surface surface, float3 dir, RTXDI_BrdfRayS
     float specularPdf = 0.0;
     if(surface.material.roughness >= kMinRoughness)
     {
-        specularPdf = ImportanceSampleGGX_VNDF_PDF(max(surface.material.roughness, kMinRoughness), surface.normal, surface.viewDir, dir);
+        specularPdf = SampleGGX_VNDF_PDF(max(surface.material.roughness, kMinRoughness), surface.normal, surface.viewDir, dir);
     }
     else if(brsp.IsDelta())
     {
