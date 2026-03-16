@@ -65,6 +65,7 @@ public:
     nvrhi::TextureHandle DefaultTextureNormal;       // RGBA(0.5,0.5,1,1) - neutral normal map
     nvrhi::TextureHandle DefaultTexturePBR;          // RG(0,1) - ORM: Metallic=0, Roughness=1
     nvrhi::TextureHandle DummyUAVTexture;            // 1x1 UAV texture for filling slots
+    nvrhi::TextureHandle DummySRVTexture;            // 1x1 SRV texture for filling slots
     nvrhi::TextureHandle BRDF_LUT;                   // BRDF integration LUT for IBL
     nvrhi::TextureHandle IrradianceTexture;          // Irradiance cubemap for IBL
     nvrhi::TextureHandle RadianceTexture;            // Radiance cubemap (filtered environment) for IBL
@@ -75,7 +76,12 @@ public:
     nvrhi::TextureHandle BrunetonIrradiance;
 
     // Default buffers
-    nvrhi::BufferHandle DummyUAVBuffer;    // Empty structured buffer
+    nvrhi::BufferHandle DummySRVByteAddressBuffer;
+    nvrhi::BufferHandle DummyUAVByteAddressBuffer;
+    nvrhi::BufferHandle DummySRVStructuredBuffer;
+    nvrhi::BufferHandle DummyUAVStructuredBuffer;
+    nvrhi::BufferHandle DummySRVTypedBuffer;
+    nvrhi::BufferHandle DummyUAVTypedBuffer;
 
     uint32_t m_RadianceMipCount = 1;
 

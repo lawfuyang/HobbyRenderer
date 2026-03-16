@@ -56,6 +56,11 @@ namespace
             extension = ".dxil";
         }
 
+        // Preserve subdirectory structure from the source path (e.g. rtxdi/LightingPasses/DI/)
+        // so that shaders in different folders with the same stem don't collide.
+        const std::filesystem::path parentDir = metadata.sourcePath.parent_path();
+        if (!parentDir.empty() && parentDir != ".")
+            return exeDir / "shaders" / subDir / parentDir / (outName + extension);
         return exeDir / "shaders" / subDir / (outName + extension);
     }
 
@@ -455,20 +460,23 @@ void Renderer::LoadShaders()
                     SDL_LOG_ASSERT_FAIL("Failed to create shader handle", "Failed to create shader handle for: %s", shaderPath.generic_string().c_str());
                 }
 
-                // Keyed by logical name with sorted defines (e.g., "ForwardLighting_PSMain_AlphaTest_KEY1_VAL1_KEY2_VAL2")
-                std::string key = metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
-
-                for (const std::string& define : metadata->defines)
+                // Keyed by logical name with folder prefix and sorted defines
+                // e.g. "rtxdi/LightingPasses/DI/GenerateInitialSamples_main" or "ForwardLighting_PSMain_KEY=VAL"
                 {
-                    key += "_" + define;
-                }
+                    const std::filesystem::path parentDir = metadata->sourcePath.parent_path();
+                    std::string folderPrefix = (!parentDir.empty() && parentDir != ".")
+                        ? parentDir.generic_string() + "/" : "";
+                    std::string key = folderPrefix + metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
+                    for (const std::string& define : metadata->defines)
+                        key += "_" + define;
 
-                SDL_assert(!m_ShaderCache.contains(key));
-                m_ShaderCache[key] = handle;
-                
-                SDL_Log("[Init] Loaded shader: %s (key=%s, permutations=%zu)", 
-                         shaderPath.generic_string().c_str(), key.c_str(), shaderConstants.size());
-                ++loadedShaderCount;
+                    SDL_assert(!m_ShaderCache.contains(key));
+                    m_ShaderCache[key] = handle;
+
+                    SDL_Log("[Init] Loaded shader: %s (key=%s, permutations=%zu)",
+                             shaderPath.generic_string().c_str(), key.c_str(), shaderConstants.size());
+                    ++loadedShaderCount;
+                }
             }
         }
         else
@@ -496,15 +504,20 @@ void Renderer::LoadShaders()
                     SDL_LOG_ASSERT_FAIL("Failed to create shader handle", "Failed to create shader handle for: %s", shaderPath.generic_string().c_str());
                 }
 
-                // Keyed by logical name (e.g., "ForwardLighting_PSMain_AlphaTest") for easy retrieval
-                const std::string key = metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
+                // Keyed by logical name with folder prefix (e.g. "rtxdi/PostprocessGBuffer_main")
+                {
+                    const std::filesystem::path parentDir = metadata->sourcePath.parent_path();
+                    std::string folderPrefix = (!parentDir.empty() && parentDir != ".")
+                        ? parentDir.generic_string() + "/" : "";
+                    const std::string key = folderPrefix + metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
 
-                SDL_assert(!m_ShaderCache.contains(key));
-                m_ShaderCache[key] = handle;
-                
-                SDL_Log("[Init] Loaded shader: %s (key=%s, no permutations)", 
-                         shaderPath.generic_string().c_str(), key.c_str());
-                ++loadedShaderCount;
+                    SDL_assert(!m_ShaderCache.contains(key));
+                    m_ShaderCache[key] = handle;
+
+                    SDL_Log("[Init] Loaded shader: %s (key=%s, no permutations)",
+                             shaderPath.generic_string().c_str(), key.c_str());
+                    ++loadedShaderCount;
+                }
             }
         }
     }

@@ -16,8 +16,14 @@ ConstantBuffer<PrepareLightsConstants>      g_Const             : register(b0);
 RWStructuredBuffer<PolymorphicLightInfo>    u_LightDataBuffer   : register(u0);
 RWBuffer<uint>                              u_LightIndexMappingBuffer : register(u1);
 RWBuffer<uint>                              u_GeometryInstanceToLight : register(u2);
+RWTexture2D<float>                          u_LocalLightPdfTexture : register(u4);
 
+// t0 = task buffer: one entry per task.  TASK_PRIMITIVE_LIGHT_BIT set → analytical light;
+//      bit clear → emissive triangle mesh.
 StructuredBuffer<PrepareLightsTask>         t_TaskBuffer        : register(t0);
+// t1 = CPU-converted analytical lights (directional/point/spot)
+StructuredBuffer<PolymorphicLightInfo>      t_PrimitiveLightBuffer : register(t1);
+
 StructuredBuffer<PerInstanceData>           t_InstanceData      : register(t26);
 StructuredBuffer<MeshData>                  t_GeometryData      : register(t27);
 StructuredBuffer<MaterialConstants>         t_MaterialConstants : register(t28);
@@ -91,9 +97,6 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
         // Apply emissive texture if present
         if ((material.m_TextureFlags & TEXFLAG_EMISSIVE) != 0)
         {
-            Texture2D emissiveTexture = GetBindlessTexture2D(material.m_EmissiveTextureIndex);
-            SamplerState emissiveSampler = GetBindlessSampler(material.m_EmissiveSamplerIndex);
-
             // Interpolate UVs for the triangle centroid
             float2 uv0 = tv.v0.m_Uv;
             float2 uv1 = tv.v1.m_Uv;
@@ -128,7 +131,7 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
             float2 longGradient  = (longEdge1 + longEdge2) / 3.0f;
             float2 centerUV      = (uv0 + uv1 + uv2) / 3.0f;
 
-            float3 emissiveMask = emissiveTexture.SampleGrad(emissiveSampler, centerUV, shortGradient, longGradient).rgb;
+            float3 emissiveMask = SampleBindlessTextureGrad(material.m_EmissiveTextureIndex, material.m_EmissiveSamplerIndex, centerUV, shortGradient, longGradient).rgb;
             radiance *= emissiveMask;
         }
 
@@ -149,9 +152,10 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
     }
     else
     {
-        // Primitive (analytic) light — copy directly from the primitive light buffer
-        // NOTE: primitive lights are not yet supported in this path; stub out.
-        lightInfo = (PolymorphicLightInfo)0;
+        // Primitive (analytical) light — read directly from the primitive light buffer.
+        // instanceAndGeometryIndex with TASK_PRIMITIVE_LIGHT_BIT set; the actual
+        // primitive light index is stored in task.lightBufferOffset.
+        lightInfo = t_PrimitiveLightBuffer[task.lightBufferOffset];
     }
 
     uint lightBufferPtr = task.lightBufferOffset + triangleIdx;
@@ -169,14 +173,15 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
             g_Const.previousFrameLightOffset + prevBufferPtr + 1;
     }
 
-    // Write the flux into the PDF texture via the geometry-instance-to-light mapping
+    // Write flux into the local-light PDF texture (mip 0) via Z-curve addressing.
     float emissiveFlux = PolymorphicLight::getPower(lightInfo);
     uint2 pdfTexturePosition = RTXDI_LinearIndexToZCurve(lightBufferPtr);
-    // Note: u_LocalLightPdfTexture is written by a separate BuildLocalLightPDF pass.
-    // Here we only write the geometry-instance-to-light mapping.
+    u_LocalLightPdfTexture[pdfTexturePosition] = emissiveFlux;
+
+    // Write the geometry-instance-to-light mapping for emissive triangle lights.
     if (!isPrimitiveLight)
     {
-        uint instanceIndex  = (task.instanceAndGeometryIndex >> 12) & 0x7FFFFu;
+        uint instanceIndex = (task.instanceAndGeometryIndex >> 12) & 0x7FFFFu;
         PerInstanceData instance = t_InstanceData[instanceIndex];
         uint geometryInstanceIndex = instance.m_FirstGeometryInstanceIndex + (task.instanceAndGeometryIndex & 0xFFFu);
         u_GeometryInstanceToLight[geometryInstanceIndex] = lightBufferPtr;

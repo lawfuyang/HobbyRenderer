@@ -64,10 +64,10 @@ Texture2D<uint>                             t_PrevGBufferSpecularRough  : regist
 Texture2D<float4>                           t_MotionVectors             : register(t11);
 Texture2D<float4>                           t_DenoiserNormalRoughness   : register(t12);
 Texture2D<float>                            t_PrevGBufferDepth          : register(t13);
-Texture2D                                   t_LocalLightPdfTexture      : register(t14);
+Texture2D                                   t_LocalLightPdfTexture      : register(t14);    
 Texture2D                                   t_EnvironmentPdfTexture     : register(t15);
-StructuredBuffer<uint2>                     t_RisBuffer                 : register(t16);
-StructuredBuffer<uint4>                     t_RisLightDataBuffer        : register(t17);
+// t16: dummy (RisBuffer read via UAV slot to avoid bindless resource handling)
+// t17: dummy (RisLightDataBuffer read via UAV slot to avoid bindless resource handling)
 RaytracingAccelerationStructure             SceneBVH                    : register(t18);
 RaytracingAccelerationStructure             PrevSceneBVH                : register(t19);
 StructuredBuffer<PolymorphicLightInfo>      t_LightDataBuffer           : register(t20);

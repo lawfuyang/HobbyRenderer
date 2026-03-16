@@ -244,19 +244,77 @@ void CommonResources::Initialize()
 
         // Create dummy UAV texture
         DummyUAVTexture = createDefaultTexture("DummyUAV", nvrhi::TextureDimension::Texture2D, nvrhi::Format::R32_FLOAT, true);
+        DummySRVTexture = createDefaultTexture("DummySRV", nvrhi::TextureDimension::Texture2D, nvrhi::Format::R32_FLOAT, false);
 
-        nvrhi::BufferDesc bufferDesc;
-        bufferDesc.byteSize = 4;
-        bufferDesc.structStride = 4;
-        bufferDesc.canHaveUAVs = true;
-        bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        bufferDesc.debugName = "DummyUAVBuffer";
-        DummyUAVBuffer = device->createBuffer(bufferDesc);
+        // DummySRVByteAddressBuffer
+        {
+            nvrhi::BufferDesc bufferDesc;
+            bufferDesc.byteSize = 4;
+            bufferDesc.canHaveRawViews = true;
+            bufferDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            bufferDesc.debugName = "DummySRVByteAddressBuffer";
+            DummySRVByteAddressBuffer = device->createBuffer(bufferDesc);
+        }
+
+        // DummyUAVByteAddressBuffer
+        {
+            nvrhi::BufferDesc bufferDesc;
+            bufferDesc.byteSize = 4;
+            bufferDesc.canHaveRawViews = true;
+            bufferDesc.canHaveUAVs = true;
+            bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bufferDesc.debugName = "DummyUAVByteAddressBuffer";
+            DummyUAVByteAddressBuffer = device->createBuffer(bufferDesc);
+        }
+
+        // DummySRVStructuredBuffer
+        {
+            nvrhi::BufferDesc bufferDesc;
+            bufferDesc.byteSize = 4;
+            bufferDesc.structStride = 4;
+            bufferDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            bufferDesc.debugName = "DummySRVStructuredBuffer";
+            DummySRVStructuredBuffer = device->createBuffer(bufferDesc);
+        }
+
+        // DummyUAVStructuredBuffer
+        {
+            nvrhi::BufferDesc bufferDesc;
+            bufferDesc.byteSize = 4;
+            bufferDesc.structStride = 4;
+            bufferDesc.canHaveUAVs = true;
+            bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bufferDesc.debugName = "DummyUAVStructuredBuffer";
+            DummyUAVStructuredBuffer = device->createBuffer(bufferDesc);
+        }
+
+        // DummySRVTypedBuffer
+        {
+            nvrhi::BufferDesc bufferDesc;
+            bufferDesc.byteSize = 4;
+            bufferDesc.canHaveTypedViews = true;
+            bufferDesc.format = nvrhi::Format::R32_UINT; // Example format
+            bufferDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            bufferDesc.debugName = "DummySRVTypedBuffer";
+            DummySRVTypedBuffer = device->createBuffer(bufferDesc);
+        }
+
+        // DummyUAVTypedBuffer
+        {
+            nvrhi::BufferDesc bufferDesc;
+            bufferDesc.byteSize = 4;
+            bufferDesc.canHaveUAVs = true;
+            bufferDesc.canHaveTypedViews = true;
+            bufferDesc.format = nvrhi::Format::R32_UINT; // Example format
+            bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bufferDesc.debugName = "DummyUAVTypedBuffer";
+            DummyUAVTypedBuffer = device->createBuffer(bufferDesc);
+        }
 
         // Upload texture data using renderer's command list management
         nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
         ScopedCommandList commandList{ cmd, "CommonResources_DefaultTextures" };
-
+        
         const char* basePath = SDL_GetBasePath();
         const Config& config = Config::Get();
 
@@ -371,6 +429,28 @@ void CommonResources::Initialize()
         uint16_t pbrPixel = 0xFFFF; // RG(0,255) - R=Metallic(0), G=Roughness(255)
         commandList->writeTexture(DefaultTexturePBR, 0, 0, &pbrPixel, sizeof(uint16_t), 0);
 
+        commandList->setPermanentTextureState(DefaultTextureBlack, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DefaultTextureWhite, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DefaultTexture3DWhite, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DefaultTextureGray, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DefaultTextureNormal, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DefaultTexturePBR, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DummyUAVTexture, nvrhi::ResourceStates::UnorderedAccess);
+        commandList->setPermanentTextureState(DummySRVTexture, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(BRDF_LUT, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(IrradianceTexture, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(RadianceTexture, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(BrunetonTransmittance, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(BrunetonScattering, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(BrunetonIrradiance, nvrhi::ResourceStates::ShaderResource);
+
+        commandList->setPermanentBufferState(DummySRVByteAddressBuffer, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentBufferState(DummyUAVByteAddressBuffer, nvrhi::ResourceStates::UnorderedAccess);
+        commandList->setPermanentBufferState(DummySRVStructuredBuffer, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentBufferState(DummyUAVStructuredBuffer, nvrhi::ResourceStates::UnorderedAccess);
+        commandList->setPermanentBufferState(DummySRVTypedBuffer, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentBufferState(DummyUAVTypedBuffer, nvrhi::ResourceStates::UnorderedAccess);
+
         // Note: Default textures are registered later in Renderer::Initialize after bindless system is set up
     }
 
@@ -407,7 +487,13 @@ void CommonResources::Shutdown()
     IrradianceTexture = nullptr;
     BRDF_LUT = nullptr;
     DummyUAVTexture = nullptr;
-    DummyUAVBuffer = nullptr;
+    DummySRVTexture = nullptr;
+    DummySRVByteAddressBuffer = nullptr;
+    DummyUAVByteAddressBuffer = nullptr;
+    DummySRVStructuredBuffer = nullptr;
+    DummyUAVStructuredBuffer = nullptr;
+    DummySRVTypedBuffer = nullptr;
+    DummyUAVTypedBuffer = nullptr;
     DefaultTexturePBR = nullptr;
     DefaultTextureNormal = nullptr;
     DefaultTextureGray = nullptr;

@@ -1,13 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
- *
- * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
- * property and proprietary rights in and to this material, related
- * documentation and any modifications thereto. Any use, reproduction,
- * disclosure or distribution of this material and related documentation
- * without an express license agreement from NVIDIA CORPORATION or
- * its affiliates is strictly prohibited.
  */
 
 #pragma pack_matrix(row_major)
@@ -16,17 +9,12 @@
 #include "../Packing.hlsli"
 
 // Inputs — registers match RTXDIRenderer.cpp PostprocessGBuffer binding set:
-//   t1  = depth
+//   t1  = LinearZ (R32_FLOAT linear view-space depth, written by GenerateViewZ)
 //   t4  = ORM (packed R8G8B8A8: R=occlusion, G=roughness, B=metalness)
 //   t5  = normals (packed oct R32_UINT)
-//   t11 = motion vectors (RG16F screen-space)
-Texture2D<float>  t_ViewDepth      : register(t1);
+Texture2D<float>  t_ViewDepth      : register(t1);  // LinearZ
 Texture2D<uint>   t_ORM            : register(t4);
 Texture2D<uint>   t_Normals        : register(t5);
-
-// Outputs — registers match RTXDIRenderer.cpp PostprocessGBuffer binding set:
-//   u21 = denoiser normal+roughness (RGBA16F, xyz=normal, w=roughness)
-RWTexture2D<float4> u_DenoiserNormalRough : register(u21);
 
 ConstantBuffer<ResamplingConstants> g_Const : register(b0);
 
@@ -48,9 +36,11 @@ float GetModifiedRoughnessFromNormalVariance(float linearRoughness, float3 nonNo
     return sqrt(saturate(linearRoughness * linearRoughness + kappa));
 }
 
-[numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
-void main(uint2 pixelPosition : SV_DispatchThreadID)
+// Fullscreen pixel shader — output goes to the denoiser normal+roughness render target.
+float4 main(FullScreenVertexOut input) : SV_Target
 {
+    int2 pixelPosition = int2(input.pos.xy);
+
     // Decode shading normal from packed oct-encoded uint
     float3 currentNormal = octToNdirUnorm32(t_Normals[pixelPosition]);
 
@@ -88,5 +78,5 @@ void main(uint2 pixelPosition : SV_DispatchThreadID)
         : GetModifiedRoughnessFromNormalVariance(currentRoughness, averageNormal);
 
     // Write denoiser normal+roughness (NRD IN_NORMAL_ROUGHNESS format)
-    u_DenoiserNormalRough[pixelPosition] = float4(currentNormal * 0.5f + 0.5f, modifiedRoughness);
+    return float4(currentNormal * 0.5f + 0.5f, modifiedRoughness);
 }

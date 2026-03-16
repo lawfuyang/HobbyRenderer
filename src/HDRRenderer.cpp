@@ -83,7 +83,7 @@ public:
             bset.bindings = {
                 nvrhi::BindingSetItem::PushConstants(0, sizeof(HistogramConstants)),
                 nvrhi::BindingSetItem::Texture_SRV(0, hdrColor),
-                nvrhi::BindingSetItem::StructuredBuffer_UAV(0, luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVBuffer)
+                nvrhi::BindingSetItem::StructuredBuffer_UAV(0, luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVStructuredBuffer)
             };
 
             const uint32_t dispatchX = DivideAndRoundUp(consts.m_Width, 16);
@@ -121,7 +121,7 @@ public:
                 bset.bindings = {
                     nvrhi::BindingSetItem::PushConstants(0, sizeof(AdaptationConstants)),
                     nvrhi::BindingSetItem::TypedBuffer_UAV(0, exposureBuffer),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(0, luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVBuffer)
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(0, luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummySRVStructuredBuffer)
                 };
 
                 Renderer::RenderPassParams params{

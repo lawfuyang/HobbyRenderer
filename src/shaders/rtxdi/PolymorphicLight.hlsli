@@ -775,8 +775,7 @@ struct EnvironmentLight
         float3 sampleRadiance = radianceScale;
         if (textureIndex >= 0)
         {
-SamplerState envSampler = ENVIRONMENT_SAMPLER;
-    sampleRadiance *= GetBindlessTexture2D(textureIndex).SampleLevel(envSampler, textureUV, 0).xyz;
+    sampleRadiance *= SampleBindlessTextureLevel(textureIndex, SAMPLER_LINEAR_CLAMP_INDEX, textureUV, 0).xyz;
         }
 
         // Inf / NaN guard.

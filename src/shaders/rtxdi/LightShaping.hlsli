@@ -56,8 +56,7 @@ float evaluateIesProfile(int profileIndex, float3 emissionDirection_, float3 lig
     const float tangentAngle = atan2(emissionDirection.y, emissionDirection.x);
     const float normTangentAngle = tangentAngle * .5f / PI + .5f;
 
-    SamplerState iesSampler = IES_SAMPLER;
-    float iesMultiplier = GetBindlessTexture2D(profileIndex).SampleLevel(iesSampler, float2(normAngle, normTangentAngle), 0).x;
+    float iesMultiplier = SampleBindlessTextureLevel(profileIndex, SAMPLER_LINEAR_CLAMP_INDEX, float2(normAngle, normTangentAngle), 0).x;
 
     return iesMultiplier;
 }
