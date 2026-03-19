@@ -31,7 +31,6 @@
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupThreadID, uint2 GroupIdx : SV_GroupID)
 {
-
     const RTXDI_RuntimeParameters params = g_Const.runtimeParams;
 
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, params.activeCheckerboardField);
@@ -67,7 +66,8 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupTh
 
     // Store the sampled lighting luminance for the gradient pass.
     // Discard the pixels where the visibility was reused, as gradients need actual visibility.
-    u_RestirLuminance[GlobalIndex] = currLuminance * (reservoir.age > 0 ? 0 : 1);
+    // NOTE: not used because i dont have gradient pass
+    //u_RestirLuminance[GlobalIndex] = currLuminance * (reservoir.age > 0 ? 0 : 1);
 
 #if RTXDI_REGIR_MODE != RTXDI_REGIR_DISABLED
     if (g_Const.visualizeRegirCells)
