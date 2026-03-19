@@ -29,9 +29,6 @@
 RGTextureHandle g_RG_RTXDIDIOutput;           // non-denoised diffuse illumination
 RGTextureHandle g_RG_RTXDIDiffuseOutput;      // RELAX denoised diffuse output
 RGTextureHandle g_RG_RTXDISpecularOutput;     // non-denoised specular / RELAX denoised specular
-RGTextureHandle g_RG_RTXDIRawDiffuseOutput;   // pre-denoised diffuse (RELAX input)
-RGTextureHandle g_RG_RTXDIRawSpecularOutput;  // pre-denoised specular (RELAX input)
-RGTextureHandle g_RG_RTXDILinearDepth;        // linear view-space depth (RELAX IN_VIEWZ)
 RGBufferHandle  g_RG_RTXDILightReservoirBuffer; // u_LightReservoirs — also read by viz renderer
 RGTextureHandle g_RG_RTXDIDIComposited;       // CompositingPass output — read by DeferredRenderer
 
@@ -539,38 +536,38 @@ public:
         {
             m_NrdIntegration->Setup(renderGraph);
 
-            // Raw RELAX inputs from RTXDI front-end packing.
+            auto makeHDR = [&](const char* name, RGTextureHandle& h)
             {
                 RGTextureDesc desc;
-                desc.m_NvrhiDesc.width  = width;
+                desc.m_NvrhiDesc.width = width;
                 desc.m_NvrhiDesc.height = height;
                 desc.m_NvrhiDesc.format = nvrhi::Format::RGBA16_FLOAT;
-                desc.m_NvrhiDesc.isUAV  = true;
+                desc.m_NvrhiDesc.isUAV = true;
                 desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-                desc.m_NvrhiDesc.debugName    = "RTXDIRawDiffuseOutput";
-                renderGraph.DeclareTexture(desc, g_RG_RTXDIRawDiffuseOutput);
-            }
-            {
-                RGTextureDesc desc;
-                desc.m_NvrhiDesc.width  = width;
-                desc.m_NvrhiDesc.height = height;
-                desc.m_NvrhiDesc.format = nvrhi::Format::RGBA16_FLOAT;
-                desc.m_NvrhiDesc.isUAV  = true;
-                desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-                desc.m_NvrhiDesc.debugName    = "RTXDIRawSpecularOutput";
-                renderGraph.DeclareTexture(desc, g_RG_RTXDIRawSpecularOutput);
-            }
+                desc.m_NvrhiDesc.debugName = name;
+                renderGraph.DeclareTexture(desc, h);
+                };
 
-            {
+            makeHDR("RTXDIRawDiffuseOutput", m_RG_RawDiffuseOutput);
+            makeHDR("RTXDIRawSpecularOutput", m_RG_RawSpecularOutput);
+            makeHDR("RTXDIDiffuseOutput", g_RG_RTXDIDiffuseOutput);
+            makeHDR("RTXDISpecularOutput", g_RG_RTXDISpecularOutput);
+        }
+        else
+        {
+            // Non-denoised path: DI output textures read by DeferredRenderer
+            auto makeHDR = [&](const char* name, RGTextureHandle& h) {
                 RGTextureDesc desc;
-                desc.m_NvrhiDesc.width  = width;
+                desc.m_NvrhiDesc.width = width;
                 desc.m_NvrhiDesc.height = height;
-                desc.m_NvrhiDesc.format = nvrhi::Format::R32_FLOAT;
-                desc.m_NvrhiDesc.isUAV  = true;
+                desc.m_NvrhiDesc.format = Renderer::HDR_COLOR_FORMAT;
+                desc.m_NvrhiDesc.isUAV = true;
                 desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-                desc.m_NvrhiDesc.debugName    = "RTXDILinearDepth";
-                renderGraph.DeclareTexture(desc, g_RG_RTXDILinearDepth);
-            }
+                desc.m_NvrhiDesc.debugName = name;
+                renderGraph.DeclareTexture(desc, h);
+                };
+            makeHDR("RTXDIDIOutput", g_RG_RTXDIDIOutput);
+            makeHDR("RTXDISpecularOutput", g_RG_RTXDISpecularOutput);
         }
 
         // ------------------------------------------------------------------
@@ -795,41 +792,6 @@ public:
             desc.m_NvrhiDesc.isRenderTarget = true;
             desc.m_NvrhiDesc.debugName    = "RTXDIDIComposited";
             renderGraph.DeclareTexture(desc, g_RG_RTXDIDIComposited);
-        }
-
-        // RELAX raw inputs (only allocated when denoising enabled)
-        if (renderer->m_EnableReSTIRDIRelaxDenoising)
-        {
-            auto makeHDR = [&](const char* name, RGTextureHandle& h) {
-                RGTextureDesc desc;
-                desc.m_NvrhiDesc.width  = width;
-                desc.m_NvrhiDesc.height = height;
-                desc.m_NvrhiDesc.format = nvrhi::Format::RGBA16_FLOAT;
-                desc.m_NvrhiDesc.isUAV  = true;
-                desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-                desc.m_NvrhiDesc.debugName    = name;
-                renderGraph.DeclareTexture(desc, h);
-            };
-            makeHDR("RTXDIRawDiffuseOutput",  m_RG_RawDiffuseOutput);
-            makeHDR("RTXDIRawSpecularOutput", m_RG_RawSpecularOutput);
-            makeHDR("RTXDIDiffuseOutput",     g_RG_RTXDIDiffuseOutput);
-            makeHDR("RTXDISpecularOutput",    g_RG_RTXDISpecularOutput);
-        }
-        else
-        {
-            // Non-denoised path: DI output textures read by DeferredRenderer
-            auto makeHDR = [&](const char* name, RGTextureHandle& h) {
-                RGTextureDesc desc;
-                desc.m_NvrhiDesc.width  = width;
-                desc.m_NvrhiDesc.height = height;
-                desc.m_NvrhiDesc.format = Renderer::HDR_COLOR_FORMAT;
-                desc.m_NvrhiDesc.isUAV  = true;
-                desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-                desc.m_NvrhiDesc.debugName    = name;
-                renderGraph.DeclareTexture(desc, h);
-            };
-            makeHDR("RTXDIDIOutput",       g_RG_RTXDIDIOutput);
-            makeHDR("RTXDISpecularOutput", g_RG_RTXDISpecularOutput);
         }
 
         // Light data buffer (PolymorphicLightInfo per light, written by PrepareLights)
@@ -1167,7 +1129,7 @@ public:
         // u17 = u_DirectLightingRaw
         // u18 = u_IndirectLightingRaw
         // u20 = u_PSRDepth
-        // u21 = u_PSRNormalRoughness (= DenoiserNormalRoughness)
+        // u21 = u_PSRNormalRoughness
         // u22 = u_PSRMotionVectors
         // u23 = u_PSRHitT
         // u24 = u_PSRDiffuseAlbedo
@@ -1282,7 +1244,16 @@ public:
 
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(denoiserNRTex);
+            ppFbDesc.setDepthAttachment(depthTex);
             nvrhi::FramebufferHandle ppFb = device->createFramebuffer(ppFbDesc);
+
+            // Surfaces Pass (Stencil == 1)
+            nvrhi::DepthStencilState ds;
+            ds.depthTestEnable = false;
+            ds.depthWriteEnable = false;
+            ds.stencilEnable = true;
+            ds.stencilRefValue = 1;
+            ds.frontFaceStencil.stencilFunc = nvrhi::ComparisonFunc::Equal;
 
             renderer->AddFullScreenPass({
                 .commandList    = commandList,
@@ -1290,6 +1261,7 @@ public:
                 .bindingSetDesc = ppBset,
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,
+                .depthStencilState = &ds,
             });
         }
 
@@ -1552,7 +1524,16 @@ public:
 
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(compositedTex);
+            ppFbDesc.setDepthAttachment(depthTex);
             nvrhi::FramebufferHandle ppFb = device->createFramebuffer(ppFbDesc);
+
+            // Surfaces Pass (Stencil == 1)
+            nvrhi::DepthStencilState ds;
+            ds.depthTestEnable = false;
+            ds.depthWriteEnable = false;
+            ds.stencilEnable = true;
+            ds.stencilRefValue = 1;
+            ds.frontFaceStencil.stencilFunc = nvrhi::ComparisonFunc::Equal;
 
             renderer->AddFullScreenPass({
                 .commandList    = commandList,
@@ -1560,6 +1541,7 @@ public:
                 .bindingSetDesc = compBset,
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,
+                .depthStencilState = &ds
             });
         }
 

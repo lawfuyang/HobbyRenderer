@@ -101,7 +101,7 @@ StructuredBuffer<VertexQuantized>           t_SceneVertices             : regist
 // u17 = u_DirectLightingRaw
 // u18 = u_IndirectLightingRaw
 // u20 = u_PSRDepth
-// u21 = u_PSRNormalRoughness (= DenoiserNormalRoughness)
+// u21 = u_PSRNormalRoughness
 // u22 = u_PSRMotionVectors
 // u23 = u_PSRHitT
 // u24 = u_PSRDiffuseAlbedo
