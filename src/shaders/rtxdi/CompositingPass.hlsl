@@ -65,8 +65,6 @@ float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target
                  + specular_illumination.rgb * max(float3(0.01f, 0.01f, 0.01f), specularF0)
                  + emissive;
 
-    color = diffuseAlbedo;
-
     if (any(isnan(color)))
         color = float3(1.0f, 0.0f, 0.0f);
 

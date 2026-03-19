@@ -1068,9 +1068,9 @@ public:
         nvrhi::TextureHandle compositedTex    = renderGraph.GetTexture(g_RG_RTXDIDIComposited,   RGResourceAccessMode::Write);
 
         // Light buffers
-        nvrhi::BufferHandle  neighborOffsetsBuf  = renderGraph.GetBuffer(m_RG_NeighborOffsetsBuffer, RGResourceAccessMode::Read);
-        nvrhi::BufferHandle  risBuffer           = renderGraph.GetBuffer(m_RG_RISBuffer,             RGResourceAccessMode::Read);
-        nvrhi::BufferHandle  lightReservoirBuf   = renderGraph.GetBuffer(g_RG_RTXDILightReservoirBuffer, RGResourceAccessMode::Read);
+        nvrhi::BufferHandle  neighborOffsetsBuf  = renderGraph.GetBuffer(m_RG_NeighborOffsetsBuffer, m_AlbedoHistoryIsNew ?  RGResourceAccessMode::Write : RGResourceAccessMode::Read);
+        nvrhi::BufferHandle  risBuffer           = renderGraph.GetBuffer(m_RG_RISBuffer,             RGResourceAccessMode::Write);
+        nvrhi::BufferHandle  lightReservoirBuf   = renderGraph.GetBuffer(g_RG_RTXDILightReservoirBuffer, RGResourceAccessMode::Write);
         nvrhi::BufferHandle  risLightDataBuf     = renderGraph.GetBuffer(m_RG_RISLightDataBuffer,    RGResourceAccessMode::Write);
         nvrhi::TextureHandle localLightPDFTex    = renderGraph.GetTexture(m_RG_LocalLightPDFTexture, RGResourceAccessMode::Write);
         nvrhi::TextureHandle envLightPDFTex      = renderGraph.GetTexture(m_RG_EnvLightPDFTexture,   RGResourceAccessMode::Write);
