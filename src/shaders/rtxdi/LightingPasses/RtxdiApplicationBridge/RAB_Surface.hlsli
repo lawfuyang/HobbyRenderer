@@ -240,7 +240,7 @@ float3 RAB_SurfaceEvaluateBrdfTimesNoL(RAB_Surface surface, float3 L)
     if (dot(L, surface.geoNormal) <= 0)
         return 0;
 
-    float d = Lambert(N, -L);
+    float d = Lambert(N, L);
     float3 s = float3(0.0f, 0.0f, 0.0f);
     if (surface.material.roughness >= kMinRoughness)
         s = GGXTimesNdotL_Exact(V, L, N, max(surface.material.roughness, kMinRoughness), surface.material.specularF0);
@@ -338,7 +338,7 @@ float3 RAB_SurfaceEvaluateBsdfTimesNoL(RAB_Surface surface, float3 L, bool isDel
     }
     else
     {
-        d = Lambert(N, -L);
+        d = Lambert(N, L);
         if (surface.material.roughness >= kMinRoughness)
         s = GGXTimesNdotL_Exact(V, L, N, surface.material.roughness, surface.material.specularF0);
     }

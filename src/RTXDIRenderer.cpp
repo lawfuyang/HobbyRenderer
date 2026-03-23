@@ -848,10 +848,12 @@ public:
         const RTXDI_ReservoirBufferParameters rbp = m_Context->GetReservoirBufferParameters();
         const RTXDI_RuntimeParameters         rtp = m_Context->GetRuntimeParams();
         const RTXDI_DIBufferIndices          bix = m_Context->GetBufferIndices();
-        // Use the light buffer params cached at PostSceneLoad (scene lights are static).
-        const RTXDI_LightBufferParameters&    lbp            = m_CachedLightBufferParams;
-        const std::vector<PolymorphicLightInfo>& primitiveLights = m_CachedPrimitiveLights;
-
+        // Rebuild per-frame so directional light direction tracks live m_SunDirection.
+        // (BuildLightBufferParams overrides direction1 with the current sun direction
+        //  before returning; this is cheap since there are only a handful of lights.)
+        std::vector<PolymorphicLightInfo> primitiveLights;
+        const RTXDI_LightBufferParameters frameLBP = BuildLightBufferParams(primitiveLights);
+        const RTXDI_LightBufferParameters& lbp = frameLBP;
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
@@ -1737,7 +1739,19 @@ private:
                 continue;
 
             if (light.m_Type == Scene::Light::Directional)
+            {
+                // Override direction1 with the live m_SunDirection so that RTXDI
+                // directional light tracks UI sun changes (instead of the static
+                // scene-file node rotation baked at load time).
+                // NOTE: m_SunDirection points TOWARD the sun, but PolymorphicLight's
+                // DirectionalLight::direction is the light's EMISSION direction
+                // (from sun toward the scene). We must negate it.
+                const Vector3& sd = renderer->m_Scene.m_SunDirection;
+                float len = std::sqrt(sd.x*sd.x + sd.y*sd.y + sd.z*sd.z);
+                if (len > 1e-6f)
+                    info.direction1 = PackNormalizedVector({ -sd.x/len, -sd.y/len, -sd.z/len });
                 infiniteLights.push_back(info);
+            }
             else
                 localLights.push_back(info);
         }

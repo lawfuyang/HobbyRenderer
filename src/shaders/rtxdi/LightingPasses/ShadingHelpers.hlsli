@@ -30,7 +30,7 @@ struct SplitBrdf
 SplitBrdf EvaluateBrdfPT(RAB_Surface surface, float3 N, float3 V, float3 L)
 {
 	SplitBrdf brdf = (SplitBrdf)0;
-    brdf.demodulatedDiffuse = Lambert(surface.normal, -L);
+    brdf.demodulatedDiffuse = Lambert(surface.normal, L);
     brdf.specular = GGXTimesNdotL_Exact(V, L, surface.normal, max(surface.material.roughness, kMinRoughness), surface.material.specularF0);
     return brdf;
 }
@@ -42,7 +42,7 @@ SplitBrdf EvaluateBrdf(RAB_Surface surface, float3 samplePosition)
     float3 L = normalize(samplePosition - surface.worldPos);
 
     SplitBrdf brdf;
-    brdf.demodulatedDiffuse = Lambert(surface.normal, -L);
+    brdf.demodulatedDiffuse = Lambert(surface.normal, L);
     if (surface.material.roughness < kMinRoughness)
         brdf.specular = 0;
     else
