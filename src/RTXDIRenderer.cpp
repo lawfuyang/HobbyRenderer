@@ -976,6 +976,14 @@ public:
             localLightPDFTex,
             nvrhi::TextureSubresourceSet(0, 1, 0, 1),
             nvrhi::Color(0.f));
+
+        // Bruneton sky path has no BuildEnvLightPDF pass writing mip0, so initialize it explicitly.
+        // Uniform 1.0 mip0 gives uniform environment sampling; SPD then builds the mip chain.
+        commandList->clearTextureFloat(
+            envLightPDFTex,
+            nvrhi::TextureSubresourceSet(0, 1, 0, 1),
+            nvrhi::Color(1.f));
+
         nvrhi::BufferHandle  prepareLightsTaskBuf= renderGraph.GetBuffer(m_RG_PrepareLightsTasks,    RGResourceAccessMode::Write);
         nvrhi::BufferHandle  primitiveLightBuf   = renderGraph.GetBuffer(m_RG_PrimitiveLightBuffer,   RGResourceAccessMode::Write);
         // secondaryGBufBuf removed — ReSTIR GI / BrdfRayTracing not dispatched
