@@ -139,7 +139,6 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings)
 
     settings.isHistoryConfidenceAvailable        = false;
     settings.isDisocclusionThresholdMixAvailable = false;
-    settings.isBaseColorMetalnessAvailable       = false;
 
     // Sky pixels are written as 1e6 in GenerateViewZ — safely outside this range.
     settings.denoisingRange = 1000.0f;

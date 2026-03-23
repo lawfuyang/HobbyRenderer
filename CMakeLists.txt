@@ -30,7 +30,10 @@ function(download_library LIB_NAME LIB_VERSION DOWNLOAD_URL LIB_PATTERN)
             set(NEEDS_DOWNLOAD FALSE)
             message(STATUS "${LIB_NAME} ${INSTALLED_VERSION} already installed, skipping download")
         else()
-            message(STATUS "${LIB_NAME} version mismatch (installed: ${INSTALLED_VERSION}, requested: ${LIB_VERSION})")
+            message(STATUS "${LIB_NAME} version mismatch (installed: ${INSTALLED_VERSION}, requested: ${LIB_VERSION}). Deleting old version and downloading new one...")
+            # Delete the old library directory to clean up
+            file(REMOVE_RECURSE "${LIB_INSTALL_DIR}")
+            file(MAKE_DIRECTORY "${LIB_INSTALL_DIR}")
         endif()
     endif()
     
@@ -133,7 +136,7 @@ set(ML_SRC_DIR "${ML_INSTALL_DIR}/${ML_SUBDIR}")
 # ----------------------------------------------------------------------------
 # NVIDIA REAL-TIME DENOISERS (NRD)
 # ----------------------------------------------------------------------------
-set(NRD_VERSION "4.17.1")
+set(NRD_VERSION "4.17.2")
 set(NRD_URL "https://github.com/NVIDIA-RTX/NRD/archive/refs/tags/v${NRD_VERSION}.zip")
 download_library("NRD" "${NRD_VERSION}" "${NRD_URL}" "NRD-*")
 set(NRD_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/NRD")
