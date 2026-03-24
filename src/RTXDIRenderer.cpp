@@ -354,6 +354,24 @@ public:
     std::vector<PolymorphicLightInfo>    m_CachedPrimitiveLights;
 
     // ------------------------------------------------------------------
+    // Triangle emissive light data — prepared once at PostSceneLoad.
+    // Triangle lights are never streamed in/out so tasks are static.
+    // ------------------------------------------------------------------
+    // One PrepareLightsTask per emissive mesh geometry (covers all its triangles).
+    std::vector<PrepareLightsTask>       m_CachedTriangleLightTasks;
+    // Total number of emissive triangles across all emissive mesh geometries.
+    uint32_t                             m_TotalEmissiveTriangles = 0;
+    // Per-instance geometry-to-light mapping: geometryInstanceIndex -> firstLightBufferOffset.
+    // RTXDI_INVALID_LIGHT_INDEX (0xFFFFFFFF) means not emissive.
+    std::vector<uint32_t>                m_CachedGeometryInstanceToLight;
+
+    // Cached sun direction from last frame — used to detect changes and
+    // trigger a rebuild of the analytical light buffer params.
+    Vector3                              m_CachedSunDirection{ 0.f, 0.f, 0.f };
+    // True when analytical light params need to be rebuilt this frame.
+    bool                                 m_AnalyticalLightsDirty = true;
+
+    // ------------------------------------------------------------------
     // RTXDI context (owns frame-index tracking and buffer-index bookkeeping)
     // ------------------------------------------------------------------
     std::unique_ptr<rtxdi::ReSTIRDIContext> m_Context;
@@ -443,9 +461,79 @@ public:
         ScopedCommandList scopeCl{ cl, "RTXDI::Initialize" };
         scopeCl->buildTopLevelAccelStructFromBuffer(m_TLASHistory, renderer->m_Scene.m_RTInstanceDescBuffer, 0, (uint32_t)renderer->m_Scene.m_RTInstanceDescs.size());
 
-        // Build and cache light buffer params — scene lights are static so this
-        // only needs to happen once after the scene is loaded.
+        // Build and cache light buffer params — analytical scene lights are static
+        // so this only needs to happen once after the scene is loaded.
         m_CachedLightBufferParams = BuildLightBufferParams(m_CachedPrimitiveLights);
+
+        // ------------------------------------------------------------------
+        // Build triangle emissive light tasks — prepared once at PostSceneLoad
+        // because triangle lights are never streamed in/out.
+        // ------------------------------------------------------------------
+        {
+            Scene& scene = renderer->m_Scene;
+
+            // Count total geometry instances (one per primitive across all nodes)
+            const uint32_t totalGeometryInstances = static_cast<uint32_t>(scene.m_InstanceData.size());
+            m_CachedGeometryInstanceToLight.assign(totalGeometryInstances, RTXDI_INVALID_LIGHT_INDEX);
+
+            // Assign m_FirstGeometryInstanceIndex for each instance.
+            // In HobbyRenderer, each PerInstanceData corresponds to exactly one primitive
+            // (one geometry sub-mesh), so geometryIndex is always 0 and
+            // m_FirstGeometryInstanceIndex == the instance's own index in m_InstanceData.
+            for (uint32_t i = 0; i < totalGeometryInstances; ++i)
+                scene.m_InstanceData[i].m_FirstGeometryInstanceIndex = i;
+
+            // Upload the updated m_FirstGeometryInstanceIndex values to the GPU buffer.
+            scopeCl->writeBuffer(scene.m_InstanceDataBuffer,
+                scene.m_InstanceData.data(),
+                scene.m_InstanceData.size() * sizeof(PerInstanceData));
+
+            m_CachedTriangleLightTasks.clear();
+            m_TotalEmissiveTriangles = 0;
+
+            // Walk all instances and build one PrepareLightsTask per emissive primitive.
+            for (uint32_t instanceIdx = 0; instanceIdx < totalGeometryInstances; ++instanceIdx)
+            {
+                const PerInstanceData& inst = scene.m_InstanceData[instanceIdx];
+
+                const Scene::Material& cpuMat = scene.m_Materials[inst.m_MaterialIndex];
+                const Vector3& emissive = cpuMat.m_EmissiveFactor;
+                const bool hasEmissiveTexture = (cpuMat.m_EmissiveTexture >= 0);
+                const bool isEmissive = hasEmissiveTexture ||
+                    (emissive.x > 0.f || emissive.y > 0.f || emissive.z > 0.f);
+
+                if (!isEmissive)
+                    continue;
+
+                // Find the MeshData to get the triangle count at LOD 0.
+                const MeshData& meshData = scene.m_MeshData[inst.m_MeshDataIndex];
+                const uint32_t triangleCount = meshData.m_IndexCounts[0] / 3u;
+                if (triangleCount == 0)
+                    continue;
+
+                // Record the geometry-to-light mapping for this instance.
+                // geometryIndex is always 0 (one primitive per PerInstanceData).
+                const uint32_t geometryInstanceIndex = inst.m_FirstGeometryInstanceIndex; // == instanceIdx
+                m_CachedGeometryInstanceToLight[geometryInstanceIndex] = m_TotalEmissiveTriangles;
+
+                // Encode instanceIndex in high 19 bits, geometryIndex (0) in low 12 bits.
+                SDL_assert(instanceIdx < (1u << 19));
+                PrepareLightsTask task{};
+                task.instanceAndGeometryIndex = (instanceIdx << 12) | 0u;
+                task.lightBufferOffset        = m_TotalEmissiveTriangles;
+                task.triangleCount            = triangleCount;
+                task.previousLightBufferOffset = -1; // static — no temporal tracking needed
+
+                m_CachedTriangleLightTasks.push_back(task);
+                m_TotalEmissiveTriangles += triangleCount;
+            }
+
+            SDL_Log("[RTXDI] Triangle emissive lights: %u triangles across %u meshes",
+                m_TotalEmissiveTriangles, (uint32_t)m_CachedTriangleLightTasks.size());
+        }
+
+        // Mark analytical lights dirty so the first frame rebuilds them.
+        m_AnalyticalLightsDirty = true;
     }
 
     // ------------------------------------------------------------------
@@ -631,9 +719,11 @@ public:
         // Sized so the Z-curve can address every local light in the scene.
         // Light count is fixed post-load, so this is created once.
         {
-            // Match FullSample semantics: PrepareLights writes one flux value per prepared light entry,
-            // including primitive infinite lights. Size mip-0 to cover all prepared lights.
-            const uint32_t preparedLightCount = std::max<uint32_t>(1u, static_cast<uint32_t>(m_CachedPrimitiveLights.size()));
+            // Total local lights = triangle emissive lights + analytical local lights.
+            // Infinite/env lights are NOT included in the local light PDF texture.
+            const uint32_t analyticalLocalLights = static_cast<uint32_t>(m_CachedLightBufferParams.localLightBufferRegion.numLights);
+            const uint32_t preparedLightCount = std::max<uint32_t>(1u,
+                m_TotalEmissiveTriangles + analyticalLocalLights);
 
             // Find smallest power-of-2 S such that S*S >= preparedLightCount.
             m_PDFTexSize = 1u;
@@ -739,8 +829,11 @@ public:
         }
 
         // Light data buffer (PolymorphicLightInfo per light, written by PrepareLights)
+        // Must hold: triangle lights + analytical local lights + infinite lights + env light.
         {
-            const uint32_t maxLights = std::max(renderer->m_Scene.m_LightCount * 2u, 1u);
+            const uint32_t analyticalLights = static_cast<uint32_t>(m_CachedPrimitiveLights.size()) + 1u; // +1 for env
+            const uint32_t maxLights = std::max(
+                m_TotalEmissiveTriangles + analyticalLights, 1u);
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(PolymorphicLightInfo);
             bd.m_NvrhiDesc.structStride = sizeof(PolymorphicLightInfo);
@@ -752,7 +845,9 @@ public:
 
         // Light index mapping buffer (uint per light)
         {
-            const uint32_t maxLights = std::max(renderer->m_Scene.m_LightCount * 2u, 1u);
+            const uint32_t analyticalLights = static_cast<uint32_t>(m_CachedPrimitiveLights.size()) + 1u;
+            const uint32_t maxLights = std::max(
+                m_TotalEmissiveTriangles + analyticalLights, 1u);
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(uint32_t);
             bd.m_NvrhiDesc.format       = nvrhi::Format::R32_UINT;
@@ -776,9 +871,14 @@ public:
             renderGraph.DeclareBuffer(bd, m_RG_GeometryInstanceToLight);
         }
 
-        // PrepareLights task buffer (PrepareLightsTask per emissive triangle)
+        // PrepareLights task buffer — holds triangle tasks + analytical light tasks.
+        // Triangle tasks are static (built at PostSceneLoad); analytical tasks are rebuilt
+        // when lights are dirty. Total = triangle mesh tasks + analytical light count.
         {
-            const uint32_t maxTasks = std::max(renderer->m_Scene.m_LightCount, 1u);
+            const uint32_t maxTasks = std::max(
+                static_cast<uint32_t>(m_CachedTriangleLightTasks.size()) +
+                static_cast<uint32_t>(m_CachedPrimitiveLights.size()),
+                1u);
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxTasks) * sizeof(PrepareLightsTask);
             bd.m_NvrhiDesc.structStride = sizeof(PrepareLightsTask);
@@ -791,7 +891,7 @@ public:
         // Primitive light buffer — CPU-converted analytical lights (directional/point/spot).
         // Written each frame via commandList->writeBuffer; read by PrepareLights.hlsl at t1.
         {
-            const uint32_t maxLights = std::max(renderer->m_Scene.m_LightCount, 1u);
+            const uint32_t maxLights = std::max(static_cast<uint32_t>(m_CachedPrimitiveLights.size()), 1u);
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(PolymorphicLightInfo);
             bd.m_NvrhiDesc.structStride = sizeof(PolymorphicLightInfo);
@@ -846,12 +946,35 @@ public:
         const RTXDI_ReservoirBufferParameters rbp = m_Context->GetReservoirBufferParameters();
         const RTXDI_RuntimeParameters         rtp = m_Context->GetRuntimeParams();
         const RTXDI_DIBufferIndices          bix = m_Context->GetBufferIndices();
-        // Rebuild per-frame so directional light direction tracks live m_SunDirection.
-        // (BuildLightBufferParams overrides direction1 with the current sun direction
-        //  before returning; this is cheap since there are only a handful of lights.)
-        std::vector<PolymorphicLightInfo> primitiveLights;
-        const RTXDI_LightBufferParameters frameLBP = BuildLightBufferParams(primitiveLights);
-        const RTXDI_LightBufferParameters& lbp = frameLBP;
+
+        // Rebuild analytical light buffer params only when any light node is dirty
+        // (includes sun orientation/pitch changes tracked via m_LightsDirty, and
+        //  the first frame after PostSceneLoad via m_AnalyticalLightsDirty).
+        // Triangle lights are static and never need a per-frame rebuild.
+        {
+            const Vector3& sunDir = renderer->m_Scene.m_SunDirection;
+            const bool sunChanged = (sunDir.x != m_CachedSunDirection.x ||
+                                     sunDir.y != m_CachedSunDirection.y ||
+                                     sunDir.z != m_CachedSunDirection.z);
+            if (m_AnalyticalLightsDirty || renderer->m_Scene.m_LightsDirty || sunChanged)
+            {
+                m_CachedLightBufferParams = BuildLightBufferParams(m_CachedPrimitiveLights);
+                m_CachedSunDirection      = sunDir;
+                m_AnalyticalLightsDirty   = false;
+            }
+        }
+
+        // Merge triangle lights into the light buffer layout.
+        // Triangle lights occupy [0, m_TotalEmissiveTriangles) in the local light region.
+        // Analytical local lights follow immediately after.
+        RTXDI_LightBufferParameters lbp = m_CachedLightBufferParams;
+        lbp.localLightBufferRegion.firstLightIndex = 0u;
+        lbp.localLightBufferRegion.numLights = m_TotalEmissiveTriangles + m_CachedLightBufferParams.localLightBufferRegion.numLights;
+        lbp.infiniteLightBufferRegion.firstLightIndex = lbp.localLightBufferRegion.numLights;
+        lbp.infiniteLightBufferRegion.numLights = m_CachedLightBufferParams.infiniteLightBufferRegion.numLights;
+        lbp.environmentLightParams.lightIndex = lbp.infiniteLightBufferRegion.firstLightIndex + lbp.infiniteLightBufferRegion.numLights;
+        lbp.environmentLightParams.lightPresent = m_CachedLightBufferParams.environmentLightParams.lightPresent;
+
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
@@ -1254,76 +1377,98 @@ public:
 
         // ------------------------------------------------------------------
         // PrepareLights
-        // Uploads CPU-converted analytical lights (directional/point/spot) to
-        // the primitive light buffer, then dispatches PrepareLights.hlsl which
-        // copies them into the main light data buffer and writes mip-0 PDF flux.
+        // Combines triangle emissive light tasks (static, built at PostSceneLoad)
+        // with analytical light tasks (rebuilt when lights are dirty).
+        //
+        // Layout in the light data buffer:
+        //   [0 .. m_TotalEmissiveTriangles)          — triangle lights
+        //   [m_TotalEmissiveTriangles .. numLocal)   — analytical local lights
+        //   [numLocal .. numLocal+numInfinite)        — infinite lights (directional)
+        //   [numLocal+numInfinite]                    — environment light (written directly)
+        //
+        // The combined task list is sorted by lightBufferOffset so FindTask()
+        // binary search works correctly.
         // ------------------------------------------------------------------
-        if (!primitiveLights.empty())
         {
             PROFILE_SCOPED("PrepareLights");
 
-            const uint32_t numPrimitiveLights = static_cast<uint32_t>(primitiveLights.size());
+            // ---- Build combined task list ----
+            // Triangle tasks are already sorted by lightBufferOffset (built in PostSceneLoad).
+            // Analytical tasks follow immediately after triangle lights.
+            std::vector<PrepareLightsTask> allTasks;
+            allTasks.reserve(m_CachedTriangleLightTasks.size() + m_CachedPrimitiveLights.size());
 
-            // Upload CPU-converted analytical lights to the primitive light buffer.
-            commandList->writeBuffer(primitiveLightBuf,
-                primitiveLights.data(),
-                primitiveLights.size() * sizeof(PolymorphicLightInfo));
+            // 1. Triangle light tasks (static, lightBufferOffset starts at 0)
+            allTasks.insert(allTasks.end(), m_CachedTriangleLightTasks.begin(), m_CachedTriangleLightTasks.end());
 
-            // Build one PrepareLightsTask per analytical light with TASK_PRIMITIVE_LIGHT_BIT set.
-            // Match FullSample semantics:
-            //  - primitive source index is encoded in instanceAndGeometryIndex low bits,
-            //  - lightBufferOffset is the destination slot in RTXDILightDataBuffer,
-            //  - triangleCount must be 1 so FindTask() allocates one thread for each primitive.
+            // 2. Analytical light tasks (TASK_PRIMITIVE_LIGHT_BIT set)
+            //    lightBufferOffset starts right after all triangle lights.
+            const uint32_t analyticalBaseOffset = m_TotalEmissiveTriangles;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(m_CachedPrimitiveLights.size()); ++i)
             {
-                std::vector<PrepareLightsTask> tasks(numPrimitiveLights);
-                for (uint32_t i = 0; i < numPrimitiveLights; ++i)
-                {
-                    tasks[i].instanceAndGeometryIndex = TASK_PRIMITIVE_LIGHT_BIT | i;
-                    tasks[i].triangleCount            = 1; // technically zero, but we need to allocate 1 thread in the grid to process this light
-                    tasks[i].lightBufferOffset        = i;
-                    tasks[i].previousLightBufferOffset = -1; // no temporal tracking yet
-                }
-                commandList->writeBuffer(prepareLightsTaskBuf,
-                    tasks.data(),
-                    tasks.size() * sizeof(PrepareLightsTask));
+                PrepareLightsTask task{};
+                task.instanceAndGeometryIndex  = TASK_PRIMITIVE_LIGHT_BIT | i;
+                task.triangleCount             = 1; // one thread per analytical light
+                task.lightBufferOffset         = analyticalBaseOffset + i;
+                task.previousLightBufferOffset = -1;
+                allTasks.push_back(task);
             }
 
-            PrepareLightsConstants plCB{};
-            plCB.numTasks                  = numPrimitiveLights;
-            plCB.currentFrameLightOffset   = 0u;
-            plCB.previousFrameLightOffset  = 0u;
+            const uint32_t totalThreads = m_TotalEmissiveTriangles + static_cast<uint32_t>(m_CachedPrimitiveLights.size());
 
-            nvrhi::BufferHandle plCBHandle = device->createBuffer(
-                nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(PrepareLightsConstants), "PrepareLightsCB", 1));
-            commandList->writeBuffer(plCBHandle, &plCB, sizeof(plCB));
-
-            nvrhi::BindingSetDesc plBset;
-            plBset.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, plCBHandle),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(0,  prepareLightsTaskBuf),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(1,  primitiveLightBuf),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(26, renderer->m_Scene.m_InstanceDataBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(27, renderer->m_Scene.m_MeshDataBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(28, renderer->m_Scene.m_MaterialConstantsBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(29, renderer->m_Scene.m_IndexBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(30, renderer->m_Scene.m_VertexBufferQuantized),
-                nvrhi::BindingSetItem::StructuredBuffer_UAV(0,  lightDataBuf),
-                nvrhi::BindingSetItem::TypedBuffer_UAV(1,       lightIndexMapBuf),
-                nvrhi::BindingSetItem::Texture_UAV(4, localLightPDFTex,
-                    nvrhi::Format::UNKNOWN,
-                    nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
-            };
-            renderer->AddComputePass({
-                .commandList    = commandList,
-                .shaderName     = "rtxdi/PrepareLights_main",
-                .bindingSetDesc = plBset,
-                .bIncludeBindlessResources = true,
-                .dispatchParams = {
-                    .x = DivideAndRoundUp(numPrimitiveLights, 256u),
-                    .y = 1u,
-                    .z = 1u
+            if (totalThreads > 0)
+            {
+                // Upload geometry-to-light mapping (static, built at PostSceneLoad).
+                if (!m_CachedGeometryInstanceToLight.empty())
+                {
+                    commandList->writeBuffer(geoInstToLightBuf, m_CachedGeometryInstanceToLight.data(), m_CachedGeometryInstanceToLight.size() * sizeof(uint32_t));
                 }
-            });
+
+                // Upload combined task buffer.
+                commandList->writeBuffer(prepareLightsTaskBuf, allTasks.data(), allTasks.size() * sizeof(PrepareLightsTask));
+
+                // Upload analytical (primitive) lights.
+                if (!m_CachedPrimitiveLights.empty())
+                {
+                    commandList->writeBuffer(primitiveLightBuf, m_CachedPrimitiveLights.data(), m_CachedPrimitiveLights.size() * sizeof(PolymorphicLightInfo));
+                }
+
+                PrepareLightsConstants plCB{};
+                plCB.numTasks                = static_cast<uint32_t>(allTasks.size());
+                plCB.currentFrameLightOffset = 0u;
+                plCB.previousFrameLightOffset = 0u;
+
+                nvrhi::BufferHandle plCBHandle = device->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(PrepareLightsConstants), "PrepareLightsCB", 1));
+                commandList->writeBuffer(plCBHandle, &plCB, sizeof(plCB));
+
+                nvrhi::BindingSetDesc plBset;
+                plBset.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, plCBHandle),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(0,  prepareLightsTaskBuf),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(1,  primitiveLightBuf),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(26, renderer->m_Scene.m_InstanceDataBuffer),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(27, renderer->m_Scene.m_MeshDataBuffer),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(28, renderer->m_Scene.m_MaterialConstantsBuffer),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(29, renderer->m_Scene.m_IndexBuffer),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(30, renderer->m_Scene.m_VertexBufferQuantized),
+                    nvrhi::BindingSetItem::StructuredBuffer_UAV(0,  lightDataBuf),
+                    nvrhi::BindingSetItem::TypedBuffer_UAV(1,       lightIndexMapBuf),
+                    nvrhi::BindingSetItem::Texture_UAV(4, localLightPDFTex,
+                        nvrhi::Format::UNKNOWN,
+                        nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
+                };
+                renderer->AddComputePass({
+                    .commandList    = commandList,
+                    .shaderName     = "rtxdi/PrepareLights_main",
+                    .bindingSetDesc = plBset,
+                    .bIncludeBindlessResources = true,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(totalThreads, 256u),
+                        .y = 1u,
+                        .z = 1u
+                    }
+                });
+            }
         }
 
         // ------------------------------------------------------------------
