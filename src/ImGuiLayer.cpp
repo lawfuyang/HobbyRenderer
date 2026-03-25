@@ -162,20 +162,17 @@ void ImGuiLayer::UpdateFrame()
             if (ImGui::TreeNode("Sun Orientation"))
             {
                 bool changed = false;
-                changed |= ImGui::SliderAngle("Yaw", &scene.m_SunYaw, -180.0f, 180.0f);
-                changed |= ImGui::SliderAngle("Pitch", &scene.m_SunPitch, 0.0f, 90.0f);
-                ImGui::Text("Direction: %.2f, %.2f, %.2f", scene.m_SunDirection.x, scene.m_SunDirection.y, scene.m_SunDirection.z);
+                float sunYaw = scene.GetSunYaw();
+                float sunPitch = scene.GetSunPitch();
+                changed |= ImGui::SliderAngle("Yaw", &sunYaw, -180.0f, 180.0f);
+                changed |= ImGui::SliderAngle("Pitch", &sunPitch, 0.0f, 90.0f);
+                Vector3 sunDir = scene.GetSunDirection();
+                ImGui::Text("Direction: %.2f, %.2f, %.2f", sunDir.x, sunDir.y, sunDir.z);
 
                 if (changed)
                 {
                     scene.m_LightsDirty = true;
-
-                    // Final sun direction for atmosphere (points TOWARDS the sun)
-                    const float pitchRad = scene.m_SunPitch;
-                    const float yawRad = scene.m_SunYaw;
-                    scene.m_SunDirection.x = cosf(pitchRad) * sinf(yawRad);
-                    scene.m_SunDirection.y = sinf(pitchRad);
-                    scene.m_SunDirection.z = cosf(pitchRad) * cosf(yawRad);
+                    scene.SetSunPitchYaw(sunPitch, sunYaw);
                 }
 
                 ImGui::TreePop();

@@ -952,7 +952,7 @@ public:
         //  the first frame after PostSceneLoad via m_AnalyticalLightsDirty).
         // Triangle lights are static and never need a per-frame rebuild.
         {
-            const Vector3& sunDir = renderer->m_Scene.m_SunDirection;
+            const Vector3 sunDir = renderer->m_Scene.GetSunDirection();
             const bool sunChanged = (sunDir.x != m_CachedSunDirection.x ||
                                      sunDir.y != m_CachedSunDirection.y ||
                                      sunDir.z != m_CachedSunDirection.z);
@@ -1020,7 +1020,7 @@ public:
         g_Const.sceneConstants.enableAlphaTestedGeometry = 1u;
         g_Const.sceneConstants.enableTransparentGeometry = 0u;
         g_Const.sceneConstants.sunIntensity              = renderer->m_Scene.GetSunIntensity();
-        g_Const.sceneConstants.sunDirection              = renderer->m_Scene.m_SunDirection;
+        g_Const.sceneConstants.sunDirection              = renderer->m_Scene.GetSunDirection();
 
         // ---- Light buffer parameters ----
         g_Const.lightBufferParams = lbp;
@@ -1955,16 +1955,9 @@ private:
 
             if (light.m_Type == Scene::Light::Directional)
             {
-                // Override direction1 with the live m_SunDirection so that RTXDI
-                // directional light tracks UI sun changes (instead of the static
-                // scene-file node rotation baked at load time).
-                // NOTE: m_SunDirection points TOWARD the sun, but PolymorphicLight's
-                // DirectionalLight::direction is the light's EMISSION direction
-                // (from sun toward the scene). We must negate it.
-                const Vector3& sd = renderer->m_Scene.m_SunDirection;
-                float len = std::sqrt(sd.x*sd.x + sd.y*sd.y + sd.z*sd.z);
-                if (len > 1e-6f)
-                    info.direction1 = PackNormalizedVector({ -sd.x/len, -sd.y/len, -sd.z/len });
+                // Node rotation is kept in sync by SetSunPitchYaw, so
+                // ConvertAnalyticalLight already produces the correct direction1
+                // from QuatToDir(node.m_Rotation). No override needed.
                 infiniteLights.push_back(info);
             }
             else

@@ -48,7 +48,7 @@ public:
         SkyConstants scb{};
         scb.m_View = renderer->m_Scene.m_View;
         scb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
-        scb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        scb.m_SunDirection = renderer->m_Scene.GetSunDirection();
         scb.m_SunIntensity = renderer->m_Scene.GetSunIntensity();
         scb.m_RenderingMode = (uint32_t)renderer->m_Mode;
         

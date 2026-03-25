@@ -403,7 +403,7 @@ protected:
         cb.m_OpaqueColorDimensions = Vector2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height };
         cb.m_OpaqueColorMipCount = opaqueColor->getDesc().mipLevels;
         cb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;
-        cb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        cb.m_SunDirection = renderer->m_Scene.GetSunDirection();
         cb.m_RenderingMode = (uint32_t)renderer->m_Mode;
         cb.m_RadianceMipCount = CommonResources::GetInstance().m_RadianceMipCount;
 

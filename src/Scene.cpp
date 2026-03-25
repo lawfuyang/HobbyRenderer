@@ -355,28 +355,6 @@ void Scene::FinalizeLoadedScene()
     PushInstances(transparentStatic);
 	PushInstances(transparentDynamic);
 
-	// init sun light direction and sun angles based on the first directional light in the scene
-	{
-		Scene::Light& dirLight = m_Lights.at(0);
-		SDL_assert(dirLight.m_Type == Scene::Light::Type::Directional);
-		SDL_assert(dirLight.m_NodeIndex != -1);
-		Scene::Node& node = m_Nodes.at(dirLight.m_NodeIndex);
-
-		DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&node.m_WorldTransform);
-		DirectX::XMVECTOR fwd = DirectX::XMVector3Normalize(DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), world));
-		DirectX::XMFLOAT3 fwd3; DirectX::XMStoreFloat3(&fwd3, fwd);
-
-		float dx = fwd3.x;
-		float dy = fwd3.y;
-		float dz = fwd3.z;
-
-		float pitchRad = std::asin(std::clamp(dy, -1.0f, 1.0f));
-		float yawRad = std::atan2(dx, dz);
-		m_SunPitch = pitchRad;
-		m_SunYaw = yawRad;
-		m_SunDirection = Vector3{ fwd3.x, fwd3.y, fwd3.z };
-	}
-
 	for (const Scene::Node& node : m_Nodes)
 	{
 		const DirectX::BoundingSphere nodeSphere(node.m_Center, node.m_Radius);

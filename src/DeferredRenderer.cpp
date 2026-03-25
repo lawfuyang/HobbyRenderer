@@ -61,7 +61,7 @@ public:
         DeferredLightingConstants dcb{};
         dcb.m_View = renderer->m_Scene.m_View;
         dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
-        dcb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        dcb.m_SunDirection = renderer->m_Scene.GetSunDirection();
         dcb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;
         dcb.m_RenderingMode = (uint32_t)renderer->m_Mode;
         dcb.m_RadianceMipCount = CommonResources::GetInstance().m_RadianceMipCount;

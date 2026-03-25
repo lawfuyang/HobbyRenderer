@@ -68,7 +68,7 @@ public:
         cb.m_FrameIndex = renderer->m_FrameNumber;
         cb.m_MaxBounces = renderer->m_PathTracerMaxBounces;
         cb.m_Jitter = Vector2{ Halton(m_AccumulationIndex + 1, 2) - 0.5f, Halton(m_AccumulationIndex + 1, 3) - 0.5f };
-        cb.m_SunDirection = renderer->m_Scene.m_SunDirection;
+        cb.m_SunDirection = renderer->m_Scene.GetSunDirection();
         {
             // Sun angular radius for soft shadows — use the directional light's m_AngularSize field.
             // m_Lights[0] is guaranteed to be a directional light (ensured by SortLightsAddDefaultDirectionalLight).

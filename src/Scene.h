@@ -262,10 +262,55 @@ public:
     // Release GPU resources and clear scene data
     void Shutdown();
 
-    // Environment / Atmosphere settings
-    float m_SunPitch = DirectX::XMConvertToRadians(45.0f);
-    float m_SunYaw = 0.0f;
-    Vector3 m_SunDirection = Vector3(0.0f, 1.0f, 0.0f);
+    // Sun direction derived from the first directional light's node world transform.
+    // Convention: returns the direction TOWARD the sun (local +Z of the light node).
+    Vector3 GetSunDirection() const
+    {
+        const Light& dirLight = m_Lights.at(0);
+        SDL_assert(dirLight.m_Type == Light::Directional && dirLight.m_NodeIndex >= 0);
+        const Node& node = m_Nodes.at(dirLight.m_NodeIndex);
+        DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&node.m_WorldTransform);
+        DirectX::XMVECTOR fwd = DirectX::XMVector3Normalize(
+            DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), world));
+        DirectX::XMFLOAT3 f; DirectX::XMStoreFloat3(&f, fwd);
+        return Vector3{ f.x, f.y, f.z };
+    }
+
+    // Sun pitch (elevation angle in radians, 0 = horizon, PI/2 = zenith)
+    float GetSunPitch() const
+    {
+        Vector3 d = GetSunDirection();
+        return std::asin(std::clamp(d.y, -1.0f, 1.0f));
+    }
+
+    // Sun yaw (azimuth angle in radians)
+    float GetSunYaw() const
+    {
+        Vector3 d = GetSunDirection();
+        return std::atan2(d.x, d.z);
+    }
+
+    // Update the directional light node's transform from pitch/yaw angles.
+    // pitch: elevation (radians), yaw: azimuth (radians).
+    void SetSunPitchYaw(float pitch, float yaw)
+    {
+        Light& dirLight = m_Lights.at(0);
+        SDL_assert(dirLight.m_Type == Light::Directional && dirLight.m_NodeIndex >= 0);
+        Node& node = m_Nodes.at(dirLight.m_NodeIndex);
+
+        using namespace DirectX;
+        // XMQuaternionRotationRollPitchYaw expects (pitch, yaw, roll).
+        // Negate pitch because the rotation convention for local +Z pointing
+        // toward the sun needs the X-axis rotation inverted.
+        XMVECTOR quat = XMQuaternionRotationRollPitchYaw(-pitch, yaw, 0.0f);
+        XMStoreFloat4(&node.m_Rotation, quat);
+
+        XMMATRIX localM = XMMatrixRotationQuaternion(quat);
+        XMStoreFloat4x4(&node.m_LocalTransform, localM);
+
+        // Directional light nodes are root nodes (no parent), so world = local.
+        node.m_WorldTransform = node.m_LocalTransform;
+    }
 
     float GetSunIntensity() const { return m_Lights.at(0).m_Intensity; } // 1st light is always the sun
 

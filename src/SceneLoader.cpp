@@ -1061,7 +1061,10 @@ void SceneLoader::SortLightsAddDefaultDirectionalLight(Scene& scene)
 		Scene::Node& lightNode = scene.m_Nodes.emplace_back();
 		lightNode.m_LightIndex = 0;
 
-		const Vector quat = DirectX::XMQuaternionRotationRollPitchYaw(-scene.m_SunPitch, scene.m_SunYaw, 0.0f);
+		// Use default sun angles from DirectionalLight defaults
+		constexpr float defaultPitch = DirectX::XM_PIDIV4; // 45 degrees
+		constexpr float defaultYaw   = 0.0f;
+		const Vector quat = DirectX::XMQuaternionRotationRollPitchYaw(-defaultPitch, defaultYaw, 0.0f);
 		DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
 
 		const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
