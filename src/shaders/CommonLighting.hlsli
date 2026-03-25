@@ -660,14 +660,10 @@ float SampleGGX_VNDF_PDF(float roughness, float3 N, float3 V, float3 L)
 {
     float3 H    = normalize(V + L);
     float NdotH = saturate(dot(N, H));
-    float NdotV = saturate(dot(N, V));
     float VdotH = saturate(dot(V, H));
     float alpha  = roughness * roughness;
-    float alpha2 = alpha * alpha;
     float D      = D_GGX(NdotH, roughness);
-    // VNDF PDF = D * G1(V) * VdotH / NdotV
-    float G1 = 2.0f * NdotV / (NdotV + sqrt(alpha2 + (1.0f - alpha2) * NdotV * NdotV));
-    return D * G1 * VdotH / max(NdotV, 1e-5f);
+    return (VdotH > 0.0f) ? D / (4.0f * VdotH) : 0.0f;
 }
 
 // Evaluate the BRDF weight (reflectance / PDF) for a GGX VNDF-sampled specular bounce.
