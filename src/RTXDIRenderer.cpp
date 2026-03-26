@@ -52,8 +52,8 @@ static constexpr uint32_t k_EnvRISTileSize  = 1024u;
 static constexpr uint32_t k_EnvRISTileCount = 128u;
 // Environment PDF texture: square, power-of-2, equirectangular lat-long.
 static constexpr uint32_t k_EnvPDFTexSize = 1024u;
-// Compact buffer stride: 3 × uint4 per RIS entry (see RTXDIApplicationBridge.hlsli).
-static constexpr uint32_t k_CompactSlotsPerEntry = 3u;
+// Compact buffer stride: 2 x uint4 per RIS entry (see RAB_LightInfo.hlsli).
+static constexpr uint32_t k_CompactSlotsPerEntry = 2u;
 
 // ============================================================================
 
