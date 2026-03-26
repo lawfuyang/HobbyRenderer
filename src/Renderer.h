@@ -211,7 +211,7 @@ struct Renderer
 
     // Rendering options
     bool m_UseMeshletRendering = true;
-    int m_ForcedLOD = -1; // -1 = auto (distance-based LOD); per-LOD BLASes + TLASPatch_CS ensure RT geometry matches rasterized geometry
+    int m_ForcedLOD = 0; // force lod to 0, due to alot of RT related shit which i cant be bothered to fix
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;
     uint32_t m_PathTracerMaxBounces = 8;

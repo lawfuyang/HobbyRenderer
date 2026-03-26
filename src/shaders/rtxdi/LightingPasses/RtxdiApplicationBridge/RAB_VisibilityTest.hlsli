@@ -49,17 +49,13 @@ bool GetConservativeVisibility(RaytracingAccelerationStructure accelStruct, RAB_
 {
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition);
 
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE |
-             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-             RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> rayQuery;
 
     rayQuery.TraceRayInline(accelStruct, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
 
     rayQuery.Proceed();
 
     bool visible = (rayQuery.CommittedStatus() == COMMITTED_NOTHING);
-
-    REPORT_RAY(!visible);
 
     return visible;
 }
@@ -81,17 +77,7 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 // Previous-frame conservative visibility helper (uses previous-frame TLAS).
 bool GetConservativeVisibilityPrevious(RAB_Surface surface, float3 samplePosition)
 {
-    RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition);
-
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE |
-             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-             RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
-
-    rayQuery.TraceRayInline(PrevSceneBVH, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
-
-    rayQuery.Proceed();
-
-    return (rayQuery.CommittedStatus() == COMMITTED_NOTHING);
+    return GetConservativeVisibility(PrevSceneBVH, surface, samplePosition);
 }
 
 // Same as RAB_GetConservativeVisibility but for temporal resampling.
@@ -122,56 +108,30 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure accelStruct, RAB_Surfa
 {
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition, 0.01);
 
-    uint instanceMask = INSTANCE_MASK_OPAQUE;
-    uint rayFlags = RAY_FLAG_NONE;
-
-    if (g_Const.sceneConstants.enableAlphaTestedGeometry)
-        instanceMask |= INSTANCE_MASK_ALPHA_TESTED;
-
-    if (g_Const.sceneConstants.enableTransparentGeometry)
-        instanceMask |= INSTANCE_MASK_TRANSPARENT;
-
-    if (!g_Const.sceneConstants.enableTransparentGeometry && !g_Const.sceneConstants.enableAlphaTestedGeometry)
-        rayFlags |= RAY_FLAG_CULL_NON_OPAQUE;
-
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
+    rayQuery.TraceRayInline(accelStruct, RAY_FLAG_NONE, 0xFF, ray);
 
-    rayQuery.TraceRayInline(accelStruct, rayFlags, instanceMask, ray);
-
+    float3 throughput = 1.0f;
     while (rayQuery.Proceed())
     {
         if (rayQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
         {
-            uint instanceIndex  = rayQuery.CandidateInstanceIndex();
-            uint primitiveIndex = rayQuery.CandidatePrimitiveIndex();
-            float2 bary         = rayQuery.CandidateTriangleBarycentrics();
-
-            PerInstanceData   inst = t_InstanceData[instanceIndex];
-            MeshData          mesh = t_GeometryData[inst.m_MeshDataIndex];
-            MaterialConstants mat  = t_MaterialConstants[inst.m_MaterialIndex];
-
-            if (mat.m_AlphaMode == ALPHA_MODE_MASK)
+            if (considerTransparentMaterial(
+                rayQuery.CandidateInstanceIndex(),
+                rayQuery.CandidateGeometryIndex(),
+                rayQuery.CandidatePrimitiveIndex(),
+                rayQuery.CandidateTriangleBarycentrics(),
+                throughput))
             {
-                TriangleVertices tv   = GetTriangleVertices(primitiveIndex, inst.m_LODIndex, mesh, t_SceneIndices, t_SceneVertices);
-                RayGradients     grad = GetShadowRayGradients(tv, bary, ray.Origin, inst.m_World);
-
-                if (AlphaTestGrad(grad.uv, grad.ddx, grad.ddy, mat))
-                    rayQuery.CommitNonOpaqueTriangleHit(); // opaque texel: blocks light
-                // else: transparent texel — do not commit, continue traversal
-            }
-            else if (mat.m_AlphaMode == ALPHA_MODE_BLEND)
-            {
-                // Do not commit hit; continue through translucent surface
+                rayQuery.CommitNonOpaqueTriangleHit();
             }
         }
     }
 
-    REPORT_RAY(rayQuery.CommittedStatus() != COMMITTED_NOTHING);
-
     if (rayQuery.CommittedStatus() == COMMITTED_NOTHING)
-        return float3(1.0, 1.0, 1.0);
-    else
-        return float3(0.0, 0.0, 0.0);
+        return throughput;
+
+    return 0.0f;
 }
 
 #endif // RAB_VISIBILITY_TEST_HLSLI

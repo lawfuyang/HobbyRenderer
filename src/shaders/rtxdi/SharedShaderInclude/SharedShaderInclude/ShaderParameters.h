@@ -42,12 +42,6 @@
 
 #define BACKGROUND_DEPTH 65504.f
 
-#define RAY_COUNT_TRACED(index) ((index) * 2)
-#define RAY_COUNT_HITS(index) ((index) * 2 + 1)
-
-#define REPORT_RAY(hit) // ray counting removed (PerPassConstants removed)
-
-
 #define INDIRECT_LIGHTING_MODE_NONE 0
 #define INDIRECT_LIGHTING_MODE_BRDF 1
 #define INDIRECT_LIGHTING_MODE_RESTIRGI 2
