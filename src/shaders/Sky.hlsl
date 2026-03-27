@@ -1,5 +1,4 @@
 #define DEFERRED_PASS
-#include "ShaderShared.h"
 #include "Bindless.hlsli"
 #include "Atmosphere.hlsli"
 
