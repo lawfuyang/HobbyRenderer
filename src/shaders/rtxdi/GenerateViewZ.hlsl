@@ -26,7 +26,7 @@ void main(uint2 pixelPos : SV_DispatchThreadID)
     //   linearZ = near * far / (far - rawDepth * (far - near))
     // We use the clip-to-view matrix directly to stay projection-agnostic.
     float4 clipPos = float4(0.0, 0.0, rawDepth, 1.0);
-    float4 viewPos = mul(clipPos, g_Const.view.m_MatClipToView);
+    float4 viewPos = mul(clipPos, g_Const.view.m_MatClipToViewNoOffset);
     float linearZ  = viewPos.z / viewPos.w;
 
     u_LinearDepth[pixelPos] = linearZ;
