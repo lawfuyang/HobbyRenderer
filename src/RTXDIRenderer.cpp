@@ -1670,16 +1670,20 @@ public:
         // ------------------------------------------------------------------
         // Copy current G-buffer to history textures for next frame
         // ------------------------------------------------------------------
-        commandList->copyTexture(albedoHistoryTex,  nvrhi::TextureSlice{}, albedoTex,     nvrhi::TextureSlice{});
-        commandList->copyTexture(ormHistoryTex,     nvrhi::TextureSlice{}, ormTex,        nvrhi::TextureSlice{});
-        commandList->copyTexture(depthHistoryTex,   nvrhi::TextureSlice{}, depthTex,      nvrhi::TextureSlice{});
-        commandList->copyTexture(normalsHistoryTex, nvrhi::TextureSlice{}, normalsTex,    nvrhi::TextureSlice{});
-        commandList->copyTexture(geoNormalsHistTex, nvrhi::TextureSlice{}, geoNormalsTex, nvrhi::TextureSlice{});
-
-        // Copy current TLAS to history for next frame
-        if (m_TLASHistory && renderer->m_Scene.m_TLAS)
         {
-            commandList->copyRaytracingAccelerationStructure(m_TLASHistory, renderer->m_Scene.m_TLAS);
+            PROFILE_GPU_SCOPED("Copy resources to History", commandList);
+
+            commandList->copyTexture(albedoHistoryTex, nvrhi::TextureSlice{}, albedoTex, nvrhi::TextureSlice{});
+            commandList->copyTexture(ormHistoryTex, nvrhi::TextureSlice{}, ormTex, nvrhi::TextureSlice{});
+            commandList->copyTexture(depthHistoryTex, nvrhi::TextureSlice{}, depthTex, nvrhi::TextureSlice{});
+            commandList->copyTexture(normalsHistoryTex, nvrhi::TextureSlice{}, normalsTex, nvrhi::TextureSlice{});
+            commandList->copyTexture(geoNormalsHistTex, nvrhi::TextureSlice{}, geoNormalsTex, nvrhi::TextureSlice{});
+
+            // Copy current TLAS to history for next frame
+            if (m_TLASHistory && renderer->m_Scene.m_TLAS)
+            {
+                commandList->copyRaytracingAccelerationStructure(m_TLASHistory, renderer->m_Scene.m_TLAS);
+            }
         }
     }
 

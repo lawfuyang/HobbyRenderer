@@ -290,6 +290,12 @@ public:
         return std::atan2(d.x, d.z);
     }
 
+    // Check if any instance transforms have changed this frame
+    bool AreInstanceTransformsDirty() const
+    {
+        return m_InstanceDirtyRange.first <= m_InstanceDirtyRange.second;
+    }
+
     // Update the directional light node's transform from pitch/yaw angles.
     // pitch: elevation (radians), yaw: azimuth (radians).
     void SetSunPitchYaw(float pitch, float yaw)

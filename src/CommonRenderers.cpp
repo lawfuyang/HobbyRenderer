@@ -222,12 +222,16 @@ public:
         }
 
         // ── TLAS Build ────────────────────────────────────────────────────────
-        commandList->buildTopLevelAccelStructFromBuffer(
-            scene.m_TLAS,
-            scene.m_RTInstanceDescBuffer,
-            0,
-            (uint32_t)scene.m_RTInstanceDescs.size()
-        );
+        // Only rebuild TLAS if instance transforms are dirty
+        if (scene.AreInstanceTransformsDirty())
+        {
+            commandList->buildTopLevelAccelStructFromBuffer(
+                scene.m_TLAS,
+                scene.m_RTInstanceDescBuffer,
+                0,
+                (uint32_t)scene.m_RTInstanceDescs.size()
+            );
+        }
     }
 
     const char* GetName() const override { return "TLAS Update"; }

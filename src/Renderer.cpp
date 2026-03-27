@@ -773,7 +773,7 @@ void Renderer::Run()
         {
             m_Scene.Update(static_cast<float>(m_FrameTime / 1000.0));
 
-            if (m_Scene.m_InstanceDirtyRange.first <= m_Scene.m_InstanceDirtyRange.second)
+            if (m_Scene.AreInstanceTransformsDirty())
             {
                 nvrhi::CommandListHandle cmd = AcquireCommandList();
                 ScopedCommandList scopedCmd{ cmd, "Upload Animated Instances" };
