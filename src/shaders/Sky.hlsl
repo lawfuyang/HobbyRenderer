@@ -5,7 +5,7 @@
 
 #include "srrhi/hlsl/Sky.hlsli"
 
-static srrhi::SkyCB g_Sky = srrhi::SkyInputs::GetSkyCB();
+static const srrhi::SkyCB g_Sky = srrhi::SkyInputs::GetSkyCB();
 
 float4 Sky_PSMain(FullScreenVertexOut input) : SV_Target
 {
