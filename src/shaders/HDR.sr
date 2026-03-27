@@ -1,0 +1,57 @@
+cbuffer HistogramConstants
+{
+    uint m_Width;
+    uint m_Height;
+    float m_MinLogLuminance;
+    float m_MaxLogLuminance;
+};
+
+cbuffer AdaptationConstants
+{
+    float m_DeltaTime;
+    float m_AdaptationSpeed;
+    uint m_NumPixels;
+    float m_MinLogLuminance;
+    float m_MaxLogLuminance;
+    float m_ExposureValueMin;     // EV clamp
+    float m_ExposureValueMax;     // EV clamp
+    float m_ExposureCompensation; // EV bias
+};
+
+cbuffer TonemapConstants
+{
+    uint m_Width;
+    uint m_Height;
+    float m_BloomIntensity;
+    uint m_EnableBloom;
+    uint m_DebugBloom;
+    uint m_Pad;
+};
+
+srinput LuminanceHistogramInputs
+{
+    [push_constant]
+    HistogramConstants m_HistogramConstants;
+    
+    Texture2D<float3> HDRColor;
+    RWStructuredBuffer<uint> Histogram;
+};
+
+srinput ExposureAdaptationInputs
+{
+    [push_constant]
+    AdaptationConstants m_AdaptationConstants;
+
+    RWBuffer<float> Exposure;
+    StructuredBuffer<uint> HistogramInput;
+};
+
+srinput TonemappingInputs
+{
+    [push_constant]
+    TonemapConstants m_TonemapConstants;
+
+    Texture2D<float3> HDRColorInput;
+    Buffer<float> ExposureInput;
+    Texture2D<float3> BloomInput;
+};

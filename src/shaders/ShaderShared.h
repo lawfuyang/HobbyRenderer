@@ -475,35 +475,6 @@ struct SpdConstants
   SpdReductionType m_ReductionType;
 };
 
-struct HistogramConstants
-{
-    uint32_t m_Width;
-    uint32_t m_Height;
-    float m_MinLogLuminance;
-    float m_MaxLogLuminance;
-};
-
-struct AdaptationConstants
-{
-    float m_DeltaTime;
-    float m_AdaptationSpeed;
-    uint32_t m_NumPixels;
-    float m_MinLogLuminance;
-    float m_MaxLogLuminance;
-    float m_ExposureValueMin;     // EV clamp
-    float m_ExposureValueMax;     // EV clamp
-    float m_ExposureCompensation; // EV bias
-};
-
-struct TonemapConstants
-{
-    uint32_t m_Width;
-    uint32_t m_Height;
-    float m_BloomIntensity;
-    uint32_t m_EnableBloom;    uint32_t m_DebugBloom;
-    uint32_t m_Pad;
-};
-
 struct BloomConstants
 {
     float m_Knee;

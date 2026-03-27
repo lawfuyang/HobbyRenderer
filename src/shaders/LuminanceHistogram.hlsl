@@ -1,9 +1,9 @@
-#include "ShaderShared.h"
+#include "srrhi/hlsl/HDR.hlsli"
 
-Texture2D<float3> HDRColor : register(t0);
-RWStructuredBuffer<uint> Histogram : register(u0);
+static const srrhi::HistogramConstants CB = srrhi::LuminanceHistogramInputs::GetHistogramConstants();
 
-ConstantBuffer<HistogramConstants> CB : register(b0);
+static const Texture2D<float3> HDRColor = srrhi::LuminanceHistogramInputs::GetHDRColor();
+static const RWStructuredBuffer<uint> Histogram = srrhi::LuminanceHistogramInputs::GetHistogram();
 
 groupshared uint LocalHistogram[256];
 

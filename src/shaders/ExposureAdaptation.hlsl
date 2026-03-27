@@ -1,9 +1,9 @@
-#include "ShaderShared.h"
+#include "srrhi/hlsl/HDR.hlsli"
 
-RWBuffer<float> Exposure : register(u0);
-StructuredBuffer<uint> HistogramInput : register(t0);
+static const srrhi::AdaptationConstants AdaptationCB = srrhi::ExposureAdaptationInputs::GetAdaptationConstants();
 
-ConstantBuffer<AdaptationConstants> AdaptationCB : register(b0);
+static const RWBuffer<float> Exposure = srrhi::ExposureAdaptationInputs::GetExposure();
+static const StructuredBuffer<uint> HistogramInput = srrhi::ExposureAdaptationInputs::GetHistogramInput();
 
 groupshared float SharedWeights[256];
 

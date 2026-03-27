@@ -1,10 +1,11 @@
 #include "ShaderShared.h"
+#include "srrhi/hlsl/HDR.hlsli"
 
-TonemapConstants TonemapCB;
+static const srrhi::TonemapConstants TonemapCB = srrhi::TonemappingInputs::GetTonemapConstants();
 
-Texture2D<float3> HDRColorInput : register(t0);
-Buffer<float> ExposureInput : register(t1);
-Texture2D<float3> BloomInput : register(t2);
+static const Texture2D<float3> HDRColorInput = srrhi::TonemappingInputs::GetHDRColorInput();
+static const Buffer<float> ExposureInput = srrhi::TonemappingInputs::GetExposureInput();
+static const Texture2D<float3> BloomInput = srrhi::TonemappingInputs::GetBloomInput();
 
 // Input color is non-negative and resides in the Linear Rec. 709 color space.
 // Output color is also Linear Rec. 709, but in the [0, 1] range.

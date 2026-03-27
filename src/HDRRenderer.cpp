@@ -2,7 +2,8 @@
 #include "Config.h"
 #include "Utilities.h"
 #include "CommonResources.h"
-#include "shaders/ShaderShared.h"
+
+#include "shaders/srrhi/cpp/HDR.h"
 
 extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_BloomUpPyramid;
@@ -73,28 +74,26 @@ public:
             // Clear histogram buffer
             commandList->clearBufferUInt(luminanceHistogram, 0);
 
-            HistogramConstants consts;
-            consts.m_Width = renderer->m_RHI->m_SwapchainExtent.x;
-            consts.m_Height = renderer->m_RHI->m_SwapchainExtent.y;
-            consts.m_MinLogLuminance = kMinLogLuminance;
-            consts.m_MaxLogLuminance = kMaxLogLuminance;
+            srrhi::LuminanceHistogramInputs inputs;
+            inputs.m_HistogramConstants.SetWidth(renderer->m_RHI->m_SwapchainExtent.x);
+            inputs.m_HistogramConstants.SetHeight(renderer->m_RHI->m_SwapchainExtent.y);
+            inputs.m_HistogramConstants.SetMinLogLuminance(kMinLogLuminance);
+            inputs.m_HistogramConstants.SetMaxLogLuminance(kMaxLogLuminance);
 
-            nvrhi::BindingSetDesc bset;
-            bset.bindings = {
-                nvrhi::BindingSetItem::PushConstants(0, sizeof(HistogramConstants)),
-                nvrhi::BindingSetItem::Texture_SRV(0, hdrColor),
-                nvrhi::BindingSetItem::StructuredBuffer_UAV(0, luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVStructuredBuffer)
-            };
+            inputs.SetHDRColor(hdrColor);
+            inputs.SetHistogram(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVStructuredBuffer);
 
-            const uint32_t dispatchX = DivideAndRoundUp(consts.m_Width, 16);
-            const uint32_t dispatchY = DivideAndRoundUp(consts.m_Height, 16);
+            nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
+
+            const uint32_t dispatchX = DivideAndRoundUp(renderer->m_RHI->m_SwapchainExtent.x, 16);
+            const uint32_t dispatchY = DivideAndRoundUp(renderer->m_RHI->m_SwapchainExtent.y, 16);
 
             Renderer::RenderPassParams params{
                 .commandList = commandList,
                 .shaderName = "LuminanceHistogram_LuminanceHistogram_CSMain",
                 .bindingSetDesc = bset,
-                .pushConstants = &consts,
-                .pushConstantsSize = sizeof(consts),
+                .pushConstants = &inputs.m_HistogramConstants,
+                .pushConstantsSize = srrhi::LuminanceHistogramInputs::PushConstantBytes,
                 .dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 }
             };
 
@@ -107,29 +106,27 @@ public:
             
             if (renderer->m_EnableAutoExposure)
             {
-                AdaptationConstants consts;
-                consts.m_DeltaTime = (float)renderer->m_FrameTime / 1000.0f;
-                consts.m_AdaptationSpeed = renderer->m_AdaptationSpeed;
-                consts.m_NumPixels = renderer->m_RHI->m_SwapchainExtent.x * renderer->m_RHI->m_SwapchainExtent.y;
-                consts.m_MinLogLuminance = kMinLogLuminance;
-                consts.m_MaxLogLuminance = kMaxLogLuminance;
-                consts.m_ExposureValueMin = renderer->m_Scene.m_Camera.m_ExposureValueMin;
-                consts.m_ExposureValueMax = renderer->m_Scene.m_Camera.m_ExposureValueMax;
-                consts.m_ExposureCompensation = renderer->m_Scene.m_Camera.m_ExposureCompensation;
+                srrhi::ExposureAdaptationInputs inputs;
+                inputs.m_AdaptationConstants.SetDeltaTime((float)renderer->m_FrameTime / 1000.0f);
+                inputs.m_AdaptationConstants.SetAdaptationSpeed(renderer->m_AdaptationSpeed);
+                inputs.m_AdaptationConstants.SetNumPixels(renderer->m_RHI->m_SwapchainExtent.x * renderer->m_RHI->m_SwapchainExtent.y);
+                inputs.m_AdaptationConstants.SetMinLogLuminance(kMinLogLuminance);
+                inputs.m_AdaptationConstants.SetMaxLogLuminance(kMaxLogLuminance);
+                inputs.m_AdaptationConstants.SetExposureValueMin(renderer->m_Scene.m_Camera.m_ExposureValueMin);
+                inputs.m_AdaptationConstants.SetExposureValueMax(renderer->m_Scene.m_Camera.m_ExposureValueMax);
+                inputs.m_AdaptationConstants.SetExposureCompensation(renderer->m_Scene.m_Camera.m_ExposureCompensation);
 
-                nvrhi::BindingSetDesc bset;
-                bset.bindings = {
-                    nvrhi::BindingSetItem::PushConstants(0, sizeof(AdaptationConstants)),
-                    nvrhi::BindingSetItem::TypedBuffer_UAV(0, exposureBuffer),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(0, luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummySRVStructuredBuffer)
-                };
+                inputs.SetExposure(exposureBuffer);
+                inputs.SetHistogramInput(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummySRVStructuredBuffer);
+
+                nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
                 Renderer::RenderPassParams params{
                     .commandList = commandList,
                     .shaderName = "ExposureAdaptation_ExposureAdaptation_CSMain",
                     .bindingSetDesc = bset,
-                    .pushConstants = &consts,
-                    .pushConstantsSize = sizeof(consts),
+                    .pushConstants = &inputs.m_AdaptationConstants,
+                    .pushConstantsSize = srrhi::ExposureAdaptationInputs::PushConstantBytes,
                     .dispatchParams = { .x = 1, .y = 1, .z = 1 }
                 };
 
@@ -146,20 +143,18 @@ public:
         {
             PROFILE_GPU_SCOPED("Tonemapping", commandList);
 
-            TonemapConstants consts;
-            consts.m_Width = renderer->m_RHI->m_SwapchainExtent.x;
-            consts.m_Height = renderer->m_RHI->m_SwapchainExtent.y;
-            consts.m_BloomIntensity = renderer->m_BloomIntensity;
-            consts.m_EnableBloom = (renderer->m_EnableBloom && bloomUpPyramid) ? 1 : 0;
-            consts.m_DebugBloom = (renderer->m_DebugBloom) ? 1 : 0;
+            srrhi::TonemappingInputs inputs;
+            inputs.m_TonemapConstants.SetWidth(renderer->m_RHI->m_SwapchainExtent.x);
+            inputs.m_TonemapConstants.SetHeight(renderer->m_RHI->m_SwapchainExtent.y);
+            inputs.m_TonemapConstants.SetBloomIntensity(renderer->m_BloomIntensity);
+            inputs.m_TonemapConstants.SetEnableBloom((renderer->m_EnableBloom && bloomUpPyramid) ? 1 : 0);
+            inputs.m_TonemapConstants.SetDebugBloom((renderer->m_DebugBloom) ? 1 : 0);
 
-            nvrhi::BindingSetDesc bset;
-            bset.bindings = {
-                nvrhi::BindingSetItem::PushConstants(0, sizeof(TonemapConstants)),
-                nvrhi::BindingSetItem::Texture_SRV(0, hdrColor),
-                nvrhi::BindingSetItem::TypedBuffer_SRV(1, exposureBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(2, bloomUpPyramid ? bloomUpPyramid : CommonResources::GetInstance().DefaultTextureBlack)
-            };
+            inputs.SetHDRColorInput(hdrColor);
+            inputs.SetExposureInput(exposureBuffer);
+            inputs.SetBloomInput(bloomUpPyramid ? bloomUpPyramid : CommonResources::GetInstance().DefaultTextureBlack);
+
+            nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
             nvrhi::FramebufferDesc fbDesc;
             fbDesc.addColorAttachment(renderer->GetCurrentBackBufferTexture());
@@ -169,8 +164,8 @@ public:
                 .commandList = commandList,
                 .shaderName = "Tonemap_Tonemap_PSMain",
                 .bindingSetDesc = bset,
-                .pushConstants = &consts,
-                .pushConstantsSize = sizeof(consts),
+                .pushConstants = &inputs.m_TonemapConstants,
+                .pushConstantsSize = srrhi::TonemappingInputs::PushConstantBytes,
                 .framebuffer = fb
             };
 
