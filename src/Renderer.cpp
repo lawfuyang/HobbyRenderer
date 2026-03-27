@@ -1727,7 +1727,7 @@ MicroProfileThreadLogGpu*& Renderer::GetGPULogForCurrentThread()
     return tl_GPULog;
 }
 
-nvrhi::BindingSetDesc Renderer::CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources)
+nvrhi::BindingSetDesc Renderer::CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources, uint32_t pushConstantBytes)
 {
     nvrhi::BindingSetDesc desc;
 
@@ -1795,8 +1795,8 @@ nvrhi::BindingSetDesc Renderer::CreateBindingSetDesc(std::span<const srrhi::Reso
             break;
 
         case srrhi::ResourceType::PushConstants:
-            // Intentionally skipped: NVRHI push constants are uploaded via
-            // ICommandList::setPushConstants(), not a BindingSetItem.
+            SDL_assert(pushConstantBytes > 0);
+            desc.addItem(nvrhi::BindingSetItem::PushConstants(entry.slot, pushConstantBytes));
             break;
         }
     }

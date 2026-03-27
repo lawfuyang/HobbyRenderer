@@ -168,10 +168,10 @@ struct Renderer
 
     static MicroProfileThreadLogGpu*& GetGPULogForCurrentThread();
 
-    static nvrhi::BindingSetDesc CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources);
+    static nvrhi::BindingSetDesc CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources, uint32_t pushConstantBytes = 0);
 
     template<typename SrInput>
-    static nvrhi::BindingSetDesc CreateBindingSetDesc(const SrInput& inputs) { return CreateBindingSetDesc({ inputs.m_Resources }); }
+    static nvrhi::BindingSetDesc CreateBindingSetDesc(const SrInput& inputs) { return CreateBindingSetDesc(inputs.m_Resources, SrInput::PushConstantBytes); }
 
     // Public State & Resources
     SDL_Window* m_Window = nullptr;
