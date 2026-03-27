@@ -123,8 +123,7 @@ external/dxc
 external/agilitysdk
 external/NRD
 external/MathLib
-external/SRRHI
 src/shaders/NRDShaders.cfg
 src/shaders/NRD.hlsli
 src/shaders/NRDConfig.hlsli
-src/srrhi.h
+src/shaders/srrhi
