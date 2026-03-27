@@ -148,6 +148,20 @@ if(WIN32)
     file(CREATE_LINK "${NRD_SRC_DIR}/Shaders/NRDConfig.hlsli" "${CMAKE_SOURCE_DIR}/src/Shaders/NRDConfig.hlsli" SYMBOLIC)
 endif()
 
+# ----------------------------------------------------------------------------
+# Shader Resource Render Hardware Interface (SRRHI)
+# ----------------------------------------------------------------------------
+set(SRRHI_VERSION "0.4")
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/bin/srrhi.exe")
+    set(SRRHI_EXE_URL "https://github.com/lawfuyang/srrhi/releases/download/v${SRRHI_VERSION}/srrhi.exe")
+    file(DOWNLOAD "${SRRHI_EXE_URL}" "${CMAKE_SOURCE_DIR}/bin/srrhi.exe" SHOW_PROGRESS)
+endif()
+set(SRRHI_URL "https://github.com/lawfuyang/srrhi/archive/refs/tags/v${SRRHI_VERSION}.zip")
+download_library("SRRHI" "${SRRHI_VERSION}" "${SRRHI_URL}" "srrhi-*")
+if(WIN32)
+    file(CREATE_LINK "${CMAKE_SOURCE_DIR}/external/SRRHI/srrhi-${SRRHI_VERSION}/srrhi.h" "${CMAKE_SOURCE_DIR}/src/srrhi.h" SYMBOLIC)
+endif()
+
 set(SHADERMAKE_FIND_FXC OFF)
 set(SHADERMAKE_FIND_DXC OFF)
 add_subdirectory(external/ShaderMake)

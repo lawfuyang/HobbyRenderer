@@ -123,8 +123,8 @@ external/dxc
 external/agilitysdk
 external/NRD
 external/MathLib
-
-# symlink to NRD shader config (generated)
+external/SRRHI
 src/shaders/NRDShaders.cfg
 src/shaders/NRD.hlsli
 src/shaders/NRDConfig.hlsli
+src/srrhi.h
