@@ -1,7 +1,6 @@
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
-#include "shaders/ShaderShared.h"
 
 #include "shaders/srrhi/cpp/Sky.h"
 
