@@ -3,10 +3,9 @@
 #include "Bindless.hlsli"
 #include "Atmosphere.hlsli"
 
-cbuffer SkyCB : register(b0)
-{
-    SkyConstants g_Sky;
-};
+#include "srrhi/hlsl/Sky.hlsli"
+
+static srrhi::SkyCB g_Sky = srrhi::SkyInputs::GetSkyCB();
 
 float4 Sky_PSMain(FullScreenVertexOut input) : SV_Target
 {

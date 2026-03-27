@@ -6,6 +6,8 @@
 // Include shared structs
 #include "shaders/ShaderShared.h"
 
+#include "shaders/srrhi/cpp/Common.h"
+
 // Minimal scene representation for glTF meshes/nodes/materials/textures
 class Scene
 {

@@ -1,0 +1,27 @@
+struct PlanarViewConstants
+{
+    float4x4      m_MatWorldToView;
+    float4x4      m_MatViewToClip;
+    float4x4      m_MatWorldToClip;
+    float4x4      m_MatClipToView;
+    float4x4      m_MatViewToWorld;
+    float4x4      m_MatClipToWorld;
+
+    float4x4      m_MatViewToClipNoOffset;
+    float4x4      m_MatWorldToClipNoOffset;
+    float4x4      m_MatClipToViewNoOffset;
+    float4x4      m_MatClipToWorldNoOffset;
+
+    float2      m_ViewportOrigin;
+    float2      m_ViewportSize;
+
+    float2      m_ViewportSizeInv;
+    float2      m_PixelOffset;
+
+    float2      m_ClipToWindowScale;
+    float2      m_ClipToWindowBias;
+
+    // Camera world position — filled each frame from m_MatViewToWorld[3].
+    // FullSample accesses view.cameraDirectionOrPosition.xyz for camera position.
+    float4      m_CameraDirectionOrPosition;   // xyz = world pos, w = 1.0
+};

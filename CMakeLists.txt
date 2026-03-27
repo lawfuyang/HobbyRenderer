@@ -149,6 +149,7 @@ if(WIN32)
 endif()
 
 add_subdirectory(external/srrhi)
+file(CREATE_LINK "${CMAKE_SOURCE_DIR}/external/srrhi/srrhi.h" "${CMAKE_SOURCE_DIR}/src/srrhi.h" SYMBOLIC)
 
 set(SHADERMAKE_FIND_FXC OFF)
 set(SHADERMAKE_FIND_DXC OFF)
@@ -330,14 +331,17 @@ message(STATUS "ShaderMake executable: ${SHADERMAKE_PATH_GENEX}")
 # ----------------------------------------------------------------------------
 # Shader Resource Render Hardware Interface (SRRHI)
 # ----------------------------------------------------------------------------
-# add_custom_target(build_srrhi
-#     COMMAND ${CMAKE_SOURCE_DIR}/bin/srrhi.exe
-#             -i "${CMAKE_SOURCE_DIR}/src/shaders"
-#             -o "${CMAKE_SOURCE_DIR}/src/shaders/srrhi"
+add_custom_target(build_srrhi
+    COMMAND ${CMAKE_SOURCE_DIR}/bin/srrhi.exe
+            -i "${CMAKE_SOURCE_DIR}/src/shaders"
+            -o "${CMAKE_SOURCE_DIR}/src/shaders/srrhi"
 
-#     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-#     COMMENT "Generating SRRHI shader headers via srrhi.exe"
-# )
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Generating SRRHI shader headers via srrhi.exe"
+)
 
-# # ssrhi always run before shader compilation
-# add_dependencies(build_shaders build_srrhi)
+# compile srrhi.exe first
+add_dependencies(build_srrhi srrhi)
+
+# ssrhi always run before shader compilation
+add_dependencies(build_shaders build_srrhi)

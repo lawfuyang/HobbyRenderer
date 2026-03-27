@@ -1,0 +1,15 @@
+#include "Common.sr"
+
+cbuffer SkyCB
+{
+    PlanarViewConstants m_View;
+    float4 m_CameraPos;
+    float3 m_SunDirection;
+    float m_SunIntensity;
+    uint m_RenderingMode; 
+};
+
+srinput SkyInputs
+{
+    SkyCB m_SkyCB;
+};

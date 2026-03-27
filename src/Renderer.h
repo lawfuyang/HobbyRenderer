@@ -7,6 +7,7 @@
 #include "Camera.h"
 #include "RenderGraph.h"
 #include "TaskScheduler.h"
+#include "srrhi.h"
 
 class IRenderer
 {
@@ -166,6 +167,11 @@ struct Renderer
     void SetCameraFromSceneCamera(const Scene::Camera& sceneCam);
 
     static MicroProfileThreadLogGpu*& GetGPULogForCurrentThread();
+
+    static nvrhi::BindingSetDesc CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources);
+
+    template<typename SrInput>
+    static nvrhi::BindingSetDesc CreateBindingSetDesc(const SrInput& inputs) { return CreateBindingSetDesc({ inputs.m_Resources }); }
 
     // Public State & Resources
     SDL_Window* m_Window = nullptr;

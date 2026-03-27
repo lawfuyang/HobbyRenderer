@@ -3,6 +3,8 @@
 #include "Utilities.h"
 #include "shaders/ShaderShared.h"
 
+#include "shaders/srrhi/cpp/Sky.h"
+
 extern RGTextureHandle g_RG_DepthTexture;
 extern RGTextureHandle g_RG_HDRColor;
 
@@ -44,20 +46,24 @@ public:
         // Sky CB
         const nvrhi::BufferDesc skyCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(SkyConstants), "SkyCB", 1);
         const nvrhi::BufferHandle skyCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(skyCBD);
-
-        SkyConstants scb{};
-        scb.m_View = renderer->m_Scene.m_View;
-        scb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
-        scb.m_SunDirection = renderer->m_Scene.GetSunDirection();
-        scb.m_SunIntensity = renderer->m_Scene.GetSunIntensity();
-        scb.m_RenderingMode = (uint32_t)renderer->m_Mode;
         
-        commandList->writeBuffer(skyCB, &scb, sizeof(scb), 0);
+        // copy just to test
+        // TODO: remove this when all PlanarViewConstants gets converted to srrhi version
+        static_assert(sizeof(srrhi::PlanarViewConstants) == sizeof(PlanarViewConstants));
+        srrhi::PlanarViewConstants viewConstantsCopy;
+        std::memcpy(&viewConstantsCopy, &renderer->m_Scene.m_View, sizeof(srrhi::PlanarViewConstants));
 
-        nvrhi::BindingSetDesc bset;
-        bset.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, skyCB),
-        };
+        srrhi::SkyInputs skyInputs;
+        skyInputs.m_SkyCB.SetView(viewConstantsCopy);
+        skyInputs.m_SkyCB.SetCameraPos(Vector4{ camPos.x, camPos.y, camPos.z, 1.0f });
+        skyInputs.m_SkyCB.SetSunDirection(renderer->m_Scene.GetSunDirection());
+        skyInputs.m_SkyCB.SetSunIntensity(renderer->m_Scene.GetSunIntensity());
+        skyInputs.m_SkyCB.SetRenderingMode((uint32_t)renderer->m_Mode);
+
+        commandList->writeBuffer(skyCB, &skyInputs.m_SkyCB, sizeof(skyInputs.m_SkyCB), 0);
+        skyInputs.SetSkyCB(skyCB);
+
+        nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(skyInputs);
 
         nvrhi::FramebufferDesc fbDesc;
         fbDesc.addColorAttachment(hdrColor);

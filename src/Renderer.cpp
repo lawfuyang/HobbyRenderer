@@ -1727,6 +1727,83 @@ MicroProfileThreadLogGpu*& Renderer::GetGPULogForCurrentThread()
     return tl_GPULog;
 }
 
+nvrhi::BindingSetDesc Renderer::CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources)
+{
+    nvrhi::BindingSetDesc desc;
+
+    for (const srrhi::ResourceEntry& entry : resources)
+    {
+        // Build texture subresource set from the mip/slice fields.
+        // -1 values map to AllMipLevels / AllArraySlices.
+        const nvrhi::TextureSubresourceSet subresources{
+            static_cast<nvrhi::MipLevel>(entry.baseMipLevel),
+            entry.numMipLevels < 0
+                ? nvrhi::TextureSubresourceSet::AllMipLevels
+                : static_cast<nvrhi::MipLevel>(entry.numMipLevels),
+            static_cast<nvrhi::ArraySlice>(entry.baseArraySlice),
+            entry.numArraySlices < 0
+                ? nvrhi::TextureSubresourceSet::AllArraySlices
+                : static_cast<nvrhi::ArraySlice>(entry.numArraySlices)
+        };
+
+        switch (entry.type)
+        {
+        case srrhi::ResourceType::Texture_SRV:
+            desc.addItem(nvrhi::BindingSetItem::Texture_SRV(entry.slot, static_cast<nvrhi::ITexture*>(entry.pResource), nvrhi::Format::UNKNOWN, subresources));
+            break;
+
+        case srrhi::ResourceType::Texture_UAV:
+            // UAV subresource set: numMipLevels is always 1 per NVRHI convention,
+            // already guaranteed by the srrhi setter (SetFoo(ptr, baseMip) hardcodes 1).
+            desc.addItem(nvrhi::BindingSetItem::Texture_UAV(entry.slot, static_cast<nvrhi::ITexture*>(entry.pResource), nvrhi::Format::UNKNOWN, subresources));
+            break;
+
+        case srrhi::ResourceType::TypedBuffer_SRV:
+            desc.addItem(nvrhi::BindingSetItem::TypedBuffer_SRV(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::TypedBuffer_UAV:
+            desc.addItem(nvrhi::BindingSetItem::TypedBuffer_UAV(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::StructuredBuffer_SRV:
+            desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::StructuredBuffer_UAV:
+            desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::RawBuffer_SRV:
+            desc.addItem(nvrhi::BindingSetItem::RawBuffer_SRV(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::RawBuffer_UAV:
+            desc.addItem(nvrhi::BindingSetItem::RawBuffer_UAV(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::ConstantBuffer:
+            desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(entry.slot, static_cast<nvrhi::IBuffer*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::Sampler:
+            desc.addItem(nvrhi::BindingSetItem::Sampler(entry.slot, static_cast<nvrhi::ISampler*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::RayTracingAccelStruct:
+            desc.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(entry.slot, static_cast<nvrhi::rt::IAccelStruct*>(entry.pResource)));
+            break;
+
+        case srrhi::ResourceType::PushConstants:
+            // Intentionally skipped: NVRHI push constants are uploaded via
+            // ICommandList::setPushConstants(), not a BindingSetItem.
+            break;
+        }
+    }
+
+    return desc;
+}
+
 std::string_view ScopedGpuProfile::BuildMicroProfileName(std::string_view name)
 {
     constexpr size_t kMaxMicroProfileTimerNameLen = MICROPROFILE_NAME_MAX_LEN - 1;
