@@ -238,7 +238,7 @@ float3 ComputeCellViewSpacePosition(uint3 GridCoordinate, float3 GridZParams, ui
     return ComputeCellViewSpacePosition(GridCoordinate, GridZParams, ViewGridSize, InvDeviceZToWorldZTransform, ClipToView, ViewSpaceZ);
 }
 
-float3 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos, PlanarViewConstants view, PlanarViewConstants viewPrev)
+float3 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos, srrhi::PlanarViewConstants view, srrhi::PlanarViewConstants viewPrev)
 {
     // FIXME: Switch back to m_MatWorldToClip (jittered) once TAA is implemented
     float4 clipPos = MatrixMultiply(float4(worldPos, 1.0), view.m_MatWorldToClipNoOffset);
@@ -259,7 +259,7 @@ float3 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos, PlanarViewCons
     return float3(prevWindowPos.xy - windowPos.xy, previousDepth - currentDepth);
 }
 
-float3 ConvertMotionVectorToPixelSpace(PlanarViewConstants view, PlanarViewConstants viewPrev, int2 pixelPosition, float3 motionVector)
+float3 ConvertMotionVectorToPixelSpace(srrhi::PlanarViewConstants view, srrhi::PlanarViewConstants viewPrev, int2 pixelPosition, float3 motionVector)
 {
     float2 currentPixelCenter = float2(pixelPosition.xy) + 0.5;
     float2 previousPosition = currentPixelCenter + motionVector.xy;

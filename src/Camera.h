@@ -42,7 +42,7 @@ public:
     float m_ExposureValueMax        = 23.0f; // clamp for auto exposure
     float m_Exposure                = 1.0f;  // final computed multiplier
 
-    void FillPlanarViewConstants(PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const;
+    void FillPlanarViewConstants(srrhi::PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const;
 
     // Reset camera to default position and orientation
     void Reset();

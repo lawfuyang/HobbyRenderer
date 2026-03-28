@@ -46,14 +46,8 @@ public:
         const nvrhi::BufferDesc skyCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::SkyCB), "SkyCB", 1);
         const nvrhi::BufferHandle skyCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(skyCBD);
         
-        // copy just to test
-        // TODO: remove this when all PlanarViewConstants gets converted to srrhi version
-        static_assert(sizeof(srrhi::PlanarViewConstants) == sizeof(PlanarViewConstants));
-        srrhi::PlanarViewConstants viewConstantsCopy;
-        std::memcpy(&viewConstantsCopy, &renderer->m_Scene.m_View, sizeof(srrhi::PlanarViewConstants));
-
         srrhi::SkyInputs skyInputs;
-        skyInputs.m_SkyCB.SetView(viewConstantsCopy);
+        skyInputs.m_SkyCB.SetView(renderer->m_Scene.m_View);
         skyInputs.m_SkyCB.SetCameraPos(Vector4{ camPos.x, camPos.y, camPos.z, 1.0f });
         skyInputs.m_SkyCB.SetSunDirection(renderer->m_Scene.GetSunDirection());
         skyInputs.m_SkyCB.SetSunIntensity(renderer->m_Scene.GetSunIntensity());

@@ -97,8 +97,8 @@ static void NrdFree(void* /*userArg*/, void* memory)
 void FillNRDCommonSettings(nrd::CommonSettings& settings)
 {
     Renderer* renderer = Renderer::GetInstance();
-    const PlanarViewConstants& view     = renderer->m_Scene.m_View;
-    const PlanarViewConstants& prevView = renderer->m_Scene.m_ViewPrev;
+    const srrhi::PlanarViewConstants& view     = renderer->m_Scene.m_View;
+    const srrhi::PlanarViewConstants& prevView = renderer->m_Scene.m_ViewPrev;
 
     const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
     const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;

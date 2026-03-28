@@ -13,7 +13,7 @@
 #ifndef SHADER_PARAMETERS_H
 #define SHADER_PARAMETERS_H
 
-// HobbyRenderer: use our own PlanarViewConstants from ShaderShared.h
+// HobbyRenderer: use srrhi::PlanarViewConstants (via ShaderShared.h -> srrhi/hlsl/Common.hlsli)
 #include "ShaderShared.h"
 
 #include <Rtxdi/DI/ReSTIRDIParameters.h>
@@ -59,7 +59,7 @@ enum class IndirectLightingMode : uint32_t
 
 struct BrdfRayTracingConstants
 {
-    PlanarViewConstants view;
+    srrhi::PlanarViewConstants view;
 
     uint frameIndex;
 };
@@ -81,8 +81,8 @@ struct PrepareLightsTask
 
 struct GBufferConstants
 {
-    PlanarViewConstants view;
-    PlanarViewConstants viewPrev;
+    srrhi::PlanarViewConstants view;
+    srrhi::PlanarViewConstants viewPrev;
 
     float roughnessOverride;
     float metalnessOverride;
@@ -99,7 +99,7 @@ struct GBufferConstants
 
 struct GlassConstants
 {
-    PlanarViewConstants view;
+    srrhi::PlanarViewConstants view;
     
     uint enableEnvironmentMap;
     uint environmentMapTextureIndex;
@@ -114,8 +114,8 @@ struct GlassConstants
 
 struct CompositingConstants
 {
-    PlanarViewConstants view;
-    PlanarViewConstants viewPrev;
+    srrhi::PlanarViewConstants view;
+    srrhi::PlanarViewConstants viewPrev;
 
     uint enableTextures;
     uint denoiserMode;
@@ -192,9 +192,9 @@ struct SceneConstants
 
 struct ResamplingConstants
 {
-    PlanarViewConstants view;
-    PlanarViewConstants prevView;
-    PlanarViewConstants prevPrevView;
+    srrhi::PlanarViewConstants view;
+    srrhi::PlanarViewConstants prevView;
+    srrhi::PlanarViewConstants prevPrevView;
     RTXDI_RuntimeParameters runtimeParams;
     
     float4 reblurHitDistParams;

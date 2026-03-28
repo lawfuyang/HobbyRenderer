@@ -72,7 +72,7 @@ float3 RAB_GetEmissiveColor(RAB_Material material)
 
 RAB_Material GetGBufferMaterial(
     int2 pixelPosition,
-    PlanarViewConstants view,
+    srrhi::PlanarViewConstants view,
     Texture2D<float4> albedoTexture,
     Texture2D<float2> ormTexture)
 {

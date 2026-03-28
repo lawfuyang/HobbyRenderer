@@ -203,7 +203,7 @@ Matrix Camera::GetInvViewProjMatrix() const
     return out;
 }
 
-void Camera::FillPlanarViewConstants(PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const
+void Camera::FillPlanarViewConstants(srrhi::PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const
 {
     using namespace DirectX;
     Matrix viewM = GetViewMatrix();

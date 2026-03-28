@@ -202,8 +202,8 @@ public:
     ::Camera m_Camera;
     Matrix m_FrozenCullingViewMatrix;
     Vector3 m_FrozenCullingCameraPos;
-    PlanarViewConstants m_View;
-    PlanarViewConstants m_ViewPrev;
+    srrhi::PlanarViewConstants m_View;
+    srrhi::PlanarViewConstants m_ViewPrev;
     int m_SelectedCameraIndex = -1;
 
     std::pair<uint32_t, uint32_t> m_InstanceDirtyRange = { UINT32_MAX, 0 };

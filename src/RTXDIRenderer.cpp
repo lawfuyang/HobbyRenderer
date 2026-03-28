@@ -981,19 +981,18 @@ public:
         ResamplingConstants g_Const{};
 
         // ---- View matrices ----
-        // Fill PlanarViewConstants with Donut-compatible field names.
-        // HobbyRenderer's PlanarViewConstants (ShaderShared.h) uses m_Mat* names;
-        // the HLSL shim (view_cb.h) maps them to matWorldToView, matViewToWorld, etc.
+        // Fill srrhi::PlanarViewConstants with field names (m_Mat*) shared between
+        // ShaderShared.h and ShaderParameters.h via srrhi generated types.
         // We copy the whole struct — field layout is identical.
         static_assert(sizeof(g_Const.view) == sizeof(renderer->m_Scene.m_View),
-            "PlanarViewConstants size mismatch between ShaderShared.h and ShaderParameters.h");
+            "srrhi::PlanarViewConstants size mismatch between ShaderShared.h and ShaderParameters.h");
         memcpy(&g_Const.view,     &renderer->m_Scene.m_View,     sizeof(g_Const.view));
         memcpy(&g_Const.prevView, &renderer->m_Scene.m_ViewPrev, sizeof(g_Const.prevView));
         // prevPrevView: use prevView as fallback (no triple-buffering in HobbyRenderer)
         memcpy(&g_Const.prevPrevView, &renderer->m_Scene.m_ViewPrev, sizeof(g_Const.prevPrevView));
 
         // Fill cameraDirectionOrPosition from matViewToWorld translation row
-        auto FillCameraPos = [](PlanarViewConstants& v) {
+        auto FillCameraPos = [](srrhi::PlanarViewConstants& v) {
             v.m_CameraDirectionOrPosition = {
                 v.m_MatViewToWorld.m[3][0],
                 v.m_MatViewToWorld.m[3][1],

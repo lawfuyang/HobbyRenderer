@@ -107,6 +107,8 @@
 #define DEPTH_FAR 0.0f
 
 static const float3 kEarthCenter = float3(0.0f, -6360000.0f, 0.0f);
+
+#include "srrhi/hlsl/Common.hlsli" // TODO: remove this when everything gets converted to srrhi
 #endif
 
 #ifdef __cplusplus
@@ -118,6 +120,8 @@ typedef DirectX::XMINT2  int2;
 typedef DirectX::XMFLOAT2 float2;
 typedef DirectX::XMFLOAT3 float3;
 typedef DirectX::XMFLOAT4 float4;
+
+#include "srrhi/cpp/Common.h" // TODO: remove this when everything gets converted to srrhi
 #endif // __cplusplus
 
 struct ImGuiPushConstants
@@ -202,33 +206,6 @@ struct Vertex
   Vector4 m_Tangent;
 };
 
-struct PlanarViewConstants
-{
-    Matrix      m_MatWorldToView;
-    Matrix      m_MatViewToClip;
-    Matrix      m_MatWorldToClip;
-    Matrix      m_MatClipToView;
-    Matrix      m_MatViewToWorld;
-    Matrix      m_MatClipToWorld;
-
-    Matrix      m_MatViewToClipNoOffset;
-    Matrix      m_MatWorldToClipNoOffset;
-    Matrix      m_MatClipToViewNoOffset;
-    Matrix      m_MatClipToWorldNoOffset;
-
-    Vector2      m_ViewportOrigin;
-    Vector2      m_ViewportSize;
-
-    Vector2      m_ViewportSizeInv;
-    Vector2      m_PixelOffset;
-
-    Vector2      m_ClipToWindowScale;
-    Vector2      m_ClipToWindowBias;
-
-    // Camera world position — filled each frame from m_MatViewToWorld[3].
-    // FullSample accesses view.cameraDirectionOrPosition.xyz for camera position.
-    Vector4      m_CameraDirectionOrPosition;   // xyz = world pos, w = 1.0
-};
 
 struct VertexQuantized
 {
@@ -273,8 +250,8 @@ struct GPULight
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
 {
-  PlanarViewConstants m_View;
-  PlanarViewConstants m_PrevView;
+  srrhi::PlanarViewConstants m_View;
+  srrhi::PlanarViewConstants m_PrevView;
   Vector4 m_FrustumPlanes[5];
   Vector4 m_CameraPos; // xyz: camera world-space position, w: unused
   Vector4 m_CullingCameraPos; // xyz: culling camera position
@@ -304,7 +281,7 @@ struct ForwardLightingPerFrameData
 
 struct DeferredLightingConstants
 {
-  PlanarViewConstants m_View;
+  srrhi::PlanarViewConstants m_View;
   Vector4 m_CameraPos;
   //
   Vector3 m_SunDirection;
@@ -323,7 +300,7 @@ struct DeferredLightingConstants
 
 struct PathTracerConstants
 {
-    PlanarViewConstants m_View;
+    srrhi::PlanarViewConstants m_View;
     Vector4 m_CameraPos;
     uint32_t m_LightCount;
     uint32_t m_AccumulationIndex;
@@ -491,8 +468,8 @@ struct SpdConstants
 
 struct RTXDIConstants
 {
-    PlanarViewConstants m_View;
-    PlanarViewConstants m_PrevView;
+    srrhi::PlanarViewConstants m_View;
+    srrhi::PlanarViewConstants m_PrevView;
     //
     Vector2U m_ViewportSize;             // (width, height) in pixels
     uint32_t m_FrameIndex;

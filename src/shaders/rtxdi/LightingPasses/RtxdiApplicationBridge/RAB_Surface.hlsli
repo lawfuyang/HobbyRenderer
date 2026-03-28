@@ -110,7 +110,7 @@ float getSurfaceDiffuseProbability(RAB_Surface surface)
 RAB_Surface GetGBufferSurface(
     int2 pixelPosition, 
     bool previousFrame,
-    PlanarViewConstants view, 
+    srrhi::PlanarViewConstants view, 
     Texture2D<float> depthTexture, 
     Texture2D<float2> normalsTexture, 
     Texture2D<float2> geoNormalsTexture)
