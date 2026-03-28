@@ -20,6 +20,8 @@ using FfxUInt32x4 = uint32_t[4];
 #define ffxMin(a, b) std::min(a, b)
 #include "shaders/ffx_spd.h"
 
+#include "shaders/srrhi/cpp/SPD.h"
+
 namespace
 {
     // Parse a single line from shaders.cfg and extract shader metadata
@@ -1592,19 +1594,18 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferH
 
     ffxSpdSetup(dispatchThreadGroupCountXY, workGroupOffset, numWorkGroupsAndMips, rectInfo, spdmips);
 
-    // Constant buffer matching SPD.hlsl
-    SpdConstants spdData;
-    spdData.m_Mips = numWorkGroupsAndMips[1];
-    spdData.m_NumWorkGroups = numWorkGroupsAndMips[0];
-    spdData.m_WorkGroupOffset.x = workGroupOffset[0];
-    spdData.m_WorkGroupOffset.y = workGroupOffset[1];
-    spdData.m_ReductionType = reductionType;
+    srrhi::SpdInputs inputs;
+    inputs.m_SpdConstants.SetMips(numWorkGroupsAndMips[1]);
+    inputs.m_SpdConstants.SetNumWorkGroups(numWorkGroupsAndMips[0]);
+    inputs.m_SpdConstants.SetWorkGroupOffset(Vector2U{ workGroupOffset[0], workGroupOffset[1] });
+    inputs.m_SpdConstants.SetReductionType(reductionType);
 
     // Clear atomic counter
     commandList->clearBufferUInt(spdAtomicCounter, 0);
 
-    nvrhi::BindingSetDesc spdBset;
-    spdBset.bindings.push_back(nvrhi::BindingSetItem::PushConstants(0, sizeof(SpdConstants)));
+    nvrhi::BindingSetDesc spdBset = CreateBindingSetDesc(inputs);
+
+    // manually push back resources because resource type can be either float or float4, depending on permutation, and SRRHI doesnt support this
     spdBset.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(0, texture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{ 0, 1, 0, 1 }));
 
     // Bind mips 1..N to UAV slots 0..N-1
@@ -1628,8 +1629,8 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferH
         .commandList = commandList,
         .shaderName = shaderName,
         .bindingSetDesc = spdBset,
-        .pushConstants = &spdData,
-        .pushConstantsSize = sizeof(spdData),
+        .pushConstants = &inputs.m_SpdConstants,
+        .pushConstantsSize = srrhi::SpdInputs::PushConstantBytes,
         .dispatchParams = { .x = dispatchThreadGroupCountXY[0], .y = dispatchThreadGroupCountXY[1], .z = 1 }
     };
 

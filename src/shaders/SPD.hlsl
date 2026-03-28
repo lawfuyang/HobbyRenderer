@@ -1,4 +1,5 @@
-﻿#include "ShaderShared.h"
+﻿#include "srrhi/hlsl/Common.hlsli"
+#include "srrhi/hlsl/SPD.hlsli"
 
 #ifndef SPD_NUM_CHANNELS
 #define SPD_NUM_CHANNELS 1
@@ -57,13 +58,15 @@ FfxUInt32x2 ffxRemapForWaveReduction(FfxUInt32 a)
     return FfxUInt32x2(ffxBitfieldInsertMask(ffxBitfieldExtract(a, 2u, 3u), a, 1u), ffxBitfieldInsertMask(ffxBitfieldExtract(a, 3u, 3u), ffxBitfieldExtract(a, 1u, 2u), 2u));
 }
 
-SpdConstants g_SpdConstants;
+// Use srrhi-generated constants - directly access cbuffer member
+static const srrhi::SpdConstants g_SpdConstants = srrhi::SpdInputs::GetSpdConstants();
 
 // Resource boundaries
 Texture2D<SPD_TYPE> g_Mip0 : register(t0);
 
 // NVRHI/SPIR-V mapping
 // We use a switch to handle multiple UAVs if bindless is not preferred for this specific task
+// manually declare resource because resource type can be either float or float4, depending on permutation, and SRRHI doesnt support this
 RWTexture2D<SPD_TYPE> g_Out1 : register(u0);
 RWTexture2D<SPD_TYPE> g_Out2 : register(u1);
 RWTexture2D<SPD_TYPE> g_Out3 : register(u2);

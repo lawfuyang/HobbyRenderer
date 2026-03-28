@@ -365,14 +365,6 @@ struct ResizeToNextLowestPowerOfTwoConstants
   uint32_t m_SamplerIdx;
 };
 
-struct SpdConstants
-{
-  uint32_t m_Mips;
-  uint32_t m_NumWorkGroups;
-  Vector2U m_WorkGroupOffset;
-  uint32_t m_ReductionType;
-};
-
 // ============================================================================
 // RTXDIConstants
 // RTXDIConstants — GPU-shared constant buffer for ReSTIR DI passes.

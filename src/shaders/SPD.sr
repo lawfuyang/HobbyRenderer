@@ -1,0 +1,13 @@
+cbuffer SpdConstants
+{
+    uint m_Mips;
+    uint m_NumWorkGroups;
+    uint2 m_WorkGroupOffset;
+    uint m_ReductionType;
+};
+
+srinput SpdInputs
+{
+    [push_constant]
+    SpdConstants m_SpdConstants;
+};
