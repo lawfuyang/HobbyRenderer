@@ -1,3 +1,19 @@
+struct DrawIndexedIndirectArguments
+{
+    uint m_IndexCount;
+    uint m_InstanceCount;
+    uint m_StartIndexLocation;
+    int  m_BaseVertexLocation;
+    uint m_StartInstanceLocation;
+};
+
+struct DispatchIndirectArguments
+{
+    uint m_ThreadGroupCountX;
+    uint m_ThreadGroupCountY;
+    uint m_ThreadGroupCountZ;
+};
+
 struct PlanarViewConstants
 {
     float4x4      m_MatWorldToView;
@@ -33,12 +49,12 @@ srinput CommonConsts
     static const float M_PI = 3.14159265359f;
 
     // Thread group / meshlet limits
-    static const uint32_t kThreadsPerGroup = 32;
-    static const uint32_t kMaxMeshletVertices = 64;
-    static const uint32_t kMaxMeshletTriangles = 96;
+    static const uint kThreadsPerGroup = 32;
+    static const uint kMaxMeshletVertices = 64;
+    static const uint kMaxMeshletTriangles = 96;
 
     // Max LOD count
-    static const uint32_t MAX_LOD_COUNT = 8;
+    static const uint MAX_LOD_COUNT = 8;
 
     // Bruneton atmosphere precomputed texture dimensions
     static const int TRANSMITTANCE_TEXTURE_WIDTH = 256;
@@ -71,10 +87,10 @@ srinput CommonConsts
     static const int RENDERING_MODE_PATH_TRACER = 2;
 
     // Texture flags (bit flags)
-    static const uint32_t TEXFLAG_ALBEDO = 1;
-    static const uint32_t TEXFLAG_NORMAL = 2;
-    static const uint32_t TEXFLAG_ROUGHNESS_METALLIC = 4;
-    static const uint32_t TEXFLAG_EMISSIVE = 8;
+    static const uint TEXFLAG_ALBEDO = 1;
+    static const uint TEXFLAG_NORMAL = 2;
+    static const uint TEXFLAG_ROUGHNESS_METALLIC = 4;
+    static const uint TEXFLAG_EMISSIVE = 8;
 
     // Default texture indices for bindless access
     static const int DEFAULT_TEXTURE_BLACK = 0;

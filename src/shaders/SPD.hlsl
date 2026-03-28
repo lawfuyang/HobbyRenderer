@@ -2,13 +2,7 @@
 #include "srrhi/hlsl/SPD.hlsli"
 
 #ifndef SPD_NUM_CHANNELS
-#define SPD_NUM_CHANNELS 1
-#endif
-
-#if SPD_NUM_CHANNELS == 3
-#define SPD_TYPE float3
-#else
-#define SPD_TYPE float
+    #define SPD_NUM_CHANNELS 1
 #endif
 
 typedef uint   FfxUInt32;
@@ -62,24 +56,23 @@ FfxUInt32x2 ffxRemapForWaveReduction(FfxUInt32 a)
 static const srrhi::SpdConstants g_SpdConstants = srrhi::SpdInputs::GetSpdConstants();
 
 // Resource boundaries
-Texture2D<SPD_TYPE> g_Mip0 : register(t0);
+static const Texture2D<SPD_TYPE> g_Mip0 = srrhi::SpdInputs::GetMip0();
 
 // NVRHI/SPIR-V mapping
 // We use a switch to handle multiple UAVs if bindless is not preferred for this specific task
-// manually declare resource because resource type can be either float or float4, depending on permutation, and SRRHI doesnt support this
-RWTexture2D<SPD_TYPE> g_Out1 : register(u0);
-RWTexture2D<SPD_TYPE> g_Out2 : register(u1);
-RWTexture2D<SPD_TYPE> g_Out3 : register(u2);
-RWTexture2D<SPD_TYPE> g_Out4 : register(u3);
-RWTexture2D<SPD_TYPE> g_Out5 : register(u4);
-RWTexture2D<SPD_TYPE> g_Out6 : register(u5);
-RWTexture2D<SPD_TYPE> g_Out7 : register(u6);
-RWTexture2D<SPD_TYPE> g_Out8 : register(u7);
-RWTexture2D<SPD_TYPE> g_Out9 : register(u8);
-RWTexture2D<SPD_TYPE> g_Out10 : register(u9);
-RWTexture2D<SPD_TYPE> g_Out11 : register(u10);
-RWTexture2D<SPD_TYPE> g_Out12 : register(u11);
-RWStructuredBuffer<uint> g_AtomicCounter : register(u12);
+static const RWTexture2D<SPD_TYPE> g_Out1 = srrhi::SpdInputs::GetOut1();
+static const RWTexture2D<SPD_TYPE> g_Out2 = srrhi::SpdInputs::GetOut2();
+static const RWTexture2D<SPD_TYPE> g_Out3 = srrhi::SpdInputs::GetOut3();
+static const RWTexture2D<SPD_TYPE> g_Out4 = srrhi::SpdInputs::GetOut4();
+static const RWTexture2D<SPD_TYPE> g_Out5 = srrhi::SpdInputs::GetOut5();
+static const RWTexture2D<SPD_TYPE> g_Out6 = srrhi::SpdInputs::GetOut6();
+static const RWTexture2D<SPD_TYPE> g_Out7 = srrhi::SpdInputs::GetOut7();
+static const RWTexture2D<SPD_TYPE> g_Out8 = srrhi::SpdInputs::GetOut8();
+static const RWTexture2D<SPD_TYPE> g_Out9 = srrhi::SpdInputs::GetOut9();
+static const RWTexture2D<SPD_TYPE> g_Out10 = srrhi::SpdInputs::GetOut10();
+static const RWTexture2D<SPD_TYPE> g_Out11 = srrhi::SpdInputs::GetOut11();
+static const RWTexture2D<SPD_TYPE> g_Out12 = srrhi::SpdInputs::GetOut12();
+static const RWStructuredBuffer<uint> g_AtomicCounter = srrhi::SpdInputs::GetAtomicCounter();
 
 groupshared FfxFloat32 spdIntermediateR[16][16];
 groupshared FfxFloat32 spdIntermediateG[16][16];

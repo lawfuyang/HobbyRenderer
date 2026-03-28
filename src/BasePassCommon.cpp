@@ -33,8 +33,8 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
     {
         RGBufferDesc desc;
-        desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(nvrhi::DrawIndexedIndirectArguments))
-            .setStructStride(sizeof(nvrhi::DrawIndexedIndirectArguments))
+        desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(srrhi::DrawIndexedIndirectArguments))
+            .setStructStride(sizeof(srrhi::DrawIndexedIndirectArguments))
             .setIsDrawIndirectArgs(true)
             .setCanHaveUAVs(true)
             .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
@@ -59,8 +59,8 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(sizeof(DispatchIndirectArguments))
-                .setStructStride(sizeof(DispatchIndirectArguments))
+            desc.m_NvrhiDesc.setByteSize(sizeof(srrhi::DispatchIndirectArguments))
+                .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
                 .setIsDrawIndirectArgs(true)
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
@@ -100,8 +100,8 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(DispatchIndirectArguments))
-                .setStructStride(sizeof(DispatchIndirectArguments))
+            desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(srrhi::DispatchIndirectArguments))
+                .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
                 .setIsDrawIndirectArgs(true)
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)

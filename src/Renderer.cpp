@@ -1599,28 +1599,25 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferH
     inputs.m_SpdConstants.SetNumWorkGroups(numWorkGroupsAndMips[0]);
     inputs.m_SpdConstants.SetWorkGroupOffset(Vector2U{ workGroupOffset[0], workGroupOffset[1] });
     inputs.m_SpdConstants.SetReductionType(reductionType);
+    inputs.SetAtomicCounter(spdAtomicCounter);
+    inputs.SetMip0(texture, 0, 1);
+    inputs.SetOut1(numMips > 1 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 1 ? 1 : 0);
+    inputs.SetOut2(numMips > 2 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 2 ? 2 : 0);
+    inputs.SetOut3(numMips > 3 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 3 ? 3 : 0);
+    inputs.SetOut4(numMips > 4 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 4 ? 4 : 0);
+    inputs.SetOut5(numMips > 5 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 5 ? 5 : 0);
+    inputs.SetOut6(numMips > 6 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 6 ? 6 : 0);
+    inputs.SetOut7(numMips > 7 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 7 ? 7 : 0);
+    inputs.SetOut8(numMips > 8 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 8 ? 8 : 0);
+    inputs.SetOut9(numMips > 9 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 9 ? 9 : 0);
+    inputs.SetOut10(numMips > 10 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 10 ? 10 : 0);
+    inputs.SetOut11(numMips > 11 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 11 ? 11 : 0);
+    inputs.SetOut12(numMips > 12 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 12 ? 12 : 0);
 
     // Clear atomic counter
     commandList->clearBufferUInt(spdAtomicCounter, 0);
 
     nvrhi::BindingSetDesc spdBset = CreateBindingSetDesc(inputs);
-
-    // manually push back resources because resource type can be either float or float4, depending on permutation, and SRRHI doesnt support this
-    spdBset.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(0, texture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{ 0, 1, 0, 1 }));
-
-    // Bind mips 1..N to UAV slots 0..N-1
-    for (uint32_t i = 1; i < numMips; ++i)
-    {
-        spdBset.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(i - 1, texture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{ i, 1, 0, 1 }));
-    }
-    for (uint32_t i = numMips; i <= 12; ++i)
-    {
-        // Fill remaining UAV slots with a dummy to satisfy binding layout
-        spdBset.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(i - 1, CommonResources::GetInstance().DummyUAVTexture));
-    }
-
-    // Atomic counter always at slot 12
-    spdBset.bindings.push_back(nvrhi::BindingSetItem::StructuredBuffer_UAV(12, spdAtomicCounter));
 
     char shaderName[256]{};
     std::snprintf(shaderName, sizeof(shaderName), "SPD_SPD_CSMain_SPD_NUM_CHANNELS=%u", numChannels);

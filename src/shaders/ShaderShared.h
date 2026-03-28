@@ -324,22 +324,6 @@ struct PerInstanceData
   uint32_t m_FirstGeometryInstanceIndex;
 };
 
-struct DrawIndexedIndirectArguments
-{
-  uint32_t m_IndexCount;
-  uint32_t m_InstanceCount;
-  uint32_t m_StartIndexLocation;
-  int m_BaseVertexLocation;
-  uint32_t m_StartInstanceLocation;
-};
-
-struct DispatchIndirectArguments
-{
-  uint32_t m_ThreadGroupCountX;
-  uint32_t m_ThreadGroupCountY;
-  uint32_t m_ThreadGroupCountZ;
-};
-
 struct CullingConstants
 {
   Vector4 m_FrustumPlanes[5];

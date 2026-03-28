@@ -6,8 +6,33 @@ cbuffer SpdConstants
     uint m_ReductionType;
 };
 
+#if SPD_NUM_CHANNELS == 3
+    #define SPD_TYPE float3
+#else
+    #define SPD_TYPE float
+#endif
+
 srinput SpdInputs
 {
     [push_constant]
     SpdConstants m_SpdConstants;
+
+    // Resource boundaries
+    Texture2D<SPD_TYPE> Mip0;
+
+    // NVRHI/SPIR-V mapping
+    // We use a switch to handle multiple UAVs if bindless is not preferred for this specific task
+    RWTexture2D<SPD_TYPE> g_Out1;
+    RWTexture2D<SPD_TYPE> Out2;
+    RWTexture2D<SPD_TYPE> Out3;
+    RWTexture2D<SPD_TYPE> Out4;
+    RWTexture2D<SPD_TYPE> Out5;
+    RWTexture2D<SPD_TYPE> Out6;
+    RWTexture2D<SPD_TYPE> Out7;
+    RWTexture2D<SPD_TYPE> Out8;
+    RWTexture2D<SPD_TYPE> Out9;
+    RWTexture2D<SPD_TYPE> Out10;
+    RWTexture2D<SPD_TYPE> Out11;
+    RWTexture2D<SPD_TYPE> Out12;
+    RWStructuredBuffer<uint> AtomicCounter;
 };

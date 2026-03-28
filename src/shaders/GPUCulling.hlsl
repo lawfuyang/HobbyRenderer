@@ -24,14 +24,14 @@ cbuffer CullingCB : register(b0)
 StructuredBuffer<PerInstanceData> g_InstanceData : register(t0);
 Texture2D<float> g_HZB : register(t1);
 StructuredBuffer<MeshData> g_MeshData : register(t2);
-RWStructuredBuffer<DrawIndexedIndirectArguments> g_VisibleArgs : register(u0);
+RWStructuredBuffer<srrhi::DrawIndexedIndirectArguments> g_VisibleArgs : register(u0);
 RWStructuredBuffer<uint> g_VisibleCount : register(u1);
 RWStructuredBuffer<uint> g_OccludedIndices : register(u2);
 RWStructuredBuffer<uint> g_OccludedCount : register(u3);
-RWStructuredBuffer<DispatchIndirectArguments> g_DispatchIndirectArgs : register(u4);
+RWStructuredBuffer<srrhi::DispatchIndirectArguments> g_DispatchIndirectArgs : register(u4);
 RWStructuredBuffer<MeshletJob> g_MeshletJobs : register(u5);
 RWStructuredBuffer<uint> g_MeshletJobCount : register(u6);
-RWStructuredBuffer<DispatchIndirectArguments> g_MeshletIndirectArgs : register(u7);
+RWStructuredBuffer<srrhi::DispatchIndirectArguments> g_MeshletIndirectArgs : register(u7);
 // Per-instance LOD index output: g_InstanceLOD[actualInstanceIndex] = lodIndex.
 // Written for every visible instance so TLASRenderer can patch BLAS addresses.
 RWStructuredBuffer<uint> g_InstanceLOD : register(u8);
@@ -105,7 +105,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             uint visibleIndex;
             InterlockedAdd(g_MeshletJobCount[0], 1, visibleIndex);
 
-            DispatchIndirectArguments args;
+            srrhi::DispatchIndirectArguments args;
             args.m_ThreadGroupCountX = DivideAndRoundUp(mesh.m_MeshletCounts[lodIndex], srrhi::CommonConsts::kThreadsPerGroup);
             args.m_ThreadGroupCountY = 1;
             args.m_ThreadGroupCountZ = 1;
@@ -121,7 +121,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             uint visibleIndex;
             InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
 
-            DrawIndexedIndirectArguments args;
+            srrhi::DrawIndexedIndirectArguments args;
             args.m_IndexCount = mesh.m_IndexCounts[lodIndex];
             args.m_InstanceCount = 1;
             args.m_StartIndexLocation = mesh.m_IndexOffsets[lodIndex];
