@@ -1729,6 +1729,27 @@ MicroProfileThreadLogGpu*& Renderer::GetGPULogForCurrentThread()
 
 nvrhi::BindingSetDesc Renderer::CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources, uint32_t pushConstantBytes)
 {
+    auto SRRHIDimensionToNVRHIDimension = [](srrhi::TextureDimension dim)
+    {
+        switch (dim)
+        {
+        case srrhi::TextureDimension::None:
+            SDL_assert(false && "Unexpected TextureDimension::None for a texture resource");
+            return nvrhi::TextureDimension::Unknown;
+
+        case srrhi::TextureDimension::Texture1D: return nvrhi::TextureDimension::Texture1D;
+        case srrhi::TextureDimension::Texture1DArray: return nvrhi::TextureDimension::Texture1DArray;
+        case srrhi::TextureDimension::Texture2D: return nvrhi::TextureDimension::Texture2D;
+        case srrhi::TextureDimension::Texture2DArray: return nvrhi::TextureDimension::Texture2DArray;
+        case srrhi::TextureDimension::Texture2DMS: return nvrhi::TextureDimension::Texture2DMS;
+        case srrhi::TextureDimension::Texture2DMSArray: return nvrhi::TextureDimension::Texture2DMSArray;
+        case srrhi::TextureDimension::Texture3D: return nvrhi::TextureDimension::Texture3D;
+        }
+
+        SDL_assert(false && "Unknown texture dimension");
+        return nvrhi::TextureDimension::Unknown;
+    };
+
     nvrhi::BindingSetDesc desc;
 
     for (const srrhi::ResourceEntry& entry : resources)
@@ -1749,13 +1770,25 @@ nvrhi::BindingSetDesc Renderer::CreateBindingSetDesc(std::span<const srrhi::Reso
         switch (entry.type)
         {
         case srrhi::ResourceType::Texture_SRV:
-            desc.addItem(nvrhi::BindingSetItem::Texture_SRV(entry.slot, static_cast<nvrhi::ITexture*>(entry.pResource), nvrhi::Format::UNKNOWN, subresources));
+            desc.addItem(nvrhi::BindingSetItem::Texture_SRV(
+                entry.slot,
+                static_cast<nvrhi::ITexture*>(entry.pResource),
+                nvrhi::Format::UNKNOWN,
+                subresources,
+                SRRHIDimensionToNVRHIDimension(entry.textureDimension)
+            ));
             break;
 
         case srrhi::ResourceType::Texture_UAV:
             // UAV subresource set: numMipLevels is always 1 per NVRHI convention,
             // already guaranteed by the srrhi setter (SetFoo(ptr, baseMip) hardcodes 1).
-            desc.addItem(nvrhi::BindingSetItem::Texture_UAV(entry.slot, static_cast<nvrhi::ITexture*>(entry.pResource), nvrhi::Format::UNKNOWN, subresources));
+            desc.addItem(nvrhi::BindingSetItem::Texture_UAV(
+                entry.slot, 
+                static_cast<nvrhi::ITexture*>(entry.pResource),
+                nvrhi::Format::UNKNOWN,
+                subresources,
+                SRRHIDimensionToNVRHIDimension(entry.textureDimension)
+            ));
             break;
 
         case srrhi::ResourceType::TypedBuffer_SRV:

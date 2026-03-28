@@ -148,6 +148,7 @@ if(WIN32)
     file(CREATE_LINK "${NRD_SRC_DIR}/Shaders/NRDConfig.hlsli" "${CMAKE_SOURCE_DIR}/src/Shaders/NRDConfig.hlsli" SYMBOLIC)
 endif()
 
+set(SRRHI_BUILD_VALIDATION_TARGETS OFF)
 add_subdirectory(external/srrhi)
 file(CREATE_LINK "${CMAKE_SOURCE_DIR}/external/srrhi/srrhi.h" "${CMAKE_SOURCE_DIR}/src/srrhi.h" SYMBOLIC)
 
