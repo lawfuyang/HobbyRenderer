@@ -1,10 +1,10 @@
 ﻿#define GPU_CULLING_DEFINE
-#include "ShaderShared.h"
 #include "Common.hlsli"
 #include "Culling.h"
 
 #include "srrhi/hlsl/Mesh.hlsli"
 #include "srrhi/hlsl/Instance.hlsli"
+#include "srrhi/hlsl/GPUCulling.hlsli"
 
 /*
 	-- 2 Phase Occlusion Culling --
@@ -20,25 +20,20 @@
 	https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf
 */
 
-cbuffer CullingCB : register(b0)
-{
-    CullingConstants g_Culling;
-};
+static const srrhi::CullingConstants g_Culling = srrhi::GPUCullingInputs::GetCullingCB();
 
-StructuredBuffer<srrhi::PerInstanceData> g_InstanceData : register(t0);
-Texture2D<float> g_HZB : register(t1);
-StructuredBuffer<srrhi::MeshData> g_MeshData : register(t2);
-RWStructuredBuffer<srrhi::DrawIndexedIndirectArguments> g_VisibleArgs : register(u0);
-RWStructuredBuffer<uint> g_VisibleCount : register(u1);
-RWStructuredBuffer<uint> g_OccludedIndices : register(u2);
-RWStructuredBuffer<uint> g_OccludedCount : register(u3);
-RWStructuredBuffer<srrhi::DispatchIndirectArguments> g_DispatchIndirectArgs : register(u4);
-RWStructuredBuffer<srrhi::MeshletJob> g_MeshletJobs : register(u5);
-RWStructuredBuffer<uint> g_MeshletJobCount : register(u6);
-RWStructuredBuffer<srrhi::DispatchIndirectArguments> g_MeshletIndirectArgs : register(u7);
-// Per-instance LOD index output: g_InstanceLOD[actualInstanceIndex] = lodIndex.
-// Written for every visible instance so TLASRenderer can patch BLAS addresses.
-RWStructuredBuffer<uint> g_InstanceLOD : register(u8);
+static const StructuredBuffer<srrhi::PerInstanceData>              g_InstanceData        = srrhi::GPUCullingInputs::GetInstanceData();
+static const Texture2D<float>                                      g_HZB                 = srrhi::GPUCullingInputs::GetHZB();
+static const StructuredBuffer<srrhi::MeshData>                     g_MeshData            = srrhi::GPUCullingInputs::GetMeshData();
+static RWStructuredBuffer<srrhi::DrawIndexedIndirectArguments>     g_VisibleArgs         = srrhi::GPUCullingInputs::GetVisibleArgs();
+static RWStructuredBuffer<uint>                                    g_VisibleCount        = srrhi::GPUCullingInputs::GetVisibleCount();
+static RWStructuredBuffer<uint>                                    g_OccludedIndices     = srrhi::GPUCullingInputs::GetOccludedIndices();
+static RWStructuredBuffer<uint>                                    g_OccludedCount       = srrhi::GPUCullingInputs::GetOccludedCount();
+static RWStructuredBuffer<srrhi::DispatchIndirectArguments>        g_DispatchIndirectArgs = srrhi::GPUCullingInputs::GetDispatchIndirectArgs();
+static RWStructuredBuffer<srrhi::MeshletJob>                       g_MeshletJobs         = srrhi::GPUCullingInputs::GetMeshletJobs();
+static RWStructuredBuffer<uint>                                    g_MeshletJobCount     = srrhi::GPUCullingInputs::GetMeshletJobCount();
+static RWStructuredBuffer<srrhi::DispatchIndirectArguments>        g_MeshletIndirectArgs = srrhi::GPUCullingInputs::GetMeshletIndirectArgs();
+static RWStructuredBuffer<uint>                                    g_InstanceLOD         = srrhi::GPUCullingInputs::GetInstanceLOD();
 
 [numthreads(srrhi::CommonConsts::kThreadsPerGroup, 1, 1)]
 void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)

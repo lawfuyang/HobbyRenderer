@@ -1,7 +1,6 @@
 #include "BasePassCommon.h"
 #include "Renderer.h"
 #include "Utilities.h"
-#include "shaders/ShaderShared.h"
 
 void BasePassResources::Initialize()
 {

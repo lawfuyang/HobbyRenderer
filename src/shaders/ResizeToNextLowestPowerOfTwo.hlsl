@@ -1,16 +1,9 @@
-#include "ShaderShared.h"
+#include "srrhi/hlsl/ResizeToNextLowestPowerOfTwo.hlsli"
 
-ResizeToNextLowestPowerOfTwoConstants g_ResizeToNextLowestPowerOfTwoConstants;
+static const srrhi::ResizeToNextLowestPowerOfTwoConstants g_ResizeToNextLowestPowerOfTwoConstants = srrhi::DownsampleTextureToPow2Inputs::GetConstants();
 
-#if NUM_CHANNELS == 1
-    typedef float ChannelType;
-#elif NUM_CHANNELS == 3
-    typedef float3 ChannelType;
-#endif
-
-Texture2D<ChannelType> g_InTexture : register(t0);
-
-RWTexture2D<ChannelType> g_OutTexture : register(u0);
+static const Texture2D<RESIZETOPOW2_TYPE>  g_InTexture  = srrhi::DownsampleTextureToPow2Inputs::GetInputTexture();
+static RWTexture2D<RESIZETOPOW2_TYPE>      g_OutTexture = srrhi::DownsampleTextureToPow2Inputs::GetOutputTexture();
 
 [numthreads(8,8,1)]
 void CS_ResizeToNextLowestPowerOfTwo(uint3 dispatchThreadId : SV_DispatchThreadID)

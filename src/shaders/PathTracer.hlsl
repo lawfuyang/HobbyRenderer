@@ -1,22 +1,20 @@
-﻿#include "ShaderShared.h"
-#include "RaytracingCommon.hlsli"
+﻿#include "RaytracingCommon.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
 
-cbuffer PathTracerCB : register(b0)
-{
-    PathTracerConstants g_PathTracer;
-};
+#include "srrhi/hlsl/PathTracer.hlsli"
 
-RaytracingAccelerationStructure g_SceneAS : register(t0);
-StructuredBuffer<srrhi::GPULight> g_Lights : register(t1);
-StructuredBuffer<srrhi::PerInstanceData> g_Instances : register(t2);
-StructuredBuffer<srrhi::MeshData> g_MeshData : register(t3);
-StructuredBuffer<srrhi::MaterialConstants> g_Materials : register(t4);
-StructuredBuffer<uint> g_Indices : register(t5);
-StructuredBuffer<srrhi::VertexQuantized> g_Vertices : register(t6);
-RWTexture2D<float4> g_Output : register(u0);
-RWTexture2D<float4> g_Accumulation : register(u1);
+static const srrhi::PathTracerConstants g_PathTracer = srrhi::PathTracerInputs::GetPathTracerCB();
+
+static const RaytracingAccelerationStructure            g_SceneAS      = srrhi::PathTracerInputs::GetSceneAS();
+static const StructuredBuffer<srrhi::GPULight>          g_Lights       = srrhi::PathTracerInputs::GetLights();
+static const StructuredBuffer<srrhi::PerInstanceData>   g_Instances    = srrhi::PathTracerInputs::GetInstances();
+static const StructuredBuffer<srrhi::MeshData>          g_MeshData     = srrhi::PathTracerInputs::GetMeshData();
+static const StructuredBuffer<srrhi::MaterialConstants> g_Materials    = srrhi::PathTracerInputs::GetMaterials();
+static const StructuredBuffer<uint>                     g_Indices      = srrhi::PathTracerInputs::GetIndices();
+static const StructuredBuffer<srrhi::VertexQuantized>   g_Vertices     = srrhi::PathTracerInputs::GetVertices();
+static RWTexture2D<float4>                              g_Output       = srrhi::PathTracerInputs::GetOutput();
+static RWTexture2D<float4>                              g_Accumulation = srrhi::PathTracerInputs::GetAccumulation();
 
 // ─── Transmissive BSDF Helpers ───────────────────────────────────────────────
 // Evaluates the exact dielectric Fresnel reflectance (unpolarized).

@@ -4,7 +4,9 @@
 #include "Camera.h"
 #include "Utilities.h"
 
-#include "shaders/ShaderShared.h"
+#include "shaders/srrhi/cpp/BasePass.h"
+#include "shaders/srrhi/cpp/GPUCulling.h"
+#include "shaders/srrhi/cpp/ResizeToNextLowestPowerOfTwo.h"
 
 extern RGTextureHandle g_RG_DepthTexture;
 extern RGTextureHandle g_RG_HZBTexture;
@@ -61,21 +63,19 @@ static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi:
 
     PROFILE_GPU_SCOPED("DownsampleTextureToPow2", commandList);
 
-    ResizeToNextLowestPowerOfTwoConstants consts;
-    consts.m_Width = outputTexture->getDesc().width;
-    consts.m_Height = outputTexture->getDesc().height;
-    consts.m_SamplerIdx = samplerIdx;
+    srrhi::ResizeToNextLowestPowerOfTwoConstants consts;
+    consts.SetWidth(outputTexture->getDesc().width);
+    consts.SetHeight(outputTexture->getDesc().height);
+    consts.SetSamplerIdx(samplerIdx);
 
-    nvrhi::BindingSetDesc bindingSetDesc;
-    bindingSetDesc.bindings =
-    {
-        nvrhi::BindingSetItem::PushConstants(0, sizeof(ResizeToNextLowestPowerOfTwoConstants)),
-        nvrhi::BindingSetItem::Texture_SRV(0, inputTexture),
-        nvrhi::BindingSetItem::Texture_UAV(0, outputTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet{0, 1, 0, 1})
-    };
+    srrhi::DownsampleTextureToPow2Inputs inputs;
+    inputs.SetConstants(&consts);
+    inputs.SetInputTexture(inputTexture);
+    inputs.SetOutputTexture(outputTexture, 0);
+    nvrhi::BindingSetDesc bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
 
-    const uint32_t dispatchX = DivideAndRoundUp(consts.m_Width, 8);
-    const uint32_t dispatchY = DivideAndRoundUp(consts.m_Height, 8);
+    const uint32_t dispatchX = DivideAndRoundUp(outputTexture->getDesc().width, 8);
+    const uint32_t dispatchY = DivideAndRoundUp(outputTexture->getDesc().height, 8);
     
     std::string shaderName = "ResizeToNextLowestPowerOfTwo_CS_ResizeToNextLowestPowerOfTwo_NUM_CHANNELS=";
     shaderName += nvrhi::getFormatInfo(outputTexture->getDesc().format).hasBlue ? "3" : "1";
@@ -86,7 +86,7 @@ static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi:
     params.bindingSetDesc = bindingSetDesc;
     params.dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 };
     params.pushConstants = &consts;
-    params.pushConstantsSize = sizeof(consts);
+    params.pushConstantsSize = srrhi::DownsampleTextureToPow2Inputs::PushConstantBytes;
     renderer->AddComputePass(params);
 }
 
@@ -205,46 +205,44 @@ protected:
             }
         }
 
-        const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(CullingConstants), args.m_CullingPhase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
+        const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::CullingConstants), args.m_CullingPhase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
         const nvrhi::BufferHandle cullCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cullCBD);
 
         const Matrix& projectionMatrix = renderer->m_Scene.m_Camera.GetProjMatrix();
 
-        CullingConstants cullData;
-        cullData.m_NumPrimitives = args.m_NumInstances;
-        memcpy(cullData.m_FrustumPlanes, args.m_FrustumPlanes, 5 * sizeof(Vector4));
-        cullData.m_View = args.m_View;
-        cullData.m_ViewProj = args.m_ViewProj;
-        cullData.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
-        cullData.m_EnableOcclusionCulling = (renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0;
-        cullData.m_HZBWidth = handles.hzb ? handles.hzb->getDesc().width : 0;
-        cullData.m_HZBHeight = handles.hzb ? handles.hzb->getDesc().height : 0;
-        cullData.m_Phase = args.m_CullingPhase;
-        cullData.m_UseMeshletRendering = renderer->m_UseMeshletRendering ? 1 : 0;
-        cullData.m_P00 = projectionMatrix.m[0][0];
-        cullData.m_P11 = projectionMatrix.m[1][1];
-        cullData.m_ForcedLOD = renderer->m_ForcedLOD;
-        cullData.m_InstanceBaseIndex = args.m_InstanceBaseIndex;
+        srrhi::CullingConstants cullData;
+        cullData.SetNumPrimitives(args.m_NumInstances);
+        cullData.SetFrustumPlanes(reinterpret_cast<const DirectX::XMFLOAT4*>(args.m_FrustumPlanes));
+        cullData.SetView(args.m_View);
+        cullData.SetViewProj(args.m_ViewProj);
+        cullData.SetEnableFrustumCulling(renderer->m_EnableFrustumCulling ? 1 : 0);
+        cullData.SetEnableOcclusionCulling((renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
+        cullData.SetHZBWidth(handles.hzb ? handles.hzb->getDesc().width : 0);
+        cullData.SetHZBHeight(handles.hzb ? handles.hzb->getDesc().height : 0);
+        cullData.SetPhase(args.m_CullingPhase);
+        cullData.SetUseMeshletRendering(renderer->m_UseMeshletRendering ? 1 : 0);
+        cullData.SetP00(projectionMatrix.m[0][0]);
+        cullData.SetP11(projectionMatrix.m[1][1]);
+        cullData.SetForcedLOD(renderer->m_ForcedLOD);
+        cullData.SetInstanceBaseIndex(args.m_InstanceBaseIndex);
         commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
-        nvrhi::BindingSetDesc cullBset;
-        cullBset.bindings =
-        {
-            nvrhi::BindingSetItem::ConstantBuffer(0, cullCB),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(1, handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, handles.visibleIndirect),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, handles.visibleCount),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, handles.occludedIndices ? handles.occludedIndices : CommonResources::GetInstance().DummyUAVStructuredBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(3, handles.occludedCount ? handles.occludedCount : CommonResources::GetInstance().DummyUAVStructuredBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(4, (args.m_CullingPhase == 0 && handles.occludedIndirect) ? handles.occludedIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(5, handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummyUAVStructuredBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(6, handles.meshletJobCount ? handles.meshletJobCount : CommonResources::GetInstance().DummyUAVStructuredBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(7, handles.meshletIndirect ? handles.meshletIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer),
-            // u8: per-instance LOD index output — written for every visible instance
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(8, renderer->m_Scene.m_InstanceLODBuffer),
-        };
+        srrhi::GPUCullingInputs inputs;
+        inputs.SetCullingCB(cullCB);
+        inputs.SetInstanceData(renderer->m_Scene.m_InstanceDataBuffer);
+        inputs.SetHZB(handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite);
+        inputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
+        inputs.SetVisibleArgs(handles.visibleIndirect);
+        inputs.SetVisibleCount(handles.visibleCount);
+        inputs.SetOccludedIndices(handles.occludedIndices ? handles.occludedIndices : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetOccludedCount(handles.occludedCount ? handles.occludedCount : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetDispatchIndirectArgs((args.m_CullingPhase == 0 && handles.occludedIndirect) ? handles.occludedIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetMeshletJobs(handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetMeshletJobCount(handles.meshletJobCount ? handles.meshletJobCount : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetMeshletIndirectArgs(handles.meshletIndirect ? handles.meshletIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetInstanceLOD(renderer->m_Scene.m_InstanceLODBuffer);
+
+        nvrhi::BindingSetDesc cullBset = Renderer::CreateBindingSetDesc(inputs);
 
         if (args.m_CullingPhase == 0)
         {
@@ -348,66 +346,62 @@ protected:
         viewportState.scissorRects[0].maxX = (int)w;
         viewportState.scissorRects[0].maxY = (int)h;
 
-        const nvrhi::BufferDesc cbd = nvrhi::utils::CreateVolatileConstantBufferDesc(
-            (uint32_t)sizeof(ForwardLightingPerFrameData), "PerFrameCB", 1);
+        const nvrhi::BufferDesc cbd = nvrhi::utils::CreateVolatileConstantBufferDesc((uint32_t)sizeof(srrhi::BasePassConstants), "PerFrameCB", 1);
         const nvrhi::BufferHandle perFrameCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cbd);
 
-        nvrhi::BindingSetDesc bset;
-        bset.bindings =
-        {
-            nvrhi::BindingSetItem::ConstantBuffer(0, perFrameCB),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(0, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, renderer->m_Scene.m_MaterialConstantsBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_VertexBufferQuantized),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, renderer->m_Scene.m_MeshletBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, renderer->m_Scene.m_MeshletVerticesBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, renderer->m_Scene.m_MeshletTrianglesBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummySRVStructuredBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(7, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(8, handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite),
-            nvrhi::BindingSetItem::RayTracingAccelStruct(9, renderer->m_Scene.m_TLAS),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_IndexBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(11, opaqueColor),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_LightBuffer),
-        };
-
-        const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
-        const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
-
-        ForwardLightingPerFrameData cb{};
-        cb.m_View = renderer->m_Scene.m_View;
-        cb.m_PrevView = renderer->m_Scene.m_ViewPrev;
-        memcpy(cb.m_FrustumPlanes, args.m_FrustumPlanes, sizeof(Vector4) * 5);
-
         Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
-        cb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 0.0f };
-
         Vector3 cullingCamPos = camPos;
         if (renderer->m_FreezeCullingCamera)
         {
             cullingCamPos = renderer->m_Scene.m_FrozenCullingCameraPos;
         }
-        cb.m_CullingCameraPos = Vector4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f };
 
-        cb.m_LightCount = renderer->m_Scene.m_LightCount;
-        cb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
-        cb.m_DebugMode = (uint32_t)renderer->m_DebugMode;
-        cb.m_EnableFrustumCulling = renderer->m_EnableFrustumCulling ? 1 : 0;
-        cb.m_EnableConeCulling = (renderer->m_EnableConeCulling && args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? 1 : 0;
-        cb.m_EnableOcclusionCulling = (renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0;
-        cb.m_HZBWidth = handles.hzb ? (uint32_t)handles.hzb->getDesc().width : 0;
-        cb.m_HZBHeight = handles.hzb ? (uint32_t)handles.hzb->getDesc().height : 0;
+        srrhi::BasePassConstants cb;
+        cb.SetView(renderer->m_Scene.m_View);
+        cb.SetPrevView(renderer->m_Scene.m_ViewPrev);
+        cb.SetFrustumPlanes(reinterpret_cast<const DirectX::XMFLOAT4*>(args.m_FrustumPlanes));
+        cb.SetCameraPos(DirectX::XMFLOAT4{ camPos.x, camPos.y, camPos.z, 0.0f });
+        cb.SetCullingCameraPos(DirectX::XMFLOAT4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f });
+        cb.SetLightCount(renderer->m_Scene.m_LightCount);
+        cb.SetEnableRTShadows(renderer->m_EnableRTShadows ? 1 : 0);
+        cb.SetDebugMode((uint32_t)renderer->m_DebugMode);
+        cb.SetEnableFrustumCulling(renderer->m_EnableFrustumCulling ? 1 : 0);
+        cb.SetEnableConeCulling((renderer->m_EnableConeCulling && args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? 1 : 0);
+        cb.SetEnableOcclusionCulling((renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
+        cb.SetHZBWidth(handles.hzb ? (uint32_t)handles.hzb->getDesc().width : 0);
+        cb.SetHZBHeight(handles.hzb ? (uint32_t)handles.hzb->getDesc().height : 0);
         // FIXME: Switch to m_MatViewToClip (jittered) once TAA is implemented
-        cb.m_P00 = cb.m_View.m_MatViewToClipNoOffset._11;
-        cb.m_P11 = cb.m_View.m_MatViewToClipNoOffset._22;
-        cb.m_OpaqueColorDimensions = Vector2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height };
-        cb.m_OpaqueColorMipCount = opaqueColor->getDesc().mipLevels;
-        cb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;
-        cb.m_SunDirection = renderer->m_Scene.GetSunDirection();
-        cb.m_RenderingMode = (uint32_t)renderer->m_Mode;
-        cb.m_RadianceMipCount = CommonResources::GetInstance().m_RadianceMipCount;
+        cb.SetP00(renderer->m_Scene.m_View.m_MatViewToClipNoOffset._11);
+        cb.SetP11(renderer->m_Scene.m_View.m_MatViewToClipNoOffset._22);
+        cb.SetOpaqueColorDimensions(DirectX::XMFLOAT2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height });
+        cb.SetOpaqueColorMipCount(opaqueColor->getDesc().mipLevels);
+        cb.SetEnableSky(renderer->m_EnableSky ? 1 : 0);
+        cb.SetSunDirection(renderer->m_Scene.GetSunDirection());
+        cb.SetRenderingMode((uint32_t)renderer->m_Mode);
+        cb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
 
         commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
+
+        srrhi::BasePassInputs inputs;
+        inputs.SetPerFrameCB(perFrameCB);
+        inputs.SetInstances(renderer->m_Scene.m_InstanceDataBuffer);
+        inputs.SetMaterials(renderer->m_Scene.m_MaterialConstantsBuffer);
+        inputs.SetVertices(renderer->m_Scene.m_VertexBufferQuantized);
+        inputs.SetMeshlets(renderer->m_Scene.m_MeshletBuffer);
+        inputs.SetMeshletVertices(renderer->m_Scene.m_MeshletVerticesBuffer);
+        inputs.SetMeshletTriangles(renderer->m_Scene.m_MeshletTrianglesBuffer);
+        inputs.SetMeshletJobs(meshletJob ? meshletJob : CommonResources::GetInstance().DummySRVStructuredBuffer);
+        inputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
+        inputs.SetHZB(handles.hzb);
+        inputs.SetSceneAS(renderer->m_Scene.m_TLAS);
+        inputs.SetIndices(renderer->m_Scene.m_IndexBuffer);
+        inputs.SetOpaqueColor(opaqueColor);
+        inputs.SetLights(renderer->m_Scene.m_LightBuffer);
+
+        nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
+
+        const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
+        const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
         nvrhi::RenderState renderState;
         renderState.rasterState = args.m_BackFaceCull ? CommonResources::GetInstance().RasterCullBack : CommonResources::GetInstance().RasterCullNone;

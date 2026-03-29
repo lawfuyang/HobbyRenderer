@@ -1,0 +1,39 @@
+#include "Common.sr"
+#include "Instance.sr"
+#include "Mesh.sr"
+
+cbuffer CullingConstants
+{
+    float4 m_FrustumPlanes[5];
+    float4x4 m_View;
+    float4x4 m_ViewProj;
+    uint m_NumPrimitives;
+    uint m_EnableFrustumCulling;
+    uint m_EnableOcclusionCulling;
+    uint m_HZBWidth;
+    uint m_HZBHeight;
+    uint m_Phase;
+    uint m_UseMeshletRendering;
+    float m_P00;
+    float m_P11;
+    int m_ForcedLOD;
+    uint m_InstanceBaseIndex;
+};
+
+srinput GPUCullingInputs
+{
+    CullingConstants m_CullingCB;
+
+    StructuredBuffer<PerInstanceData> InstanceData;                          // t0
+    Texture2D<float> HZB;                                                    // t1
+    StructuredBuffer<MeshData> MeshData;                                     // t2
+    RWStructuredBuffer<DrawIndexedIndirectArguments> VisibleArgs;             // u0
+    RWStructuredBuffer<uint> VisibleCount;                                    // u1
+    RWStructuredBuffer<uint> OccludedIndices;                                 // u2
+    RWStructuredBuffer<uint> OccludedCount;                                   // u3
+    RWStructuredBuffer<DispatchIndirectArguments> DispatchIndirectArgs;       // u4
+    RWStructuredBuffer<MeshletJob> MeshletJobs;                               // u5
+    RWStructuredBuffer<uint> MeshletJobCount;                                 // u6
+    RWStructuredBuffer<DispatchIndirectArguments> MeshletIndirectArgs;        // u7
+    RWStructuredBuffer<uint> InstanceLOD;                                     // u8
+};

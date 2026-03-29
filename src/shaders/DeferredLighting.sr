@@ -1,0 +1,39 @@
+#include "Common.sr"
+#include "Instance.sr"
+#include "Mesh.sr"
+#include "GPULight.sr"
+
+cbuffer DeferredLightingConstants
+{
+    PlanarViewConstants m_View;
+    float4 m_CameraPos;
+    float3 m_SunDirection;
+    uint m_LightCount;
+    uint m_EnableRTShadows;
+    uint m_DebugMode;
+    uint m_EnableSky;
+    uint m_RenderingMode;
+    uint m_RadianceMipCount;
+    uint m_UseReSTIRDI;
+    uint m_UseReSTIRDIDenoised;
+};
+
+srinput DeferredLightingInputs
+{
+    DeferredLightingConstants m_DeferredCB;
+
+    Texture2D<float4> GBufferAlbedo;                      // t0
+    Texture2D<float2> GBufferNormals;                     // t1
+    Texture2D<float2> GBufferORM;                         // t2
+    Texture2D<float4> GBufferEmissive;                    // t3
+    Texture2D<float>  Depth;                              // t4
+    RaytracingAccelerationStructure SceneAS;               // t5
+    StructuredBuffer<GPULight> Lights;                    // t6
+    Texture2D<float2> GBufferMotion;                      // t7
+    Texture2D<float4> RTXDIDIComposited;                  // t8
+    StructuredBuffer<PerInstanceData> Instances;          // t9
+    StructuredBuffer<MaterialConstants> Materials;        // t10
+    StructuredBuffer<VertexQuantized> Vertices;           // t11
+    StructuredBuffer<MeshData> MeshData;                  // t12
+    StructuredBuffer<uint> Indices;                       // t13
+};

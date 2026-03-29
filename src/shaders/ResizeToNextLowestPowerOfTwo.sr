@@ -1,0 +1,21 @@
+#if NUM_CHANNELS == 3
+    #define RESIZETOPOW2_TYPE float3
+#else
+    #define RESIZETOPOW2_TYPE float
+#endif
+
+cbuffer ResizeToNextLowestPowerOfTwoConstants
+{
+    uint m_Width;
+    uint m_Height;
+    uint m_SamplerIdx;
+};
+
+srinput DownsampleTextureToPow2Inputs
+{
+    [push_constant]
+    ResizeToNextLowestPowerOfTwoConstants m_Constants;
+
+    Texture2D<RESIZETOPOW2_TYPE> InputTexture;
+    RWTexture2D<RESIZETOPOW2_TYPE> OutputTexture;
+};

@@ -1,28 +1,26 @@
-﻿#include "ShaderShared.h"
-#include "Culling.h"
+﻿#include "Culling.h"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
 #include "MeshCommon.hlsli"
 
-cbuffer PerFrameCB : register(b0)
-{
-    ForwardLightingPerFrameData g_PerFrame;
-};
+#include "srrhi/hlsl/BasePass.hlsli"
 
-StructuredBuffer<srrhi::PerInstanceData> g_Instances : register(t0);
-StructuredBuffer<srrhi::MaterialConstants> g_Materials : register(t1);
-StructuredBuffer<srrhi::VertexQuantized> g_Vertices : register(t2);
-StructuredBuffer<srrhi::Meshlet> g_Meshlets : register(t3);
-StructuredBuffer<uint> g_MeshletVertices : register(t4);
-StructuredBuffer<uint> g_MeshletTriangles : register(t5);
-StructuredBuffer<srrhi::MeshletJob> g_MeshletJobs : register(t6);
-StructuredBuffer<srrhi::MeshData> g_MeshData : register(t7);
-StructuredBuffer<uint> g_Indices : register(t10);
-Texture2D<float> g_HZB : register(t8);
-RaytracingAccelerationStructure g_SceneAS : register(t9);
-Texture2D g_OpaqueColor : register(t11);
-StructuredBuffer<srrhi::GPULight> g_Lights : register(t12);
+static const srrhi::BasePassConstants g_PerFrame = srrhi::BasePassInputs::GetPerFrameCB();
+
+static const StructuredBuffer<srrhi::PerInstanceData>  g_Instances        = srrhi::BasePassInputs::GetInstances();
+static const StructuredBuffer<srrhi::MaterialConstants> g_Materials        = srrhi::BasePassInputs::GetMaterials();
+static const StructuredBuffer<srrhi::VertexQuantized>   g_Vertices         = srrhi::BasePassInputs::GetVertices();
+static const StructuredBuffer<srrhi::Meshlet>           g_Meshlets         = srrhi::BasePassInputs::GetMeshlets();
+static const StructuredBuffer<uint>                     g_MeshletVertices  = srrhi::BasePassInputs::GetMeshletVertices();
+static const StructuredBuffer<uint>                     g_MeshletTriangles = srrhi::BasePassInputs::GetMeshletTriangles();
+static const StructuredBuffer<srrhi::MeshletJob>        g_MeshletJobs      = srrhi::BasePassInputs::GetMeshletJobs();
+static const StructuredBuffer<srrhi::MeshData>          g_MeshData         = srrhi::BasePassInputs::GetMeshData();
+static const Texture2D<float>                           g_HZB              = srrhi::BasePassInputs::GetHZB();
+static const RaytracingAccelerationStructure            g_SceneAS          = srrhi::BasePassInputs::GetSceneAS();
+static const StructuredBuffer<uint>                     g_Indices          = srrhi::BasePassInputs::GetIndices();
+static const Texture2D<float4>                          g_OpaqueColor      = srrhi::BasePassInputs::GetOpaqueColor();
+static const StructuredBuffer<srrhi::GPULight>          g_Lights           = srrhi::BasePassInputs::GetLights();
 
 void UnpackMeshletBV(srrhi::Meshlet m, out float3 center, out float radius)
 {

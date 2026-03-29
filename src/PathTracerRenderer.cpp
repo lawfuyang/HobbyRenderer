@@ -1,7 +1,7 @@
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
-#include "shaders/ShaderShared.h"
+#include "shaders/srrhi/cpp/PathTracer.h"
 
 extern RGTextureHandle g_RG_HDRColor;
 
@@ -57,18 +57,18 @@ public:
         // Pause animations
         renderer->m_EnableAnimations = false;
 
-        const nvrhi::BufferDesc pathTracerCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(PathTracerConstants), "PathTracerCB", 1);
+        const nvrhi::BufferDesc pathTracerCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::PathTracerConstants), "PathTracerCB", 1);
         const nvrhi::BufferHandle pathTracerCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(pathTracerCBD);
 
-        PathTracerConstants cb{};
-        cb.m_View = renderer->m_Scene.m_View;
-        cb.m_CameraPos = Vector4{ renderer->m_Scene.m_Camera.GetPosition().x, renderer->m_Scene.m_Camera.GetPosition().y, renderer->m_Scene.m_Camera.GetPosition().z, 1.0f };
-        cb.m_LightCount = renderer->m_Scene.m_LightCount;
-        cb.m_AccumulationIndex = m_AccumulationIndex;
-        cb.m_FrameIndex = renderer->m_FrameNumber;
-        cb.m_MaxBounces = renderer->m_PathTracerMaxBounces;
-        cb.m_Jitter = Vector2{ Halton(m_AccumulationIndex + 1, 2) - 0.5f, Halton(m_AccumulationIndex + 1, 3) - 0.5f };
-        cb.m_SunDirection = renderer->m_Scene.GetSunDirection();
+        srrhi::PathTracerConstants cb;
+        cb.SetView(renderer->m_Scene.m_View);
+        cb.SetCameraPos(DirectX::XMFLOAT4{ renderer->m_Scene.m_Camera.GetPosition().x, renderer->m_Scene.m_Camera.GetPosition().y, renderer->m_Scene.m_Camera.GetPosition().z, 1.0f });
+        cb.SetLightCount(renderer->m_Scene.m_LightCount);
+        cb.SetAccumulationIndex(m_AccumulationIndex);
+        cb.SetFrameIndex(renderer->m_FrameNumber);
+        cb.SetMaxBounces(renderer->m_PathTracerMaxBounces);
+        cb.SetJitter(DirectX::XMFLOAT2{ Halton(m_AccumulationIndex + 1, 2) - 0.5f, Halton(m_AccumulationIndex + 1, 3) - 0.5f });
+        cb.SetSunDirection(renderer->m_Scene.GetSunDirection());
         {
             // Sun angular radius for soft shadows — use the directional light's m_AngularSize field.
             // m_Lights[0] is guaranteed to be a directional light (ensured by SortLightsAddDefaultDirectionalLight).
@@ -76,24 +76,23 @@ public:
                 ? renderer->m_Scene.m_Lights[0].m_AngularSize
                 : 0.533f; // fallback to real sun size in degrees
             const float halfAngleRad = angularSizeDeg * 0.5f * (DirectX::XM_PI / 180.0f);
-            cb.m_CosSunAngularRadius = cosf(halfAngleRad);
+            cb.SetCosSunAngularRadius(cosf(halfAngleRad));
         }
 
         commandList->writeBuffer(pathTracerCB, &cb, sizeof(cb), 0);
 
-        nvrhi::BindingSetDesc bset;
-        bset.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, pathTracerCB),
-            nvrhi::BindingSetItem::RayTracingAccelStruct(0, renderer->m_Scene.m_TLAS),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(1, renderer->m_Scene.m_LightBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(2, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(3, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(4, renderer->m_Scene.m_MaterialConstantsBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(5, renderer->m_Scene.m_IndexBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_VertexBufferQuantized),
-            nvrhi::BindingSetItem::Texture_UAV(0, hdrColor),
-            nvrhi::BindingSetItem::Texture_UAV(1, accumBuffer)
-        };
+        srrhi::PathTracerInputs ptInputs;
+        ptInputs.SetPathTracerCB(pathTracerCB);
+        ptInputs.SetSceneAS(renderer->m_Scene.m_TLAS);
+        ptInputs.SetLights(renderer->m_Scene.m_LightBuffer);
+        ptInputs.SetInstances(renderer->m_Scene.m_InstanceDataBuffer);
+        ptInputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
+        ptInputs.SetMaterials(renderer->m_Scene.m_MaterialConstantsBuffer);
+        ptInputs.SetIndices(renderer->m_Scene.m_IndexBuffer);
+        ptInputs.SetVertices(renderer->m_Scene.m_VertexBufferQuantized);
+        ptInputs.SetOutput(hdrColor, 0);
+        ptInputs.SetAccumulation(accumBuffer, 0);
+        nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(ptInputs);
 
         Renderer::RenderPassParams params{
             .commandList = commandList,

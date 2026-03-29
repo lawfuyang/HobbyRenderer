@@ -23,7 +23,7 @@ float3 MatrixMultiply(float3 v, float3x3 m)
     return mul(v, m);
 }
 
-float GetMaxScale(Matrix m)
+float GetMaxScale(float4x4 m)
 {
     return max(length(m[0].xyz), max(length(m[1].xyz), length(m[2].xyz)));
 }

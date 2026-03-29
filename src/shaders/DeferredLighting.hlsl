@@ -1,30 +1,27 @@
 ﻿#define DEFERRED_PASS
-#include "ShaderShared.h"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
 
 #include "srrhi/hlsl/GPULight.hlsli"
+#include "srrhi/hlsl/DeferredLighting.hlsli"
 
-cbuffer DeferredCB : register(b0)
-{
-    DeferredLightingConstants g_Deferred;
-};
+static const srrhi::DeferredLightingConstants g_Deferred = srrhi::DeferredLightingInputs::GetDeferredCB();
 
-Texture2D<float4> g_GBufferAlbedo    : register(t0);
-Texture2D<float2> g_GBufferNormals   : register(t1);
-Texture2D<float2> g_GBufferORM       : register(t2);
-Texture2D<float4> g_GBufferEmissive  : register(t3);
-Texture2D<float2> g_GBufferMotion    : register(t7);
-Texture2D<float>  g_Depth            : register(t4);
-RaytracingAccelerationStructure g_SceneAS : register(t5);
-StructuredBuffer<srrhi::PerInstanceData> g_Instances : register(t10);
-StructuredBuffer<srrhi::MaterialConstants> g_Materials : register(t11);
-StructuredBuffer<srrhi::VertexQuantized> g_Vertices : register(t12);
-StructuredBuffer<srrhi::MeshData> g_MeshData : register(t13);
-StructuredBuffer<uint> g_Indices : register(t14);
-StructuredBuffer<srrhi::GPULight> g_Lights : register(t6);
-Texture2D<float4> g_RTXDIDIComposited : register(t8);  // CompositingPass output (DI + emissive, already remodulated)
+static const Texture2D<float4>                          g_GBufferAlbedo      = srrhi::DeferredLightingInputs::GetGBufferAlbedo();
+static const Texture2D<float2>                          g_GBufferNormals     = srrhi::DeferredLightingInputs::GetGBufferNormals();
+static const Texture2D<float2>                          g_GBufferORM         = srrhi::DeferredLightingInputs::GetGBufferORM();
+static const Texture2D<float4>                          g_GBufferEmissive    = srrhi::DeferredLightingInputs::GetGBufferEmissive();
+static const Texture2D<float2>                          g_GBufferMotion      = srrhi::DeferredLightingInputs::GetGBufferMotion();
+static const Texture2D<float>                           g_Depth              = srrhi::DeferredLightingInputs::GetDepth();
+static const RaytracingAccelerationStructure            g_SceneAS            = srrhi::DeferredLightingInputs::GetSceneAS();
+static const StructuredBuffer<srrhi::PerInstanceData>   g_Instances          = srrhi::DeferredLightingInputs::GetInstances();
+static const StructuredBuffer<srrhi::MaterialConstants> g_Materials          = srrhi::DeferredLightingInputs::GetMaterials();
+static const StructuredBuffer<srrhi::VertexQuantized>   g_Vertices           = srrhi::DeferredLightingInputs::GetVertices();
+static const StructuredBuffer<srrhi::MeshData>          g_MeshData           = srrhi::DeferredLightingInputs::GetMeshData();
+static const StructuredBuffer<uint>                     g_Indices            = srrhi::DeferredLightingInputs::GetIndices();
+static const StructuredBuffer<srrhi::GPULight>          g_Lights             = srrhi::DeferredLightingInputs::GetLights();
+static const Texture2D<float4>                          g_RTXDIDIComposited  = srrhi::DeferredLightingInputs::GetRTXDIDIComposited();
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {

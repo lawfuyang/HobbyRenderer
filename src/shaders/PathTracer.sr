@@ -1,0 +1,32 @@
+#include "Common.sr"
+#include "Instance.sr"
+#include "Mesh.sr"
+#include "GPULight.sr"
+
+cbuffer PathTracerConstants
+{
+    PlanarViewConstants m_View;
+    float4 m_CameraPos;
+    uint m_LightCount;
+    uint m_AccumulationIndex;
+    uint m_FrameIndex;
+    uint m_MaxBounces;
+    float2 m_Jitter;
+    float3 m_SunDirection;
+    float m_CosSunAngularRadius;
+};
+
+srinput PathTracerInputs
+{
+    PathTracerConstants m_PathTracerCB;
+
+    RaytracingAccelerationStructure SceneAS;         // t0
+    StructuredBuffer<GPULight> Lights;               // t1
+    StructuredBuffer<PerInstanceData> Instances;     // t2
+    StructuredBuffer<MeshData> MeshData;             // t3
+    StructuredBuffer<MaterialConstants> Materials;   // t4
+    StructuredBuffer<uint> Indices;                  // t5
+    StructuredBuffer<VertexQuantized> Vertices;      // t6
+    RWTexture2D<float4> Output;                      // u0
+    RWTexture2D<float4> Accumulation;                // u1
+};

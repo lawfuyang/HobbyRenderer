@@ -1,7 +1,7 @@
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
-#include "shaders/ShaderShared.h"
+#include "shaders/srrhi/cpp/DeferredLighting.h"
 
 extern RGTextureHandle g_RG_DepthTexture;
 extern RGTextureHandle g_RG_GBufferAlbedo;
@@ -55,21 +55,21 @@ public:
 
 
         // Deferred CB
-        const nvrhi::BufferDesc deferredCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(DeferredLightingConstants), "DeferredCB", 1);
+        const nvrhi::BufferDesc deferredCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::DeferredLightingConstants), "DeferredCB", 1);
         const nvrhi::BufferHandle deferredCB = device->createBuffer(deferredCBD);
 
-        DeferredLightingConstants dcb{};
-        dcb.m_View = renderer->m_Scene.m_View;
-        dcb.m_CameraPos = Vector4{ camPos.x, camPos.y, camPos.z, 1.0f };
-        dcb.m_SunDirection = renderer->m_Scene.GetSunDirection();
-        dcb.m_EnableSky = renderer->m_EnableSky ? 1 : 0;
-        dcb.m_RenderingMode = (uint32_t)renderer->m_Mode;
-        dcb.m_RadianceMipCount = CommonResources::GetInstance().m_RadianceMipCount;
-        dcb.m_LightCount = renderer->m_Scene.m_LightCount;
-        dcb.m_EnableRTShadows = renderer->m_EnableRTShadows ? 1 : 0;
-        dcb.m_DebugMode = renderer->m_DebugMode;
-        dcb.m_UseReSTIRDI = renderer->m_EnableReSTIRDI ? 1u : 0u;
-        dcb.m_UseReSTIRDIDenoised = 0u; // compositing is done by CompositingPass
+        srrhi::DeferredLightingConstants dcb;
+        dcb.SetView(renderer->m_Scene.m_View);
+        dcb.SetCameraPos(DirectX::XMFLOAT4{ camPos.x, camPos.y, camPos.z, 1.0f });
+        dcb.SetSunDirection(renderer->m_Scene.GetSunDirection());
+        dcb.SetEnableSky(renderer->m_EnableSky ? 1 : 0);
+        dcb.SetRenderingMode((uint32_t)renderer->m_Mode);
+        dcb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
+        dcb.SetLightCount(renderer->m_Scene.m_LightCount);
+        dcb.SetEnableRTShadows(renderer->m_EnableRTShadows ? 1 : 0);
+        dcb.SetDebugMode(renderer->m_DebugMode);
+        dcb.SetUseReSTIRDI(renderer->m_EnableReSTIRDI ? 1u : 0u);
+        dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
         // t8: RTXDI composited output (DI + emissive, already remodulated by CompositingPass)
@@ -77,24 +77,23 @@ public:
             ? renderGraph.GetTexture(g_RG_RTXDIDIComposited, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureBlack;
 
-        nvrhi::BindingSetDesc bset;
-        bset.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, deferredCB),
-            nvrhi::BindingSetItem::Texture_SRV(0, gbufferAlbedo),
-            nvrhi::BindingSetItem::Texture_SRV(1, gbufferNormals),
-            nvrhi::BindingSetItem::Texture_SRV(2, gbufferORM),
-            nvrhi::BindingSetItem::Texture_SRV(3, gbufferEmissive),
-            nvrhi::BindingSetItem::Texture_SRV(7, gbufferMotionVectors),
-            nvrhi::BindingSetItem::Texture_SRV(4, depthTexture),
-            nvrhi::BindingSetItem::RayTracingAccelStruct(5, renderer->m_Scene.m_TLAS),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(6, renderer->m_Scene.m_LightBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(10, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(11, renderer->m_Scene.m_MaterialConstantsBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(12, renderer->m_Scene.m_VertexBufferQuantized),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(13, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(14, renderer->m_Scene.m_IndexBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(8,  rtxdiComposited),
-        };
+        srrhi::DeferredLightingInputs dlInputs;
+        dlInputs.SetDeferredCB(deferredCB);
+        dlInputs.SetGBufferAlbedo(gbufferAlbedo);
+        dlInputs.SetGBufferNormals(gbufferNormals);
+        dlInputs.SetGBufferORM(gbufferORM);
+        dlInputs.SetGBufferEmissive(gbufferEmissive);
+        dlInputs.SetGBufferMotion(gbufferMotionVectors);
+        dlInputs.SetDepth(depthTexture);
+        dlInputs.SetSceneAS(renderer->m_Scene.m_TLAS);
+        dlInputs.SetLights(renderer->m_Scene.m_LightBuffer);
+        dlInputs.SetInstances(renderer->m_Scene.m_InstanceDataBuffer);
+        dlInputs.SetMaterials(renderer->m_Scene.m_MaterialConstantsBuffer);
+        dlInputs.SetVertices(renderer->m_Scene.m_VertexBufferQuantized);
+        dlInputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
+        dlInputs.SetIndices(renderer->m_Scene.m_IndexBuffer);
+        dlInputs.SetRTXDIDIComposited(rtxdiComposited);
+        nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(dlInputs);
 
         nvrhi::FramebufferDesc fbDesc;
         fbDesc.addColorAttachment(hdrColor);

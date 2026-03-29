@@ -1,0 +1,48 @@
+#include "Common.sr"
+#include "Instance.sr"
+#include "Mesh.sr"
+#include "GPULight.sr"
+
+cbuffer BasePassConstants
+{
+    PlanarViewConstants m_View;
+    PlanarViewConstants m_PrevView;
+    float4 m_FrustumPlanes[5];
+    float4 m_CameraPos;
+    float4 m_CullingCameraPos;
+    uint m_LightCount;
+    uint m_EnableRTShadows;
+    uint m_DebugMode;
+    uint m_EnableFrustumCulling;
+    uint m_EnableConeCulling;
+    uint m_EnableOcclusionCulling;
+    uint m_HZBWidth;
+    uint m_HZBHeight;
+    float m_P00;
+    float m_P11;
+    float2 m_OpaqueColorDimensions;
+    float3 m_SunDirection;
+    uint m_EnableSky;
+    uint m_RenderingMode;
+    uint m_RadianceMipCount;
+    uint m_OpaqueColorMipCount;
+};
+
+srinput BasePassInputs
+{
+    BasePassConstants m_PerFrameCB;
+
+    StructuredBuffer<PerInstanceData> Instances;         // t0
+    StructuredBuffer<MaterialConstants> Materials;        // t1
+    StructuredBuffer<VertexQuantized> Vertices;           // t2
+    StructuredBuffer<Meshlet> Meshlets;                   // t3
+    StructuredBuffer<uint> MeshletVertices;               // t4
+    StructuredBuffer<uint> MeshletTriangles;              // t5
+    StructuredBuffer<MeshletJob> MeshletJobs;             // t6
+    StructuredBuffer<MeshData> MeshData;                  // t7
+    Texture2D<float> HZB;                                 // t8
+    RaytracingAccelerationStructure SceneAS;               // t9
+    StructuredBuffer<uint> Indices;                       // t10
+    Texture2D<float4> OpaqueColor;                        // t11
+    StructuredBuffer<GPULight> Lights;                    // t12
+};
