@@ -159,20 +159,6 @@ struct VertexQuantized
   }
 #endif // __cplusplus
 
-struct GPULight
-{
-    Vector3 m_Position;
-    float m_Intensity;
-    Vector3 m_Direction;
-    uint32_t m_Type;
-    Vector3 m_Color;
-    float m_Range;
-    float m_SpotInnerConeAngle;
-    float m_SpotOuterConeAngle;
-    float m_Radius;
-    float m_CosSunAngularRadius;
-};
-
 // Shared per-frame data structure (one definition used by both C++ and HLSL).
 struct ForwardLightingPerFrameData
 {

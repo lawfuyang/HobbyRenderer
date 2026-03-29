@@ -10,6 +10,8 @@
 // RNG for stochastic sampling — only present in path-tracer compute kernels, not rasterized passes
 #include "RNG.hlsli"
 
+#include "srrhi/hlsl/GPULight.hlsli"
+
 float Luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 float calcLuminance(float3 c) { return Luminance(c); }
@@ -286,7 +288,7 @@ struct LightingInputs
     StructuredBuffer<MaterialConstants> materials;
     StructuredBuffer<uint> indices;
     StructuredBuffer<VertexQuantized> vertices;
-    StructuredBuffer<GPULight> lights;
+    StructuredBuffer<srrhi::GPULight> lights;
 
     float3 sunRadiance; // Atmosphere-aware direct radiance (already contains BRDF/n.l)
     float3 sunDirection;
@@ -498,7 +500,7 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
 // ─── Rasterized lighting path (deterministic, single-ray hard shadows) ────────
 // These implementations are used by all rasterized passes (forward, deferred, sky).
 // No RNG — shadows are either pre-computed (sunShadow field) or single RT queries.
-LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight light)
+LightingComponents ComputeDirectionalLighting(LightingInputs inputs, srrhi::GPULight light)
 {
     LightingComponents result;
     result.diffuse = 0;
@@ -527,7 +529,7 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
     return EvaluateDirectLight(inputs, radiance, shadow);
 }
 
-LightingComponents ComputeSpotLighting(LightingInputs inputs, GPULight light)
+LightingComponents ComputeSpotLighting(LightingInputs inputs, srrhi::GPULight light)
 {
     LightingComponents result;
     result.diffuse = 0;
@@ -583,7 +585,7 @@ LightingComponents AccumulateDirectLighting(LightingInputs inputs, uint lightCou
 
     for (uint i = 0; i < lightCount; ++i)
     {
-        GPULight light = inputs.lights[i];
+        srrhi::GPULight light = inputs.lights[i];
         
         [branch]
         if (light.m_Type == 0) // Directional
@@ -713,7 +715,7 @@ float3 SampleConeSolidAngle(float3 dir, float cosHalfAngle, float2 u)
 // samples gives an unbiased penumbra estimate without explicit PDF weighting
 // because EvaluateDirectLight already applies NdotL and the disc is treated as
 // a uniform emitter (radiance is constant across the visible disc).
-LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight light, float cosSunAngularRadius, inout RNG rng)
+LightingComponents ComputeDirectionalLighting(LightingInputs inputs, srrhi::GPULight light, float cosSunAngularRadius, inout RNG rng)
 {
     LightingComponents result;
     result.diffuse  = 0;
@@ -749,7 +751,7 @@ LightingComponents ComputeDirectionalLighting(LightingInputs inputs, GPULight li
 // a hard-shadow point light (but still fires LIGHT_SHADOW_SAMPLES identical rays;
 // reduce LIGHT_SHADOW_SAMPLES or set radius > 0 for efficiency).
 // Attenuation is evaluated at the light centre, same as the rasterized path.
-LightingComponents ComputePointLighting(LightingInputs inputs, GPULight light, inout RNG rng)
+LightingComponents ComputePointLighting(LightingInputs inputs, srrhi::GPULight light, inout RNG rng)
 {
     LightingComponents result;
     result.diffuse  = 0;
@@ -806,7 +808,7 @@ LightingComponents ComputePointLighting(LightingInputs inputs, GPULight light, i
 // Spot light with radius-based sphere-area soft shadow.
 // Cone attenuation is evaluated with the unperturbed centre direction to avoid
 // incorrect penumbra / banding at cone edges when m_Radius > 0.
-LightingComponents ComputeSpotLighting(LightingInputs inputs, GPULight light, inout RNG rng)
+LightingComponents ComputeSpotLighting(LightingInputs inputs, srrhi::GPULight light, inout RNG rng)
 {
     LightingComponents result;
     result.diffuse  = 0;
@@ -882,7 +884,7 @@ LightingComponents AccumulateDirectLighting(LightingInputs inputs, uint lightCou
 
     for (uint i = 0; i < lightCount; ++i)
     {
-        GPULight light = inputs.lights[i];
+        srrhi::GPULight light = inputs.lights[i];
 
         [branch]
         if (light.m_Type == 0) // Directional

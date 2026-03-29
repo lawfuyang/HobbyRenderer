@@ -1,0 +1,13 @@
+struct GPULight
+{
+    float3 m_Position;
+    float m_Intensity;
+    float3 m_Direction;
+    uint m_Type;
+    float3 m_Color;
+    float m_Range;
+    float m_SpotInnerConeAngle;
+    float m_SpotOuterConeAngle;
+    float m_Radius;
+    float m_CosSunAngularRadius;
+};

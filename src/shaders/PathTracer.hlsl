@@ -9,7 +9,7 @@ cbuffer PathTracerCB : register(b0)
 };
 
 RaytracingAccelerationStructure g_SceneAS : register(t0);
-StructuredBuffer<GPULight> g_Lights : register(t1);
+StructuredBuffer<srrhi::GPULight> g_Lights : register(t1);
 StructuredBuffer<PerInstanceData> g_Instances : register(t2);
 StructuredBuffer<MeshData> g_MeshData : register(t3);
 StructuredBuffer<MaterialConstants> g_Materials : register(t4);

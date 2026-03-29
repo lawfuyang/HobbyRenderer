@@ -4,6 +4,8 @@
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
 
+#include "srrhi/hlsl/GPULight.hlsli"
+
 cbuffer DeferredCB : register(b0)
 {
     DeferredLightingConstants g_Deferred;
@@ -21,7 +23,7 @@ StructuredBuffer<MaterialConstants> g_Materials : register(t11);
 StructuredBuffer<VertexQuantized> g_Vertices : register(t12);
 StructuredBuffer<MeshData> g_MeshData : register(t13);
 StructuredBuffer<uint> g_Indices : register(t14);
-StructuredBuffer<GPULight> g_Lights : register(t6);
+StructuredBuffer<srrhi::GPULight> g_Lights : register(t6);
 Texture2D<float4> g_RTXDIDIComposited : register(t8);  // CompositingPass output (DI + emissive, already remodulated)
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target

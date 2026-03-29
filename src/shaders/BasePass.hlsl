@@ -21,7 +21,7 @@ StructuredBuffer<uint> g_Indices : register(t10);
 Texture2D<float> g_HZB : register(t8);
 RaytracingAccelerationStructure g_SceneAS : register(t9);
 Texture2D g_OpaqueColor : register(t11);
-StructuredBuffer<GPULight> g_Lights : register(t12);
+StructuredBuffer<srrhi::GPULight> g_Lights : register(t12);
 
 void UnpackMeshletBV(Meshlet m, out float3 center, out float radius)
 {

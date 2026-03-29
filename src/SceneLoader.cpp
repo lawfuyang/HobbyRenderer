@@ -6,6 +6,8 @@
 #include "TextureLoader.h"
 #include "shaders/ShaderShared.h"
 
+#include "shaders/srrhi/cpp/GPULight.h"
+
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
 
@@ -2253,7 +2255,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 
 void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 {
-	std::vector<GPULight> gpuLights;
+	std::vector<srrhi::GPULight> gpuLights;
 
 	for (const Scene::Light& light : scene.m_Lights)
 	{
@@ -2261,7 +2263,7 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 		SDL_assert(light.m_NodeIndex >= 0 && light.m_NodeIndex < (int)scene.m_Nodes.size());
 		const Scene::Node& node = scene.m_Nodes[light.m_NodeIndex];
 
-		GPULight gl;
+		srrhi::GPULight gl;
 		gl.m_Type = (uint32_t)light.m_Type;
 		gl.m_Color = light.m_Color;
 		gl.m_Intensity = light.m_Intensity;
@@ -2290,14 +2292,14 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 
 	if (!gpuLights.empty())
 	{
-		bool needsNewBuffer = !scene.m_LightBuffer || (scene.m_LightBuffer->getDesc().byteSize < (uint32_t)(gpuLights.size() * sizeof(GPULight)));
+		bool needsNewBuffer = !scene.m_LightBuffer || (scene.m_LightBuffer->getDesc().byteSize < (uint32_t)(gpuLights.size() * sizeof(srrhi::GPULight)));
 
 		if (needsNewBuffer)
 		{
 			nvrhi::BufferDesc desc;
-			desc.byteSize = (uint32_t)(gpuLights.size() * sizeof(GPULight));
+			desc.byteSize = (uint32_t)(gpuLights.size() * sizeof(srrhi::GPULight));
 			desc.debugName = "LightBuffer";
-			desc.structStride = sizeof(GPULight);
+			desc.structStride = sizeof(srrhi::GPULight);
 			desc.initialState = nvrhi::ResourceStates::ShaderResource;
 			desc.keepInitialState = true;
 			desc.canHaveUAVs = true; // For potential future compute sorting
@@ -2307,7 +2309,7 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 
 		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
 		ScopedCommandList scopedCmd(cmd, "Upload Light Buffer");
-		cmd->writeBuffer(scene.m_LightBuffer, gpuLights.data(), (uint32_t)(gpuLights.size() * sizeof(GPULight)));
+		cmd->writeBuffer(scene.m_LightBuffer, gpuLights.data(), (uint32_t)(gpuLights.size() * sizeof(srrhi::GPULight)));
 	}
 }
 
