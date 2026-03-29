@@ -1,8 +1,9 @@
 ﻿// Include shared types
 #include "ShaderShared.h"
+#include "srrhi/hlsl/ImGui.hlsli"
 
-// Instantiate the push-constant variable used by the ImGui shaders
-ImGuiPushConstants pushConstants;
+static const srrhi::ImGuiConstants ImGuiCB      = srrhi::ImGuiInputs::GetImGuiConstants();
+static const Texture2D<float4>     ImGuiTexture = srrhi::ImGuiInputs::GetFontTexture();
 
 struct VSInput
 {
@@ -23,11 +24,9 @@ VSOutput VSMain(VSInput input)
     VSOutput output;
     output.Color = input.aColor;
     output.UV = input.aUV;
-    output.Position = float4(input.aPos * pushConstants.uScale + pushConstants.uTranslate, 0.0f, 1.0f);
+    output.Position = float4(input.aPos * ImGuiCB.uScale + ImGuiCB.uTranslate, 0.0f, 1.0f);
     return output;
 }
-
-Texture2D sTexture : register(t0);
 
 struct PSInput
 {
@@ -38,6 +37,6 @@ struct PSInput
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    SamplerState sampler = SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX];
-    return input.Color * sTexture.Sample(sampler, input.UV);
+    SamplerState linearClampSampler = SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX];
+    return input.Color * ImGuiTexture.Sample(linearClampSampler, input.UV);
 }

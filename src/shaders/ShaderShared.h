@@ -122,12 +122,6 @@ typedef DirectX::XMFLOAT4 float4;
 
 #endif // __cplusplus
 
-struct ImGuiPushConstants
-{
-	Vector2 uScale;
-	Vector2 uTranslate;
-};
-
 // Forward-lighting specific shared types.
 // Vertex input: provide simple C++ and HLSL variants
 struct Vertex

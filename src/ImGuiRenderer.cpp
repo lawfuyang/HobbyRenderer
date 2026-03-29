@@ -1,7 +1,6 @@
 #include "Renderer.h"
 
-// Include shared structs
-#include "shaders/ShaderShared.h"
+#include "shaders/srrhi/cpp/ImGui.h"
 
 #include <imgui.h>
 #include "CommonResources.h"
@@ -157,12 +156,9 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     // ============================================================================
     // Binding Set Setup
     // ============================================================================
-    // Setup binding set for push constants, font texture, and sampler
-    nvrhi::BindingSetDesc bindingSetDesc;
-    bindingSetDesc.bindings = {
-        nvrhi::BindingSetItem::PushConstants(0, sizeof(ImGuiPushConstants)),
-        nvrhi::BindingSetItem::Texture_SRV(0, m_FontTexture)
-    };
+    srrhi::ImGuiInputs inputs;
+    inputs.SetFontTexture(m_FontTexture);
+    nvrhi::BindingSetDesc bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
 
     // Get or create binding layout
     nvrhi::BindingLayoutHandle layoutForSet = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bindingSetDesc);
@@ -202,14 +198,13 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     // ============================================================================
     // Push Constants Setup
     // ============================================================================
-    // Setup push constants for scale and translate
-    ImGuiPushConstants pushConstants{};
-    pushConstants.uScale.x = 2.0f / draw_data->DisplaySize.x;
-    pushConstants.uScale.y = -2.0f / draw_data->DisplaySize.y;
-    pushConstants.uTranslate.x = -1.0f - draw_data->DisplayPos.x * pushConstants.uScale.x;
-    pushConstants.uTranslate.y = 1.0f - draw_data->DisplayPos.y * pushConstants.uScale.y;
+    float scaleX = 2.0f / draw_data->DisplaySize.x;
+    float scaleY = -2.0f / draw_data->DisplaySize.y;
+    inputs.m_ImGuiConstants.SetUScale({ scaleX, scaleY });
+    inputs.m_ImGuiConstants.SetUTranslate({ -1.0f - draw_data->DisplayPos.x * scaleX,
+                                             1.0f - draw_data->DisplayPos.y * scaleY });
 
-    commandList->setPushConstants(&pushConstants, sizeof(pushConstants));
+    commandList->setPushConstants(&inputs.m_ImGuiConstants, srrhi::ImGuiInputs::PushConstantBytes);
 
     // ============================================================================
     // Rendering
@@ -250,7 +245,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
             r.maxY = (int)clip_max.y;
 
             commandList->setGraphicsState(state);
-            commandList->setPushConstants(&pushConstants, sizeof(pushConstants));
+            commandList->setPushConstants(&inputs.m_ImGuiConstants, srrhi::ImGuiInputs::PushConstantBytes);
 
             // Draw the command
             nvrhi::DrawArguments args;

@@ -1,0 +1,13 @@
+cbuffer ImGuiConstants
+{
+    float2 uScale;
+    float2 uTranslate;
+};
+
+srinput ImGuiInputs
+{
+    [push_constant]
+    ImGuiConstants m_ImGuiConstants;
+
+    Texture2D<float4> FontTexture;
+};
