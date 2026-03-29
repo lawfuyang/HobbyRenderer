@@ -1,4 +1,3 @@
-#include "ShaderShared.h"
 #include "Common.hlsli"
 
 Texture2D<float> g_DepthInput : register(t0);

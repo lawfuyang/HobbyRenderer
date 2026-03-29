@@ -4,7 +4,6 @@
 #include "CommonResources.h"
 #include "Utilities.h"
 #include "TextureLoader.h"
-#include "shaders/ShaderShared.h"
 
 #include "shaders/srrhi/cpp/GPULight.h"
 

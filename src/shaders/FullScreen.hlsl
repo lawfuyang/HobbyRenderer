@@ -1,4 +1,3 @@
-#include "ShaderShared.h"
 #include "Common.hlsli"
 
 [numthreads(3, 1, 1)]

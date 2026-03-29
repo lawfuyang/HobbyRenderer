@@ -4,8 +4,6 @@
 #include "TextureLoader.h"
 #include "Config.h"
 
-#include "shaders/ShaderShared.h"
-
 void CommonResources::Initialize()
 {
     Renderer* renderer = Renderer::GetInstance();

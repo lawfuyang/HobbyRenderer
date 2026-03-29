@@ -1,10 +1,10 @@
 ﻿#ifndef RAYTRACING_COMMON_HLSLI
 #define RAYTRACING_COMMON_HLSLI
 
-#include "ShaderShared.h"
 #include "Bindless.hlsli"
 #include "MeshCommon.hlsli"
 
+#include "srrhi/hlsl/Common.hlsli"
 #include "srrhi/hlsl/Instance.hlsli"
 
 struct RayHitInfo

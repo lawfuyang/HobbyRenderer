@@ -1,7 +1,8 @@
 #pragma once
 
 #include "pch.h"
-#include "shaders/ShaderShared.h"
+
+#include "srrhi/cpp/Common.h"
 
 struct ProjectionParams
 {

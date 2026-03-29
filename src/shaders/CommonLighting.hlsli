@@ -1,7 +1,6 @@
 ﻿#ifndef COMMON_LIGHTING_HLSLI
 #define COMMON_LIGHTING_HLSLI
 
-#include "ShaderShared.h"
 #include "RaytracingCommon.hlsli"
 #include "Packing.hlsli"
 

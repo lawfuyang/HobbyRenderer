@@ -1,6 +1,6 @@
-﻿#include "ShaderShared.h"
-#include "Common.hlsli"
+﻿#include "Common.hlsli"
 
+#include "srrhi/hlsl/Common.hlsli"
 #include "srrhi/hlsl/HDR.hlsli"
 
 static const srrhi::TonemapConstants TonemapCB = srrhi::TonemappingInputs::GetTonemapConstants();

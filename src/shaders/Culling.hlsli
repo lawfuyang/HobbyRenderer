@@ -1,6 +1,5 @@
-#pragma once
-
-#include "ShaderShared.h"
+#ifndef CULLING_H
+#define CULLING_H
 
 bool FrustumSphereTest(
     float3 centerVS,
@@ -84,3 +83,5 @@ bool OcclusionSphereTest(float3 center, float radius, uint2 HZBDims, float P00, 
     // visible if sphere is closer than occluder
     return depthSphere >= depthHZB;
 }
+
+#endif // CULLING_H

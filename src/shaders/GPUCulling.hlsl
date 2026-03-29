@@ -1,6 +1,6 @@
 ﻿#define GPU_CULLING_DEFINE
 #include "Common.hlsli"
-#include "Culling.h"
+#include "Culling.hlsli"
 
 #include "srrhi/hlsl/Mesh.hlsli"
 #include "srrhi/hlsl/Instance.hlsli"

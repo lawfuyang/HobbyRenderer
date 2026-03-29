@@ -11,8 +11,8 @@
 // One thread per instance — no job-count indirection needed.
 
 #include "nvrhi/nvrhiHLSL.h"
-#include "ShaderShared.h"
 
+#include "srrhi/hlsl/Common.hlsli"
 #include "srrhi/hlsl/Instance.hlsli"
 
 // ---- Inputs ----------------------------------------------------------------

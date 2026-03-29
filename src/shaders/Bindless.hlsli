@@ -1,8 +1,6 @@
 #ifndef BINDLESS_HLSLI
 #define BINDLESS_HLSLI
 
-#include "ShaderShared.h"
-
 // Scene buffers and samplers in space1
 // These matches the layout in BasePass.hlsl and are now used in DeferredLighting.hlsl for RT shadows.
 

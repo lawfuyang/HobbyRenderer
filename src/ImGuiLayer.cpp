@@ -1,13 +1,10 @@
 ﻿#include "pch.h"
 #include "ImGuiLayer.h"
 #include "Renderer.h"
-
-// Include shared structs
-#include "shaders/ShaderShared.h"
+#include "CommonResources.h"
 
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
-#include "CommonResources.h"
 
 void ImGuiLayer::Initialize()
 {

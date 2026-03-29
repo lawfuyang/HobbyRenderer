@@ -1,5 +1,4 @@
-﻿// Include shared types
-#include "ShaderShared.h"
+﻿#include "srrhi/hlsl/Common.hlsli"
 #include "srrhi/hlsl/ImGui.hlsli"
 
 static const srrhi::ImGuiConstants ImGuiCB      = srrhi::ImGuiInputs::GetImGuiConstants();

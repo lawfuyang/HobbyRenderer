@@ -3,9 +3,6 @@
 #include "pch.h"
 #include "Camera.h"
 
-// Include shared structs
-#include "shaders/ShaderShared.h"
-
 #include "shaders/srrhi/cpp/Common.h"
 #include "shaders/srrhi/cpp/Mesh.h"
 #include "shaders/srrhi/cpp/Instance.h"
