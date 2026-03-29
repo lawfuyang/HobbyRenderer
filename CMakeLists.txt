@@ -297,7 +297,6 @@ add_custom_target(build_shaders
             --include "${CMAKE_SOURCE_DIR}/external/nvrhi/include"
             --include "${CMAKE_SOURCE_DIR}/src/shaders/rtxdi/SharedShaderInclude"
             --relaxedInclude "pch.h"
-            --relaxedInclude "srrhi/cpp/Common.h" # TODO: remove this when everything gets converted to srrhi
 
     # DXIL output for D3D12 for NRD
     COMMAND ${SHADERMAKE_PATH_GENEX}
