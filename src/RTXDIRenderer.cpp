@@ -1,15 +1,3 @@
-/*
- * RTXDIRenderer.cpp
- *
- * Implements the ReSTIR DI pipeline:
- *   1. GenerateInitialSamples  — one thread per pixel, picks candidate light
- *   2. TemporalResampling      — combines with previous-frame reservoir
- *   3. ShadeSamples            — evaluates BRDF and writes demodulated DI illumination
- *
- * Controlled by Renderer::m_EnableReSTIRDI.  When disabled, Setup() bails out early
- * and the DeferredRenderer uses its normal AccumulateDirectLighting() path.
- */
-
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
@@ -38,7 +26,6 @@ extern RGTextureHandle g_RG_GBufferGeoNormals;
 extern RGTextureHandle g_RG_GBufferORM;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_GBufferEmissive;
-extern RGTextureHandle g_RG_HDRColor;
 
 // ============================================================================
 
@@ -56,19 +43,8 @@ static constexpr uint32_t k_EnvPDFTexSize = 1024u;
 static constexpr uint32_t k_CompactSlotsPerEntry = 2u;
 
 // ============================================================================
-
-enum class ReSTIRDIQualityPreset : uint32_t
-{
-    Custom = 0,
-    Fast = 1,
-    Medium = 2,
-    Unbiased = 3,
-    Ultra = 4,
-    Reference = 5
-};
-
 bool g_ReSTIRDI_ShowAdvancedSettings = false;
-rtxdi::ReSTIRDI_ResamplingMode          g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+rtxdi::ReSTIRDI_ResamplingMode         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
 RTXDI_DIInitialSamplingParameters      g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
 RTXDI_DITemporalResamplingParameters   g_ReSTIRDI_TemporalResamplingParams = rtxdi::GetDefaultReSTIRDITemporalResamplingParams();
 RTXDI_BoilingFilterParameters          g_ReSTIRDI_BoilingFilterParams      = rtxdi::GetDefaultReSTIRDIBoilingFilterParams();
