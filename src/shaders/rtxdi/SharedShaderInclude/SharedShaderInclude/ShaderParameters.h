@@ -13,8 +13,18 @@
 #ifndef SHADER_PARAMETERS_H
 #define SHADER_PARAMETERS_H
 
-// HobbyRenderer: use srrhi::PlanarViewConstants (via ShaderShared.h -> srrhi/hlsl/Common.hlsli)
-#include "ShaderShared.h"
+#if !defined(__cplusplus)
+    // for srrhi::PlanarViewConstants 
+    #include "srrhi/hlsl/Common.hlsli"
+
+    typedef uint uint32_t;
+    typedef uint2 Vector2U;
+    typedef float2 Vector2;
+    typedef float3 Vector3;
+    typedef float4 Vector4;
+    typedef row_major float4x4 Matrix; // Ensure HLSL uses row-major layout to match DirectX::XMFLOAT4X4 on CPU
+    typedef float4 Color;
+#endif // __cplusplus
 
 #include <Rtxdi/DI/ReSTIRDIParameters.h>
 #include <Rtxdi/GI/ReSTIRGIParameters.h>

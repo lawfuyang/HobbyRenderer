@@ -3,7 +3,6 @@
 #include "Utilities.h"
 #include "NrdIntegration.h"
 
-#include "shaders/ShaderShared.h"
 #include "shaders/rtxdi/SharedShaderInclude/SharedShaderInclude/ShaderParameters.h"
 
 #include <Rtxdi/DI/ReSTIRDI.h>
