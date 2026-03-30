@@ -13,16 +13,46 @@
 #ifndef POLYMORPHIC_LIGHT_HLSLI
 #define POLYMORPHIC_LIGHT_HLSLI
 
-#include "../CommonLighting.hlsli"
-#include "LightShaping.hlsli"
-#include "../Packing.hlsli"
-
 #define LIGHT_SAMPING_EPSILON 1e-10
 #define DISTANT_LIGHT_DISTANCE 1e7
 
 #ifndef ENVIRONMENT_SAMPLER
 #define ENVIRONMENT_SAMPLER SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX]
 #endif
+
+// kPolymorphicLight* constant aliases from srrhi::RTXDIConstants.
+// Defined here (before LightShaping.hlsli) so LightShaping.hlsli can use them.
+#define kPolymorphicLightTypeShift           srrhi::RTXDIConstants::kPolymorphicLightTypeShift
+#define kPolymorphicLightTypeMask            srrhi::RTXDIConstants::kPolymorphicLightTypeMask
+#define kPolymorphicLightShapingEnableBit    srrhi::RTXDIConstants::kPolymorphicLightShapingEnableBit
+#define kPolymorphicLightIesProfileEnableBit srrhi::RTXDIConstants::kPolymorphicLightIesProfileEnableBit
+#define kPolymorphicLightMinLog2Radiance     srrhi::RTXDIConstants::kPolymorphicLightMinLog2Radiance
+#define kPolymorphicLightMaxLog2Radiance     srrhi::RTXDIConstants::kPolymorphicLightMaxLog2Radiance
+
+#include "../CommonLighting.hlsli"
+#include "../Packing.hlsli"
+
+// Bring srrhi::PolymorphicLightInfo into global scope as a bare name.
+// PolymorphicLight.hlsli is always included after srrhi/hlsl/RTXDI.hlsli
+// (via RAB_Buffers.hlsli or directly), so srrhi::PolymorphicLightInfo is
+// already defined at this point.
+typedef srrhi::PolymorphicLightInfo PolymorphicLightInfo;
+
+#include "LightShaping.hlsli"
+
+// PolymorphicLightType enum — defined here so PolymorphicLight.hlsli is self-contained.
+// Values mirror srrhi::RTXDIConstants::kPolymorphicLightType_k* constants.
+enum PolymorphicLightType
+{
+    kSphere      = 0,
+    kCylinder    = 1,
+    kDisk        = 2,
+    kRect        = 3,
+    kTriangle    = 4,
+    kDirectional = 5,
+    kEnvironment = 6,
+    kPoint       = 7
+};
 
 struct PolymorphicLightSample
 {

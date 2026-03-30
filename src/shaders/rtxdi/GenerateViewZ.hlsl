@@ -7,12 +7,16 @@
  *   - NRD denoiser             (IN_VIEWZ)
  */
 
-#include "SharedShaderInclude/ShaderParameters.h"
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+#include "srrhi/hlsl/RTXDI.hlsli"
 
-Texture2D<float>    t_Depth       : register(t1);   // raw depth [0,1]
-RWTexture2D<float>  u_LinearDepth : register(u0);   // linear view-space Z (positive)
-
-ConstantBuffer<ResamplingConstants> g_Const : register(b0);
+#define g_Const         srrhi::GenerateViewZInputs::GetConst()
+#define t_Depth         srrhi::GenerateViewZInputs::GetDepth()
+#define u_LinearDepth   srrhi::GenerateViewZInputs::GetLinearDepth()
+#define RTXDI_SCREEN_SPACE_GROUP_SIZE srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE
 
 [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
 void main(uint2 pixelPos : SV_DispatchThreadID)

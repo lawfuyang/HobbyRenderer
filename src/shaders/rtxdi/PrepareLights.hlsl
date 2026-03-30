@@ -9,33 +9,35 @@
 #include "../Bindless.hlsli"
 #include "../RaytracingCommon.hlsli"
 #include <Rtxdi/Utils/Math.hlsli>
-#include "SharedShaderInclude/ShaderParameters.h"
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+#include "srrhi/hlsl/RTXDI.hlsli"
 
-// ---- Resource bindings (must match RTXDIRenderer.cpp PrepareLights binding set) ----
-ConstantBuffer<PrepareLightsConstants>      g_Const             : register(b0);
-RWStructuredBuffer<PolymorphicLightInfo>    u_LightDataBuffer   : register(u0);
-RWBuffer<uint>                              u_LightIndexMappingBuffer : register(u1);
-RWTexture2D<float>                          u_LocalLightPdfTexture : register(u2);
+// ---------------------------------------------------------------------------
+// Resource accessors — obtained via srrhi getter functions.
+// No 'using namespace srrhi' and no direct _* variable access.
+// ---------------------------------------------------------------------------
+static const srrhi::PrepareLightsConstants        g_Const                   = srrhi::PrepareLightsInputs::GetConst();
+static const StructuredBuffer<srrhi::PrepareLightsTask>       t_TaskBuffer             = srrhi::PrepareLightsInputs::GetTaskBuffer();
+static const StructuredBuffer<srrhi::PolymorphicLightInfo>    t_PrimitiveLightBuffer   = srrhi::PrepareLightsInputs::GetPrimitiveLightBuffer();
+static const StructuredBuffer<srrhi::PerInstanceData>         t_InstanceData           = srrhi::PrepareLightsInputs::GetInstanceData();
+static const StructuredBuffer<srrhi::MeshData>                t_GeometryData           = srrhi::PrepareLightsInputs::GetGeometryData();
+static const StructuredBuffer<srrhi::MaterialConstants>       t_MaterialConstants      = srrhi::PrepareLightsInputs::GetMaterialConstants();
+static const StructuredBuffer<uint>                           t_SceneIndices           = srrhi::PrepareLightsInputs::GetSceneIndices();
+static const StructuredBuffer<srrhi::VertexQuantized>         t_SceneVertices          = srrhi::PrepareLightsInputs::GetSceneVertices();
+static const RWStructuredBuffer<srrhi::PolymorphicLightInfo>  u_LightDataBuffer        = srrhi::PrepareLightsInputs::GetLightDataBuffer();
+static const RWBuffer<uint>                                   u_LightIndexMappingBuffer = srrhi::PrepareLightsInputs::GetLightIndexMappingBuffer();
+static const RWTexture2D<float4>                              u_LocalLightPdfTexture   = srrhi::PrepareLightsInputs::GetLocalLightPdfTexture();
 
-// t0 = task buffer: one entry per task.  TASK_PRIMITIVE_LIGHT_BIT set → analytical light;
-//      bit clear → emissive triangle mesh.
-StructuredBuffer<PrepareLightsTask>         t_TaskBuffer        : register(t0);
-// t1 = CPU-converted analytical lights (directional/point/spot)
-StructuredBuffer<PolymorphicLightInfo>      t_PrimitiveLightBuffer : register(t1);
-
-StructuredBuffer<srrhi::PerInstanceData>           t_InstanceData      : register(t2);
-StructuredBuffer<srrhi::MeshData>           t_GeometryData      : register(t3);
-StructuredBuffer<srrhi::MaterialConstants>         t_MaterialConstants : register(t4);
-
-// Bindless scene geometry buffers (bound via bIncludeBindlessResources = true)
-StructuredBuffer<uint>                      t_SceneIndices      : register(t5);
-StructuredBuffer<srrhi::VertexQuantized>    t_SceneVertices     : register(t6);
+static const uint TASK_PRIMITIVE_LIGHT_BIT = srrhi::RTXDIConstants::TASK_PRIMITIVE_LIGHT_BIT;
 
 #define ENVIRONMENT_SAMPLER SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX]
 #define IES_SAMPLER         SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX]
 #include "PolymorphicLight.hlsli"
 
-bool FindTask(uint dispatchThreadId, out PrepareLightsTask task)
+bool FindTask(uint dispatchThreadId, out srrhi::PrepareLightsTask task)
 {
     int left = 0;
     int right = int(g_Const.numTasks) - 1;
@@ -61,7 +63,7 @@ bool FindTask(uint dispatchThreadId, out PrepareLightsTask task)
 [numthreads(256, 1, 1)]
 void main(uint dispatchThreadId : SV_DispatchThreadID)
 {
-    PrepareLightsTask task = (PrepareLightsTask)0;
+    srrhi::PrepareLightsTask task = (srrhi::PrepareLightsTask)0;
 
     if (!FindTask(dispatchThreadId, task))
         return;
@@ -69,7 +71,7 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
     uint triangleIdx = dispatchThreadId - task.lightBufferOffset;
     bool isPrimitiveLight = (task.instanceAndGeometryIndex & TASK_PRIMITIVE_LIGHT_BIT) != 0;
 
-    PolymorphicLightInfo lightInfo = (PolymorphicLightInfo)0;
+    srrhi::PolymorphicLightInfo lightInfo = (srrhi::PolymorphicLightInfo)0;
 
     if (!isPrimitiveLight)
     {
@@ -182,5 +184,5 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
     // Write flux into the local-light PDF texture (mip 0) via Z-curve addressing.
     float emissiveFlux = PolymorphicLight::getPower(lightInfo);
     uint2 pdfTexturePosition = RTXDI_LinearIndexToZCurve(lightBufferPtr);
-    u_LocalLightPdfTexture[pdfTexturePosition] = emissiveFlux;
+    u_LocalLightPdfTexture[pdfTexturePosition] = float4(emissiveFlux, 0, 0, 0);
 }

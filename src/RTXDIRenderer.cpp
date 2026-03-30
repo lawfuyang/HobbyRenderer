@@ -3,11 +3,12 @@
 #include "Utilities.h"
 #include "NrdIntegration.h"
 
-#include "shaders/rtxdi/SharedShaderInclude/SharedShaderInclude/ShaderParameters.h"
-
 #include <Rtxdi/DI/ReSTIRDI.h>
 #include <Rtxdi/RtxdiUtils.h>
 #include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include "shaders/srrhi/cpp/RTXDI.h"
 
 #include <imgui.h>
 
@@ -326,14 +327,14 @@ public:
     // are never streamed in/out so this never needs to be rebuilt per-frame)
     // ------------------------------------------------------------------
     RTXDI_LightBufferParameters          m_CachedLightBufferParams{};
-    std::vector<PolymorphicLightInfo>    m_CachedPrimitiveLights;
+    std::vector<srrhi::PolymorphicLightInfo>    m_CachedPrimitiveLights;
 
     // ------------------------------------------------------------------
     // Triangle emissive light data — prepared once at PostSceneLoad.
     // Triangle lights are never streamed in/out so tasks are static.
     // ------------------------------------------------------------------
     // One PrepareLightsTask per emissive mesh geometry (covers all its triangles).
-    std::vector<PrepareLightsTask>       m_CachedTriangleLightTasks;
+    std::vector<srrhi::PrepareLightsTask>       m_CachedTriangleLightTasks;
     // Total number of emissive triangles across all emissive mesh geometries.
     uint32_t                             m_TotalEmissiveTriangles = 0;
     // Per-instance geometry-to-light mapping: geometryInstanceIndex -> firstLightBufferOffset.
@@ -373,11 +374,11 @@ public:
         Renderer* renderer = Renderer::GetInstance();
 
         // Initialize ReSTIR DI parameter structs to library defaults
-        g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
-        g_ReSTIRDI_TemporalResamplingParams = rtxdi::GetDefaultReSTIRDITemporalResamplingParams();
-        g_ReSTIRDI_BoilingFilterParams = rtxdi::GetDefaultReSTIRDIBoilingFilterParams();
+        g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
+        g_ReSTIRDI_TemporalResamplingParams= rtxdi::GetDefaultReSTIRDITemporalResamplingParams();
+        g_ReSTIRDI_BoilingFilterParams     = rtxdi::GetDefaultReSTIRDIBoilingFilterParams();
         g_ReSTIRDI_SpatialResamplingParams = rtxdi::GetDefaultReSTIRDISpatialResamplingParams();
-        g_ReSTIRDI_ShadingParams = rtxdi::GetDefaultReSTIRDIShadingParams();
+        g_ReSTIRDI_ShadingParams           = rtxdi::GetDefaultReSTIRDIShadingParams();
 
         // "medium" preset from FullSample as base, with my own changes
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
@@ -493,7 +494,7 @@ public:
 
                 // Encode instanceIndex in high 19 bits, geometryIndex (0) in low 12 bits.
                 SDL_assert(instanceIdx < (1u << 19));
-                PrepareLightsTask task{};
+                srrhi::PrepareLightsTask task{};
                 task.instanceAndGeometryIndex = (instanceIdx << 12) | 0u;
                 task.lightBufferOffset        = m_TotalEmissiveTriangles;
                 task.triangleCount            = triangleCount;
@@ -810,8 +811,8 @@ public:
             const uint32_t maxLights = std::max(
                 m_TotalEmissiveTriangles + analyticalLights, 1u);
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(PolymorphicLightInfo);
-            bd.m_NvrhiDesc.structStride = sizeof(PolymorphicLightInfo);
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(srrhi::PolymorphicLightInfo);
+            bd.m_NvrhiDesc.structStride = sizeof(srrhi::PolymorphicLightInfo);
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.debugName    = "RTXDILightDataBuffer";
@@ -855,8 +856,8 @@ public:
                 static_cast<uint32_t>(m_CachedPrimitiveLights.size()),
                 1u);
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxTasks) * sizeof(PrepareLightsTask);
-            bd.m_NvrhiDesc.structStride = sizeof(PrepareLightsTask);
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxTasks) * sizeof(srrhi::PrepareLightsTask);
+            bd.m_NvrhiDesc.structStride = sizeof(srrhi::PrepareLightsTask);
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.debugName    = "RTXDIPrepareLightsTasks";
@@ -868,8 +869,8 @@ public:
         {
             const uint32_t maxLights = std::max(static_cast<uint32_t>(m_CachedPrimitiveLights.size()), 1u);
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(PolymorphicLightInfo);
-            bd.m_NvrhiDesc.structStride = sizeof(PolymorphicLightInfo);
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(maxLights) * sizeof(srrhi::PolymorphicLightInfo);
+            bd.m_NvrhiDesc.structStride = sizeof(srrhi::PolymorphicLightInfo);
             bd.m_NvrhiDesc.canHaveUAVs  = false;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::ShaderResource;
             bd.m_NvrhiDesc.debugName    = "RTXDIPrimitiveLightBuffer";
@@ -879,8 +880,8 @@ public:
         // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing
         {
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(width) * height * sizeof(SecondaryGBufferData);
-            bd.m_NvrhiDesc.structStride = sizeof(SecondaryGBufferData);
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(width) * height * sizeof(srrhi::SecondaryGBufferData);
+            bd.m_NvrhiDesc.structStride = sizeof(srrhi::SecondaryGBufferData);
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.debugName    = "RTXDISecondaryGBuffer";
@@ -914,6 +915,8 @@ public:
         m_Context->SetBoilingFilterParameters(g_ReSTIRDI_BoilingFilterParams);
         m_Context->SetSpatialResamplingParameters(g_ReSTIRDI_SpatialResamplingParams);
         m_Context->SetShadingParameters(g_ReSTIRDI_ShadingParams);
+
+
 
         // ------------------------------------------------------------------
         // Build ResamplingConstants (FullSample's g_Const) from context accessors
@@ -953,18 +956,14 @@ public:
         const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
         const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
 
-        ResamplingConstants g_Const{};
+        srrhi::ResamplingConstants g_Const{};
 
         // ---- View matrices ----
         // Fill srrhi::PlanarViewConstants with field names (m_Mat*) shared between
         // ShaderShared.h and ShaderParameters.h via srrhi generated types.
         // We copy the whole struct — field layout is identical.
-        static_assert(sizeof(g_Const.view) == sizeof(renderer->m_Scene.m_View),
-            "srrhi::PlanarViewConstants size mismatch between ShaderShared.h and ShaderParameters.h");
-        memcpy(&g_Const.view,     &renderer->m_Scene.m_View,     sizeof(g_Const.view));
-        memcpy(&g_Const.prevView, &renderer->m_Scene.m_ViewPrev, sizeof(g_Const.prevView));
-        // prevPrevView: use prevView as fallback (no triple-buffering in HobbyRenderer)
-        memcpy(&g_Const.prevPrevView, &renderer->m_Scene.m_ViewPrev, sizeof(g_Const.prevPrevView));
+        static_assert(sizeof(srrhi::PlanarViewConstants) == sizeof(renderer->m_Scene.m_View),
+            "srrhi::PlanarViewConstants size mismatch between ShaderShared.h and RTXDI.sr");
 
         // Fill cameraDirectionOrPosition from matViewToWorld translation row
         auto FillCameraPos = [](srrhi::PlanarViewConstants& v) {
@@ -975,29 +974,41 @@ public:
                 1.0f
             };
         };
-        FillCameraPos(g_Const.view);
-        FillCameraPos(g_Const.prevView);
-        FillCameraPos(g_Const.prevPrevView);
+
+        srrhi::PlanarViewConstants viewCopy, prevViewCopy, prevPrevViewCopy;
+        memcpy(&viewCopy,         &renderer->m_Scene.m_View,     sizeof(viewCopy));
+        memcpy(&prevViewCopy,     &renderer->m_Scene.m_ViewPrev, sizeof(prevViewCopy));
+        memcpy(&prevPrevViewCopy, &renderer->m_Scene.m_ViewPrev, sizeof(prevPrevViewCopy));
+        FillCameraPos(viewCopy);
+        FillCameraPos(prevViewCopy);
+        FillCameraPos(prevPrevViewCopy);
+        g_Const.SetView(viewCopy);
+        g_Const.SetPrevView(prevViewCopy);
+        g_Const.SetPrevPrevView(prevPrevViewCopy);
 
         // ---- Runtime parameters ----
-        g_Const.runtimeParams = rtp;
+        g_Const.SetRuntimeParams(rtp);
 
         // ---- Denoiser mode ----
-        g_Const.denoiserMode = renderer->m_EnableReSTIRDIRelaxDenoising
-            ? DENOISER_MODE_RELAX : DENOISER_MODE_OFF;
+        g_Const.SetDenoiserMode(renderer->m_EnableReSTIRDIRelaxDenoising
+            ? srrhi::RTXDIConstants::DENOISER_MODE_RELAX : srrhi::RTXDIConstants::DENOISER_MODE_OFF);
 
         // ---- Scene constants ----
-        g_Const.sceneConstants.enableEnvironmentMap      = renderer->m_EnableSky ? 1u : 0u;
-        g_Const.sceneConstants.environmentMapTextureIndex = 0u; // Bruneton sky — no texture index
-        g_Const.sceneConstants.environmentScale          = 1.0f;
-        g_Const.sceneConstants.environmentRotation       = 0.0f;
-        g_Const.sceneConstants.enableAlphaTestedGeometry = 1u;
-        g_Const.sceneConstants.enableTransparentGeometry = 0u;
-        g_Const.sceneConstants.sunIntensity              = renderer->m_Scene.GetSunIntensity();
-        g_Const.sceneConstants.sunDirection              = renderer->m_Scene.GetSunDirection();
+        {
+            srrhi::SceneConstants sc{};
+            sc.enableEnvironmentMap       = renderer->m_EnableSky ? 1u : 0u;
+            sc.environmentMapTextureIndex = 0u; // Bruneton sky — no texture index
+            sc.environmentScale           = 1.0f;
+            sc.environmentRotation        = 0.0f;
+            sc.enableAlphaTestedGeometry  = 1u;
+            sc.enableTransparentGeometry  = 0u;
+            sc.sunIntensity               = renderer->m_Scene.GetSunIntensity();
+            sc.sunDirection               = renderer->m_Scene.GetSunDirection();
+            g_Const.SetSceneConstants(sc);
+        }
 
         // ---- Light buffer parameters ----
-        g_Const.lightBufferParams = lbp;
+        g_Const.SetLightBufferParams(lbp);
 
         // ---- RIS buffer segment parameters ----
         {
@@ -1005,7 +1016,7 @@ public:
             localSeg.bufferOffset = 0u;
             localSeg.tileSize     = k_RISTileSize;
             localSeg.tileCount    = k_RISTileCount;
-            g_Const.localLightsRISBufferSegmentParams = localSeg;
+            g_Const.SetLocalLightsRISBufferSegmentParams(localSeg);
         }
         if (renderer->m_EnableSky)
         {
@@ -1013,43 +1024,45 @@ public:
             envSeg.bufferOffset = k_RISTileSize * k_RISTileCount;
             envSeg.tileSize     = k_EnvRISTileSize;
             envSeg.tileCount    = k_EnvRISTileCount;
-            g_Const.environmentLightRISBufferSegmentParams = envSeg;
+            g_Const.SetEnvironmentLightRISBufferSegmentParams(envSeg);
         }
 
         // ---- PDF texture sizes ----
-        g_Const.localLightPdfTextureSize  = { m_PDFTexSize, m_PDFTexSize };
-        g_Const.environmentPdfTextureSize = { k_EnvPDFTexSize, k_EnvPDFTexSize };
+        g_Const.SetLocalLightPdfTextureSize({ m_PDFTexSize, m_PDFTexSize });
+        g_Const.SetEnvironmentPdfTextureSize({ k_EnvPDFTexSize, k_EnvPDFTexSize });
 
         // ---- ReSTIR DI parameters ----
         {
             RTXDI_Parameters restirDI{};
-            restirDI.reservoirBufferParams = rbp;
-            restirDI.bufferIndices         = bix;
-            restirDI.initialSamplingParams = m_Context->GetInitialSamplingParameters();
-            restirDI.temporalResamplingParams = m_Context->GetTemporalResamplingParameters();
-            restirDI.spatialResamplingParams  = m_Context->GetSpatialResamplingParameters();
-            restirDI.shadingParams            = m_Context->GetShadingParameters();
+            restirDI.reservoirBufferParams        = rbp;
+            restirDI.bufferIndices                = bix;
+            restirDI.initialSamplingParams        = m_Context->GetInitialSamplingParameters();
+            restirDI.temporalResamplingParams     = m_Context->GetTemporalResamplingParameters();
+            restirDI.boilingFilterParams          = m_Context->GetBoilingFilterParameters();
+            restirDI.spatialResamplingParams      = m_Context->GetSpatialResamplingParameters();
+            restirDI.spatioTemporalResamplingParams = m_Context->GetSpatioTemporalResamplingParameters();
+            restirDI.shadingParams                = m_Context->GetShadingParameters();
 
             // When RELAX denoising is active and there is no indirect lighting pass,
             // ShadeSamples is the last pass writing to u_DiffuseLighting / u_SpecularLighting.
             // TODO: set this to '0' when we have a separate indirect pass, and then only set this back to '1' for the final shading of indirect
             restirDI.shadingParams.enableDenoiserInputPacking = renderer->m_EnableReSTIRDIRelaxDenoising ? 1u : 0u;
 
-            g_Const.restirDI = restirDI;
+            g_Const.SetRestirDI(restirDI);
         }
 
         // ---- Misc flags ----
-        g_Const.enablePreviousTLAS    = 1u;
-        g_Const.discountNaiveSamples  = m_Context->GetSpatialResamplingParameters().discountNaiveSamples;
-        g_Const.enableBrdfIndirect    = 0u; // GI/PT stubs not dispatched
-        g_Const.enableBrdfAdditiveBlend = 0u;
-        g_Const.enableAccumulation    = 0u;
-        g_Const.directLightingMode    = DirectLightingMode::ReStir;
-        g_Const.visualizeRegirCells   = 0u;
+        g_Const.SetEnablePreviousTLAS(1u);
+        g_Const.SetDiscountNaiveSamples(m_Context->GetSpatialResamplingParameters().discountNaiveSamples);
+        g_Const.SetEnableBrdfIndirect(0u); // GI/PT stubs not dispatched
+        g_Const.SetEnableBrdfAdditiveBlend(0u);
+        g_Const.SetEnableAccumulation(0u);
+        g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
+        g_Const.SetVisualizeRegirCells(0u);
 
         // Upload constant buffers (volatile — recreated every frame)
         const nvrhi::BufferHandle rtxdiCB = device->createBuffer(
-            nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(ResamplingConstants), "ResamplingConstantsCB", 1));
+            nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::ResamplingConstants), "ResamplingConstantsCB", 1));
         commandList->writeBuffer(rtxdiCB, &g_Const, sizeof(g_Const));
 
         // Retrieve render graph resources — FullSample RAB_Buffers.hlsli slot layout
@@ -1099,17 +1112,13 @@ public:
         // that reflects the actual sky distribution (bright horizon, dark zenith, etc.).
         // When sky is disabled, the shader writes uniform 1.0 as a fallback.
         {
-            nvrhi::BindingSetDesc buildEnvPDFBset;
-            buildEnvPDFBset.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, rtxdiCB),
-                nvrhi::BindingSetItem::Texture_UAV(0, envLightPDFTex,
-                    nvrhi::Format::UNKNOWN,
-                    nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
-            };
+            srrhi::BuildEnvLightPDFInputs buildEnvPDFInputs;
+            buildEnvPDFInputs.SetConst(rtxdiCB);
+            buildEnvPDFInputs.SetEnvLightPdfMip0(envLightPDFTex, 0);
             renderer->AddComputePass({
                 .commandList    = commandList,
                 .shaderName     = "rtxdi/LightingPasses/Presampling/BuildEnvLightPDF_main",
-                .bindingSetDesc = buildEnvPDFBset,
+                .bindingSetDesc = Renderer::CreateBindingSetDesc(buildEnvPDFInputs),
                 .dispatchParams = {
                     .x = DivideAndRoundUp(k_EnvPDFTexSize, 8u),
                     .y = DivideAndRoundUp(k_EnvPDFTexSize, 8u),
@@ -1158,83 +1167,45 @@ public:
         }
 
         // ------------------------------------------------------------------
-        // RAB_Buffers.hlsli binding layout (all passes that use the shared bset)
-        // b0  = ResamplingConstants (g_Const)
-        // t0  = t_NeighborOffsets
-        // t1  = t_GBufferDepth
-        // t2  = t_GBufferGeoNormals
-        // t3  = t_GBufferAlbedo
-        // t4  = t_GBufferORM
-        // t5  = t_GBufferNormals
-        // t6  = t_PrevGBufferNormals
-        // t7  = t_PrevGBufferGeoNormals
-        // t8  = t_PrevGBufferAlbedo
-        // t9  = t_PrevGBufferORM
-        // t10 = t_MotionVectors
-        // t11 = t_DenoiserNormalRoughness
-        // t12 = t_PrevGBufferDepth
-        // t13 = t_LocalLightPdfTexture
-        // t14 = t_EnvironmentPdfTexture
-        // t15 = SceneBVH
-        // t16 = PrevSceneBVH
-        // t17 = t_LightDataBuffer
-        // t18 = t_GBufferEmissive
-        // t19 = t_GeometryInstanceToLight
-        // t20 = t_InstanceData
-        // t21 = t_GeometryData
-        // t22 = t_MaterialConstants
-        // t23 = t_SceneIndices
-        // t24 = t_SceneVertices
-        // u0  = u_LightReservoirs
-        // u1  = u_RisBuffer
-        // u2  = u_RisLightDataBuffer
-        // u3  = u_RestirLuminance         (stub)
-        // u4  = u_GIReservoirs            (stub)
-        // u5  = u_SecondaryGBuffer        (stub — future GI)
-        // u6  = u_DiffuseLighting
-        // u7  = u_SpecularLighting
+        // ResamplingPassInputs — shared binding set for all resampling passes
         // ------------------------------------------------------------------
 
-        nvrhi::BindingSetDesc bset;
-        bset.bindings = {
-            // Constant buffers
-            nvrhi::BindingSetItem::ConstantBuffer(0, rtxdiCB),
-            // SRVs
-            nvrhi::BindingSetItem::TypedBuffer_SRV(0,  neighborOffsetsBuf),
-            nvrhi::BindingSetItem::Texture_SRV(1,  depthTex),
-            nvrhi::BindingSetItem::Texture_SRV(2,  geoNormalsTex),
-            nvrhi::BindingSetItem::Texture_SRV(3,  albedoTex),
-            nvrhi::BindingSetItem::Texture_SRV(4,  ormTex),
-            nvrhi::BindingSetItem::Texture_SRV(5,  normalsTex),
-            nvrhi::BindingSetItem::Texture_SRV(6,  normalsHistoryTex),
-            nvrhi::BindingSetItem::Texture_SRV(7,  geoNormalsHistTex),
-            nvrhi::BindingSetItem::Texture_SRV(8,  albedoHistoryTex),
-            nvrhi::BindingSetItem::Texture_SRV(9,  ormHistoryTex),
-            nvrhi::BindingSetItem::Texture_SRV(10, motionTex),
-            nvrhi::BindingSetItem::Texture_SRV(11, denoiserNRTex),
-            nvrhi::BindingSetItem::Texture_SRV(12, depthHistoryTex),
-            nvrhi::BindingSetItem::Texture_SRV(13, localLightPDFTex),
-            nvrhi::BindingSetItem::Texture_SRV(14, envLightPDFTex),
-            nvrhi::BindingSetItem::RayTracingAccelStruct(15, renderer->m_Scene.m_TLAS),
-            nvrhi::BindingSetItem::RayTracingAccelStruct(16, m_TLASHistory),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(17, lightDataBuf),
-            nvrhi::BindingSetItem::Texture_SRV(18, emissiveTex),
-            nvrhi::BindingSetItem::TypedBuffer_SRV(19, geoInstToLightBuf),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(20, renderer->m_Scene.m_InstanceDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(21, renderer->m_Scene.m_MeshDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(22, renderer->m_Scene.m_MaterialConstantsBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(23, renderer->m_Scene.m_IndexBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(24, renderer->m_Scene.m_VertexBufferQuantized),
-            // UAVs
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, lightReservoirBuf),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, risBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, risLightDataBuf),
-            nvrhi::BindingSetItem::Texture_UAV(3, cr.DummyUAVTexture),                    // u_RestirLuminance stub
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(4, cr.DummyUAVStructuredBuffer),  // u_GIReservoirs stub
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(5, cr.DummyUAVStructuredBuffer),  // u_SecondaryGBuffer stub
-            nvrhi::BindingSetItem::Texture_UAV(6, bDenoise ? rawDiffuseTex  : diOutputTex),
-            nvrhi::BindingSetItem::Texture_UAV(7, bDenoise ? rawSpecularTex : specularOutTex),
-        };
+        srrhi::ResamplingPassInputs resamplingInputs;
+        resamplingInputs.SetConst(rtxdiCB);
+        resamplingInputs.SetNeighborOffsets(neighborOffsetsBuf);
+        resamplingInputs.SetGBufferDepth(depthTex);
+        resamplingInputs.SetGBufferGeoNormals(geoNormalsTex);
+        resamplingInputs.SetGBufferAlbedo(albedoTex);
+        resamplingInputs.SetGBufferORM(ormTex);
+        resamplingInputs.SetGBufferNormals(normalsTex);
+        resamplingInputs.SetPrevGBufferNormals(normalsHistoryTex);
+        resamplingInputs.SetPrevGBufferGeoNormals(geoNormalsHistTex);
+        resamplingInputs.SetPrevGBufferAlbedo(albedoHistoryTex);
+        resamplingInputs.SetPrevGBufferORM(ormHistoryTex);
+        resamplingInputs.SetMotionVectors(motionTex);
+        resamplingInputs.SetDenoiserNormalRoughness(denoiserNRTex);
+        resamplingInputs.SetPrevGBufferDepth(depthHistoryTex);
+        resamplingInputs.SetLocalLightPdfTexture(localLightPDFTex);
+        resamplingInputs.SetEnvironmentPdfTexture(envLightPDFTex);
+        resamplingInputs.SetSceneBVH(renderer->m_Scene.m_TLAS);
+        resamplingInputs.SetPrevSceneBVH(m_TLASHistory);
+        resamplingInputs.SetLightDataBuffer(lightDataBuf);
+        resamplingInputs.SetGBufferEmissive(emissiveTex);
+        resamplingInputs.SetGeometryInstanceToLight(geoInstToLightBuf);
+        resamplingInputs.SetInstanceData(renderer->m_Scene.m_InstanceDataBuffer);
+        resamplingInputs.SetGeometryData(renderer->m_Scene.m_MeshDataBuffer);
+        resamplingInputs.SetMaterialConstants(renderer->m_Scene.m_MaterialConstantsBuffer);
+        resamplingInputs.SetSceneIndices(renderer->m_Scene.m_IndexBuffer);
+        resamplingInputs.SetSceneVertices(renderer->m_Scene.m_VertexBufferQuantized);
+        resamplingInputs.SetLightReservoirs(lightReservoirBuf);
+        resamplingInputs.SetRisBuffer(risBuffer);
+        resamplingInputs.SetRisLightDataBuffer(risLightDataBuf);
+        resamplingInputs.SetRestirLuminance(cr.DummyUAVTexture, 0);           // u_RestirLuminance stub
+        resamplingInputs.SetGIReservoirs(cr.DummyUAVStructuredBuffer);        // u_GIReservoirs stub
+        resamplingInputs.SetSecondaryGBuffer(cr.DummyUAVStructuredBuffer);    // u_SecondaryGBuffer stub
+        resamplingInputs.SetDiffuseLighting(bDenoise ? rawDiffuseTex  : diOutputTex,    0);
+        resamplingInputs.SetSpecularLighting(bDenoise ? rawSpecularTex : specularOutTex, 0);
+        const nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(resamplingInputs);
 
         // ------------------------------------------------------------------
         // GenerateViewZ — always run (unconditional), writes linear view-space
@@ -1243,20 +1214,18 @@ public:
         {
             PROFILE_SCOPED("GenerateViewZ");
 
-            nvrhi::BindingSetDesc vzBset;
-            vzBset.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, rtxdiCB),
-                nvrhi::BindingSetItem::Texture_SRV(1,  depthTex),
-                nvrhi::BindingSetItem::Texture_UAV(0,  linearDepthTex),
-            };
+            srrhi::GenerateViewZInputs vzInputs;
+            vzInputs.SetConst(rtxdiCB);
+            vzInputs.SetDepth(depthTex);
+            vzInputs.SetLinearDepth(linearDepthTex, 0);
             renderer->AddComputePass({
                 .commandList    = commandList,
                 .shaderName     = "rtxdi/GenerateViewZ_main",
-                .bindingSetDesc = vzBset,
+                .bindingSetDesc = Renderer::CreateBindingSetDesc(vzInputs),
                 .bIncludeBindlessResources = false,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                    .y = DivideAndRoundUp(height, RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
             });
@@ -1270,13 +1239,11 @@ public:
         {
             PROFILE_SCOPED("PostprocessGBuffer");
 
-            nvrhi::BindingSetDesc ppBset;
-            ppBset.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, rtxdiCB),
-                nvrhi::BindingSetItem::Texture_SRV(1,  linearDepthTex),  // LinearZ (not raw depth)
-                nvrhi::BindingSetItem::Texture_SRV(5,  normalsTex),
-                nvrhi::BindingSetItem::Texture_SRV(4,  ormTex),
-            };
+            srrhi::PostprocessGBufferInputs ppInputs;
+            ppInputs.SetConst(rtxdiCB);
+            ppInputs.SetViewDepth(linearDepthTex);  // LinearZ (not raw depth)
+            ppInputs.SetNormals(normalsTex);
+            ppInputs.SetORM(ormTex);
 
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(denoiserNRTex);
@@ -1294,7 +1261,7 @@ public:
             renderer->AddFullScreenPass({
                 .commandList    = commandList,
                 .shaderName     = "rtxdi/PostprocessGBuffer_main",
-                .bindingSetDesc = ppBset,
+                .bindingSetDesc = Renderer::CreateBindingSetDesc(ppInputs),
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,
                 .depthStencilState = &ds,
@@ -1321,7 +1288,7 @@ public:
             // ---- Build combined task list ----
             // Triangle tasks are already sorted by lightBufferOffset (built in PostSceneLoad).
             // Analytical tasks follow immediately after triangle lights.
-            std::vector<PrepareLightsTask> allTasks;
+            std::vector<srrhi::PrepareLightsTask> allTasks;
             allTasks.reserve(m_CachedTriangleLightTasks.size() + m_CachedPrimitiveLights.size());
 
             // 1. Triangle light tasks (static, lightBufferOffset starts at 0)
@@ -1332,8 +1299,8 @@ public:
             const uint32_t analyticalBaseOffset = m_TotalEmissiveTriangles;
             for (uint32_t i = 0; i < static_cast<uint32_t>(m_CachedPrimitiveLights.size()); ++i)
             {
-                PrepareLightsTask task{};
-                task.instanceAndGeometryIndex  = TASK_PRIMITIVE_LIGHT_BIT | i;
+                srrhi::PrepareLightsTask task{};
+                task.instanceAndGeometryIndex  = srrhi::RTXDIConstants::TASK_PRIMITIVE_LIGHT_BIT | i;
                 task.triangleCount             = 1; // one thread per analytical light
                 task.lightBufferOffset         = analyticalBaseOffset + i;
                 task.previousLightBufferOffset = -1;
@@ -1351,42 +1318,38 @@ public:
                 }
 
                 // Upload combined task buffer.
-                commandList->writeBuffer(prepareLightsTaskBuf, allTasks.data(), allTasks.size() * sizeof(PrepareLightsTask));
+                commandList->writeBuffer(prepareLightsTaskBuf, allTasks.data(), allTasks.size() * sizeof(srrhi::PrepareLightsTask));
 
                 // Upload analytical (primitive) lights.
                 if (!m_CachedPrimitiveLights.empty())
                 {
-                    commandList->writeBuffer(primitiveLightBuf, m_CachedPrimitiveLights.data(), m_CachedPrimitiveLights.size() * sizeof(PolymorphicLightInfo));
+                    commandList->writeBuffer(primitiveLightBuf, m_CachedPrimitiveLights.data(), m_CachedPrimitiveLights.size() * sizeof(srrhi::PolymorphicLightInfo));
                 }
 
-                PrepareLightsConstants plCB{};
-                plCB.numTasks                = static_cast<uint32_t>(allTasks.size());
-                plCB.currentFrameLightOffset = 0u;
-                plCB.previousFrameLightOffset = 0u;
+                srrhi::PrepareLightsConstants plCB{};
+                plCB.SetNumTasks(static_cast<uint32_t>(allTasks.size()));
+                plCB.SetCurrentFrameLightOffset(0u);
+                plCB.SetPreviousFrameLightOffset(0u);
 
-                nvrhi::BufferHandle plCBHandle = device->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(PrepareLightsConstants), "PrepareLightsCB", 1));
+                nvrhi::BufferHandle plCBHandle = device->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::PrepareLightsConstants), "PrepareLightsCB", 1));
                 commandList->writeBuffer(plCBHandle, &plCB, sizeof(plCB));
 
-            nvrhi::BindingSetDesc plBset;
-                plBset.bindings = {
-                    nvrhi::BindingSetItem::ConstantBuffer(0, plCBHandle),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(0,  prepareLightsTaskBuf),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(1,  primitiveLightBuf),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(2,  renderer->m_Scene.m_InstanceDataBuffer),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(3,  renderer->m_Scene.m_MeshDataBuffer),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(4,  renderer->m_Scene.m_MaterialConstantsBuffer),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(5,  renderer->m_Scene.m_IndexBuffer),
-                    nvrhi::BindingSetItem::StructuredBuffer_SRV(6,  renderer->m_Scene.m_VertexBufferQuantized),
-                    nvrhi::BindingSetItem::StructuredBuffer_UAV(0,  lightDataBuf),
-                    nvrhi::BindingSetItem::TypedBuffer_UAV(1,       lightIndexMapBuf),
-                    nvrhi::BindingSetItem::Texture_UAV(2, localLightPDFTex,
-                        nvrhi::Format::UNKNOWN,
-                        nvrhi::TextureSubresourceSet{0, 1, 0, 1}),
-                };
+                srrhi::PrepareLightsInputs plInputs;
+                plInputs.SetConst(plCBHandle);
+                plInputs.SetTaskBuffer(prepareLightsTaskBuf);
+                plInputs.SetPrimitiveLightBuffer(primitiveLightBuf);
+                plInputs.SetInstanceData(renderer->m_Scene.m_InstanceDataBuffer);
+                plInputs.SetGeometryData(renderer->m_Scene.m_MeshDataBuffer);
+                plInputs.SetMaterialConstants(renderer->m_Scene.m_MaterialConstantsBuffer);
+                plInputs.SetSceneIndices(renderer->m_Scene.m_IndexBuffer);
+                plInputs.SetSceneVertices(renderer->m_Scene.m_VertexBufferQuantized);
+                plInputs.SetLightDataBuffer(lightDataBuf);
+                plInputs.SetLightIndexMappingBuffer(lightIndexMapBuf);
+                plInputs.SetLocalLightPdfTexture(localLightPDFTex, 0);
                 renderer->AddComputePass({
                     .commandList    = commandList,
                     .shaderName     = "rtxdi/PrepareLights_main",
-                    .bindingSetDesc = plBset,
+                    .bindingSetDesc = Renderer::CreateBindingSetDesc(plInputs),
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
                         .x = DivideAndRoundUp(totalThreads, 256u),
@@ -1418,10 +1381,10 @@ public:
                 return (sign << 15u) | (static_cast<uint32_t>(e16) << 10u) | (mantissa >> 13u);
             };
 
-            PolymorphicLightInfo envInfo{};
+            srrhi::PolymorphicLightInfo envInfo{};
             // Type = kEnvironment
-            envInfo.colorTypeAndFlags = static_cast<uint32_t>(PolymorphicLightType::kEnvironment)
-                                      << kPolymorphicLightTypeShift;
+            envInfo.colorTypeAndFlags = srrhi::RTXDIConstants::kPolymorphicLightType_kEnvironment
+                                      << srrhi::RTXDIConstants::kPolymorphicLightTypeShift;
             // radianceScale = white (1,1,1) — actual radiance is computed procedurally in the shader
             PackLightColor({ 1.f, 1.f, 1.f }, envInfo);
             // direction1 = 0xFFFFFFFF → textureIndex = -1 → no texture, use procedural Bruneton sky
@@ -1432,7 +1395,7 @@ public:
             envInfo.direction2 = (k_EnvPDFTexSize & 0xFFFFu) | (k_EnvPDFTexSize << 16u);
 
             const uint64_t byteOffset = static_cast<uint64_t>(lbp.environmentLightParams.lightIndex)
-                                      * sizeof(PolymorphicLightInfo);
+                                      * sizeof(srrhi::PolymorphicLightInfo);
             commandList->writeBuffer(lightDataBuf, &envInfo, sizeof(envInfo), byteOffset);
         }
 
@@ -1452,7 +1415,7 @@ public:
             {
                 PROFILE_SCOPED("Presample Local Lights");
 
-                const uint32_t presampleGroupsX = DivideAndRoundUp(k_RISTileSize, RTXDI_PRESAMPLING_GROUP_SIZE);
+                const uint32_t presampleGroupsX = DivideAndRoundUp(k_RISTileSize, srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE);
                 renderer->AddComputePass({
                     .commandList    = commandList,
                     .shaderName     = "rtxdi/LightingPasses/Presampling/PresampleLights_main",
@@ -1480,7 +1443,7 @@ public:
             {
                 PROFILE_SCOPED("Presample Environment Light");
 
-                const uint32_t presampleGroupsX = DivideAndRoundUp(k_EnvRISTileSize, RTXDI_PRESAMPLING_GROUP_SIZE);
+                const uint32_t presampleGroupsX = DivideAndRoundUp(k_EnvRISTileSize, srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE);
                 renderer->AddComputePass({
                     .commandList    = commandList,
                     .shaderName     = "rtxdi/LightingPasses/Presampling/PresampleEnvironmentMap_main",
@@ -1504,8 +1467,8 @@ public:
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                    .y = DivideAndRoundUp(height, RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
             });
@@ -1526,8 +1489,8 @@ public:
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                    .y = DivideAndRoundUp(height, RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
             });
@@ -1548,15 +1511,15 @@ public:
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                    .y = DivideAndRoundUp(height, RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
             });
         }
 
         // ------------------------------------------------------------------
-        // Shade Samples → write to DI output (u8/u9)
+        // Shade Samples        // Shade Samples → write to DI output (u8/u9)
         // ------------------------------------------------------------------
         {
             PROFILE_SCOPED(bDenoise ? "Shade Samples (RELAX)" : "Shade Samples");
@@ -1568,16 +1531,15 @@ public:
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                    .y = DivideAndRoundUp(height, RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
             });
         }
 
         // ------------------------------------------------------------------
-        // RELAX denoising (when enabled)
-        // ------------------------------------------------------------------
+        // RELAX denoising        // ------------------------------------------------------------------
         if (bDenoise)
         {
             // linearDepthTex was already written by GenerateViewZ above (unconditional)
@@ -1607,16 +1569,13 @@ public:
         {
             PROFILE_SCOPED("CompositingPass");
 
-            nvrhi::BindingSetDesc compBset;
-            compBset.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, rtxdiCB),
-                nvrhi::BindingSetItem::Texture_SRV(0,  albedoTex),   // t_GBufferAlbedo  (RGBA8_UNORM)
-                nvrhi::BindingSetItem::Texture_SRV(1,  ormTex),      // t_GBufferORM     (RG8_UNORM: roughness=.r, metallic=.g)
-                nvrhi::BindingSetItem::Texture_SRV(2,  emissiveTex), // t_GBufferEmissive
-                // DI illumination inputs (denoised or raw)
-                nvrhi::BindingSetItem::Texture_SRV(3,  bDenoise ? denoisedDiffuseTex  : diOutputTex),
-                nvrhi::BindingSetItem::Texture_SRV(4,  bDenoise ? denoisedSpecularTex : specularOutTex),
-            };
+            srrhi::CompositingPassInputs compInputs;
+            compInputs.SetConst(rtxdiCB);
+            compInputs.SetGBufferAlbedo(albedoTex);
+            compInputs.SetGBufferORM(ormTex);
+            compInputs.SetGBufferEmissive(emissiveTex);
+            compInputs.SetDiffuseIllumination(bDenoise ? denoisedDiffuseTex  : diOutputTex);
+            compInputs.SetSpecularIllumination(bDenoise ? denoisedSpecularTex : specularOutTex);
 
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(compositedTex);
@@ -1634,7 +1593,7 @@ public:
             renderer->AddFullScreenPass({
                 .commandList    = commandList,
                 .shaderName     = "rtxdi/CompositingPass_CompositingPass_PSMain",
-                .bindingSetDesc = compBset,
+                .bindingSetDesc = Renderer::CreateBindingSetDesc(compInputs),
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,
                 .depthStencilState = &ds
@@ -1698,18 +1657,18 @@ private:
              | ((FloatToUInt(std::max(0.f, std::min(1.f, b)), 255.f) & 0xFFu) << 16u);
     }
 
-    static void PackLightColor(const Vector3& color, PolymorphicLightInfo& info)
+    static void PackLightColor(const Vector3& color, srrhi::PolymorphicLightInfo& info)
     {
         float maxR = std::max({ color.x, color.y, color.z });
         if (maxR <= 0.f) return;
 
-        float logR = (std::log2f(maxR) - kPolymorphicLightMinLog2Radiance)
-                   / (kPolymorphicLightMaxLog2Radiance - kPolymorphicLightMinLog2Radiance);
+        float logR = (std::log2f(maxR) - srrhi::RTXDIConstants::kPolymorphicLightMinLog2Radiance)
+                   / (srrhi::RTXDIConstants::kPolymorphicLightMaxLog2Radiance - srrhi::RTXDIConstants::kPolymorphicLightMinLog2Radiance);
         logR = std::max(0.f, std::min(1.f, logR));
         uint32_t packed = std::min(static_cast<uint32_t>(std::ceil(logR * 65534.f)) + 1u, 0xffffu);
         float unpacked = std::exp2f((static_cast<float>(packed - 1u) / 65534.f)
-                         * (kPolymorphicLightMaxLog2Radiance - kPolymorphicLightMinLog2Radiance)
-                         + kPolymorphicLightMinLog2Radiance);
+                         * (srrhi::RTXDIConstants::kPolymorphicLightMaxLog2Radiance - srrhi::RTXDIConstants::kPolymorphicLightMinLog2Radiance)
+                         + srrhi::RTXDIConstants::kPolymorphicLightMinLog2Radiance);
 
         info.colorTypeAndFlags |= PackR8G8B8Unorm(color.x / unpacked, color.y / unpacked, color.z / unpacked);
         info.logRadiance       |= packed;
@@ -1742,11 +1701,11 @@ private:
         return X | (Y << 16u);
     }
 
-    // Convert a single scene light to PolymorphicLightInfo.
+    // Convert a single scene light to srrhi::PolymorphicLightInfo.
     // Returns false if the light type is unsupported.
     static bool ConvertAnalyticalLight(const Scene::Light& light,
                                        const Scene::Node&  node,
-                                       PolymorphicLightInfo& out)
+                                       srrhi::PolymorphicLightInfo& out)
     {
         out = {};
 
@@ -1779,8 +1738,8 @@ private:
                                       light.m_Color.y * radiance,
                                       light.m_Color.z * radiance };
 
-            out.colorTypeAndFlags = static_cast<uint32_t>(PolymorphicLightType::kDirectional)
-                                    << kPolymorphicLightTypeShift;
+            out.colorTypeAndFlags = srrhi::RTXDIConstants::kPolymorphicLightType_kDirectional
+                                    << srrhi::RTXDIConstants::kPolymorphicLightTypeShift;
             PackLightColor(col, out);
             // Use toward-sun convention (+Z forward), consistent with deferred path's GetSunDirection().
             const Vector3 sunDir = Renderer::GetInstance()->m_Scene.GetSunDirection();
@@ -1798,8 +1757,8 @@ private:
                 Vector3 col = { light.m_Color.x * radiance,
                                           light.m_Color.y * radiance,
                                           light.m_Color.z * radiance };
-                out.colorTypeAndFlags = static_cast<uint32_t>(PolymorphicLightType::kSphere)
-                                        << kPolymorphicLightTypeShift;
+                out.colorTypeAndFlags = srrhi::RTXDIConstants::kPolymorphicLightType_kSphere
+                                        << srrhi::RTXDIConstants::kPolymorphicLightTypeShift;
                 PackLightColor(col, out);
                 out.center  = { node.m_Translation.x, node.m_Translation.y, node.m_Translation.z };
                 out.scalars = PackFloat2ToUint(light.m_Radius, 0.f);
@@ -1810,8 +1769,8 @@ private:
                 Vector3 flux = { light.m_Color.x * light.m_Intensity,
                                            light.m_Color.y * light.m_Intensity,
                                            light.m_Color.z * light.m_Intensity };
-                out.colorTypeAndFlags = static_cast<uint32_t>(PolymorphicLightType::kPoint)
-                                        << kPolymorphicLightTypeShift;
+                out.colorTypeAndFlags = srrhi::RTXDIConstants::kPolymorphicLightType_kPoint
+                                        << srrhi::RTXDIConstants::kPolymorphicLightTypeShift;
                 PackLightColor(flux, out);
                 out.center = { node.m_Translation.x, node.m_Translation.y, node.m_Translation.z };
             }
@@ -1833,9 +1792,9 @@ private:
                                           light.m_Color.y * radiance,
                                           light.m_Color.z * radiance };
 
-                out.colorTypeAndFlags = (static_cast<uint32_t>(PolymorphicLightType::kSphere)
-                                         << kPolymorphicLightTypeShift)
-                                      | kPolymorphicLightShapingEnableBit;
+                out.colorTypeAndFlags = (srrhi::RTXDIConstants::kPolymorphicLightType_kSphere
+                                         << srrhi::RTXDIConstants::kPolymorphicLightTypeShift)
+                                      | srrhi::RTXDIConstants::kPolymorphicLightShapingEnableBit;
                 PackLightColor(col, out);
                 out.scalars = PackFloat2ToUint(light.m_Radius, 0.f);
             }
@@ -1845,9 +1804,9 @@ private:
                                            light.m_Color.y * light.m_Intensity,
                                            light.m_Color.z * light.m_Intensity };
 
-                out.colorTypeAndFlags = (static_cast<uint32_t>(PolymorphicLightType::kPoint)
-                                         << kPolymorphicLightTypeShift)
-                                      | kPolymorphicLightShapingEnableBit;
+                out.colorTypeAndFlags = (srrhi::RTXDIConstants::kPolymorphicLightType_kPoint
+                                         << srrhi::RTXDIConstants::kPolymorphicLightTypeShift)
+                                      | srrhi::RTXDIConstants::kPolymorphicLightShapingEnableBit;
                 PackLightColor(flux, out);
             }
 
@@ -1863,16 +1822,16 @@ private:
     }
 
     // Build the CPU-side primitive light array and return RTXDI_LightBufferParameters.
-    // Also fills outPrimitiveLights with converted PolymorphicLightInfo entries,
+    // Also fills outPrimitiveLights with converted srrhi::PolymorphicLightInfo entries,
     // packed in RTXDI expected order: local finite lights first, infinite lights after.
-    static RTXDI_LightBufferParameters BuildLightBufferParams(std::vector<PolymorphicLightInfo>& outPrimitiveLights)
+    static RTXDI_LightBufferParameters BuildLightBufferParams(std::vector<srrhi::PolymorphicLightInfo>& outPrimitiveLights)
     {
         const Renderer* renderer = Renderer::GetInstance();
 
         RTXDI_LightBufferParameters lbp{};
 
-        std::vector<PolymorphicLightInfo> localLights;
-        std::vector<PolymorphicLightInfo> infiniteLights;
+        std::vector<srrhi::PolymorphicLightInfo> localLights;
+        std::vector<srrhi::PolymorphicLightInfo> infiniteLights;
         localLights.reserve(renderer->m_Scene.m_LightCount);
         infiniteLights.reserve(renderer->m_Scene.m_LightCount);
 
@@ -1882,7 +1841,7 @@ private:
             SDL_assert(light.m_NodeIndex >= 0);
             const Scene::Node& node = renderer->m_Scene.m_Nodes[light.m_NodeIndex];
 
-            PolymorphicLightInfo info{};
+            srrhi::PolymorphicLightInfo info{};
             if (!ConvertAnalyticalLight(light, node, info))
                 continue;
 

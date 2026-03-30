@@ -13,7 +13,7 @@
 #ifndef RTXDI_RAB_SURFACE_HLSLI
 #define RTXDI_RAB_SURFACE_HLSLI
 
-#include "SharedShaderInclude/ShaderParameters.h"
+// Types and constants come from srrhi/hlsl/RTXDI.hlsli via RAB_Buffers.hlsli.
 #include "../../CommonLighting.hlsli"
 #include "../../Packing.hlsli"
 

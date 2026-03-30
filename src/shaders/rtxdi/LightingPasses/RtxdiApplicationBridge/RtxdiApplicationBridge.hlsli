@@ -31,7 +31,6 @@ between the bridge functions.
 #ifndef RTXDI_APPLICATION_BRIDGE_HLSLI
 #define RTXDI_APPLICATION_BRIDGE_HLSLI
 
-#include "SharedShaderInclude/ShaderParameters.h"
 #include "RAB_Buffers.hlsli"
 
 #include "RAB_LightInfo.hlsli"

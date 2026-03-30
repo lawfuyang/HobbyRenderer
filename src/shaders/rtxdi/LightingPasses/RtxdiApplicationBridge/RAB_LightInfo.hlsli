@@ -13,8 +13,10 @@
 #ifndef RAB_LIGHT_INFO_HLSLI
 #define RAB_LIGHT_INFO_HLSLI
 
-#include "../../PolymorphicLight.hlsli"
+// RAB_Buffers.hlsli must come first — it includes srrhi/hlsl/RTXDI.hlsli which
+// provides srrhi::RTXDIConstants needed by PolymorphicLight.hlsli.
 #include "RAB_Buffers.hlsli"
+#include "../../PolymorphicLight.hlsli"
 #include "RAB_Surface.hlsli"
 #include "RAB_LightSample.hlsli"
 #include "../../Atmosphere.hlsli"

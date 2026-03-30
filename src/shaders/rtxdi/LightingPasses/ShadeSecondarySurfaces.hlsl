@@ -18,6 +18,9 @@
 
 #include "RtxdiApplicationBridge/RtxdiApplicationBridge.hlsli"
 
+// Bring srrhi-defined types into global scope as bare names.
+typedef srrhi::SecondaryGBufferData SecondaryGBufferData;
+
 #include <Rtxdi/DI/InitialSampling.hlsli>
 #include <Rtxdi/DI/SpatialResampling.hlsli>
 #include <Rtxdi/GI/Reservoir.hlsli>

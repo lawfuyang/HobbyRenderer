@@ -12,26 +12,25 @@
 
 #pragma pack_matrix(row_major)
 
-#include "SharedShaderInclude/ShaderParameters.h"
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+#include "srrhi/hlsl/RTXDI.hlsli"
+
 #include "../CommonLighting.hlsli"
 
 #ifdef WITH_NRD
 #include <NRD.hlsli>
 #endif
 
-ConstantBuffer<ResamplingConstants> g_Const : register(b0);
-
-// G-buffer inputs — slots match RTXDIRenderer.cpp CompositingPass binding set
-// t0  = GBufferAlbedo   (RGBA8_UNORM: baseColor.rgb + alpha)
-// t1  = GBufferORM      (RG8_UNORM:  roughness=.r, metallic=.g)
-// t2  = GBufferEmissive (RGBA8_UNORM)
-// t3  = DI diffuse illumination  (denoised or raw)
-// t4  = DI specular illumination (denoised or raw)
-Texture2D<float4> t_GBufferAlbedo        : register(t0);
-Texture2D<float2> t_GBufferORM           : register(t1);
-Texture2D<float4> t_GBufferEmissive      : register(t2);
-Texture2D<float4> t_DiffuseIllumination  : register(t3);
-Texture2D<float4> t_SpecularIllumination : register(t4);
+#define g_Const                  srrhi::CompositingPassInputs::GetConst()
+#define t_GBufferAlbedo          srrhi::CompositingPassInputs::GetGBufferAlbedo()
+#define t_GBufferORM             srrhi::CompositingPassInputs::GetGBufferORM()
+#define t_GBufferEmissive        srrhi::CompositingPassInputs::GetGBufferEmissive()
+#define t_DiffuseIllumination    srrhi::CompositingPassInputs::GetDiffuseIllumination()
+#define t_SpecularIllumination   srrhi::CompositingPassInputs::GetSpecularIllumination()
+#define DENOISER_MODE_RELAX      srrhi::RTXDIConstants::DENOISER_MODE_RELAX
 
 float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target
 {

@@ -13,92 +13,97 @@
 #ifndef RAB_BUFFER_HLSLI
 #define RAB_BUFFER_HLSLI
 
-#include <SharedShaderInclude/ShaderParameters.h>
+// All resource declarations come from the srrhi-generated header.
+// The ResamplingPassInputs srinput owns all bindings for the main resampling passes.
+//
+// RTXDI SDK parameter headers are included BEFORE srrhi/hlsl/RTXDI.hlsli.
+// The SDK types (RTXDI_LightBufferRegion, ReGIR_*, etc.) are declared as
+// "extern" in RTXDI.sr, so srrhi does NOT redefine them in namespace srrhi.
+//
+// Note: DXC does not allow accessing cbuffer members via namespace::member
+// syntax (e.g. srrhi::ResamplingPassInputs_Const is invalid for a cbuffer
+// member). Resources are accessed exclusively through the getter functions
+// in the srrhi::ResamplingPassInputs namespace.
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+#include <Rtxdi/Utils/ReservoirAddressing.hlsli>
 
-#include "srrhi/hlsl/Mesh.hlsli"
-#include "srrhi/hlsl/Instance.hlsli"
+#include "srrhi/hlsl/RTXDI.hlsli"
 
-// ---- Constant buffers ----
-ConstantBuffer<ResamplingConstants> g_Const : register(b0);
+// ---------------------------------------------------------------------------
+// Constant buffer
+// ---------------------------------------------------------------------------
+#define g_Const                     srrhi::ResamplingPassInputs::GetConst()
 
-// ---- SRVs (match RTXDIRenderer.cpp binding layout) ----
-// t0  = t_NeighborOffsets
-// t1  = t_GBufferDepth
-// t2  = t_GBufferGeoNormals     (RG16_FLOAT: oct-encoded geometric normal)
-// t3  = t_GBufferAlbedo         (RGBA8_UNORM: baseColor.rgb + alpha)
-// t4  = t_GBufferORM            (RG8_UNORM: roughness=.r, metallic=.g)
-// t5  = t_GBufferNormals        (RG16_FLOAT: encoded, decoded via DecodeNormal)
-// t6  = t_PrevGBufferNormals    (= m_GbufferNormalsHistory)
-// t7  = t_PrevGBufferGeoNormals (= m_GeoNormalsHistory)
-// t8  = t_PrevGBufferAlbedo     (= m_GBufferAlbedoHistory)
-// t9  = t_PrevGBufferORM        (= m_GBufferORMHistory)
-// t10 = t_MotionVectors
-// t11 = t_DenoiserNormalRoughness
-// t12 = t_PrevGBufferDepth
-// t13 = t_LocalLightPdfTexture
-// t14 = t_EnvironmentPdfTexture
-// t15 = SceneBVH
-// t16 = PrevSceneBVH
-// t17 = t_LightDataBuffer
-// t18 = t_GBufferEmissive
-// t19 = t_GeometryInstanceToLight
-// t20 = t_InstanceData  (PerInstanceData)
-// t21 = t_GeometryData  (srrhi::MeshData)
-// t22 = t_MaterialConstants
-// t23 = t_SceneIndices
-// t24 = t_SceneVertices
+// ---------------------------------------------------------------------------
+// SRVs — accessed via getter functions (no direct _* variable access)
+// ---------------------------------------------------------------------------
+#define t_NeighborOffsets           srrhi::ResamplingPassInputs::GetNeighborOffsets()
+#define t_GBufferDepth              srrhi::ResamplingPassInputs::GetGBufferDepth()
+#define t_GBufferGeoNormals         srrhi::ResamplingPassInputs::GetGBufferGeoNormals()
+#define t_GBufferAlbedo             srrhi::ResamplingPassInputs::GetGBufferAlbedo()
+#define t_GBufferORM                srrhi::ResamplingPassInputs::GetGBufferORM()
+#define t_GBufferNormals            srrhi::ResamplingPassInputs::GetGBufferNormals()
+#define t_PrevGBufferNormals        srrhi::ResamplingPassInputs::GetPrevGBufferNormals()
+#define t_PrevGBufferGeoNormals     srrhi::ResamplingPassInputs::GetPrevGBufferGeoNormals()
+#define t_PrevGBufferAlbedo         srrhi::ResamplingPassInputs::GetPrevGBufferAlbedo()
+#define t_PrevGBufferORM            srrhi::ResamplingPassInputs::GetPrevGBufferORM()
+#define t_MotionVectors             srrhi::ResamplingPassInputs::GetMotionVectors()
+#define t_DenoiserNormalRoughness   srrhi::ResamplingPassInputs::GetDenoiserNormalRoughness()
+#define t_PrevGBufferDepth          srrhi::ResamplingPassInputs::GetPrevGBufferDepth()
+#define t_LocalLightPdfTexture      srrhi::ResamplingPassInputs::GetLocalLightPdfTexture()
+#define t_EnvironmentPdfTexture     srrhi::ResamplingPassInputs::GetEnvironmentPdfTexture()
+#define SceneBVH                    srrhi::ResamplingPassInputs::GetSceneBVH()
+#define PrevSceneBVH                srrhi::ResamplingPassInputs::GetPrevSceneBVH()
+#define t_LightDataBuffer           srrhi::ResamplingPassInputs::GetLightDataBuffer()
+#define t_GBufferEmissive           srrhi::ResamplingPassInputs::GetGBufferEmissive()
+#define t_GeometryInstanceToLight   srrhi::ResamplingPassInputs::GetGeometryInstanceToLight()
+#define t_InstanceData              srrhi::ResamplingPassInputs::GetInstanceData()
+#define t_GeometryData              srrhi::ResamplingPassInputs::GetGeometryData()
+#define t_MaterialConstants         srrhi::ResamplingPassInputs::GetMaterialConstants()
+#define t_SceneIndices              srrhi::ResamplingPassInputs::GetSceneIndices()
+#define t_SceneVertices             srrhi::ResamplingPassInputs::GetSceneVertices()
 
-Buffer<float2>                              t_NeighborOffsets           : register(t0);
-Texture2D<float>                            t_GBufferDepth              : register(t1);
-Texture2D<float2>                           t_GBufferGeoNormals         : register(t2);  // RG16_FLOAT: oct-encoded geometric normal
-Texture2D<float4>                           t_GBufferAlbedo             : register(t3);  // RGBA8_UNORM: baseColor.rgb + alpha
-Texture2D<float2>                           t_GBufferORM                : register(t4);  // RG8_UNORM: roughness=.r, metallic=.g
-Texture2D<float2>                           t_GBufferNormals            : register(t5);  // RG16_FLOAT: encoded, use DecodeNormal
-Texture2D<float2>                           t_PrevGBufferNormals        : register(t6);  // = m_GbufferNormalsHistory
-Texture2D<float2>                           t_PrevGBufferGeoNormals     : register(t7);  // = m_GeoNormalsHistory
-Texture2D<float4>                           t_PrevGBufferAlbedo         : register(t8);  // = m_GBufferAlbedoHistory
-Texture2D<float2>                           t_PrevGBufferORM            : register(t9);  // = m_GBufferORMHistory
-Texture2D<float4>                           t_MotionVectors             : register(t10);
-Texture2D<float3>                           t_DenoiserNormalRoughness   : register(t11);
-Texture2D<float>                            t_PrevGBufferDepth          : register(t12);
-Texture2D                                   t_LocalLightPdfTexture      : register(t13);
-Texture2D                                   t_EnvironmentPdfTexture     : register(t14);
-RaytracingAccelerationStructure             SceneBVH                    : register(t15);
-RaytracingAccelerationStructure             PrevSceneBVH                : register(t16);
-StructuredBuffer<PolymorphicLightInfo>      t_LightDataBuffer           : register(t17);
-Texture2D<float4>                           t_GBufferEmissive           : register(t18);
-StructuredBuffer<uint>                      t_GeometryInstanceToLight   : register(t19);
-StructuredBuffer<srrhi::PerInstanceData>           t_InstanceData              : register(t20);
-StructuredBuffer<srrhi::MeshData>           t_GeometryData              : register(t21);
-StructuredBuffer<srrhi::MaterialConstants>         t_MaterialConstants         : register(t22);
-StructuredBuffer<uint>                      t_SceneIndices              : register(t23);
-StructuredBuffer<srrhi::VertexQuantized>    t_SceneVertices             : register(t24);
+// UAVs
+#define u_LightReservoirs           srrhi::ResamplingPassInputs::GetLightReservoirs()
+#define u_RisBuffer                 srrhi::ResamplingPassInputs::GetRisBuffer()
+#define u_RisLightDataBuffer        srrhi::ResamplingPassInputs::GetRisLightDataBuffer()
+#define u_RestirLuminance           srrhi::ResamplingPassInputs::GetRestirLuminance()
+#define u_GIReservoirs              srrhi::ResamplingPassInputs::GetGIReservoirs()
+#define u_SecondaryGBuffer          srrhi::ResamplingPassInputs::GetSecondaryGBuffer()
+#define u_DiffuseLighting           srrhi::ResamplingPassInputs::GetDiffuseLighting()
+#define u_SpecularLighting          srrhi::ResamplingPassInputs::GetSpecularLighting()
 
-// ---- UAVs (match RTXDIRenderer.cpp binding layout) ----
-// u0  = u_LightReservoirs
-// u1  = u_RisBuffer
-// u2  = u_RisLightDataBuffer
-// u3  = u_RestirLuminance         (stub)
-// u4  = u_GIReservoirs            (stub)
-// u5  = u_SecondaryGBuffer        (stub — future GI)
-// u6  = u_DiffuseLighting
-// u7  = u_SpecularLighting
-
-RWStructuredBuffer<RTXDI_PackedDIReservoir> u_LightReservoirs           : register(u0);
-RWStructuredBuffer<uint2>                   u_RisBuffer                 : register(u1);
-RWStructuredBuffer<uint4>                   u_RisLightDataBuffer        : register(u2);
-RWTexture2D<float2>                         u_RestirLuminance           : register(u3);
-RWStructuredBuffer<RTXDI_PackedGIReservoir> u_GIReservoirs              : register(u4);
-RWStructuredBuffer<SecondaryGBufferData>    u_SecondaryGBuffer          : register(u5);
-RWTexture2D<float4>                         u_DiffuseLighting           : register(u6);
-RWTexture2D<float4>                         u_SpecularLighting          : register(u7);
-
-// RTXDI macro aliases
+// RTXDI macro aliases (SDK expects these names)
 #define RTXDI_RIS_BUFFER                u_RisBuffer
 #define RTXDI_LIGHT_RESERVOIR_BUFFER    u_LightReservoirs
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER   t_NeighborOffsets
 #define RTXDI_GI_RESERVOIR_BUFFER       u_GIReservoirs
 #define IES_SAMPLER                     SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX]
+
+// RTXDIConstants aliases — expose srrhi::RTXDIConstants values as bare names
+// used throughout the bridge and lighting pass shaders.
+#define INSTANCE_MASK_OPAQUE             srrhi::RTXDIConstants::INSTANCE_MASK_OPAQUE
+#define INSTANCE_MASK_ALPHA_TESTED       srrhi::RTXDIConstants::INSTANCE_MASK_ALPHA_TESTED
+#define INSTANCE_MASK_TRANSPARENT        srrhi::RTXDIConstants::INSTANCE_MASK_TRANSPARENT
+#define INSTANCE_MASK_ALL                srrhi::RTXDIConstants::INSTANCE_MASK_ALL
+#define DENOISER_MODE_OFF                srrhi::RTXDIConstants::DENOISER_MODE_OFF
+#define DENOISER_MODE_REBLUR             srrhi::RTXDIConstants::DENOISER_MODE_REBLUR
+#define DENOISER_MODE_RELAX              srrhi::RTXDIConstants::DENOISER_MODE_RELAX
+#define BACKGROUND_DEPTH                 srrhi::RTXDIConstants::BACKGROUND_DEPTH
+#define INDIRECT_LIGHTING_MODE_NONE      srrhi::RTXDIConstants::INDIRECT_LIGHTING_MODE_NONE
+#define INDIRECT_LIGHTING_MODE_BRDF      srrhi::RTXDIConstants::INDIRECT_LIGHTING_MODE_BRDF
+#define INDIRECT_LIGHTING_MODE_RESTIRGI  srrhi::RTXDIConstants::INDIRECT_LIGHTING_MODE_RESTIRGI
+#define kSecondaryGBuffer_IsSpecularRay    srrhi::RTXDIConstants::kSecondaryGBuffer_IsSpecularRay
+#define kSecondaryGBuffer_IsDeltaSurface   srrhi::RTXDIConstants::kSecondaryGBuffer_IsDeltaSurface
+#define kSecondaryGBuffer_IsEnvironmentMap srrhi::RTXDIConstants::kSecondaryGBuffer_IsEnvironmentMap
+#define RTXDI_SCREEN_SPACE_GROUP_SIZE    srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE
+#define RTXDI_PRESAMPLING_GROUP_SIZE     srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE
+#define RTXDI_GRAD_FACTOR                srrhi::RTXDIConstants::RTXDI_GRAD_FACTOR
+#define RTXDI_GRAD_STORAGE_SCALE         srrhi::RTXDIConstants::RTXDI_GRAD_STORAGE_SCALE
+#define RTXDI_GRAD_MAX_VALUE             srrhi::RTXDIConstants::RTXDI_GRAD_MAX_VALUE
 
 // Translates a light index between frames.
 // Since lights don't stream in/out, the index is always stable — return it unchanged.

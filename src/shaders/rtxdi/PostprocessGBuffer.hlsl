@@ -6,19 +6,19 @@
 #pragma pack_matrix(row_major)
 
 #include "NRD.hlsli"
-#include "SharedShaderInclude/ShaderParameters.h"
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
 #include "../Packing.hlsli"
 #include "../CommonLighting.hlsli"
 
-// Inputs — registers match RTXDIRenderer.cpp PostprocessGBuffer binding set:
-//   t1  = LinearZ (R32_FLOAT linear view-space depth, written by GenerateViewZ)
-//   t4  = ORM (packed R8G8B8A8: R=occlusion, G=roughness, B=metalness)
-//   t5  = normals (packed oct R32_UINT)
-Texture2D<float>  t_ViewDepth      : register(t1);  // LinearZ
-Texture2D<float2> t_ORM            : register(t4);
-Texture2D<float2> t_Normals        : register(t5);
+#include "srrhi/hlsl/RTXDI.hlsli"
 
-ConstantBuffer<ResamplingConstants> g_Const : register(b0);
+#define g_Const         srrhi::PostprocessGBufferInputs::GetConst()
+#define t_ViewDepth     srrhi::PostprocessGBufferInputs::GetViewDepth()
+#define t_ORM           srrhi::PostprocessGBufferInputs::GetORM()
+#define t_Normals       srrhi::PostprocessGBufferInputs::GetNormals()
 
 #define NRD_BILATERAL_WEIGHT_VIEWZ_SENSITIVITY 100.0
 #define NRD_BILATERAL_WEIGHT_CUTOFF            0.03

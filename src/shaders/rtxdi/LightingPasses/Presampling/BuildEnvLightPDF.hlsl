@@ -25,14 +25,18 @@
 
 // Minimal includes — avoid pulling in the full RtxdiApplicationBridge which
 // declares many resources that would fail binding validation in this pass.
-#include <SharedShaderInclude/ShaderParameters.h>
+#include <Rtxdi/DI/ReSTIRDIParameters.h>
+#include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/ReGIR/ReGIRParameters.h>
+#include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+
 #include "../../Atmosphere.hlsli"
 #include "../../CommonLighting.hlsli"
 
-ConstantBuffer<ResamplingConstants> g_Const : register(b0);
+#include "srrhi/hlsl/RTXDI.hlsli"
 
-// Mip-0 of the env PDF texture, bound as a UAV so we can write it.
-RWTexture2D<float> u_EnvLightPdfMip0 : register(u0);
+#define g_Const              srrhi::BuildEnvLightPDFInputs::GetConst()
+#define u_EnvLightPdfMip0    srrhi::BuildEnvLightPDFInputs::GetEnvLightPdfMip0()
 
 [numthreads(8, 8, 1)]
 void main(uint2 GlobalIndex : SV_DispatchThreadID)
