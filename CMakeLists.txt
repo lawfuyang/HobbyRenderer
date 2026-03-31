@@ -148,6 +148,29 @@ if(WIN32)
     file(CREATE_LINK "${NRD_SRC_DIR}/Shaders/NRDConfig.hlsli" "${CMAKE_SOURCE_DIR}/src/Shaders/NRDConfig.hlsli" SYMBOLIC)
 endif()
 
+# ----------------------------------------------------------------------------
+# AMD FSR SDK
+# ----------------------------------------------------------------------------
+SET(FSR_SDK_VERSION "2.2.0")
+SET(FSR_SDK_URL "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/archive/refs/tags/v${FSR_SDK_VERSION}.zip")
+download_library("FSR_SDK" "${FSR_SDK_VERSION}" "${FSR_SDK_URL}" "FidelityFX-SDK-*")
+set(FSR_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/FSR_SDK")
+set(FSR_SDK_SUBDIR "FidelityFX-SDK-${FSR_SDK_VERSION}")
+set(FSR_SDK_SRC_DIR "${FSR_SDK_INSTALL_DIR}/${FSR_SDK_SUBDIR}")
+SET(FSR_SDK_FIDELITY_FX_DIR "${FSR_SDK_SRC_DIR}/Kits/FidelityFX")
+SET(FSR_SDK_BIN_DIR "${FSR_SDK_FIDELITY_FX_DIR}/signedbin")
+
+# Create symbolic links for DLL files in FSR_SDK_BIN_DIR to bin directory
+if(WIN32)
+    file(GLOB FSR_DLL_FILES "${FSR_SDK_BIN_DIR}/*.dll")
+    foreach(FSR_DLL ${FSR_DLL_FILES})
+        get_filename_component(FSR_DLL_FILENAME ${FSR_DLL} NAME)
+        file(CREATE_LINK "${FSR_DLL}" "${CMAKE_SOURCE_DIR}/bin/${FSR_DLL_FILENAME}" SYMBOLIC)
+    endforeach()
+
+    file(CREATE_LINK "${FSR_SDK_FIDELITY_FX_DIR}" "${CMAKE_SOURCE_DIR}/src/FidelityFX" SYMBOLIC)
+endif()
+
 set(SRRHI_BUILD_VALIDATION_TARGETS OFF)
 add_subdirectory(external/srrhi)
 file(CREATE_LINK "${CMAKE_SOURCE_DIR}/external/srrhi/srrhi.h" "${CMAKE_SOURCE_DIR}/src/srrhi.h" SYMBOLIC)
@@ -252,6 +275,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external
 # NRD
 target_link_libraries(${PROJECT_NAME} PRIVATE NRD)
 target_include_directories(${PROJECT_NAME} PRIVATE "${NRD_SRC_DIR}/Include")
+
+# FidelityFX
+target_link_libraries(${PROJECT_NAME} PRIVATE "${FSR_SDK_BIN_DIR}/amd_fidelityfx_loader_dx12.lib")
 
 # ============================================================================
 # ShaderMake Integration (offline HLSL compilation)

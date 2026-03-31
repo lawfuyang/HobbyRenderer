@@ -24,13 +24,10 @@ void main(uint2 pixelPos : SV_DispatchThreadID)
     float rawDepth = t_Depth[pixelPos];
 
     // Reconstruct linear view-space depth from the projection matrix.
-    // g_Const.view.matClipToView[3][2] = near * far / (near - far)  (row-major)
-    // g_Const.view.matClipToView[2][2] = far / (far - near)
-    // For a standard reversed-Z projection:
-    //   linearZ = near * far / (far - rawDepth * (far - near))
-    // We use the clip-to-view matrix directly to stay projection-agnostic.
+    // The depth buffer is written with the jittered projection, so we must
+    // use the matching jittered clip-to-view inverse.
     float4 clipPos = float4(0.0, 0.0, rawDepth, 1.0);
-    float4 viewPos = mul(clipPos, g_Const.view.m_MatClipToViewNoOffset);
+    float4 viewPos = mul(clipPos, g_Const.view.m_MatClipToView);
     float linearZ  = viewPos.z / viewPos.w;
 
     u_LinearDepth[pixelPos] = linearZ;

@@ -151,6 +151,20 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
+        // TAA (FSR3) controls
+        if (ImGui::TreeNode("TAA"))
+        {
+            ImGui::Checkbox("Enable TAA", &renderer->m_bTAAEnabled);
+
+            if (renderer->m_bTAAEnabled)
+            {
+                ImGui::Checkbox("Debug View", &renderer->m_bTAADebugView);
+                ImGui::SliderFloat("Sharpness", &renderer->m_TAASharpness, 0.0f, 1.0f);
+            }
+
+            ImGui::TreePop();
+        }
+
         // Lights controls
         if (ImGui::TreeNode("Lights"))
         {

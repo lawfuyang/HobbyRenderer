@@ -248,6 +248,11 @@ struct Renderer
         float m_ExposureCompensation;
     } m_DebugBackup{};
 
+    bool m_bTAAEnabled = true;
+    bool m_bTAADebugView = false;
+    float m_TAASharpness = 0.0f;
+    float m_PrevFrameExposure = 1.0f; // Previous frame's exposure multiplier (readback from GPU)
+
     // Environment Lighting settings
     bool m_EnableSky = true;
     std::string m_IrradianceTexturePath = "irradiance.dds";

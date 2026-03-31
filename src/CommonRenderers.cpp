@@ -13,6 +13,7 @@ RGTextureHandle g_RG_GBufferORM;
 RGTextureHandle g_RG_GBufferEmissive;
 RGTextureHandle g_RG_GBufferMotionVectors;
 RGTextureHandle g_RG_HDRColor;
+RGTextureHandle g_RG_ExposureTexture;
 
 // ============================================================================
 // Renderer Implementations
@@ -126,6 +127,17 @@ public:
             hzbDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             
             m_NeedHZBClear = renderGraph.DeclarePersistentTexture(hzbDesc, g_RG_HZBTexture);
+        }
+
+        {
+            RGTextureDesc desc;
+            desc.m_NvrhiDesc.width = 1;
+            desc.m_NvrhiDesc.height = 1;
+            desc.m_NvrhiDesc.format = nvrhi::Format::R32_FLOAT;
+            desc.m_NvrhiDesc.debugName = "ExposureTexture_RG";
+            desc.m_NvrhiDesc.isUAV = true;
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            renderGraph.DeclarePersistentTexture(desc, g_RG_ExposureTexture);
         }
 
         return true;

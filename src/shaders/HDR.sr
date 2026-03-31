@@ -44,6 +44,7 @@ srinput ExposureAdaptationInputs
 
     RWBuffer<float> Exposure;
     StructuredBuffer<uint> HistogramInput;
+    RWTexture2D<float> ExposureTexture;
 };
 
 srinput TonemappingInputs

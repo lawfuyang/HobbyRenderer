@@ -224,9 +224,17 @@ void Camera::FillPlanarViewConstants(srrhi::PlanarViewConstants& constants, floa
     XMStoreFloat4x4(&constants.m_MatViewToWorld, invView);
     XMStoreFloat4x4(&constants.m_MatClipToWorld, invViewProj);
 
-    // Jittered versions
-    uint32_t frameIndex = Renderer::GetInstance()->m_FrameNumber;
-    Vector2 jitter = { Halton(frameIndex % 16 + 1, 2) - 0.5f, Halton(frameIndex % 16 + 1, 3) - 0.5f };
+    // Jittered versions — only apply sub-pixel jitter when TAA is enabled.
+    // When TAA is off the "jittered" matrices are identical to the non-jittered
+    // ones so that nothing on screen jitters.
+    Renderer* renderer = Renderer::GetInstance();
+    Vector2 jitter = { 0.0f, 0.0f };
+
+    if (renderer->m_bTAAEnabled)
+    {
+        uint32_t frameIndex = renderer->m_FrameNumber;
+        jitter = { Halton(frameIndex % 16 + 1, 2) - 0.5f, Halton(frameIndex % 16 + 1, 3) - 0.5f };
+    }
 
     XMMATRIX jitterMatrix = XMMatrixTranslation(2.0f * jitter.x / viewportWidth, -2.0f * jitter.y / viewportHeight, 0.0f);
     XMMATRIX viewProjJittered = XMMatrixMultiply(viewProj, jitterMatrix);

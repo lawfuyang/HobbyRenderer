@@ -7,6 +7,8 @@
 
 extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_BloomUpPyramid;
+extern RGTextureHandle g_RG_TAAOutput;
+extern RGTextureHandle g_RG_ExposureTexture;
 
 static constexpr float kMinLogLuminance = -10.0f;
 static constexpr float kMaxLogLuminance = 20.0f;
@@ -16,6 +18,10 @@ class HDRRenderer : public IRenderer
 public:
     RGBufferHandle m_RG_LuminanceHistogram;
     RGBufferHandle m_RG_ExposureBuffer;
+
+    // Readback: double-buffered staging buffers for reading back exposure to CPU
+    nvrhi::BufferHandle m_ExposureReadbackBuffers[2];
+    bool m_ReadbackInitialized = false;
 
     bool Setup(RenderGraph& renderGraph) override
     {
@@ -45,12 +51,36 @@ public:
             renderGraph.DeclarePersistentBuffer(desc, m_RG_ExposureBuffer);
         }
 
-        renderGraph.ReadTexture(g_RG_HDRColor);
+        // Create readback staging buffers (once)
+        if (!m_ReadbackInitialized)
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                nvrhi::BufferDesc rbDesc;
+                rbDesc.byteSize = sizeof(float);
+                rbDesc.debugName = i == 0 ? "ExposureReadback0" : "ExposureReadback1";
+                rbDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+                m_ExposureReadbackBuffers[i] = renderer->m_RHI->m_NvrhiDevice->createBuffer(rbDesc);
+            }
+            m_ReadbackInitialized = true;
+        }
+        
         if (renderer->m_EnableBloom && renderer->m_Mode != RenderingMode::ReferencePathTracer)
         {
             renderGraph.ReadTexture(g_RG_BloomUpPyramid);
         }
 
+        if (renderer->m_bTAAEnabled)
+        {
+            renderGraph.WriteTexture(g_RG_TAAOutput);
+        }
+        else
+        {
+            renderGraph.ReadTexture(g_RG_HDRColor);
+        }
+
+        renderGraph.WriteTexture(g_RG_ExposureTexture);
+        
         return true;
     }
 
@@ -63,7 +93,7 @@ public:
 
         nvrhi::BufferHandle luminanceHistogram = renderer->m_EnableAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
         nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(m_RG_ExposureBuffer, RGResourceAccessMode::Write);
-        nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(renderer->m_bTAAEnabled ? g_RG_TAAOutput : g_RG_HDRColor, RGResourceAccessMode::Read);
         nvrhi::TextureHandle bloomUpPyramid = (renderer->m_EnableBloom && renderer->m_Mode != RenderingMode::ReferencePathTracer) ? renderGraph.GetTexture(g_RG_BloomUpPyramid, RGResourceAccessMode::Read) : nullptr;
 
         // 1. Histogram Pass
@@ -116,8 +146,11 @@ public:
                 inputs.m_AdaptationConstants.SetExposureValueMax(renderer->m_Scene.m_Camera.m_ExposureValueMax);
                 inputs.m_AdaptationConstants.SetExposureCompensation(renderer->m_Scene.m_Camera.m_ExposureCompensation);
 
+                nvrhi::TextureHandle exposureTexture = renderGraph.GetTexture(g_RG_ExposureTexture, RGResourceAccessMode::Write);
+
                 inputs.SetExposure(exposureBuffer);
                 inputs.SetHistogramInput(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummySRVStructuredBuffer);
+                inputs.SetExposureTexture(exposureTexture, 0);
 
                 nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
@@ -134,8 +167,29 @@ public:
             }
             else
             {
-                // Manual mode: just update the buffer from CPU
+                // Manual mode: write the exposure value directly to both buffer and texture
                 commandList->writeBuffer(exposureBuffer, &renderer->m_Scene.m_Camera.m_Exposure, sizeof(float));
+
+                // Also write to the 1x1 exposure texture for FSR3
+                nvrhi::TextureHandle exposureTexture = renderGraph.GetTexture(g_RG_ExposureTexture, RGResourceAccessMode::Write);
+                commandList->writeTexture(exposureTexture, 0, 0, &renderer->m_Scene.m_Camera.m_Exposure, sizeof(float));
+            }
+        }
+
+        // Readback previous frame's exposure for FSR3 preExposure
+        {
+            const uint32_t writeIdx = renderer->m_FrameNumber % 2;
+            const uint32_t readIdx = 1 - writeIdx;
+
+            // Copy current exposure to staging buffer for next frame readback
+            commandList->copyBuffer(m_ExposureReadbackBuffers[writeIdx], 0, exposureBuffer, 0, sizeof(float));
+
+            // Read back the previous frame's value
+            float* mapped = static_cast<float*>(renderer->m_RHI->m_NvrhiDevice->mapBuffer(m_ExposureReadbackBuffers[readIdx], nvrhi::CpuAccessMode::Read));
+            if (mapped)
+            {
+                renderer->m_PrevFrameExposure = *mapped;
+                renderer->m_RHI->m_NvrhiDevice->unmapBuffer(m_ExposureReadbackBuffers[readIdx]);
             }
         }
 

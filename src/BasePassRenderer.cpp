@@ -370,9 +370,8 @@ protected:
         cb.SetEnableOcclusionCulling((renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
         cb.SetHZBWidth(handles.hzb ? (uint32_t)handles.hzb->getDesc().width : 0);
         cb.SetHZBHeight(handles.hzb ? (uint32_t)handles.hzb->getDesc().height : 0);
-        // FIXME: Switch to m_MatViewToClip (jittered) once TAA is implemented
-        cb.SetP00(renderer->m_Scene.m_View.m_MatViewToClipNoOffset._11);
-        cb.SetP11(renderer->m_Scene.m_View.m_MatViewToClipNoOffset._22);
+        cb.SetP00(renderer->m_Scene.m_View.m_MatViewToClip._11);
+        cb.SetP11(renderer->m_Scene.m_View.m_MatViewToClip._22);
         cb.SetOpaqueColorDimensions(DirectX::XMFLOAT2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height });
         cb.SetOpaqueColorMipCount(opaqueColor->getDesc().mipLevels);
         cb.SetEnableSky(renderer->m_EnableSky ? 1 : 0);

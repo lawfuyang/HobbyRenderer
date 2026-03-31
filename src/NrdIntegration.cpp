@@ -138,6 +138,13 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings)
     settings.isHistoryConfidenceAvailable        = false;
     settings.isDisocclusionThresholdMixAvailable = false;
 
+    // Camera jitter offsets (in pixels, current and previous frame).
+    // m_PixelOffset is the Halton sub-pixel jitter applied to the projection matrix.
+    settings.cameraJitter[0]     = view.m_PixelOffset.x;
+    settings.cameraJitter[1]     = view.m_PixelOffset.y;
+    settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x;
+    settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y;
+
     // Sky pixels are written as 1e6 in GenerateViewZ — safely outside this range.
     settings.denoisingRange = 1000.0f;
 }

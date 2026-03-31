@@ -42,7 +42,6 @@ public:
         Vector3 m_Translation = Vector3{ 0.0f, 0.0f, 0.0f };
         Quaternion m_Rotation = Quaternion{ 0.0f, 0.0f, 0.0f, 1.0f };
         Vector3 m_Scale = Vector3{ 1.0f, 1.0f, 1.0f };
-        bool m_HasTRS = false;
         bool m_IsAnimated = false; // Directly targeted by an animation channel
         bool m_IsDynamic = false;  // Animated or child of dynamic
         bool m_IsDirty = false;    // Transform changed this frame
@@ -176,14 +175,6 @@ public:
         float m_SpotOuterConeAngle = DirectX::XM_PIDIV4; // 45deg
         float m_AngularSize = 0.533f; // For directional lights (degree)
         int m_NodeIndex = -1; // Must be valid - references the Node containing this light's transform
-    };
-
-    struct DirectionalLight
-    {
-        float yaw       = 0.0f;
-        float pitch     = -DirectX::XM_PI / 3.0f; // -60 degrees, like Unreal Engine default sunlight
-        float intensity = 20000.0f;  // Default to 20,000 lux (bright daylight)
-        float angularSize = 0.533f; // Sun angular size in degrees (default to real sun)
     };
 
     // Public scene storage (instance members)

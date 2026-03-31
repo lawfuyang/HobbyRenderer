@@ -126,14 +126,12 @@ RAB_Surface GetGBufferSurface(
     if (rawDepth == 0.0f)
         return surface; // surface.viewDepth == BACKGROUND_DEPTH from RAB_EmptySurface()
 
-    // Convert raw NDC depth to linear view-space depth using the *non-jittered*
-    // clip-to-view matrix.  The depth buffer is written by the base pass with
-    // m_MatWorldToClipNoOffset, so we must invert with the matching NoOffset
-    // matrix.  Using the jittered m_MatClipToView introduces a per-frame depth
-    // error that breaks temporal depth comparisons at edge pixels.
+    // Convert raw NDC depth to linear view-space depth.  The depth buffer is
+    // written by the base pass with the jittered m_MatWorldToClip, so we must
+    // invert with the matching jittered matrix.
     {
         float4 clipPos  = float4(0.0f, 0.0f, rawDepth, 1.0f);
-        float4 viewPos  = MatrixMultiply(clipPos, view.m_MatClipToViewNoOffset);
+        float4 viewPos  = MatrixMultiply(clipPos, view.m_MatClipToView);
         surface.viewDepth = viewPos.z / viewPos.w;
     }
 
@@ -142,12 +140,12 @@ RAB_Surface GetGBufferSurface(
     surface.geoNormal = DecodeNormal(geoNormalsTexture[pixelPosition]);
     surface.normal = DecodeNormal(normalsTexture[pixelPosition]);
 
-    // Reconstruct world position from clip-space depth using HobbyRenderer's view constants.
-    // Use the raw NDC depth here (correct clip-space Z for the world-pos reconstruction).
+    // Reconstruct world position from clip-space depth.  The depth buffer is
+    // written with the jittered projection, so we must use the jittered inverse.
     {
         float2 uv = (float2(pixelPosition) + 0.5f) / float2(view.m_ViewportSize);
         float4 clipPos = float4(uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), rawDepth, 1.0f);
-        float4 worldPosFour = MatrixMultiply(clipPos, view.m_MatClipToWorldNoOffset);
+        float4 worldPosFour = MatrixMultiply(clipPos, view.m_MatClipToWorld);
         surface.worldPos = worldPosFour.xyz / worldPosFour.w;
     }
 

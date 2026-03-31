@@ -4,6 +4,7 @@ static const srrhi::AdaptationConstants AdaptationCB = srrhi::ExposureAdaptation
 
 static const RWBuffer<float> Exposure = srrhi::ExposureAdaptationInputs::GetExposure();
 static const StructuredBuffer<uint> HistogramInput = srrhi::ExposureAdaptationInputs::GetHistogramInput();
+static const RWTexture2D<float> ExposureTexture = srrhi::ExposureAdaptationInputs::GetExposureTexture();
 
 groupshared float SharedWeights[256];
 
@@ -47,5 +48,6 @@ void ExposureAdaptation_CSMain(uint threadIdx : SV_GroupIndex)
         float exposure = currentExposure + (targetExposure - currentExposure) * (1.0f - exp(-AdaptationCB.m_DeltaTime * AdaptationCB.m_AdaptationSpeed));
         
         Exposure[0] = exposure;
+        ExposureTexture[uint2(0, 0)] = exposure;
     }
 }

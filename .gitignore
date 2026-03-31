@@ -123,8 +123,10 @@ external/dxc
 external/agilitysdk
 external/NRD
 external/MathLib
+external/FSR_SDK
 src/shaders/NRDShaders.cfg
 src/shaders/NRD.hlsli
 src/shaders/NRDConfig.hlsli
 src/shaders/srrhi
 src/srrhi.h
+src/FidelityFX

@@ -241,9 +241,10 @@ float3 ComputeCellViewSpacePosition(uint3 GridCoordinate, float3 GridZParams, ui
 
 float3 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos, srrhi::PlanarViewConstants view, srrhi::PlanarViewConstants viewPrev)
 {
-    // FIXME: Switch back to m_MatWorldToClip (jittered) once TAA is implemented
-    float4 clipPos = MatrixMultiply(float4(worldPos, 1.0), view.m_MatWorldToClipNoOffset);
-    float4 prevClipPos = MatrixMultiply(float4(prevWorldPos, 1.0), viewPrev.m_MatWorldToClipNoOffset);
+    // Use jittered matrices so motion vectors include the sub-pixel jitter offset.
+    // FSR3 TAA with MOTION_VECTORS_JITTER_CANCELLATION will remove the jitter internally.
+    float4 clipPos = MatrixMultiply(float4(worldPos, 1.0), view.m_MatWorldToClip);
+    float4 prevClipPos = MatrixMultiply(float4(prevWorldPos, 1.0), viewPrev.m_MatWorldToClip);
 
     // clipPos.w is the linear view-space depth
     float currentDepth = clipPos.w;
@@ -255,8 +256,6 @@ float3 ComputeMotionVectors(float3 worldPos, float3 prevWorldPos, srrhi::PlanarV
     float2 windowPos = clipPos.xy * view.m_ClipToWindowScale + view.m_ClipToWindowBias;
     float2 prevWindowPos = prevClipPos.xy * viewPrev.m_ClipToWindowScale + viewPrev.m_ClipToWindowBias;
 
-    // FIXME: When TAA is implemented, if we use jittered matrices, we need to add back the jitter offset correction:
-    // return prevWindowPos.xy - windowPos.xy + (g_PerFrame.m_View.m_PixelOffset - g_PerFrame.m_PrevView.m_PixelOffset);
     return float3(prevWindowPos.xy - windowPos.xy, previousDepth - currentDepth);
 }
 

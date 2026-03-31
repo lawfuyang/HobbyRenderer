@@ -35,6 +35,7 @@ public:
 
     // Set projection parameters
     void SetProjection(const ProjectionParams& proj) { m_Proj = proj; }
+    const ProjectionParams& GetProjection() const { return m_Proj; }
 
     // Exposure settings (photographic EV100)
     float m_ExposureValue           = 0.0f; // EV100

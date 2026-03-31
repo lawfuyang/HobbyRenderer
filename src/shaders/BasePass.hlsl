@@ -47,8 +47,7 @@ VSOut PrepareVSOut(srrhi::Vertex v, srrhi::PerInstanceData inst, uint instanceID
 {
     VSOut o;
     float4 worldPos = MatrixMultiply(float4(v.m_Pos, 1.0f), inst.m_World);
-    // FIXME: Switch to m_MatWorldToClip (jittered) once TAA is implemented
-    o.Position = MatrixMultiply(worldPos, g_PerFrame.m_View.m_MatWorldToClipNoOffset);
+    o.Position = MatrixMultiply(worldPos, g_PerFrame.m_View.m_MatWorldToClip);
 
     o.normal = TransformNormal(v.m_Normal, inst.m_World);
     o.tangent.xyz = TransformNormal(v.m_Tangent.xyz, inst.m_World);
@@ -434,8 +433,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         float3 refractedRayExit = input.worldPos + transmissionRay;
 
         // Project to screen space
-        // FIXME: Switch back to m_MatWorldToClip (jittered) once TAA is implemented
-        float4 refractClipPos = MatrixMultiply(float4(refractedRayExit, 1.0), g_PerFrame.m_View.m_MatWorldToClipNoOffset);
+        float4 refractClipPos = MatrixMultiply(float4(refractedRayExit, 1.0), g_PerFrame.m_View.m_MatWorldToClip);
         float2 refractUV = (refractClipPos.xy / refractClipPos.w) * float2(0.5, -0.5) + 0.5;
 
         // Sample background with roughness-based LOD

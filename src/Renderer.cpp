@@ -897,6 +897,7 @@ void Renderer::Run()
         extern IRenderer* g_SkyRenderer;
         extern IRenderer* g_TransparentPassRenderer;
         extern IRenderer* g_BloomRenderer;
+        extern IRenderer* g_TAARenderer;
         extern IRenderer* g_HDRRenderer;
         extern IRenderer* g_ImGuiRenderer;
         extern IRenderer* g_PathTracerRenderer;
@@ -919,6 +920,9 @@ void Renderer::Run()
             m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);
             m_RenderGraph.ScheduleRenderer(g_BloomRenderer);
         }
+
+        // TAA runs after scene rendering, before HDR tonemapping
+        m_RenderGraph.ScheduleRenderer(g_TAARenderer);
 
         m_RenderGraph.ScheduleRenderer(g_HDRRenderer);
         m_RenderGraph.ScheduleRenderer(g_ImGuiRenderer);
