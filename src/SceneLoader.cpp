@@ -104,10 +104,11 @@ static Quaternion json_get_quat(const JsonContext& ctx, int tokenIdx)
 // Convert quaternion to forward direction vector (applies rotation to default forward -Z axis)
 static Vector3 QuaternionToDirection(const Quaternion& q)
 {
-	// Create rotation matrix from quaternion and apply to forward direction [0, 0, -1]
+	// Create rotation matrix from quaternion and apply to forward direction [0, 0, 1]
+	// After glTF RH->LH Z-negation conversion, the camera's -Z forward becomes +Z in LH space
 	DirectX::XMVECTOR quat = DirectX::XMLoadFloat4(&q);
 	DirectX::XMMATRIX rotMatrix = DirectX::XMMatrixRotationQuaternion(quat);
-	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
+	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
 	DirectX::XMVECTOR direction = DirectX::XMVector3Transform(forward, rotMatrix);
 	
 	// Normalize the direction
@@ -1686,7 +1687,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 			float pos[4] = { 0,0,0,0 };
 			cgltf_size posComps = cgltf_num_components(posAcc->type);
 			cgltf_accessor_read_float(posAcc, v, pos, posComps);
-			vx.m_Pos.x = pos[0]; vx.m_Pos.y = pos[1]; vx.m_Pos.z = pos[2];
+			vx.m_Pos.x = pos[0]; vx.m_Pos.y = pos[1]; vx.m_Pos.z = -pos[2]; // glTF RH -> LH: negate Z
 
 			float nrm[4] = { 0,0,0,0 };
 			if (normAcc)
@@ -1694,7 +1695,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 				cgltf_size nrmComps = cgltf_num_components(normAcc->type);
 				cgltf_accessor_read_float(normAcc, v, nrm, nrmComps);
 			}
-			vx.m_Normal.x = nrm[0]; vx.m_Normal.y = nrm[1]; vx.m_Normal.z = nrm[2];
+			vx.m_Normal.x = nrm[0]; vx.m_Normal.y = nrm[1]; vx.m_Normal.z = -nrm[2]; // glTF RH -> LH: negate Z
 
 			float uv[4] = { 0,0,0,0 };
 			if (uvAcc)
@@ -1710,7 +1711,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 				cgltf_size tangComps = cgltf_num_components(tangAcc->type);
 				cgltf_accessor_read_float(tangAcc, v, tang, tangComps);
 			}
-			vx.m_Tangent.x = tang[0]; vx.m_Tangent.y = tang[1]; vx.m_Tangent.z = tang[2]; vx.m_Tangent.w = tang[3];
+			vx.m_Tangent.x = tang[0]; vx.m_Tangent.y = tang[1]; vx.m_Tangent.z = -tang[2]; vx.m_Tangent.w = -tang[3]; // glTF RH -> LH: negate Z and W
 
 			rawVertices[v] = vx;
 		}
@@ -1723,11 +1724,17 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 			{
 				rawIndices[k] = static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, k));
 			}
+			// glTF RH -> LH: negating Z flips winding; swap 2nd and 3rd index per triangle to restore CCW front-face
+			for (cgltf_size k = 0; k + 2 < prim.indices->count; k += 3)
+				std::swap(rawIndices[k + 1], rawIndices[k + 2]);
 		}
 		else
 		{
 			rawIndices.resize(vertCount);
 			for (uint32_t k = 0; k < vertCount; ++k) rawIndices[k] = k;
+			// glTF RH -> LH: negating Z flips winding; swap 2nd and 3rd index per triangle to restore CCW front-face
+			for (uint32_t k = 0; k + 2 < vertCount; k += 3)
+				std::swap(rawIndices[k + 1], rawIndices[k + 2]);
 		}
 
 		std::vector<uint32_t> remap(rawIndices.size());
@@ -2028,18 +2035,30 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene,
 			// Decompose matrix to TRS in case it's animated later
 			DirectX::XMVECTOR scale, rot, trans;
 			DirectX::XMMatrixDecompose(&scale, &rot, &trans, DirectX::XMLoadFloat4x4(&localOut));
-			DirectX::XMStoreFloat3(&node.m_Translation, trans);
-			DirectX::XMStoreFloat4(&node.m_Rotation, rot);
+			// Convert RH (glTF) -> LH (D3D): negate Z of translation, negate X and Y of quaternion
+			DirectX::XMFLOAT3 t3; DirectX::XMStoreFloat3(&t3, trans);
+			t3.z = -t3.z;
+			node.m_Translation = t3;
+			DirectX::XMFLOAT4 q4; DirectX::XMStoreFloat4(&q4, rot);
+			q4.x = -q4.x; q4.y = -q4.y;
+			node.m_Rotation = q4;
 			DirectX::XMStoreFloat3(&node.m_Scale, scale);
+			// Rebuild local matrix from converted TRS
+			const DirectX::XMMATRIX localM = DirectX::XMMatrixScalingFromVector(DirectX::XMLoadFloat3(&node.m_Scale)) *
+				DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&node.m_Rotation)) *
+				DirectX::XMMatrixTranslationFromVector(DirectX::XMLoadFloat3(&node.m_Translation));
+			DirectX::XMStoreFloat4x4(&localOut, localM);
 		}
 		else
 		{
 			if (cn.has_translation)
-				node.m_Translation = Vector3{ cn.translation[0], cn.translation[1], cn.translation[2] };
+				// Convert RH -> LH: negate Z
+				node.m_Translation = Vector3{ cn.translation[0], cn.translation[1], -cn.translation[2] };
 			if (cn.has_scale)
 				node.m_Scale = Vector3{ cn.scale[0], cn.scale[1], cn.scale[2] };
 			if (cn.has_rotation)
-				node.m_Rotation = Quaternion{ cn.rotation[0], cn.rotation[1], cn.rotation[2], cn.rotation[3] };
+				// Convert RH -> LH: negate X and Y of quaternion
+				node.m_Rotation = Quaternion{ -cn.rotation[0], -cn.rotation[1], cn.rotation[2], cn.rotation[3] };
 
 			const DirectX::XMMATRIX localM = DirectX::XMMatrixScalingFromVector(DirectX::XMLoadFloat3(&node.m_Scale)) *
 				DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&node.m_Rotation)) *

@@ -94,27 +94,21 @@ void CommonResources::Initialize()
     renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX, LinearClampBorderWhite);
 
     // Initialize common raster states
-    bool frontCCW = true; // glTF spec says counter-clockwise is front face
-
     // Solid, no cull
     RasterCullNone.fillMode = nvrhi::RasterFillMode::Solid;
     RasterCullNone.cullMode = nvrhi::RasterCullMode::None;
-    RasterCullNone.frontCounterClockwise = frontCCW;
 
     // Solid, back-face cull
     RasterCullBack.fillMode = nvrhi::RasterFillMode::Solid;
     RasterCullBack.cullMode = nvrhi::RasterCullMode::Back;
-    RasterCullBack.frontCounterClockwise = frontCCW;
 
     // Solid, front-face cull
     RasterCullFront.fillMode = nvrhi::RasterFillMode::Solid;
     RasterCullFront.cullMode = nvrhi::RasterCullMode::Front;
-    RasterCullFront.frontCounterClockwise = frontCCW;
 
     // Wireframe, no cull
     RasterWireframeNoCull.fillMode = nvrhi::RasterFillMode::Wireframe;
     RasterWireframeNoCull.cullMode = nvrhi::RasterCullMode::None;
-    RasterWireframeNoCull.frontCounterClockwise = frontCCW;
 
     // Initialize common blend states
     {

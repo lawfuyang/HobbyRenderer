@@ -58,9 +58,7 @@ void Camera::ProcessEvent(const SDL_Event& event)
             m_LastMouseX = event.motion.x;
             m_LastMouseY = event.motion.y;
 
-            float yawDelta = dx * m_MouseSensitivity;
-            yawDelta = -yawDelta;
-            m_Yaw += yawDelta;
+            m_Yaw += dx * m_MouseSensitivity;
             m_Pitch += dy * m_MouseSensitivity;  // Positive dy (mouse down) should increase pitch (look down)
             // Clamp pitch
             if (m_Pitch > DirectX::XM_PIDIV2 - 0.01f) m_Pitch = DirectX::XM_PIDIV2 - 0.01f;
@@ -157,7 +155,7 @@ Matrix Camera::GetProjMatrix() const
     float xScale = yScale / m_Proj.aspectRatio;
 
     Matrix m{};
-    m._11 = -xScale; // NOTE: i have no fucking idea why this needs to be negative, else the entire scene is mirrored on the x-axis
+    m._11 = xScale;
     m._22 = yScale;
     m._33 = 0.0f;
     m._34 = 1.0f;
@@ -266,16 +264,8 @@ void Camera::SetFromMatrix(const Matrix& worldTransform)
     XMVECTOR pos = m.r[3];
     XMStoreFloat3(reinterpret_cast<Vector3*>(&m_Position), pos);
 
-    // Extract rotation matrix (3x3 part)
-    XMMATRIX rotationM = m;
-    rotationM.r[3] = XMVectorSet(0, 0, 0, 1); // remove translation
-
-    // GLTF cameras look down -Z, our camera looks down +Z, so adjust by 180 degrees around Y
-    XMMATRIX rotY180 = XMMatrixRotationY(XM_PI);
-    XMMATRIX effectiveRot = XMMatrixMultiply(rotY180, rotationM);
-
     // Forward direction in world space
-    XMVECTOR worldForward = XMVector3TransformNormal(XMVectorSet(0, 0, 1, 0), effectiveRot);
+    XMVECTOR worldForward = XMVector3TransformNormal(XMVectorSet(0, 0, 1, 0), m);
     worldForward = XMVector3Normalize(worldForward);
 
     // Compute yaw and pitch from forward direction
