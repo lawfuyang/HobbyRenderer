@@ -70,7 +70,6 @@
 #define u_LightReservoirs           srrhi::ResamplingPassInputs::GetLightReservoirs()
 #define u_RisBuffer                 srrhi::ResamplingPassInputs::GetRisBuffer()
 #define u_RisLightDataBuffer        srrhi::ResamplingPassInputs::GetRisLightDataBuffer()
-#define u_RestirLuminance           srrhi::ResamplingPassInputs::GetRestirLuminance()
 #define u_GIReservoirs              srrhi::ResamplingPassInputs::GetGIReservoirs()
 #define u_SecondaryGBuffer          srrhi::ResamplingPassInputs::GetSecondaryGBuffer()
 #define u_DiffuseLighting           srrhi::ResamplingPassInputs::GetDiffuseLighting()

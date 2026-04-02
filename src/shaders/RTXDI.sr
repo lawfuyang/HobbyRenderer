@@ -213,82 +213,81 @@ srinput RTXDIConstants
 // ---- BuildEnvLightPDF pass ----
 srinput BuildEnvLightPDFInputs
 {
-    ResamplingConstants m_Const;                    // b0
-    RWTexture2D<float>  m_EnvLightPdfMip0;          // u0
+    ResamplingConstants m_Const;
+    RWTexture2D<float>  m_EnvLightPdfMip0;
 };
 
 // ---- GenerateViewZ pass ----
 srinput GenerateViewZInputs
 {
-    ResamplingConstants m_Const;                    // b0
-    Texture2D<float>    m_Depth;                    // t1 — raw depth
-    RWTexture2D<float>  m_LinearDepth;              // u0
+    ResamplingConstants m_Const;
+    Texture2D<float>    m_Depth;
+    RWTexture2D<float>  m_LinearDepth;
 };
 
 // ---- PostprocessGBuffer pass ----
 srinput PostprocessGBufferInputs
 {
-    ResamplingConstants m_Const;                    // b0
-    Texture2D<float>    m_ViewDepth;                // t1 — LinearZ
-    Texture2D<float2>   m_ORM;                      // t4
-    Texture2D<float2>   m_Normals;                  // t5
+    ResamplingConstants m_Const;
+    Texture2D<float>    m_ViewDepth;
+    Texture2D<float2>   m_ORM;
+    Texture2D<float2>   m_Normals;
 };
 
 // ---- PrepareLights pass ----
 srinput PrepareLightsInputs
 {
-    PrepareLightsConstants                    m_Const;                    // b0
-    StructuredBuffer<PrepareLightsTask>       m_TaskBuffer;               // t0
-    StructuredBuffer<PolymorphicLightInfo>    m_PrimitiveLightBuffer;  // t1
-    StructuredBuffer<PerInstanceData>         m_InstanceData;     // t2
-    StructuredBuffer<MeshData>                m_GeometryData;     // t3
-    StructuredBuffer<MaterialConstants>       m_MaterialConstants;// t4
-    StructuredBuffer<uint>                    m_SceneIndices;             // t5
-    StructuredBuffer<VertexQuantized>         m_SceneVertices;    // t6
-    RWStructuredBuffer<PolymorphicLightInfo>  m_LightDataBuffer;  // u0
-    RWBuffer<uint>                            m_LightIndexMappingBuffer;  // u1
-    RWTexture2D<float4>                       m_LocalLightPdfTexture;     // u2
+    PrepareLightsConstants                    m_Const;
+    StructuredBuffer<PrepareLightsTask>       m_TaskBuffer;
+    StructuredBuffer<PolymorphicLightInfo>    m_PrimitiveLightBuffer;
+    StructuredBuffer<PerInstanceData>         m_InstanceData;
+    StructuredBuffer<MeshData>                m_GeometryData;
+    StructuredBuffer<MaterialConstants>       m_MaterialConstants;
+    StructuredBuffer<uint>                    m_SceneIndices;
+    StructuredBuffer<VertexQuantized>         m_SceneVertices;
+    RWStructuredBuffer<PolymorphicLightInfo>  m_LightDataBuffer;
+    RWBuffer<uint>                            m_LightIndexMappingBuffer;
+    RWTexture2D<float4>                       m_LocalLightPdfTexture;
 };
 
 // ---- Main resampling passes (shared binding set) ----
 srinput ResamplingPassInputs
 {
-    ResamplingConstants m_Const;                                    // b0
+    ResamplingConstants m_Const;
 
-    Buffer<float2>                              m_NeighborOffsets;          // t0
-    Texture2D<float>                            m_GBufferDepth;             // t1
-    Texture2D<float2>                           m_GBufferGeoNormals;        // t2
-    Texture2D<float4>                           m_GBufferAlbedo;            // t3
-    Texture2D<float2>                           m_GBufferORM;               // t4
-    Texture2D<float2>                           m_GBufferNormals;           // t5
-    Texture2D<float2>                           m_PrevGBufferNormals;       // t6
-    Texture2D<float2>                           m_PrevGBufferGeoNormals;    // t7
-    Texture2D<float4>                           m_PrevGBufferAlbedo;        // t8
-    Texture2D<float2>                           m_PrevGBufferORM;           // t9
-    Texture2D<float4>                           m_MotionVectors;            // t10
-    Texture2D<float3>                           m_DenoiserNormalRoughness;  // t11
-    Texture2D<float>                            m_PrevGBufferDepth;         // t12
-    Texture2D<float4>                            m_LocalLightPdfTexture;     // t13
-    Texture2D<float4>                            m_EnvironmentPdfTexture;    // t14
-    RaytracingAccelerationStructure             m_SceneBVH;                 // t15
-    RaytracingAccelerationStructure             m_PrevSceneBVH;             // t16
-    StructuredBuffer<PolymorphicLightInfo>      m_LightDataBuffer;          // t17
-    Texture2D<float4>                           m_GBufferEmissive;          // t18
-    Buffer<uint>                                m_GeometryInstanceToLight;  // t19
-    StructuredBuffer<PerInstanceData>           m_InstanceData;             // t20
-    StructuredBuffer<MeshData>                  m_GeometryData;             // t21
-    StructuredBuffer<MaterialConstants>         m_MaterialConstants;        // t22
-    StructuredBuffer<uint>                      m_SceneIndices;             // t23
-    StructuredBuffer<VertexQuantized>           m_SceneVertices;            // t24
+    Buffer<float2>                              m_NeighborOffsets;
+    Texture2D<float>                            m_GBufferDepth;
+    Texture2D<float2>                           m_GBufferGeoNormals;
+    Texture2D<float4>                           m_GBufferAlbedo;
+    Texture2D<float2>                           m_GBufferORM;
+    Texture2D<float2>                           m_GBufferNormals;
+    Texture2D<float2>                           m_PrevGBufferNormals;
+    Texture2D<float2>                           m_PrevGBufferGeoNormals;
+    Texture2D<float4>                           m_PrevGBufferAlbedo;
+    Texture2D<float2>                           m_PrevGBufferORM;
+    Texture2D<float4>                           m_MotionVectors;
+    Texture2D<float3>                           m_DenoiserNormalRoughness;
+    Texture2D<float>                            m_PrevGBufferDepth;
+    Texture2D<float4>                            m_LocalLightPdfTexture;
+    Texture2D<float4>                            m_EnvironmentPdfTexture;
+    RaytracingAccelerationStructure             m_SceneBVH;
+    RaytracingAccelerationStructure             m_PrevSceneBVH;
+    StructuredBuffer<PolymorphicLightInfo>      m_LightDataBuffer;
+    Texture2D<float4>                           m_GBufferEmissive;
+    Buffer<uint>                                m_GeometryInstanceToLight;
+    StructuredBuffer<PerInstanceData>           m_InstanceData;
+    StructuredBuffer<MeshData>                  m_GeometryData;
+    StructuredBuffer<MaterialConstants>         m_MaterialConstants;
+    StructuredBuffer<uint>                      m_SceneIndices;
+    StructuredBuffer<VertexQuantized>           m_SceneVertices;
 
-    RWStructuredBuffer<RTXDI_PackedDIReservoir> m_LightReservoirs;          // u0
-    RWStructuredBuffer<uint2>                   m_RisBuffer;                // u1
-    RWStructuredBuffer<uint4>                   m_RisLightDataBuffer;       // u2
-    RWTexture2D<float2>                         m_RestirLuminance;          // u3
-    RWStructuredBuffer<RTXDI_PackedGIReservoir> m_GIReservoirs;             // u4
-    RWStructuredBuffer<SecondaryGBufferData>    m_SecondaryGBuffer;         // u5
-    RWTexture2D<float4>                         m_DiffuseLighting;          // u6
-    RWTexture2D<float4>                         m_SpecularLighting;         // u7
+    RWStructuredBuffer<RTXDI_PackedDIReservoir> m_LightReservoirs;
+    RWStructuredBuffer<uint2>                   m_RisBuffer;
+    RWStructuredBuffer<uint4>                   m_RisLightDataBuffer;
+    RWStructuredBuffer<RTXDI_PackedGIReservoir> m_GIReservoirs;
+    RWStructuredBuffer<SecondaryGBufferData>    m_SecondaryGBuffer;
+    RWTexture2D<float4>                         m_DiffuseLighting;
+    RWTexture2D<float4>                         m_SpecularLighting;
 };
 
 // ---- CompositingPass ----

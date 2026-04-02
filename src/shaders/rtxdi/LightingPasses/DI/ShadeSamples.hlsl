@@ -64,11 +64,6 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupTh
         }
     }
 
-    // Store the sampled lighting luminance for the gradient pass.
-    // Discard the pixels where the visibility was reused, as gradients need actual visibility.
-    // NOTE: not used because i dont have gradient pass
-    //u_RestirLuminance[GlobalIndex] = currLuminance * (reservoir.age > 0 ? 0 : 1);
-
 #if RTXDI_REGIR_MODE != RTXDI_REGIR_DISABLED
     if (g_Const.visualizeRegirCells)
     {

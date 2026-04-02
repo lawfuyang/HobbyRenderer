@@ -8,6 +8,7 @@
 #include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
 #include <Rtxdi/LightSampling/RISBufferSegmentAllocator.h>
 #include <Rtxdi/GI/ReSTIRGIParameters.h>
+#include <Rtxdi/GI/ReSTIRGI.h>
 #include <Rtxdi/ReGIR/ReGIRParameters.h>
 #include <Rtxdi/ReGIR/ReGIR.h>
 #include "shaders/srrhi/cpp/RTXDI.h"
@@ -45,6 +46,16 @@ static constexpr uint32_t k_EnvPDFTexSize = 1024u;
 static constexpr uint32_t k_CompactSlotsPerEntry = 2u;
 
 // ============================================================================
+// ============================================================================
+// ReSTIR GI globals
+// ============================================================================
+static bool                                    g_ReSTIRGI_Enabled          = true;
+static rtxdi::ReSTIRGI_ResamplingMode          g_ReSTIRGI_ResamplingMode   = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+static RTXDI_GITemporalResamplingParameters    g_ReSTIRGI_TemporalParams   = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+static RTXDI_BoilingFilterParameters           g_ReSTIRGI_BoilingParams    = rtxdi::GetDefaultReSTIRGIBoilingFilterParams();
+static RTXDI_GISpatialResamplingParameters     g_ReSTIRGI_SpatialParams    = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+static RTXDI_GIFinalShadingParameters          g_ReSTIRGI_FinalShadingParams= rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+
 bool g_ReSTIRDI_ShowAdvancedSettings = false;
 rtxdi::ReSTIRDI_ResamplingMode         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
 RTXDI_DIInitialSamplingParameters      g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
@@ -290,6 +301,106 @@ void RTXDIIMGUISettings()
         ImGui::TreePop();
     }
 
+    // ---- ReSTIR GI -----------------------------------------------------------
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("ReSTIR GI", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Indent();
+
+        ImGui::Checkbox("Enable ReSTIR GI", &g_ReSTIRGI_Enabled);
+
+        if (g_ReSTIRGI_Enabled)
+        {
+            // Resampling mode combo (FusedSpatiotemporal excluded)
+            if (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::FusedSpatiotemporal)
+                g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+
+            ImGui::PushItemWidth(200.f);
+            ImGui::Combo("GI Resampling Mode", (int*)&g_ReSTIRGI_ResamplingMode,
+                "None\0"
+                "Temporal\0"
+                "Spatial\0"
+                "Temporal + Spatial\0");
+            ImGui::PopItemWidth();
+
+            // Temporal sub-section
+            const bool giHasTemporal =
+                (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Temporal ||
+                 g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
+            if (giHasTemporal && ImGui::TreeNode("GI Temporal Resampling"))
+            {
+                ImGui::SliderFloat("GI Temporal Depth Threshold",
+                    &g_ReSTIRGI_TemporalParams.depthThreshold, 0.0f, 1.0f);
+                ImGui::SliderFloat("GI Temporal Normal Threshold",
+                    &g_ReSTIRGI_TemporalParams.normalThreshold, 0.0f, 1.0f);
+                ImGui::SliderInt("GI Max History Length",
+                    (int*)&g_ReSTIRGI_TemporalParams.maxHistoryLength, 1, 100);
+                ImGui::SliderInt("GI Max Reservoir Age",
+                    (int*)&g_ReSTIRGI_TemporalParams.maxReservoirAge, 1, 100);
+
+                bool giPermutation = g_ReSTIRGI_TemporalParams.enablePermutationSampling != 0;
+                if (ImGui::Checkbox("GI Permutation Sampling", &giPermutation))
+                    g_ReSTIRGI_TemporalParams.enablePermutationSampling = giPermutation ? 1u : 0u;
+
+                bool giFallback = g_ReSTIRGI_TemporalParams.enableFallbackSampling != 0;
+                if (ImGui::Checkbox("GI Fallback Sampling", &giFallback))
+                    g_ReSTIRGI_TemporalParams.enableFallbackSampling = giFallback ? 1u : 0u;
+
+                ImGui::Combo("GI Temporal Bias Correction",
+                    (int*)&g_ReSTIRGI_TemporalParams.biasCorrectionMode,
+                    "Off\0Basic\0Ray Traced\0");
+
+                bool giBoiling = g_ReSTIRGI_BoilingParams.enableBoilingFilter != 0;
+                if (ImGui::Checkbox("##giBoilingFilter", &giBoiling))
+                    g_ReSTIRGI_BoilingParams.enableBoilingFilter = giBoiling ? 1u : 0u;
+                ImGui::SameLine();
+                ImGui::PushItemWidth(90.f);
+                ImGui::SliderFloat("GI Boiling Filter",
+                    &g_ReSTIRGI_BoilingParams.boilingFilterStrength, 0.0f, 1.0f);
+                ImGui::PopItemWidth();
+
+                ImGui::TreePop();
+            }
+
+            // Spatial sub-section
+            const bool giHasSpatial =
+                (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Spatial ||
+                 g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
+            if (giHasSpatial && ImGui::TreeNode("GI Spatial Resampling"))
+            {
+                ImGui::SliderInt("GI Spatial Num Samples",
+                    (int*)&g_ReSTIRGI_SpatialParams.numSamples, 1, 32);
+                ImGui::SliderFloat("GI Spatial Sampling Radius",
+                    &g_ReSTIRGI_SpatialParams.samplingRadius, 1.0f, 64.0f);
+                ImGui::SliderFloat("GI Spatial Depth Threshold",
+                    &g_ReSTIRGI_SpatialParams.depthThreshold, 0.0f, 1.0f);
+                ImGui::SliderFloat("GI Spatial Normal Threshold",
+                    &g_ReSTIRGI_SpatialParams.normalThreshold, 0.0f, 1.0f);
+                ImGui::Combo("GI Spatial Bias Correction",
+                    (int*)&g_ReSTIRGI_SpatialParams.biasCorrectionMode,
+                    "Off\0Basic\0Ray Traced\0");
+
+                ImGui::TreePop();
+            }
+
+            // Final Shading sub-section
+            if (ImGui::TreeNode("GI Final Shading"))
+            {
+                bool giFinalVis = g_ReSTIRGI_FinalShadingParams.enableFinalVisibility != 0;
+                if (ImGui::Checkbox("GI Enable Final Visibility", &giFinalVis))
+                    g_ReSTIRGI_FinalShadingParams.enableFinalVisibility = giFinalVis ? 1u : 0u;
+
+                bool giFinalMIS = g_ReSTIRGI_FinalShadingParams.enableFinalMIS != 0;
+                if (ImGui::Checkbox("GI Enable Final MIS", &giFinalMIS))
+                    g_ReSTIRGI_FinalShadingParams.enableFinalMIS = giFinalMIS ? 1u : 0u;
+
+                ImGui::TreePop();
+            }
+        }
+
+        ImGui::Unindent();
+    }
+
     ImGui::Unindent();
 }
 
@@ -303,6 +414,9 @@ public:
     RGBufferHandle m_RG_RISBuffer;
     // Light reservoir buffer — stored via global g_RG_RTXDILightReservoirBuffer
     // so the RTXDIVisualizationRenderer can sample reservoirs after shading.
+
+    // GI reservoir buffer — persistent (2 frames of RTXDI_PackedGIReservoir per pixel)
+    RGBufferHandle m_RG_GIReservoirBuffer;
 
     // Track if neighbor offsets buffer was newly allocated (needs initial fill)
     bool m_NeighborOffsetsBufferIsNew = false;
@@ -403,6 +517,9 @@ public:
     // ReGIR context — created once in CreateRTXDIContext(), used for grid build
     std::unique_ptr<rtxdi::ReGIRContext>    m_ReGIRContext;
 
+    // ReSTIR GI context — created once in CreateRTXDIContext()
+    std::unique_ptr<rtxdi::ReSTIRGIContext> m_ReSTIRGIContext;
+
     // RIS buffer segment allocator — shared between ReSTIR DI and ReGIR so that
     // GetReGIRCellOffset() / GetReGIRLightSlotCount() return correct values.
     rtxdi::RISBufferSegmentAllocator        m_RISBufferSegmentAllocator;
@@ -443,6 +560,12 @@ public:
         // Initialize dynamic parameters to defaults
         g_ReGIR_DynamicParams = rtxdi::ReGIRDynamicParameters{};
         m_ReGIRContext->SetDynamicParameters(g_ReGIR_DynamicParams);
+
+        // Create the ReSTIR GI context
+        rtxdi::ReSTIRGIStaticParameters giStaticParams;
+        giStaticParams.RenderWidth  = width;
+        giStaticParams.RenderHeight = height;
+        m_ReSTIRGIContext = std::make_unique<rtxdi::ReSTIRGIContext>(giStaticParams);
     }
 
     void Initialize() override
@@ -479,6 +602,14 @@ public:
         g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
 
         CreateRTXDIContext();
+
+        // Initialize ReSTIR GI parameter structs to library defaults
+        g_ReSTIRGI_Enabled           = false;
+        g_ReSTIRGI_ResamplingMode    = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+        g_ReSTIRGI_TemporalParams    = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+        g_ReSTIRGI_BoilingParams     = rtxdi::GetDefaultReSTIRGIBoilingFilterParams();
+        g_ReSTIRGI_SpatialParams     = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+        g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
 
         m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
@@ -950,6 +1081,7 @@ public:
         }
 
         // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing
+        if (g_ReSTIRGI_Enabled)
         {
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(width) * height * sizeof(srrhi::SecondaryGBufferData);
@@ -958,6 +1090,20 @@ public:
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.debugName    = "RTXDISecondaryGBuffer";
             renderGraph.DeclareBuffer(bd, m_RG_SecondaryGBuffer);
+        }
+
+        // GI reservoir buffer (persistent — 2 frames of RTXDI_PackedGIReservoir per pixel)
+        if (g_ReSTIRGI_Enabled)
+        {
+            const RTXDI_ReservoirBufferParameters giRbp = m_ReSTIRGIContext->GetReservoirBufferParameters();
+            const uint64_t totalGIReservoirs = static_cast<uint64_t>(giRbp.reservoirArrayPitch) * rtxdi::c_NumReSTIRGIReservoirBuffers;
+            RGBufferDesc bd;
+            bd.m_NvrhiDesc.byteSize     = totalGIReservoirs * sizeof(RTXDI_PackedGIReservoir);
+            bd.m_NvrhiDesc.structStride = sizeof(RTXDI_PackedGIReservoir);
+            bd.m_NvrhiDesc.canHaveUAVs  = true;
+            bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bd.m_NvrhiDesc.debugName    = "RTXDI_GIReservoirBuffer";
+            renderGraph.DeclarePersistentBuffer(bd, m_RG_GIReservoirBuffer);
         }
 
         return true;
@@ -987,6 +1133,17 @@ public:
         m_Context->SetBoilingFilterParameters(g_ReSTIRDI_BoilingFilterParams);
         m_Context->SetSpatialResamplingParameters(g_ReSTIRDI_SpatialResamplingParams);
         m_Context->SetShadingParameters(g_ReSTIRDI_ShadingParams);
+
+        // Apply ReSTIR GI parameters to context
+        if (m_ReSTIRGIContext)
+        {
+            m_ReSTIRGIContext->SetFrameIndex(renderer->m_FrameNumber);
+            m_ReSTIRGIContext->SetResamplingMode(g_ReSTIRGI_ResamplingMode);
+            m_ReSTIRGIContext->SetTemporalResamplingParameters(g_ReSTIRGI_TemporalParams);
+            m_ReSTIRGIContext->SetBoilingFilterParameters(g_ReSTIRGI_BoilingParams);
+            m_ReSTIRGIContext->SetSpatialResamplingParameters(g_ReSTIRGI_SpatialParams);
+            m_ReSTIRGIContext->SetFinalShadingParameters(g_ReSTIRGI_FinalShadingParams);
+        }
 
 
 
@@ -1115,10 +1272,11 @@ public:
             restirDI.spatioTemporalResamplingParams = m_Context->GetSpatioTemporalResamplingParameters();
             restirDI.shadingParams                = m_Context->GetShadingParameters();
 
-            // When RELAX denoising is active and there is no indirect lighting pass,
-            // ShadeSamples is the last pass writing to u_DiffuseLighting / u_SpecularLighting.
-            // TODO: set this to '0' when we have a separate indirect pass, and then only set this back to '1' for the final shading of indirect
-            restirDI.shadingParams.enableDenoiserInputPacking = renderer->m_EnableReSTIRDIRelaxDenoising ? 1u : 0u;
+            // When RELAX denoising is active, DI ShadeSamples is the last NRD-packing pass
+            // only when GI is disabled. When GI is enabled, GI FinalShading (isLastPass=true)
+            // is the NRD-packing pass for the combined DI+GI signal.
+            restirDI.shadingParams.enableDenoiserInputPacking =
+                (renderer->m_EnableReSTIRDIRelaxDenoising && !g_ReSTIRGI_Enabled) ? 1u : 0u;
 
             g_Const.SetRestirDI(restirDI);
         }
@@ -1126,16 +1284,29 @@ public:
         // ---- Misc flags ----
         g_Const.SetEnablePreviousTLAS(1u);
         g_Const.SetDiscountNaiveSamples(m_Context->GetSpatialResamplingParameters().discountNaiveSamples);
-        g_Const.SetEnableBrdfIndirect(0u); // GI/PT stubs not dispatched
-        g_Const.SetEnableBrdfAdditiveBlend(0u);
+        g_Const.SetEnableBrdfIndirect(g_ReSTIRGI_Enabled ? 1u : 0u);
+        g_Const.SetEnableBrdfAdditiveBlend(g_ReSTIRGI_Enabled ? 1u : 0u);
         g_Const.SetEnableAccumulation(0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
         // Sync the standalone bool with the debug mode combo so both paths work
         g_ReGIR_VisualizeRegirCells = (renderer->m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
         g_Const.SetVisualizeRegirCells(g_ReGIR_VisualizeRegirCells ? 1u : 0u);
 
+        // ---- ReSTIR GI parameters ----
+        if (m_ReSTIRGIContext)
+        {
+            RTXDI_GIParameters giParams{};
+            giParams.reservoirBufferParams        = m_ReSTIRGIContext->GetReservoirBufferParameters();
+            giParams.bufferIndices                = m_ReSTIRGIContext->GetBufferIndices();
+            giParams.temporalResamplingParams     = m_ReSTIRGIContext->GetTemporalResamplingParameters();
+            giParams.boilingFilterParams          = m_ReSTIRGIContext->GetBoilingFilterParameters();
+            giParams.spatialResamplingParams      = m_ReSTIRGIContext->GetSpatialResamplingParameters();
+            giParams.spatioTemporalResamplingParams = m_ReSTIRGIContext->GetSpatioTemporalResamplingParameters();
+            giParams.finalShadingParams           = m_ReSTIRGIContext->GetFinalShadingParameters();
+            g_Const.SetRestirGI(giParams);
+        }
+
         // ---- ReGIR parameters ----
-        if (m_ReGIRContext)
         {
             // Update dynamic parameters from ImGui state each frame
             m_ReGIRContext->SetDynamicParameters(g_ReGIR_DynamicParams);
@@ -1262,7 +1433,13 @@ public:
 
         nvrhi::BufferHandle  prepareLightsTaskBuf= renderGraph.GetBuffer(m_RG_PrepareLightsTasks,    RGResourceAccessMode::Write);
         nvrhi::BufferHandle  primitiveLightBuf   = renderGraph.GetBuffer(m_RG_PrimitiveLightBuffer,   RGResourceAccessMode::Write);
-        // secondaryGBufBuf removed — ReSTIR GI / BrdfRayTracing not dispatched
+        // GI buffers — resolved from render graph when GI is enabled, otherwise fall back to dummies
+        nvrhi::BufferHandle  giReservoirBuf    = g_ReSTIRGI_Enabled
+            ? renderGraph.GetBuffer(m_RG_GIReservoirBuffer,  RGResourceAccessMode::Write)
+            : cr.DummyUAVStructuredBuffer;
+        nvrhi::BufferHandle  secondaryGBufBuf  = g_ReSTIRGI_Enabled
+            ? renderGraph.GetBuffer(m_RG_SecondaryGBuffer,   RGResourceAccessMode::Write)
+            : cr.DummyUAVStructuredBuffer;
 
         // Denoising path outputs
         const bool bDenoise = renderer->m_EnableReSTIRDIRelaxDenoising;
@@ -1333,9 +1510,8 @@ public:
         resamplingInputs.SetLightReservoirs(lightReservoirBuf);
         resamplingInputs.SetRisBuffer(risBuffer);
         resamplingInputs.SetRisLightDataBuffer(risLightDataBuf);
-        resamplingInputs.SetRestirLuminance(cr.DummyUAVTexture, 0);           // u_RestirLuminance stub
-        resamplingInputs.SetGIReservoirs(cr.DummyUAVStructuredBuffer);        // u_GIReservoirs stub
-        resamplingInputs.SetSecondaryGBuffer(cr.DummyUAVStructuredBuffer);    // u_SecondaryGBuffer stub
+        resamplingInputs.SetGIReservoirs(giReservoirBuf);                      // u_GIReservoirs
+        resamplingInputs.SetSecondaryGBuffer(secondaryGBufBuf);                // u_SecondaryGBuffer
         resamplingInputs.SetDiffuseLighting(bDenoise ? rawDiffuseTex  : diOutputTex,    0);
         resamplingInputs.SetSpecularLighting(bDenoise ? rawSpecularTex : specularOutTex, 0);
         const nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(resamplingInputs);
@@ -1688,6 +1864,101 @@ public:
                     .z = 1u
                 }
             });
+        }
+
+        // ------------------------------------------------------------------
+        // ReSTIR GI passes (conditional on g_ReSTIRGI_Enabled)
+        // ------------------------------------------------------------------
+        if (g_ReSTIRGI_Enabled)
+        {
+            // 1. BrdfRayTracing — traces BRDF rays and fills the secondary GBuffer
+            {
+                PROFILE_SCOPED("GI BrdfRayTracing");
+                renderer->AddComputePass({
+                    .commandList    = commandList,
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_BRDFRAYTRACING_MAIN,
+                    .bindingSetDesc = bset,
+                    .bIncludeBindlessResources = true,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .z = 1u
+                    }
+                });
+            }
+
+            // 2. ShadeSecondarySurfaces — shades secondary GBuffer hits and seeds GI reservoirs
+            {
+                PROFILE_SCOPED("GI ShadeSecondarySurfaces");
+                renderer->AddComputePass({
+                    .commandList    = commandList,
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
+                    .bindingSetDesc = bset,
+                    .bIncludeBindlessResources = true,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .z = 1u
+                    }
+                });
+            }
+
+            // 3. GI Temporal Resampling (conditional on mode)
+            const bool giHasTemporal =
+                (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Temporal ||
+                 g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
+            if (giHasTemporal)
+            {
+                PROFILE_SCOPED("GI Temporal Resampling");
+                renderer->AddComputePass({
+                    .commandList    = commandList,
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_TEMPORALRESAMPLING_MAIN,
+                    .bindingSetDesc = bset,
+                    .bIncludeBindlessResources = true,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .z = 1u
+                    }
+                });
+            }
+
+            // 4. GI Spatial Resampling (conditional on mode)
+            const bool giHasSpatial =
+                (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Spatial ||
+                 g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
+            if (giHasSpatial)
+            {
+                PROFILE_SCOPED("GI Spatial Resampling");
+                renderer->AddComputePass({
+                    .commandList    = commandList,
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_SPATIALRESAMPLING_MAIN,
+                    .bindingSetDesc = bset,
+                    .bIncludeBindlessResources = true,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .z = 1u
+                    }
+                });
+            }
+
+            // 5. GI Final Shading — additively blends GI into u_DiffuseLighting / u_SpecularLighting
+            //    isLastPass=true (hardcoded in shader): writes NRD-packed signal when denoising is on
+            {
+                PROFILE_SCOPED("GI Final Shading");
+                renderer->AddComputePass({
+                    .commandList    = commandList,
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_FINALSHADING_MAIN,
+                    .bindingSetDesc = bset,
+                    .bIncludeBindlessResources = true,
+                    .dispatchParams = {
+                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .z = 1u
+                    }
+                });
+            }
         }
 
         // ------------------------------------------------------------------
