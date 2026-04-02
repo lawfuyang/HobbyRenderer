@@ -70,7 +70,7 @@ public:
 
         Renderer::RenderPassParams params{
             .commandList = commandList,
-            .shaderName = "Sky_Sky_PSMain",
+            .shaderID = ShaderID::SKY_SKY_PSMAIN,
             .bindingSetDesc = bset,
             .framebuffer = framebuffer,
             .depthStencilState = &ds

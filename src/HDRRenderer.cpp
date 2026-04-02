@@ -105,7 +105,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList = commandList,
-                .shaderName = "LuminanceHistogram_LuminanceHistogram_CSMain",
+                .shaderID = ShaderID::LUMINANCEHISTOGRAM_LUMINANCEHISTOGRAM_CSMAIN,
                 .bindingSetDesc = bset,
                 .pushConstants = &inputs.m_HistogramConstants,
                 .pushConstantsSize = srrhi::LuminanceHistogramInputs::PushConstantBytes,
@@ -141,7 +141,7 @@ public:
 
                 Renderer::RenderPassParams params{
                     .commandList = commandList,
-                    .shaderName = "ExposureAdaptation_ExposureAdaptation_CSMain",
+                    .shaderID = ShaderID::EXPOSUREADAPTATION_EXPOSUREADAPTATION_CSMAIN,
                     .bindingSetDesc = bset,
                     .pushConstants = &inputs.m_AdaptationConstants,
                     .pushConstantsSize = srrhi::ExposureAdaptationInputs::PushConstantBytes,
@@ -197,7 +197,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList = commandList,
-                .shaderName = "Tonemap_Tonemap_PSMain",
+                .shaderID = ShaderID::TONEMAP_TONEMAP_PSMAIN,
                 .bindingSetDesc = bset,
                 .pushConstants = &inputs.m_TonemapConstants,
                 .pushConstantsSize = srrhi::TonemappingInputs::PushConstantBytes,

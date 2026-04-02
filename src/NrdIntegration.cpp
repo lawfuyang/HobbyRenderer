@@ -252,6 +252,14 @@ bool NrdIntegration::Initialize()
     // -------------------------------------------------------------------------
     // Per-pipeline resources: create shader, per-pipeline binding layout, pipeline
     // -------------------------------------------------------------------------
+
+    // Build a map from NRD-format key strings to ShaderID constants once, so
+    // each pipeline lookup is O(1) instead of a linear scan over all entries.
+    std::unordered_map<std::string, uint32_t> nrdShaderIdMap;
+    nrdShaderIdMap.reserve(ShaderID::COUNT);
+    for (uint32_t i = 0; i < ShaderID::COUNT; ++i)
+        nrdShaderIdMap.emplace(ShaderID::ENTRIES[i].key, i);
+
     for (uint32_t p = 0; p < instanceDesc->pipelinesNum; ++p)
     {
         NrdPipeline pipeline;
@@ -292,7 +300,9 @@ bool NrdIntegration::Initialize()
             return key;
         }();
 
-        pipeline.Shader = renderer->GetShaderHandle(shaderKey);
+        const auto nrdIt = nrdShaderIdMap.find(shaderKey);
+        if (nrdIt != nrdShaderIdMap.end())
+            pipeline.Shader = renderer->GetShaderHandle(nrdIt->second);
 
         if (!pipeline.Shader)
         {

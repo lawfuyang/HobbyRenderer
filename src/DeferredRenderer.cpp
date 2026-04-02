@@ -115,7 +115,7 @@ public:
 
         Renderer::RenderPassParams params{
             .commandList = commandList,
-            .shaderName = "DeferredLighting_DeferredLighting_PSMain",
+            .shaderID = ShaderID::DEFERREDLIGHTING_DEFERREDLIGHTING_PSMAIN,
             .bindingSetDesc = bset,
             .framebuffer = framebuffer,
             .depthStencilState = &ds

@@ -77,12 +77,13 @@ static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi:
     const uint32_t dispatchX = DivideAndRoundUp(outputTexture->getDesc().width, 8);
     const uint32_t dispatchY = DivideAndRoundUp(outputTexture->getDesc().height, 8);
     
-    std::string shaderName = "ResizeToNextLowestPowerOfTwo_CS_ResizeToNextLowestPowerOfTwo_NUM_CHANNELS=";
-    shaderName += nvrhi::getFormatInfo(outputTexture->getDesc().format).hasBlue ? "3" : "1";
+    const uint32_t resizeShaderID = nvrhi::getFormatInfo(outputTexture->getDesc().format).hasBlue
+        ? ShaderID::RESIZETONEXTLOWESTPOWEROFTWO_CS_RESIZETONEXTLOWESTPOWEROFTWO_NUM_CHANNELS_3
+        : ShaderID::RESIZETONEXTLOWESTPOWEROFTWO_CS_RESIZETONEXTLOWESTPOWEROFTWO_NUM_CHANNELS_1;
 
     Renderer::RenderPassParams params;
     params.commandList = commandList;
-    params.shaderName = shaderName;
+    params.shaderID = resizeShaderID;
     params.bindingSetDesc = bindingSetDesc;
     params.dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 };
     params.pushConstants = &consts;
@@ -249,7 +250,7 @@ protected:
             const uint32_t dispatchX = DivideAndRoundUp(args.m_NumInstances, srrhi::CommonConsts::kThreadsPerGroup);
             Renderer::RenderPassParams params;
             params.commandList = commandList;
-            params.shaderName = "GPUCulling_Culling_CSMain";
+            params.shaderID = ShaderID::GPUCULLING_CULLING_CSMAIN;
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .x = dispatchX, .y = 1, .z = 1 };
             renderer->AddComputePass(params);
@@ -258,7 +259,7 @@ protected:
         {
             Renderer::RenderPassParams params;
             params.commandList = commandList;
-            params.shaderName = "GPUCulling_Culling_CSMain";
+            params.shaderID = ShaderID::GPUCULLING_CULLING_CSMAIN;
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .indirectBuffer = handles.occludedIndirect, .indirectOffsetBytes = 0 };
             renderer->AddComputePass(params);
@@ -271,7 +272,7 @@ protected:
         {
             Renderer::RenderPassParams params;
             params.commandList = commandList;
-            params.shaderName = "GPUCulling_BuildIndirect_CSMain";
+            params.shaderID = ShaderID::GPUCULLING_BUILDINDIRECT_CSMAIN;
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .x = 1, .y = 1, .z = 1 };
             renderer->AddComputePass(params);
@@ -421,16 +422,16 @@ protected:
             renderState.depthStencilState.stencilRefValue = 1;
         }
 
-        const char* psName = bUseAlphaTest ? "BasePass_GBuffer_PSMain_AlphaTest_AlphaTest_ALPHA_TEST=1" : 
-                            bUseAlphaBlend ? "BasePass_Forward_PSMain_Forward_Transparent_FORWARD_TRANSPARENT=1" : 
-                            "BasePass_GBuffer_PSMain";
+        const uint32_t psID = bUseAlphaTest ? ShaderID::BASEPASS_GBUFFER_PSMAIN_ALPHATEST_ALPHATEST_ALPHA_TEST_1 : 
+                            bUseAlphaBlend ? ShaderID::BASEPASS_FORWARD_PSMAIN_FORWARD_TRANSPARENT_FORWARD_TRANSPARENT_1 : 
+                            ShaderID::BASEPASS_GBUFFER_PSMAIN;
 
         if (renderer->m_UseMeshletRendering)
         {
             nvrhi::MeshletPipelineDesc meshPipelineDesc;
-            meshPipelineDesc.AS = renderer->GetShaderHandle("BasePass_ASMain");
-            meshPipelineDesc.MS = renderer->GetShaderHandle("BasePass_MSMain");
-            meshPipelineDesc.PS = renderer->GetShaderHandle(psName);
+            meshPipelineDesc.AS = renderer->GetShaderHandle(ShaderID::BASEPASS_ASMAIN);
+            meshPipelineDesc.MS = renderer->GetShaderHandle(ShaderID::BASEPASS_MSMAIN);
+            meshPipelineDesc.PS = renderer->GetShaderHandle(psID);
             meshPipelineDesc.renderState = renderState;
             meshPipelineDesc.bindingLayouts = { layout, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
             meshPipelineDesc.useDrawIndex = true;
@@ -451,8 +452,8 @@ protected:
         else
         {
             nvrhi::GraphicsPipelineDesc pipelineDesc;
-            pipelineDesc.VS = renderer->GetShaderHandle("BasePass_VSMain");
-            pipelineDesc.PS = renderer->GetShaderHandle(psName);
+            pipelineDesc.VS = renderer->GetShaderHandle(ShaderID::BASEPASS_VSMAIN);
+            pipelineDesc.PS = renderer->GetShaderHandle(psID);
             pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
             pipelineDesc.renderState = renderState;
             pipelineDesc.bindingLayouts = { layout, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };

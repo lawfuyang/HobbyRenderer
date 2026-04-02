@@ -128,5 +128,6 @@ src/shaders/NRDShaders.cfg
 src/shaders/NRD.hlsli
 src/shaders/NRDConfig.hlsli
 src/shaders/srrhi
+src/shaders/ShaderIDs.h
 src/srrhi.h
 src/FidelityFX

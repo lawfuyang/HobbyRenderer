@@ -221,7 +221,7 @@ public:
 
             Renderer::RenderPassParams params;
             params.commandList           = commandList;
-            params.shaderName            = "TLASPatch_TLASPatch_CSMain";
+            params.shaderID              = ShaderID::TLASPATCH_TLASPATCH_CSMAIN;
             params.bindingSetDesc        = Renderer::CreateBindingSetDesc(inputs);
             params.bIncludeBindlessResources = false;
             params.pushConstants         = &inputs.m_PC;

@@ -1250,7 +1250,7 @@ public:
             buildEnvPDFInputs.SetEnvLightPdfMip0(envLightPDFTex, 0);
             renderer->AddComputePass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/LightingPasses/Presampling/BuildEnvLightPDF_main",
+                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_BUILDENVLIGHTPDF_MAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(buildEnvPDFInputs),
                 .dispatchParams = {
                     .x = DivideAndRoundUp(k_EnvPDFTexSize, 8u),
@@ -1353,7 +1353,7 @@ public:
             vzInputs.SetLinearDepth(linearDepthTex, 0);
             renderer->AddComputePass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/GenerateViewZ_main",
+                .shaderID       = ShaderID::RTXDI_GENERATEVIEWZ_MAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(vzInputs),
                 .bIncludeBindlessResources = false,
                 .dispatchParams = {
@@ -1393,7 +1393,7 @@ public:
 
             renderer->AddFullScreenPass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/PostprocessGBuffer_main",
+                .shaderID       = ShaderID::RTXDI_POSTPROCESSGBUFFER_MAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(ppInputs),
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,
@@ -1481,7 +1481,7 @@ public:
                 plInputs.SetLocalLightPdfTexture(localLightPDFTex, 0);
                 renderer->AddComputePass({
                     .commandList    = commandList,
-                    .shaderName     = "rtxdi/PrepareLights_main",
+                    .shaderID       = ShaderID::RTXDI_PREPARELIGHTS_MAIN,
                     .bindingSetDesc = Renderer::CreateBindingSetDesc(plInputs),
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
@@ -1551,7 +1551,7 @@ public:
                 const uint32_t presampleGroupsX = DivideAndRoundUp(k_RISTileSize, srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE);
                 renderer->AddComputePass({
                     .commandList    = commandList,
-                    .shaderName     = "rtxdi/LightingPasses/Presampling/PresampleLights_main",
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_PRESAMPLELIGHTS_MAIN,
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = false,
                     .dispatchParams = { .x = presampleGroupsX, .y = k_RISTileCount, .z = 1u }
@@ -1579,7 +1579,7 @@ public:
                 const uint32_t presampleGroupsX = DivideAndRoundUp(k_EnvRISTileSize, srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE);
                 renderer->AddComputePass({
                     .commandList    = commandList,
-                    .shaderName     = "rtxdi/LightingPasses/Presampling/PresampleEnvironmentMap_main",
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_PRESAMPLEENVIRONMENTMAP_MAIN,
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = false,
                     .dispatchParams = { .x = presampleGroupsX, .y = k_EnvRISTileCount, .z = 1u }
@@ -1600,7 +1600,7 @@ public:
                 const uint32_t dispatchX = DivideAndRoundUp(regirSlots, srrhi::RTXDIConstants::RTXDI_GRID_BUILD_GROUP_SIZE);
                 renderer->AddComputePass({
                     .commandList    = commandList,
-                    .shaderName     = "rtxdi/LightingPasses/Presampling/PresampleReGIR_main_RTXDI_REGIR_MODE=RTXDI_REGIR_ONION",
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_PRESAMPLEREGIR_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = false,
                     .dispatchParams = { .x = dispatchX, .y = 1u, .z = 1u }
@@ -1616,7 +1616,7 @@ public:
 
             renderer->AddComputePass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/LightingPasses/DI/GenerateInitialSamples_main_RTXDI_REGIR_MODE=RTXDI_REGIR_ONION",
+                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_GENERATEINITIALSAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
@@ -1638,7 +1638,7 @@ public:
 
             renderer->AddComputePass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/LightingPasses/DI/TemporalResampling_main",
+                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_TEMPORALRESAMPLING_MAIN,
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
@@ -1660,7 +1660,7 @@ public:
 
             renderer->AddComputePass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/LightingPasses/DI/SpatialResampling_main",
+                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_SPATIALRESAMPLING_MAIN,
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
@@ -1679,7 +1679,7 @@ public:
 
             renderer->AddComputePass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/LightingPasses/DI/ShadeSamples_main_RTXDI_REGIR_MODE=RTXDI_REGIR_ONION",
+                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_SHADESAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
@@ -1744,7 +1744,7 @@ public:
 
             renderer->AddFullScreenPass({
                 .commandList    = commandList,
-                .shaderName     = "rtxdi/CompositingPass_CompositingPass_PSMain",
+                .shaderID       = ShaderID::RTXDI_COMPOSITINGPASS_COMPOSITINGPASS_PSMAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(compInputs),
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,

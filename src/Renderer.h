@@ -9,6 +9,8 @@
 #include "TaskScheduler.h"
 #include "srrhi.h"
 
+#include "shaders/ShaderIDs.h"
+
 class IRenderer
 {
 public:
@@ -123,7 +125,7 @@ struct Renderer
     struct RenderPassParams
     {
         nvrhi::CommandListHandle commandList;
-        std::string_view shaderName;
+        uint32_t shaderID = UINT32_MAX;
         nvrhi::BindingSetDesc bindingSetDesc;
         uint32_t registerSpace = 0;
 
@@ -148,7 +150,7 @@ struct Renderer
     void AddComputePass(const RenderPassParams& params);
     void AddFullScreenPass(const RenderPassParams& params);
     void GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, uint32_t reductionType);
-    nvrhi::ShaderHandle GetShaderHandle(std::string_view name) const;
+    nvrhi::ShaderHandle GetShaderHandle(uint32_t shaderID) const;
 
     // Global Bindless Texture System
     void InitializeStaticBindlessTextures();
@@ -184,8 +186,8 @@ struct Renderer
     // Render Graph
     RenderGraph m_RenderGraph;
 
-    // Shader cache
-    std::unordered_map<std::string, nvrhi::ShaderHandle> m_ShaderCache;
+    // Shader handles — indexed by ShaderID:: constants, populated by LoadShaders()
+    nvrhi::ShaderHandle m_ShaderHandles[ShaderID::COUNT]{};
 
     // UI
     ImGuiLayer m_ImGuiLayer;

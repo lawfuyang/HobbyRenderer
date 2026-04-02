@@ -24,265 +24,6 @@ using FfxUInt32x4 = uint32_t[4];
 
 namespace
 {
-    // Parse a single line from shaders.cfg and extract shader metadata
-    struct ShaderMetadata
-    {
-        std::filesystem::path sourcePath;
-        std::string entryPoint;
-        std::string suffix;
-        std::vector<std::string> defines;
-        nvrhi::ShaderType shaderType = nvrhi::ShaderType::None;
-    };
-
-    // ShaderMake naming: <sourcefile_without_ext>_<EntryPoint><Suffix>[_<Hash>].spirv
-    std::filesystem::path GetShaderOutputPath(const std::filesystem::path& exeDir, const ShaderMetadata& metadata, nvrhi::GraphicsAPI api)
-    {
-        std::filesystem::path filename = metadata.sourcePath.stem();
-        
-        std::string outName = filename.string();
-
-        // if the entry point is 'main', entryPoint won't be appended to the bin file name. Thanks ShaderMake. That's retarded.
-        if (metadata.entryPoint != "main")
-        {
-            outName += "_" + metadata.entryPoint;
-        }
-
-        outName += metadata.suffix;
-
-        std::string subDir = "spirv";
-        std::string extension = ".spirv";
-
-        if (api == nvrhi::GraphicsAPI::D3D12)
-        {
-            subDir = "dxil";
-            extension = ".dxil";
-        }
-
-        // Preserve subdirectory structure from the source path (e.g. rtxdi/LightingPasses/DI/)
-        // so that shaders in different folders with the same stem don't collide.
-        const std::filesystem::path parentDir = metadata.sourcePath.parent_path();
-        if (!parentDir.empty() && parentDir != ".")
-            return exeDir / "shaders" / subDir / parentDir / (outName + extension);
-        return exeDir / "shaders" / subDir / (outName + extension);
-    }
-
-    // Parse shaders.cfg to extract shader entries
-    // Helper: Parse a define string and return all possible values
-    // Handles both "KEY=VALUE" and "KEY={VAL1,VAL2,VAL3}" formats
-    // Returns map of KEY -> vector of all possible values
-    std::map<std::string, std::vector<std::string>> ParseDefineValues(const std::vector<std::string>& defineStrings)
-    {
-        std::map<std::string, std::vector<std::string>> result;
-        
-        for (const std::string& defineStr : defineStrings)
-        {
-            const size_t eqPos = defineStr.find('=');
-            if (eqPos == std::string::npos)
-            {
-                continue; // Skip invalid defines
-            }
-            
-            std::string key = defineStr.substr(0, eqPos);
-            std::string valueStr = defineStr.substr(eqPos + 1);
-            
-            std::vector<std::string>& values = result[key];
-            
-            // Check if values are in braces (multiple values)
-            if (!valueStr.empty() && valueStr[0] == '{' && valueStr.back() == '}')
-            {
-                // Remove braces
-                valueStr = valueStr.substr(1, valueStr.length() - 2);
-                
-                // Split by comma
-                size_t start = 0;
-                while (start < valueStr.length())
-                {
-                    const size_t comma = valueStr.find(',', start);
-                    const size_t end = (comma == std::string::npos) ? valueStr.length() : comma;
-                    values.push_back(valueStr.substr(start, end - start));
-                    start = (comma == std::string::npos) ? valueStr.length() : comma + 1;
-                }
-            }
-            else
-            {
-                // Single value
-                values.push_back(valueStr);
-            }
-        }
-        
-        return result;
-    }
-    
-    // Helper: Generate all permutations of defines and sort them
-    // Returns a vector of all combinations, each sorted alphabetically
-    std::vector<std::vector<std::string>> GenerateDefinePermutations(
-        const std::map<std::string, std::vector<std::string>>& defineValues)
-    {
-        std::vector<std::vector<std::string>> permutations;
-        
-        if (defineValues.empty())
-        {
-            permutations.push_back(std::vector<std::string>()); // One empty permutation
-            return permutations;
-        }
-        
-        // Get keys in sorted order
-        std::vector<std::string> keys;
-        for (const auto& [key, values] : defineValues)
-        {
-            keys.push_back(key);
-        }
-        std::sort(keys.begin(), keys.end());
-        
-        // Generate all combinations using cartesian product
-        std::vector<size_t> indices(keys.size(), 0);
-        
-        while (true)
-        {
-            std::vector<std::string> permutation;
-            for (size_t i = 0; i < keys.size(); ++i)
-            {
-                const std::string& key = keys[i];
-                const std::string& value = defineValues.at(key)[indices[i]];
-                permutation.push_back(key + "=" + value);
-            }
-            
-            // Sort the permutation alphabetically
-            std::sort(permutation.begin(), permutation.end());
-            permutations.push_back(permutation);
-            
-            // Next combination
-            size_t pos = keys.size() - 1;
-            while (true)
-            {
-                indices[pos]++;
-                if (indices[pos] < defineValues.at(keys[pos]).size())
-                {
-                    break;
-                }
-                indices[pos] = 0;
-                if (pos == 0)
-                {
-                    // All combinations generated
-                    return permutations;
-                }
-                --pos;
-            }
-        }
-    }
-
-    void ParseShaderConfig(std::string_view configPath, std::vector<ShaderMetadata>& outMetadata)
-    {
-        std::ifstream configFile{std::filesystem::path{configPath}};
-
-        if (!configFile.is_open())
-        {
-            SDL_LOG_ASSERT_FAIL("Failed to open shader config", "[Shader] Failed to open shader config: %.*s", static_cast<int>(configPath.size()), configPath.data());
-            return;
-        }
-
-        std::string line;
-        while (std::getline(configFile, line))
-        {
-            // Skip empty lines and comments
-            if (line.empty() || line[0] == '/' || line[0] == '#')
-                continue;
-
-            // Trim leading/trailing whitespace
-            const size_t start = line.find_first_not_of(" \t\r\n");
-            const size_t end = line.find_last_not_of(" \t\r\n");
-            if (start == std::string::npos)
-                continue;
-
-            line = line.substr(start, end - start + 1);
-
-            // Parse: <shader_path> -T <profile> -E <entry> [other options]
-            std::istringstream iss{line};
-            std::string token;
-            ShaderMetadata baseMetadata;
-            std::vector<std::string> rawDefines;
-
-            iss >> token;
-            baseMetadata.sourcePath = std::filesystem::path{token};
-
-            while (iss >> token)
-            {
-                if (token == "-T" || token == "--profile")
-                {
-                    iss >> token;
-                    if (token.find("vs") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Vertex;
-                    else if (token.find("ps") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Pixel;
-                    else if (token.find("gs") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Geometry;
-                    else if (token.find("cs") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Compute;
-                    else if (token.find("hs") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Hull;
-                    else if (token.find("ds") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Domain;
-                    else if (token.find("as") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Amplification;
-                    else if (token.find("ms") != std::string::npos)
-                        baseMetadata.shaderType = nvrhi::ShaderType::Mesh;
-                }
-                else if (token == "-E" || token == "--entryPoint")
-                {
-                    iss >> baseMetadata.entryPoint;
-                }
-                else if (token == "-s" || token == "--outputSuffix")
-                {
-                    iss >> baseMetadata.suffix;
-                }
-                else if (token == "-D" || token == "--define")
-                {
-                    iss >> token;
-                    rawDefines.push_back(token);
-                }
-            }
-
-            if (baseMetadata.entryPoint.empty())
-            {
-                baseMetadata.entryPoint = "main"; // Default entry point if not specified
-            }
-
-            SDL_assert(baseMetadata.shaderType != nvrhi::ShaderType::None && "Failed to parse shader entry from config");
-
-            // Parse defines and generate all permutations
-            const std::map<std::string, std::vector<std::string>> defineValues = ParseDefineValues(rawDefines);
-            const std::vector<std::vector<std::string>> permutations = GenerateDefinePermutations(defineValues);
-            
-            // Create a metadata entry for each permutation
-            for (const std::vector<std::string>& definesInPermutation : permutations)
-            {
-                ShaderMetadata metadata = baseMetadata;
-                metadata.defines = definesInPermutation;
-                outMetadata.push_back(metadata);
-            }
-
-            const char* typeStr = "Unknown";
-            switch (baseMetadata.shaderType)
-            {
-            case nvrhi::ShaderType::Vertex:        typeStr = "VS"; break;
-            case nvrhi::ShaderType::Pixel:         typeStr = "PS"; break;
-            case nvrhi::ShaderType::Geometry:      typeStr = "GS"; break;
-            case nvrhi::ShaderType::Compute:       typeStr = "CS"; break;
-            case nvrhi::ShaderType::Hull:          typeStr = "HS"; break;
-            case nvrhi::ShaderType::Domain:        typeStr = "DS"; break;
-            case nvrhi::ShaderType::Amplification: typeStr = "AS"; break;
-            case nvrhi::ShaderType::Mesh:          typeStr = "MS"; break;
-            default: break;
-            }
-
-            SDL_Log("[Shader] Parsed: %s (%s) -> entry: %s, permutations: %zu", 
-                     baseMetadata.sourcePath.generic_string().c_str(),
-                     typeStr, baseMetadata.entryPoint.c_str(), permutations.size());
-        }
-
-        SDL_Log("[Shader] Parsed %zu shader entries from config", outMetadata.size());
-    }
-
     void InitSDL()
     {
         SDL_Log("[Init] Starting SDL initialization");
@@ -328,9 +69,8 @@ Renderer* Renderer::GetInstance()
 
 void Renderer::LoadShaders()
 {
-    SDL_Log("[Init] Loading compiled shaders from config");
+    SDL_Log("[Init] Loading compiled shaders from ShaderID::ENTRIES metadata");
 
-    // Get executable directory
     const char* basePathCStr = SDL_GetBasePath();
     if (!basePathCStr)
     {
@@ -339,198 +79,117 @@ void Renderer::LoadShaders()
     }
     const std::filesystem::path exeDir = basePathCStr;
 
-    std::vector<ShaderMetadata> shaderMetadata;
-
-    // Parse shaders.cfg to get list of shaders to load
-    std::filesystem::path configPath = exeDir / ".." / "src" / "shaders" / "shaders.cfg";    
-    ParseShaderConfig(configPath.generic_string(), shaderMetadata);
-
-    // parse NRDShaders.cfg as well for NRD shader permutations
-    configPath = configPath.parent_path() / "NRDShaders.cfg";
-    ParseShaderConfig(configPath.generic_string(), shaderMetadata);
-
-    if (shaderMetadata.empty())
+    // Group shader IDs by their output binary file so each file is read once.
+    std::unordered_map<std::string, std::vector<uint32_t>> fileToIDs;
+    for (uint32_t id = 0; id < ShaderID::COUNT; ++id)
     {
-        SDL_Log("[Init] No shaders to load from config");
-        return; // Not an error, just no shaders defined yet
+        const std::string fullPath = (exeDir / ShaderID::ENTRIES[id].outputFile).generic_string();
+        fileToIDs[fullPath].push_back(id);
     }
 
-    // Load each shader by creating a map of shader file paths to shader metadata
-    std::unordered_map<std::string, std::vector<const ShaderMetadata*>> filePathToMetadata;
+    constexpr std::string_view BLOB_SIGNATURE = "NVSP";
+    size_t loadedCount = 0;
 
-    for (const ShaderMetadata& metadata : shaderMetadata)
+    for (const auto& [pathStr, ids] : fileToIDs)
     {
-        // Use GetShaderOutputPath to get the correct file path with proper extension
-        // (This will be either .dxil or .spirv depending on the graphics API)
-        const std::filesystem::path shaderPath = GetShaderOutputPath(exeDir, metadata, m_RHI->GetGraphicsAPI());
-        filePathToMetadata[shaderPath.generic_string()].push_back(&metadata);
-    }
-
-    // Load and process each unique shader file
-    size_t loadedShaderCount = 0;
-    for (const auto& [shaderPathStr, metadataList] : filePathToMetadata)
-    {
-        const std::filesystem::path shaderPath = shaderPathStr;
-
-        // Read the shader binary
-        const std::vector<uint8_t> shaderBinary = ReadBinaryFile(shaderPath);
-        if (shaderBinary.empty())
+        const std::vector<uint8_t> binary = ReadBinaryFile(pathStr);
+        if (binary.empty())
         {
-            SDL_LOG_ASSERT_FAIL("Failed to read shader file", "Failed to read shader file: %s", shaderPath.generic_string().c_str());
+            SDL_LOG_ASSERT_FAIL("Failed to read shader file", "Failed to read shader file: %s", pathStr.c_str());
+            continue;
         }
 
-        // Detect if this is a shader blob with multiple permutations or a simple single-shader binary
-        constexpr size_t BLOB_SIGNATURE_SIZE = 4;
-        const char* BLOB_SIGNATURE = "NVSP";
-        
-        bool isShaderBlob = (shaderBinary.size() >= BLOB_SIGNATURE_SIZE) && 
-                            (std::memcmp(shaderBinary.data(), BLOB_SIGNATURE, BLOB_SIGNATURE_SIZE) == 0);
+        const bool bIsBlob = (binary.size() >= BLOB_SIGNATURE.size()) &&
+                             (std::memcmp(binary.data(), BLOB_SIGNATURE.data(), BLOB_SIGNATURE.size()) == 0);
 
-        SDL_Log("[Init] Loaded shader file: %s (%zu bytes, %s)", 
-                 shaderPath.generic_string().c_str(), shaderBinary.size(),
-                 isShaderBlob ? "blob with permutations" : "single compiled shader");
+        SDL_Log("[Init] Shader file: %s (%zu bytes, %s)",
+                pathStr.c_str(), binary.size(), bIsBlob ? "blob" : "single");
 
-        if (isShaderBlob)
+        for (const uint32_t id : ids)
         {
-            // SHADER BLOB PATH: File contains multiple permutations
-            // Enumerate all available permutations in the blob
-            std::vector<std::string> availablePermutations;
-            ShaderMake::EnumeratePermutationsInBlob(shaderBinary.data(), shaderBinary.size(), availablePermutations);
-            SDL_Log("[Init]   Available permutations in blob: %zu", availablePermutations.size());
+            const ShaderID::ShaderEntry& entry = ShaderID::ENTRIES[id];
 
-            // Load each requested shader permutation from the blob
-            for (const ShaderMetadata* metadata : metadataList)
+            nvrhi::ShaderDesc desc;
+            desc.shaderType = entry.type;
+            desc.entryName  = std::string(entry.entryPoint);
+            desc.debugName  = pathStr;
+
+            if (bIsBlob)
             {
-                // ShaderMake::ShaderConstant stores raw char* pointers, causing lifetime issues
-                // Create a safe vector of strings to ensure the data remains valid.
-                struct ShaderConstantSafe
-                {
-                    std::string name;
-                    std::string value;
-                };
+                // Parse definesStr: "KEY1=VAL1,KEY2=VAL2" -> ShaderConstant array.
+                // Use stable storage so char* pointers stay valid.
+                struct Constant { std::string name, value; };
+                std::vector<Constant> constants;
 
-                // Build shader constants from defines for permutation lookup
-                std::vector<ShaderConstantSafe> shaderConstants;
-                for (const std::string& define : metadata->defines)
+                if (!entry.definesStr.empty())
                 {
-                    // Parse "KEY=VALUE" format
-                    const size_t eqPos = define.find('=');
-                    if (eqPos != std::string::npos)
+                    std::string_view remaining = entry.definesStr;
+                    while (!remaining.empty())
                     {
-                        std::string key = define.substr(0, eqPos);
-                        std::string value = define.substr(eqPos + 1);
-                        shaderConstants.push_back(ShaderConstantSafe{ key, value });
-                    }
-                    else
-                    {
-                        SDL_LOG_ASSERT_FAIL("Invalid define format in metadata", "Invalid define format in shader metadata for shader %s: '%s'", 
-                                                 shaderPath.generic_string().c_str(), define.c_str());
+                        const size_t comma = remaining.find(',');
+                        const std::string_view token = remaining.substr(0, comma);
+                        remaining = (comma == std::string_view::npos) ? "" : remaining.substr(comma + 1);
+
+                        const size_t eq = token.find('=');
+                        if (eq != std::string_view::npos)
+                            constants.push_back({ std::string(token.substr(0, eq)), std::string(token.substr(eq + 1)) });
                     }
                 }
 
-                std::vector<ShaderMake::ShaderConstant> shaderConstantsRaw;
-                for (const ShaderConstantSafe& constant : shaderConstants)
-                {
-                    shaderConstantsRaw.push_back({ constant.name.c_str(), constant.value.c_str() });
-                }
+                std::vector<ShaderMake::ShaderConstant> rawConstants;
+                rawConstants.reserve(constants.size());
+                for (const Constant& c : constants)
+                    rawConstants.push_back({ c.name.c_str(), c.value.c_str() });
 
-                // Find the specific permutation in the blob
                 const void* permutationBinary = nullptr;
-                size_t permutationSize = 0;
-                if (!ShaderMake::FindPermutationInBlob(shaderBinary.data(), shaderBinary.size(), 
-                                                        shaderConstantsRaw.data(), static_cast<uint32_t>(shaderConstantsRaw.size()),
-                                                        &permutationBinary, &permutationSize))
+                size_t      permutationSize   = 0;
+                if (!ShaderMake::FindPermutationInBlob(
+                        binary.data(), binary.size(),
+                        rawConstants.data(), static_cast<uint32_t>(rawConstants.size()),
+                        &permutationBinary, &permutationSize))
                 {
-                    SDL_Log("[Init] Failed to find shader permutation in blob: %s", shaderPath.generic_string().c_str());
-                    const std::string errorMsg = ShaderMake::FormatShaderNotFoundMessage(shaderBinary.data(), shaderBinary.size(),
-                                                                                          shaderConstantsRaw.data(), static_cast<uint32_t>(shaderConstantsRaw.size()));
-                    
-                    SDL_LOG_ASSERT_FAIL("Failed to find shader permutation in blob", "Failed to find shader permutation in blob: %s\n%s", 
-                                             shaderPath.generic_string().c_str(), errorMsg.c_str());
+                    const std::string errorMsg = ShaderMake::FormatShaderNotFoundMessage(
+                        binary.data(), binary.size(),
+                        rawConstants.data(), static_cast<uint32_t>(rawConstants.size()));
+                    SDL_LOG_ASSERT_FAIL("Failed to find shader permutation in blob",
+                        "Failed to find shader permutation in blob: %s\n%s",
+                        pathStr.c_str(), errorMsg.c_str());
+                    continue;
                 }
 
-                // Create shader descriptor
-                nvrhi::ShaderDesc desc;
-                desc.shaderType = metadata->shaderType;
-                desc.entryName = metadata->entryPoint;
-                desc.debugName = shaderPath.generic_string();
-
-                // Create shader handle
-                const nvrhi::ShaderHandle handle = m_RHI->m_NvrhiDevice->createShader(desc, permutationBinary, permutationSize);
-                if (!handle)
-                {
-                    SDL_LOG_ASSERT_FAIL("Failed to create shader handle", "Failed to create shader handle for: %s", shaderPath.generic_string().c_str());
-                }
-
-                // Keyed by logical name with folder prefix and sorted defines
-                // e.g. "rtxdi/LightingPasses/DI/GenerateInitialSamples_main" or "ForwardLighting_PSMain_KEY=VAL"
-                {
-                    const std::filesystem::path parentDir = metadata->sourcePath.parent_path();
-                    std::string folderPrefix = (!parentDir.empty() && parentDir != ".")
-                        ? parentDir.generic_string() + "/" : "";
-                    std::string key = folderPrefix + metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
-                    for (const std::string& define : metadata->defines)
-                        key += "_" + define;
-
-                    SDL_assert(!m_ShaderCache.contains(key));
-                    m_ShaderCache[key] = handle;
-
-                    SDL_Log("[Init] Loaded shader: %s (key=%s, permutations=%zu)",
-                             shaderPath.generic_string().c_str(), key.c_str(), shaderConstants.size());
-                    ++loadedShaderCount;
-                }
+                m_ShaderHandles[id] = m_RHI->m_NvrhiDevice->createShader(desc, permutationBinary, permutationSize);
             }
-        }
-        else
-        {
-            // SINGLE SHADER PATH: File contains only one compiled shader (no permutations)
-            // This is used when the shader has no permutation variations
-            for (const ShaderMetadata* metadata : metadataList)
+            else
             {
-                // Verify that a single-shader file should have no defines
-                if (!metadata->defines.empty())
-                {
-                    SDL_assert(metadata->defines.empty() && "Shader with permutations should be stored as a blob");
-                }
-
-                // Create shader descriptor
-                nvrhi::ShaderDesc desc;
-                desc.shaderType = metadata->shaderType;
-                desc.entryName = metadata->entryPoint;
-                desc.debugName = shaderPath.generic_string();
-
-                // Create shader handle from the entire binary
-                const nvrhi::ShaderHandle handle = m_RHI->m_NvrhiDevice->createShader(desc, shaderBinary.data(), shaderBinary.size());
-                if (!handle)
-                {
-                    SDL_LOG_ASSERT_FAIL("Failed to create shader handle", "Failed to create shader handle for: %s", shaderPath.generic_string().c_str());
-                }
-
-                // Keyed by logical name with folder prefix (e.g. "rtxdi/PostprocessGBuffer_main")
-                {
-                    const std::filesystem::path parentDir = metadata->sourcePath.parent_path();
-                    std::string folderPrefix = (!parentDir.empty() && parentDir != ".")
-                        ? parentDir.generic_string() + "/" : "";
-                    const std::string key = folderPrefix + metadata->sourcePath.stem().string() + "_" + metadata->entryPoint + metadata->suffix;
-
-                    SDL_assert(!m_ShaderCache.contains(key));
-                    m_ShaderCache[key] = handle;
-
-                    SDL_Log("[Init] Loaded shader: %s (key=%s, no permutations)",
-                             shaderPath.generic_string().c_str(), key.c_str());
-                    ++loadedShaderCount;
-                }
+                m_ShaderHandles[id] = m_RHI->m_NvrhiDevice->createShader(desc, binary.data(), binary.size());
             }
+
+            if (!m_ShaderHandles[id])
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to create shader handle",
+                    "Failed to create shader handle for: %s (id=%u)", pathStr.c_str(), id);
+                continue;
+            }
+
+            SDL_Log("[Init] Loaded shader id=%u  key=%.*s",
+                    id, static_cast<int>(entry.key.size()), entry.key.data());
+            ++loadedCount;
         }
     }
 
-    SDL_Log("[Init] All %zu shader(s) loaded successfully from %zu file(s)", loadedShaderCount, filePathToMetadata.size());
+    for (nvrhi::ShaderHandle handle : m_ShaderHandles)
+    {
+        SDL_assert(handle && "One or more shaders failed to load, see previous error logs");
+    }
+
+    SDL_Log("[Init] %zu / %u shader(s) loaded from %zu file(s)",
+            loadedCount, ShaderID::COUNT, fileToIDs.size());
 }
 
 void Renderer::UnloadShaders()
 {
     SDL_Log("[Shutdown] Unloading shaders");
-    m_ShaderCache.clear();
+    std::fill(std::begin(m_ShaderHandles), std::end(m_ShaderHandles), nvrhi::ShaderHandle{});
     SDL_Log("[Shutdown] Shaders unloaded");
 }
 
@@ -546,7 +205,7 @@ void Renderer::ReloadShaders()
     m_MeshletPipelineCache.clear();
     m_ComputePipelineCache.clear();
     m_BindingLayoutCache.clear();
-    m_ShaderCache.clear();
+    UnloadShaders();
 
     SDL_Log("[HotReload] Caches cleared. Re-loading shaders from disk...");
 
@@ -556,14 +215,10 @@ void Renderer::ReloadShaders()
     m_RequestedShaderReload = false;
 }
 
-nvrhi::ShaderHandle Renderer::GetShaderHandle(std::string_view name) const
+nvrhi::ShaderHandle Renderer::GetShaderHandle(uint32_t shaderID) const
 {
-    std::unordered_map<std::string, nvrhi::ShaderHandle>::const_iterator it = m_ShaderCache.find(name.data());
-    if (it != m_ShaderCache.end())
-        return it->second;
-    
-    SDL_LOG_ASSERT_FAIL("Requested shader not found in cache", "[Error] Shader '%s' not found in cache!", name.data());
-    return {};
+    SDL_assert(shaderID < ShaderID::COUNT && "Invalid shader ID");
+    return m_ShaderHandles[shaderID];
 }
 
 nvrhi::TextureHandle Renderer::GetCurrentBackBufferTexture() const
@@ -1445,12 +1100,15 @@ nvrhi::ComputePipelineHandle Renderer::GetOrCreateComputePipeline(nvrhi::ShaderH
 
 void Renderer::AddFullScreenPass(const RenderPassParams& params)
 {
+    SDL_assert(params.shaderID != UINT32_MAX);
+
     PROFILE_FUNCTION();
-    PROFILE_GPU_SCOPED(params.shaderName, params.commandList);
+    const std::string_view profileName = ShaderID::ENTRIES[params.shaderID].key;
+    PROFILE_GPU_SCOPED(profileName, params.commandList);
 
     nvrhi::MeshletPipelineDesc desc;
-    desc.MS = GetShaderHandle("FullScreen_MSMain");
-    desc.PS = GetShaderHandle(params.shaderName);
+    desc.MS = GetShaderHandle(ShaderID::FULLSCREEN_MSMAIN);
+    desc.PS = GetShaderHandle(params.shaderID);
 
     std::vector<nvrhi::BindingSetHandle> bindingSets;
 
@@ -1516,8 +1174,11 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
 
 void Renderer::AddComputePass(const RenderPassParams& params)
 {
+    SDL_assert(params.shaderID != UINT32_MAX);
+
     PROFILE_FUNCTION();
-    PROFILE_GPU_SCOPED(params.shaderName, params.commandList);
+    const std::string_view profileName = ShaderID::ENTRIES[params.shaderID].key;
+    PROFILE_GPU_SCOPED(profileName, params.commandList);
 
     nvrhi::BindingLayoutVector layouts;
     std::vector<nvrhi::BindingSetHandle> bindingSets;
@@ -1547,7 +1208,8 @@ void Renderer::AddComputePass(const RenderPassParams& params)
     }
 
     nvrhi::ComputeState state;
-    state.pipeline = GetOrCreateComputePipeline(GetShaderHandle(params.shaderName), layouts);
+    const nvrhi::ShaderHandle computeShader = GetShaderHandle(params.shaderID);
+    state.pipeline = GetOrCreateComputePipeline(computeShader, layouts);
     for (const nvrhi::BindingSetHandle& bindingSet : bindingSets)
     {
         state.bindings.push_back(bindingSet.Get());
@@ -1623,12 +1285,13 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferH
 
     nvrhi::BindingSetDesc spdBset = CreateBindingSetDesc(inputs);
 
-    char shaderName[256]{};
-    std::snprintf(shaderName, sizeof(shaderName), "SPD_SPD_CSMain_SPD_NUM_CHANNELS=%u", numChannels);
+    const uint32_t spdShaderID = (numChannels == 3)
+        ? ShaderID::SPD_SPD_CSMAIN_SPD_NUM_CHANNELS_3
+        : ShaderID::SPD_SPD_CSMAIN_SPD_NUM_CHANNELS_1;
 
     Renderer::RenderPassParams params{
         .commandList = commandList,
-        .shaderName = shaderName,
+        .shaderID = spdShaderID,
         .bindingSetDesc = spdBset,
         .pushConstants = &inputs.m_SpdConstants,
         .pushConstantsSize = srrhi::SpdInputs::PushConstantBytes,

@@ -141,8 +141,8 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     nvrhi::GraphicsState state;
     nvrhi::GraphicsPipelineDesc pipelineDesc;
 
-    pipelineDesc.VS = renderer->GetShaderHandle("imgui_VSMain");
-    pipelineDesc.PS = renderer->GetShaderHandle("imgui_PSMain");
+    pipelineDesc.VS = renderer->GetShaderHandle(ShaderID::IMGUI_VSMAIN);
+    pipelineDesc.PS = renderer->GetShaderHandle(ShaderID::IMGUI_PSMAIN);
     pipelineDesc.inputLayout = m_InputLayout;
     pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
     pipelineDesc.renderState.rasterState = CommonResources::GetInstance().RasterCullNone;

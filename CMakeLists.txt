@@ -372,3 +372,24 @@ add_dependencies(build_srrhi srrhi)
 
 # ssrhi always run before shader compilation
 add_dependencies(build_shaders build_srrhi)
+
+# ----------------------------------------------------------------------------
+# ShaderIDsGenerator — generates src/shaders/ShaderIDs.h from .cfg files
+# ----------------------------------------------------------------------------
+add_subdirectory(ShaderIDsGenerator EXCLUDE_FROM_ALL)
+
+add_custom_target(build_shaderids
+    COMMAND $<TARGET_FILE:ShaderIDsGenerator>
+            -i "${CMAKE_SOURCE_DIR}/src/shaders/shaders.cfg"
+            -i "${CMAKE_SOURCE_DIR}/src/shaders/NRDShaders.cfg"
+            -o "${CMAKE_SOURCE_DIR}/src/shaders/"
+
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Generating ShaderIDs.h via ShaderIDsGenerator"
+)
+
+# build ShaderIDsGenerator.exe before running it
+add_dependencies(build_shaderids ShaderIDsGenerator)
+
+# ShaderIDs.h must exist before the main project compiles
+add_dependencies(${PROJECT_NAME} build_shaderids)

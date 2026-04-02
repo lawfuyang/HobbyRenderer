@@ -72,7 +72,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList       = commandList,
-                .shaderName        = "Bloom_Prefilter_PSMain",
+                .shaderID          = ShaderID::BLOOM_PREFILTER_PSMAIN,
                 .bindingSetDesc    = bset,
                 .pushConstants     = &inputs.m_PrefilterConstants,
                 .pushConstantsSize = srrhi::BloomPrefilterInputs::PushConstantBytes,
@@ -100,7 +100,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList       = commandList,
-                .shaderName        = "Bloom_Downsample_PSMain",
+                .shaderID          = ShaderID::BLOOM_DOWNSAMPLE_PSMAIN,
                 .bindingSetDesc    = bset,
                 .pushConstants     = &inputs.m_DownsampleConstants,
                 .pushConstantsSize = srrhi::BloomDownsampleInputs::PushConstantBytes,
@@ -136,7 +136,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList       = commandList,
-                .shaderName        = "Bloom_Upsample_PSMain",
+                .shaderID          = ShaderID::BLOOM_UPSAMPLE_PSMAIN,
                 .bindingSetDesc    = bset,
                 .pushConstants     = &inputs.m_UpsampleConstants,
                 .pushConstantsSize = srrhi::BloomUpsampleInputs::PushConstantBytes,
@@ -161,7 +161,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList       = commandList,
-                .shaderName        = "Bloom_Composite_PSMain",
+                .shaderID          = ShaderID::BLOOM_COMPOSITE_PSMAIN,
                 .bindingSetDesc    = bset,
                 .pushConstants     = &inputs.m_CompositeConstants,
                 .pushConstantsSize = srrhi::BloomCompositeInputs::PushConstantBytes,
