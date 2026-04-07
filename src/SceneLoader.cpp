@@ -346,6 +346,9 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 				else if (json_strcmp(ctx, t, "rotation"))
 				{
 					newNode.m_Rotation = json_get_quat(ctx, t + 1);
+					// Convert RH (glTF) -> LH (D3D): negate Z of translation, negate X and Y of quaternion
+					newNode.m_Rotation.x *= -1.0f;
+					newNode.m_Rotation.y *= -1.0f;
 				}
 				else if (json_strcmp(ctx, t, "scale"))
 				{
