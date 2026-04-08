@@ -168,8 +168,8 @@ void ImGuiLayer::UpdateFrame()
         // Lights controls
         if (ImGui::TreeNode("Lights"))
         {
-            // index 0 is guaranteed to be the sun light
-            Scene::Light& sun = scene.m_Lights[0];
+            // the last light is guaranteed to be the sun light
+            Scene::Light& sun = scene.m_Lights.back();
             if (ImGui::TreeNode("Sun Orientation"))
             {
                 bool changed = false;

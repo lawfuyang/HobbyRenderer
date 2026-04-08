@@ -66,9 +66,9 @@ public:
         cb.SetSunDirection(renderer->m_Scene.GetSunDirection());
         {
             // Sun angular radius for soft shadows — use the directional light's m_AngularSize field.
-            // m_Lights[0] is guaranteed to be a directional light (ensured by SortLightsAddDefaultDirectionalLight).
+            // the last light is guaranteed to be a directional light (ensured by SortLightsAddDefaultDirectionalLight).
             const float angularSizeDeg = !renderer->m_Scene.m_Lights.empty()
-                ? renderer->m_Scene.m_Lights[0].m_AngularSize
+                ? renderer->m_Scene.m_Lights.back().m_AngularSize
                 : 0.533f; // fallback to real sun size in degrees
             const float halfAngleRad = angularSizeDeg * 0.5f * (DirectX::XM_PI / 180.0f);
             cb.SetCosSunAngularRadius(cosf(halfAngleRad));
