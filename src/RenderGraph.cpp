@@ -991,17 +991,28 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                 
                 if (bCanAlias)
                 {
-                    resource->m_Heap = candidate->m_Heap;
-                    resource->m_Offset = candidate->m_Offset;
-                    resource->m_HeapIndex = candidate->m_HeapIndex;
-                    resource->m_BlockOffset = candidate->m_BlockOffset;
+                    // Store candidate's heap info in locals BEFORE overwriting resource fields,
+                    // so the createAndBindResource callback can correctly detect if the physical
+                    // resource needs to be recreated (by comparing old m_Heap/m_Offset with new).
+                    nvrhi::HeapHandle aliasHeap = candidate->m_Heap;
+                    uint64_t aliasOffset = candidate->m_Offset;
+                    uint32_t aliasHeapIndex = candidate->m_HeapIndex;
+                    uint64_t aliasBlockOffset = candidate->m_BlockOffset;
+
                     resource->m_AliasedFromIndex = candidateIdx;
                     resource->m_IsAllocated = true;
                     resource->m_IsPhysicalOwner = false;
                     
                     candidate->m_PhysicalLastPass = std::max(candidate->m_PhysicalLastPass, resource->m_Lifetime.m_LastPass);
 
-                    createAndBindResource(idx, resource->m_Heap, resource->m_Offset);
+                    createAndBindResource(idx, aliasHeap, aliasOffset);
+
+                    // Update resource's heap/offset AFTER the callback so the callback
+                    // could compare old values against new to decide if rebinding is needed.
+                    resource->m_Heap = aliasHeap;
+                    resource->m_Offset = aliasOffset;
+                    resource->m_HeapIndex = aliasHeapIndex;
+                    resource->m_BlockOffset = aliasBlockOffset;
 
                     if (bIsBuffer) m_Stats.m_NumAliasedBuffers++;
                     else m_Stats.m_NumAliasedTextures++;
@@ -1014,6 +1025,12 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         
         if (!aliased)
         {
+            // Save old heap/offset so the callback can detect changes after SubAllocateResource
+            // overwrites them. This ensures the callback correctly recreates the physical resource
+            // when the allocation location changes.
+            nvrhi::HeapHandle oldHeap = resource->m_Heap;
+            uint64_t oldOffset = resource->m_Offset;
+
             SubAllocateResource(resource, memReq.alignment);
             
             resource->m_IsAllocated = true;
@@ -1021,7 +1038,16 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
             resource->m_AliasedFromIndex = UINT32_MAX;
             resource->m_PhysicalLastPass = resource->m_Lifetime.m_LastPass;
 
-            createAndBindResource(idx, resource->m_Heap, resource->m_Offset);
+            // Pass new heap/offset from SubAllocateResource. The callback compares against
+            // the resource's stored values, but SubAllocateResource already overwrote them.
+            // We need to temporarily restore old values so the callback can detect changes.
+            nvrhi::HeapHandle newHeap = resource->m_Heap;
+            uint64_t newOffset = resource->m_Offset;
+            resource->m_Heap = oldHeap;
+            resource->m_Offset = oldOffset;
+            createAndBindResource(idx, newHeap, newOffset);
+            resource->m_Heap = newHeap;
+            resource->m_Offset = newOffset;
 
             if (bIsBuffer)
                 m_Stats.m_NumAllocatedBuffers++;
