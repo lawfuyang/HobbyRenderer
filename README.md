@@ -2,6 +2,8 @@
 
 A 3D rendering engine built in C++, featuring modern graphics techniques and supporting Direct3D 12 API.
 
+![screenshot](https://github.com/user-attachments/assets/7b7e4238-231b-45b4-99a4-f5bfe256d5d7)
+
 ## Features
 
 ### Core Rendering Pipeline
