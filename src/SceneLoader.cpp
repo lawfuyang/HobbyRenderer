@@ -101,30 +101,25 @@ static Quaternion json_get_quat(const JsonContext& ctx, int tokenIdx)
 	return Quaternion(json_get_float(ctx, tokenIdx + 1), json_get_float(ctx, tokenIdx + 2), json_get_float(ctx, tokenIdx + 3), json_get_float(ctx, tokenIdx + 4));
 }
 
-// Convert quaternion to forward direction vector (applies rotation to default forward +Z axis)
-static Vector3 QuaternionToDirection(const Quaternion& q)
+// Extract light shine direction (+Z in LH space) from a world transform matrix.
+// After RH->LH conversion, +Z = direction the light illuminates (shine direction).
+static Vector3 MatrixToForwardDirection(const Matrix& worldTransform)
 {
-	// Create rotation matrix from quaternion and apply to forward direction [0, 0, 1]
-	// After glTF RH->LH Z-negation conversion, the camera's -Z forward becomes +Z in LH space
-	DirectX::XMVECTOR quat = DirectX::XMLoadFloat4(&q);
-	DirectX::XMMATRIX rotMatrix = DirectX::XMMatrixRotationQuaternion(quat);
-	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
-	DirectX::XMVECTOR direction = DirectX::XMVector3Transform(forward, rotMatrix);
-	
-	// Normalize the direction
-	DirectX::XMVECTOR normalized = DirectX::XMVector3NormalizeEst(direction);
+	DirectX::XMMATRIX m = DirectX::XMLoadFloat4x4(&worldTransform);
+	DirectX::XMVECTOR forward = DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), m);
+	DirectX::XMVECTOR normalized = DirectX::XMVector3NormalizeEst(forward);
 	
 	Vector3 result;
 	DirectX::XMStoreFloat3(&result, normalized);
 	return result;
 }
 
-// Convert direction vector to quaternion rotation (rotates default forward [0,0,1] to target direction)
+// Convert direction vector to quaternion rotation (rotates default forward -Z to target direction)
+// Produces a RH-convention quaternion; caller must apply RH->LH conversion (negate X,Y) afterwards
 static Quaternion DirectionToQuaternion(const Vector3& direction)
 {
 	DirectX::XMVECTOR dirVec = DirectX::XMLoadFloat3(&direction);
-	// After glTF RH->LH Z-negation conversion, the camera's -Z forward becomes +Z in LH space
-	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+	DirectX::XMVECTOR forward = DirectX::XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
 	DirectX::XMVECTOR axis = DirectX::XMVector3Cross(forward, dirVec);
 	float dot = DirectX::XMVectorGetX(DirectX::XMVector3Dot(forward, dirVec));
 	float angle = std::atan2(DirectX::XMVectorGetX(DirectX::XMVector3Length(axis)), dot);
@@ -433,8 +428,20 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							if (json_strcmp(ctx, ct, "irradiance")) light.m_Intensity = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "angularSize")) light.m_AngularSize = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "color")) light.m_Color = json_get_vec3(ctx, ct + 1);
-							else if (json_strcmp(ctx, ct, "rotation")) newNode.m_Rotation = json_get_quat(ctx, ct + 1);
-							else if (json_strcmp(ctx, ct, "direction")) newNode.m_Rotation = DirectionToQuaternion(json_get_vec3(ctx, ct + 1));
+							else if (json_strcmp(ctx, ct, "rotation"))
+							{
+								newNode.m_Rotation = json_get_quat(ctx, ct + 1);
+								// Convert RH -> LH: negate X and Y of quaternion
+								newNode.m_Rotation.x *= -1.0f;
+								newNode.m_Rotation.y *= -1.0f;
+							}
+							else if (json_strcmp(ctx, ct, "direction"))
+							{
+								newNode.m_Rotation = DirectionToQuaternion(json_get_vec3(ctx, ct + 1));
+								// Convert RH -> LH: negate X and Y of quaternion
+								newNode.m_Rotation.x *= -1.0f;
+								newNode.m_Rotation.y *= -1.0f;
+							}
 							ct = cgltf_skip_json(tokens.data(), ct + 1);
 						}
 					}
@@ -456,9 +463,26 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							else if (json_strcmp(ctx, ct, "radius")) light.m_Radius = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "range")) light.m_Range = json_get_float(ctx, ct + 1);
 							else if (json_strcmp(ctx, ct, "color")) light.m_Color = json_get_vec3(ctx, ct + 1);
-							else if (json_strcmp(ctx, ct, "translation")) newNode.m_Translation = json_get_vec3(ctx, ct + 1);
-							else if (json_strcmp(ctx, ct, "rotation")) newNode.m_Rotation = json_get_quat(ctx, ct + 1);
-							else if (json_strcmp(ctx, ct, "direction")) newNode.m_Rotation = DirectionToQuaternion(json_get_vec3(ctx, ct + 1));
+							else if (json_strcmp(ctx, ct, "translation"))
+							{
+								newNode.m_Translation = json_get_vec3(ctx, ct + 1);
+								// Convert RH -> LH: negate Z
+								newNode.m_Translation.z *= -1.0f;
+							}
+							else if (json_strcmp(ctx, ct, "rotation"))
+							{
+								newNode.m_Rotation = json_get_quat(ctx, ct + 1);
+								// Convert RH -> LH: negate X and Y of quaternion
+								newNode.m_Rotation.x *= -1.0f;
+								newNode.m_Rotation.y *= -1.0f;
+							}
+							else if (json_strcmp(ctx, ct, "direction"))
+							{
+								newNode.m_Rotation = DirectionToQuaternion(json_get_vec3(ctx, ct + 1));
+								// Convert RH -> LH: negate X and Y of quaternion
+								newNode.m_Rotation.x *= -1.0f;
+								newNode.m_Rotation.y *= -1.0f;
+							}
 							ct = cgltf_skip_json(tokens.data(), ct + 1);
 						}
 					}
@@ -1069,15 +1093,11 @@ void SceneLoader::SortLightsAddDefaultDirectionalLight(Scene& scene)
 		Scene::Node& lightNode = scene.m_Nodes.emplace_back();
 		lightNode.m_LightIndex = (int)scene.m_Lights.size() - 1;
 
-		// Use default sun angles from DirectionalLight defaults
+		// Use default sun angles: 45° pitch pointing downward along +Z in LH space
 		constexpr float defaultPitch = DirectX::XM_PIDIV4; // 45 degrees
 		constexpr float defaultYaw   = 0.0f;
 		Vector quat = DirectX::XMQuaternionRotationRollPitchYaw(defaultPitch, defaultYaw, 0.0f);
 		DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
-
-		// GLTF to LH
-		lightNode.m_Rotation.x *= -1.0f;
-		lightNode.m_Rotation.y *= -1.0f;
 
 		const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
 		DirectX::XMStoreFloat4x4(&lightNode.m_LocalTransform, localM);
@@ -2302,10 +2322,10 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 		gl.m_CosSunAngularRadius = 1.0f;
 		
 		// Extract position from node's world transform
-		gl.m_Position = node.m_Translation;
+		gl.m_Position = Vector3{ node.m_WorldTransform._41, node.m_WorldTransform._42, node.m_WorldTransform._43 };
 		
-		// Derive direction from node's rotation quaternion
-		gl.m_Direction = QuaternionToDirection(node.m_Rotation);
+		// Derive direction from node's world transform matrix (+Z forward in LH space)
+		gl.m_Direction = MatrixToForwardDirection(node.m_WorldTransform);
 
 		if (light.m_Type == Scene::Light::Type::Directional)
 		{

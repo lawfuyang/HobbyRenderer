@@ -255,7 +255,8 @@ public:
     void Shutdown();
 
     // Sun direction derived from the first directional light's node world transform.
-    // Convention: returns the direction TOWARD the sun (local +Z of the light node).
+    // After RH->LH conversion, +Z = light shine direction, -Z = toward the light source.
+    // Convention: returns the direction TOWARD the sun (local -Z of the light node).
     Vector3 GetSunDirection() const
     {
         const Light& dirLight = m_Lights.back();
@@ -263,23 +264,32 @@ public:
         const Node& node = m_Nodes.at(dirLight.m_NodeIndex);
         DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&node.m_WorldTransform);
         DirectX::XMVECTOR fwd = DirectX::XMVector3Normalize(
-            DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), world));
+            DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f), world));
         Vector3 f; DirectX::XMStoreFloat3(&f, fwd);
         return Vector3{ f.x, f.y, f.z };
     }
 
-    // Sun pitch (elevation angle in radians, 0 = horizon, srrhi::CommonConsts::PI/2 = zenith)
+    // Sun pitch (elevation angle in radians, 0 = horizon, PI/2 = zenith)
+    // Derived from the shine direction (+Z of light node); pitch = elevation of the sun.
     float GetSunPitch() const
     {
+        // Shine direction = -GetSunDirection() (toward-sun negated).
+        // The sun elevation equals asin of the Y component of the toward-sun direction,
+        // which is the same as asin(-shineDir.y). But since GetSunDirection() already
+        // returns toward-sun, we can use it directly.
         Vector3 d = GetSunDirection();
         return std::asin(std::clamp(d.y, -1.0f, 1.0f));
     }
 
     // Sun yaw (azimuth angle in radians)
+    // Derived from the shine direction (+Z of light node) for roundtrip consistency
+    // with SetSunPitchYaw which applies yaw to the shine direction.
     float GetSunYaw() const
     {
+        // Shine direction = negated toward-sun direction
         Vector3 d = GetSunDirection();
-        return std::atan2(d.x, d.z);
+        // Negate to get shine direction, then compute yaw from that
+        return std::atan2(-d.x, -d.z);
     }
 
     // Check if any instance transforms have changed this frame
@@ -297,10 +307,10 @@ public:
         Node& node = m_Nodes.at(dirLight.m_NodeIndex);
 
         using namespace DirectX;
-        // XMQuaternionRotationRollPitchYaw expects (pitch, yaw, roll).
-        // Negate pitch because the rotation convention for local +Z pointing
-        // toward the sun needs the X-axis rotation inverted.
-        XMVECTOR quat = XMQuaternionRotationRollPitchYaw(-pitch, yaw, 0.0f);
+        // After RH->LH conversion, +Z = light shine direction, -Z = toward sun.
+        // Positive pitch rotates +Z downward (light shines down), so -Z points
+        // upward at the given elevation = toward the sun.
+        XMVECTOR quat = XMQuaternionRotationRollPitchYaw(pitch, yaw, 0.0f);
         XMStoreFloat4(&node.m_Rotation, quat);
 
         XMMATRIX localM = XMMatrixRotationQuaternion(quat);

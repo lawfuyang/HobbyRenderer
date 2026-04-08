@@ -2132,14 +2132,15 @@ private:
     {
         out = {};
 
-        // Direction from node rotation quaternion (same convention as glTF spot lights)
+        // Direction from node rotation quaternion.
+        // After RH->LH conversion, +Z = light shine direction (the direction the light illuminates).
         auto QuatToDir = [](const DirectX::XMFLOAT4& q) -> Vector3 {
-            // Forward = local -Z rotated by q
+            // Forward = local +Z rotated by q
             float x = q.x, y = q.y, z = q.z, w = q.w;
             return {
-                -2.f*(x*z + w*y),
-                -2.f*(y*z - w*x),
-                -1.f + 2.f*(x*x + y*y)
+                2.f*(x*z + w*y),
+                2.f*(y*z - w*x),
+                1.f - 2.f*(x*x + y*y)
             };
         };
 
@@ -2164,7 +2165,7 @@ private:
             out.colorTypeAndFlags = srrhi::RTXDIConstants::kPolymorphicLightType_kDirectional
                                     << srrhi::RTXDIConstants::kPolymorphicLightTypeShift;
             PackLightColor(col, out);
-            // Use toward-sun convention (+Z forward), consistent with deferred path's GetSunDirection().
+            // Use toward-sun convention (-Z of light node), consistent with deferred path's GetSunDirection().
             const Vector3 sunDir = Renderer::GetInstance()->m_Scene.GetSunDirection();
             out.direction1 = PackNormalizedVector(sunDir);
             out.scalars    = PackFloat2ToUint(halfAngRad, solidAngle);
