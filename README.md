@@ -2,7 +2,7 @@
 
 A 3D rendering engine built in C++, featuring modern graphics techniques and supporting Direct3D 12 API.
 
-![screenshot](https://github.com/user-attachments/assets/7b7e4238-231b-45b4-99a4-f5bfe256d5d7)
+<img width="1920" height="1080" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
 
 ## Features
 
