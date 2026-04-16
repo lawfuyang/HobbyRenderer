@@ -3,7 +3,7 @@
 
 void Config::ParseCommandLine(int argc, char* argv[])
 {
-    Renderer* renderer = Renderer::GetInstance();
+    
 
     for (int i = 1; i < argc; ++i)
     {
@@ -45,8 +45,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             if (i + 1 < argc)
             {
-                renderer->m_IrradianceTexturePath = argv[++i];
-                SDL_Log("[Config] Irradiance texture set via command line: %s", renderer->m_IrradianceTexturePath.c_str());
+                g_Renderer.m_IrradianceTexturePath = argv[++i];
+                SDL_Log("[Config] Irradiance texture set via command line: %s", g_Renderer.m_IrradianceTexturePath.c_str());
             }
             else
             {
@@ -57,8 +57,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             if (i + 1 < argc)
             {
-                renderer->m_RadianceTexturePath = argv[++i];
-                SDL_Log("[Config] Radiance texture set via command line: %s", renderer->m_RadianceTexturePath.c_str());
+                g_Renderer.m_RadianceTexturePath = argv[++i];
+                SDL_Log("[Config] Radiance texture set via command line: %s", g_Renderer.m_RadianceTexturePath.c_str());
             }
             else
             {
@@ -72,18 +72,18 @@ void Config::ParseCommandLine(int argc, char* argv[])
                 std::filesystem::path envMapPath = argv[++i];
                 std::string stem = envMapPath.stem().string();
                 std::filesystem::path parent = envMapPath.parent_path();
-                renderer->m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
-                renderer->m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
+                g_Renderer.m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
+                g_Renderer.m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
 
                 SDL_Log("[Config] Environment map set via command line: %s", envMapPath.string().c_str());
-                SDL_Log("[Config] Irradiance: %s", renderer->m_IrradianceTexturePath.c_str());
-                SDL_Log("[Config] Radiance: %s", renderer->m_RadianceTexturePath.c_str());
+                SDL_Log("[Config] Irradiance: %s", g_Renderer.m_IrradianceTexturePath.c_str());
+                SDL_Log("[Config] Radiance: %s", g_Renderer.m_RadianceTexturePath.c_str());
 
-                if (!std::filesystem::exists(renderer->m_IrradianceTexturePath)) {
-                    SDL_LOG_ASSERT_FAIL("Irradiance map not found", "Irradiance map not found: %s", renderer->m_IrradianceTexturePath.c_str());
+                if (!std::filesystem::exists(g_Renderer.m_IrradianceTexturePath)) {
+                    SDL_LOG_ASSERT_FAIL("Irradiance map not found", "Irradiance map not found: %s", g_Renderer.m_IrradianceTexturePath.c_str());
                 }
-                if (!std::filesystem::exists(renderer->m_RadianceTexturePath)) {
-                    SDL_LOG_ASSERT_FAIL("Radiance map not found", "Radiance map not found: %s", renderer->m_RadianceTexturePath.c_str());
+                if (!std::filesystem::exists(g_Renderer.m_RadianceTexturePath)) {
+                    SDL_LOG_ASSERT_FAIL("Radiance map not found", "Radiance map not found: %s", g_Renderer.m_RadianceTexturePath.c_str());
                 }
             }
             else
@@ -95,11 +95,11 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             if (i + 1 < argc)
             {
-                renderer->m_BRDFLutTexture = argv[++i];
-                SDL_Log("[Config] BRDF LUT texture set via command line: %s", renderer->m_BRDFLutTexture.c_str());
+                g_Renderer.m_BRDFLutTexture = argv[++i];
+                SDL_Log("[Config] BRDF LUT texture set via command line: %s", g_Renderer.m_BRDFLutTexture.c_str());
                 
-                if (!std::filesystem::exists(renderer->m_BRDFLutTexture)) {
-                    SDL_LOG_ASSERT_FAIL("BRDF LUT not found", "BRDF LUT not found: %s", renderer->m_BRDFLutTexture.c_str());
+                if (!std::filesystem::exists(g_Renderer.m_BRDFLutTexture)) {
+                    SDL_LOG_ASSERT_FAIL("BRDF LUT not found", "BRDF LUT not found: %s", g_Renderer.m_BRDFLutTexture.c_str());
                 }
             }
             else

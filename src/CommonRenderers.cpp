@@ -25,12 +25,12 @@ class ClearRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        
+        const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
         
         // Declare transient depth texture
-        if (renderer->m_Mode != RenderingMode::ReferencePathTracer)
+        if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
         {
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width = width;
@@ -50,7 +50,7 @@ public:
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width = width;
             desc.m_NvrhiDesc.height = height;
-            desc.m_NvrhiDesc.format = renderer->m_Mode == RenderingMode::ReferencePathTracer ? Renderer::PATH_TRACER_HDR_COLOR_FORMAT : Renderer::HDR_COLOR_FORMAT;
+            desc.m_NvrhiDesc.format = g_Renderer.m_Mode == RenderingMode::ReferencePathTracer ? Renderer::PATH_TRACER_HDR_COLOR_FORMAT : Renderer::HDR_COLOR_FORMAT;
             desc.m_NvrhiDesc.debugName = "HDRColorTexture_RG";
             desc.m_NvrhiDesc.isRenderTarget = true;
             desc.m_NvrhiDesc.isUAV = true;
@@ -60,7 +60,7 @@ public:
         }
         
         // Declare transient GBuffer textures
-        if (renderer->m_Mode != RenderingMode::ReferencePathTracer)
+        if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
         {
             RGTextureDesc gbufferDesc;
             gbufferDesc.m_NvrhiDesc.width = width;
@@ -102,7 +102,7 @@ public:
         }
 
         // HZB Texture (Persistent)
-        if (renderer->m_Mode != RenderingMode::ReferencePathTracer)
+        if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
         {
             uint32_t sw = width;
             uint32_t sh = height;
@@ -145,13 +145,13 @@ public:
     
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         // Get transient resources from render graph
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
         commandList->clearTextureFloat(hdrColor, nvrhi::AllSubresources, nvrhi::Color{});
 
-        if (renderer->m_Mode != RenderingMode::ReferencePathTracer)
+        if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
         {
             nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
             nvrhi::TextureHandle gbufferAlbedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
@@ -187,8 +187,8 @@ class TLASRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        Scene& scene = renderer->m_Scene;
+        
+        Scene& scene = g_Renderer.m_Scene;
 
         if (!scene.m_TLAS || !scene.m_RTInstanceDescBuffer || scene.m_RTInstanceDescs.empty())
             return false;
@@ -198,8 +198,8 @@ public:
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        Scene& scene = renderer->m_Scene;
+        
+        Scene& scene = g_Renderer.m_Scene;
 
         // ── TLAS Patch ────────────────────────────────────────────────────────
         // Dispatch TLASPatch_CS to write the correct per-LOD BLAS address and
@@ -227,7 +227,7 @@ public:
             params.pushConstants         = &inputs.m_PC;
             params.pushConstantsSize     = srrhi::TLASPatchInputs::PushConstantBytes;
             params.dispatchParams        = { .x = dispatchX, .y = 1, .z = 1 };
-            renderer->AddComputePass(params);
+            g_Renderer.AddComputePass(params);
         }
 
         // ── TLAS Build ────────────────────────────────────────────────────────

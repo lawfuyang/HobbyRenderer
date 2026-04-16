@@ -102,11 +102,11 @@ public:
 
     void InitFSR()
     {
-        Renderer* renderer = Renderer::GetInstance();
-        ID3D12Device* nativeDevice = renderer->m_RHI->m_NvrhiDevice->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
+        
+        ID3D12Device* nativeDevice = g_Renderer.m_RHI->m_NvrhiDevice->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
 
-        const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         // Native resolution TAA: render size == display size
         const FfxApiDimensions2D resolution{ width, height };
@@ -151,11 +151,11 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         {
-            const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-            const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+            const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+            const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width = width;
@@ -170,7 +170,7 @@ public:
 
         renderGraph.ReadTexture(g_RG_HDRColor);
 
-        if (renderer->m_bTAAEnabled)
+        if (g_Renderer.m_bTAAEnabled)
         {
             renderGraph.ReadTexture(g_RG_GBufferMotionVectors);
             renderGraph.ReadTexture(g_RG_DepthTexture);
@@ -186,11 +186,11 @@ public:
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         nvrhi::TextureHandle outputTex = renderGraph.GetTexture(g_RG_TAAOutput, RGResourceAccessMode::Write);
 
-        if (!renderer->m_bTAAEnabled)
+        if (!g_Renderer.m_bTAAEnabled)
         {
             nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
             commandList->copyTexture(outputTex, nvrhi::TextureSlice{}, hdrColor, nvrhi::TextureSlice{});
@@ -215,11 +215,11 @@ public:
         ID3D12Resource* exposureRes = exposureTex->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
         ID3D12Resource* outputRes   = outputTex->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
 
-        const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         // Jitter offset from current frame's view constants
-        const srrhi::PlanarViewConstants& view     = renderer->m_Scene.m_View;
+        const srrhi::PlanarViewConstants& view     = g_Renderer.m_Scene.m_View;
         const FfxApiFloatCoords2D jitterOffset{ view.m_PixelOffset.x, view.m_PixelOffset.y };
         const FfxApiDimensions2D  renderSize{ width, height };
 
@@ -238,16 +238,16 @@ public:
         dispatch.renderSize         = renderSize;
         dispatch.upscaleSize        = renderSize; // native resolution — no upscaling
 
-        dispatch.enableSharpening   = renderer->m_TAASharpness > 0.0f;
-        dispatch.sharpness          = renderer->m_TAASharpness;
-        dispatch.frameTimeDelta     = static_cast<float>(renderer->GetFrameTimeMs());
-        dispatch.preExposure        = std::max(renderer->m_PrevFrameExposure, 1e-6f);
+        dispatch.enableSharpening   = g_Renderer.m_TAASharpness > 0.0f;
+        dispatch.sharpness          = g_Renderer.m_TAASharpness;
+        dispatch.frameTimeDelta     = static_cast<float>(g_Renderer.GetFrameTimeMs());
+        dispatch.preExposure        = std::max(g_Renderer.m_PrevFrameExposure, 1e-6f);
         dispatch.reset              = false;
         dispatch.cameraNear         = FLT_MAX;                          // reversed-Z infinite projection
-        dispatch.cameraFar          = renderer->m_Scene.m_Camera.GetProjection().nearZ;
-        dispatch.cameraFovAngleVertical = renderer->m_Scene.m_Camera.GetProjection().fovY;
+        dispatch.cameraFar          = g_Renderer.m_Scene.m_Camera.GetProjection().nearZ;
+        dispatch.cameraFovAngleVertical = g_Renderer.m_Scene.m_Camera.GetProjection().fovY;
         dispatch.viewSpaceToMetersFactor = 0.0f;
-        dispatch.flags              = renderer->m_bTAADebugView ? FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW : 0;
+        dispatch.flags              = g_Renderer.m_bTAADebugView ? FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW : 0;
 
         FFX_CALL(ffx::Dispatch(m_FSRContext, dispatch));
     }

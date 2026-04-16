@@ -94,12 +94,12 @@ static void NrdFree(void* /*userArg*/, void* memory)
 
 void FillNRDCommonSettings(nrd::CommonSettings& settings)
 {
-    Renderer* renderer = Renderer::GetInstance();
-    const srrhi::PlanarViewConstants& view     = renderer->m_Scene.m_View;
-    const srrhi::PlanarViewConstants& prevView = renderer->m_Scene.m_ViewPrev;
+    
+    const srrhi::PlanarViewConstants& view     = g_Renderer.m_Scene.m_View;
+    const srrhi::PlanarViewConstants& prevView = g_Renderer.m_Scene.m_ViewPrev;
 
-    const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
-    const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+    const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+    const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
     // NRD expects column-major matrices with column-vector convention.
     // Our matrices are row-major with row-vector convention (DirectXMath style).
@@ -129,9 +129,9 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings)
 
     settings.isMotionVectorInWorldSpace = false;
 
-    settings.frameIndex = renderer->m_FrameNumber;
+    settings.frameIndex = g_Renderer.m_FrameNumber;
     // Flush history on the very first frame so permanent textures start clean.
-    settings.accumulationMode = (renderer->m_FrameNumber == 0)
+    settings.accumulationMode = (g_Renderer.m_FrameNumber == 0)
         ? nrd::AccumulationMode::CLEAR_AND_RESTART
         : nrd::AccumulationMode::CONTINUE;
 
@@ -163,8 +163,8 @@ NrdIntegration::~NrdIntegration()
 
 bool NrdIntegration::Initialize()
 {
-    Renderer* renderer = Renderer::GetInstance();
-    nvrhi::DeviceHandle device = renderer->m_RHI->m_NvrhiDevice;
+    
+    nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
 
     // -------------------------------------------------------------------------
     // Create NRD instance
@@ -302,7 +302,7 @@ bool NrdIntegration::Initialize()
 
         const auto nrdIt = nrdShaderIdMap.find(shaderKey);
         if (nrdIt != nrdShaderIdMap.end())
-            pipeline.Shader = renderer->GetShaderHandle(nrdIt->second);
+            pipeline.Shader = g_Renderer.GetShaderHandle(nrdIt->second);
 
         if (!pipeline.Shader)
         {
@@ -359,15 +359,15 @@ bool NrdIntegration::Initialize()
 
 void NrdIntegration::Setup(RenderGraph& renderGraph)
 {
-    Renderer* renderer = Renderer::GetInstance();
-    nvrhi::DeviceHandle device = renderer->m_RHI->m_NvrhiDevice;
+    
+    nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
     const nrd::InstanceDesc* instanceDesc = nrd::GetInstanceDesc(*m_Instance);
 
     m_PermanentPoolTextures.resize(instanceDesc->permanentPoolSize);
     m_TransientPoolTextures.resize(instanceDesc->transientPoolSize);
 
-    const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-    const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+    const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+    const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
     // -------------------------------------------------------------------------
     // Permanent and transient pool textures
@@ -472,10 +472,10 @@ void NrdIntegration::RunDenoiserPasses(
 {
     PROFILE_GPU_SCOPED("NRD Denoise", commandList);
 
-    Renderer* renderer = Renderer::GetInstance();
-    nvrhi::DeviceHandle device = renderer->m_RHI->m_NvrhiDevice;
-    const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
-    const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+    
+    nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
+    const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+    const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
     // -------------------------------------------------------------------------
     // Configure NRD denoiser settings

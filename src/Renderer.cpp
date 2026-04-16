@@ -54,19 +54,6 @@ namespace
     }
 }
 
-Renderer* Renderer::s_Instance = nullptr;
-
-void Renderer::SetInstance(Renderer* instance)
-{
-    s_Instance = instance;
-}
-
-Renderer* Renderer::GetInstance()
-{
-    SDL_assert(s_Instance && "Renderer instance is not set");
-    return s_Instance;
-}
-
 void Renderer::LoadShaders()
 {
     SDL_Log("[Init] Loading compiled shaders from ShaderID::ENTRIES metadata");
@@ -453,7 +440,7 @@ void Renderer::Run()
 
         if (m_Scene.m_LightsDirty)
         {
-            SceneLoader::CreateAndUploadLightBuffer(m_Scene, this);
+            SceneLoader::CreateAndUploadLightBuffer(m_Scene);
             m_Scene.m_LightsDirty = false;
         }
 
@@ -1531,7 +1518,7 @@ ScopedCommandList::ScopedCommandList(const nvrhi::CommandListHandle& commandList
 
     if (m_HasMarker)
     {
-        Renderer::GetInstance()->m_RHI->SetCommandListDebugName(commandList, markerName);
+        g_Renderer.m_RHI->SetCommandListDebugName(commandList, markerName);
     }
 
     if (m_HasMarker)
@@ -1558,16 +1545,56 @@ ScopedCommandList::~ScopedCommandList()
     m_CommandList->close();
 }
 
+// Forward declaration — defined in Tests/TestMain.cpp.
+// Only referenced when --run-tests is present; the linker will find the definition
+// because TestMain.cpp is compiled into the same executable.
+int RunTests(int argc, char* argv[]);
+
+// Helper: returns true if any argv entry starts with "--run-tests"
+static bool HasRunTestsFlag(int argc, char* argv[])
+{
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strncmp(argv[i], "--run-tests", 11) == 0)
+            return true;
+    }
+    return false;
+}
+
 int main(int argc, char* argv[])
 {
+    // -----------------------------------------------------------------------
+    // Test mode: skip renderer initialization entirely and run the test suite.
+    // Usage:
+    //   HobbyRenderer --run-tests              (run all tests)
+    //   HobbyRenderer --run-tests=*CoreBoot*   (filter by pattern)
+    //   HobbyRenderer --run-tests --verbose    (verbose output)
+    // -----------------------------------------------------------------------
+    if (HasRunTestsFlag(argc, argv))
+    {
+        // SDL must be initialized for SDL_Log / SDL_GetPerformanceCounter used
+        // by some tests (e.g. SimpleTimer).
+        if (!SDL_Init(SDL_INIT_VIDEO))
+        {
+            SDL_Log("[Tests] SDL_Init failed: %s", SDL_GetError());
+            return 1;
+        }
+
+        const int result = RunTests(argc, argv);
+
+        SDL_Quit();
+        return result;
+    }
+
+    // -----------------------------------------------------------------------
+    // Normal renderer mode
+    // -----------------------------------------------------------------------
     Renderer renderer{};
-    Renderer::SetInstance(&renderer);
     Config::ParseCommandLine(argc, argv);
 
     renderer.Initialize();
 
     renderer.Run();
     renderer.Shutdown();
-    Renderer::SetInstance(nullptr);
     return 0;
 }

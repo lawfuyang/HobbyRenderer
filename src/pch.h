@@ -75,3 +75,19 @@ using Frustum = DirectX::BoundingFrustum;
 
 #define PROFILE_SCOPED(NAME) MICROPROFILE_SCOPE_CSTR(NAME);
 #define PROFILE_FUNCTION() MICROPROFILE_SCOPEI("", __FUNCTION__, MP_AUTO);
+
+#define SingletonFunctionsCommon(ClassName)          \
+    ClassName(const ClassName&)            = delete; \
+    ClassName(ClassName&&)                 = delete; \
+    ClassName& operator=(const ClassName&) = delete; \
+    ClassName& operator=(ClassName&&)      = delete; \
+    inline static ClassName* ms_Instance   = nullptr;
+
+#define SingletonFunctionsSimple(ClassName)                      \
+private:                                                         \
+    SingletonFunctionsCommon(ClassName);                         \
+public:                                                          \
+    ClassName() { SDL_assert(!ms_Instance); ms_Instance = this; }    \
+    ~ClassName() { if (ms_Instance == this) ms_Instance = nullptr; } \
+    static ClassName& GetInstance() { SDL_assert(ms_Instance); return *ms_Instance; }
+    

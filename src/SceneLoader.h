@@ -35,10 +35,10 @@ public:
     static void ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets);
 
     // Texture and GPU buffer functions
-    static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sceneDir, Renderer* renderer);
-    static void UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer);
-    static void CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices);
-    static void CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer);
+    static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sceneDir);
+    static void UpdateMaterialsAndCreateConstants(Scene& scene);
+    static void CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices);
+    static void CreateAndUploadLightBuffer(Scene& scene);
 
 private:
     // Utility functions

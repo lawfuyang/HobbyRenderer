@@ -58,16 +58,16 @@ nvrhi::MemoryRequirements RGTextureDesc::GetMemoryRequirements() const
 {
     nvrhi::TextureDesc tempDesc = m_NvrhiDesc;
     tempDesc.isVirtual = true;
-    nvrhi::TextureHandle tempTex = Renderer::GetInstance()->m_RHI->m_NvrhiDevice->createTexture(tempDesc);
-    return Renderer::GetInstance()->m_RHI->m_NvrhiDevice->getTextureMemoryRequirements(tempTex);
+    nvrhi::TextureHandle tempTex = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(tempDesc);
+    return g_Renderer.m_RHI->m_NvrhiDevice->getTextureMemoryRequirements(tempTex);
 }
 
 nvrhi::MemoryRequirements RGBufferDesc::GetMemoryRequirements() const
 {
     nvrhi::BufferDesc tempDesc = m_NvrhiDesc;
     tempDesc.isVirtual = true;
-    nvrhi::BufferHandle tempBuf = Renderer::GetInstance()->m_RHI->m_NvrhiDevice->createBuffer(tempDesc);
-    return Renderer::GetInstance()->m_RHI->m_NvrhiDevice->getBufferMemoryRequirements(tempBuf);
+    nvrhi::BufferHandle tempBuf = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(tempDesc);
+    return g_Renderer.m_RHI->m_NvrhiDevice->getBufferMemoryRequirements(tempBuf);
 }
 
 // ============================================================================
@@ -190,9 +190,9 @@ void RenderGraph::BeginPass(const char* name)
 
 void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
 {
-    Renderer* renderer = Renderer::GetInstance();
-    const int readIndex = renderer->m_FrameNumber % 2;
-    const int writeIndex = (renderer->m_FrameNumber + 1) % 2;
+    
+    const int readIndex = g_Renderer.m_FrameNumber % 2;
+    const int writeIndex = (g_Renderer.m_FrameNumber + 1) % 2;
 
     BeginSetup();
     pRenderer->m_bPassEnabled = false;
@@ -207,27 +207,27 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         BeginPass(pRenderer->GetName());
         const uint16_t passIndex = GetCurrentPassIndex();
 
-        nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+        nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 
         const bool bImmediateExecute = false; /* defer execution until after render graph compiles */
-        renderer->m_TaskScheduler->ScheduleTask([renderer, pRenderer, cmd, readIndex, writeIndex, passIndex]() {
+        g_Renderer.m_TaskScheduler->ScheduleTask([pRenderer, cmd, readIndex, writeIndex, passIndex]() {
             PROFILE_SCOPED(pRenderer->GetName());
             SimpleTimer cpuTimer;
             ScopedCommandList scopedCmd{ cmd, pRenderer->GetName() };
             PROFILE_GPU_SCOPED(pRenderer->GetName(), cmd);
 
-            renderer->m_RenderGraph.SetActivePass(passIndex);
+            g_Renderer.m_RenderGraph.SetActivePass(passIndex);
             
-            if (renderer->m_RHI->m_NvrhiDevice->pollTimerQuery(pRenderer->m_GPUQueries[readIndex]))
+            if (g_Renderer.m_RHI->m_NvrhiDevice->pollTimerQuery(pRenderer->m_GPUQueries[readIndex]))
             {
-                pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(renderer->m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex]));
+                pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(g_Renderer.m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex]));
             }
-            renderer->m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]);
+            g_Renderer.m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]);
             
-            renderer->m_RenderGraph.InsertAliasBarriers(passIndex, scopedCmd);
+            g_Renderer.m_RenderGraph.InsertAliasBarriers(passIndex, scopedCmd);
             scopedCmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]);
-            pRenderer->Render(scopedCmd, renderer->m_RenderGraph);
-            renderer->m_RenderGraph.SetActivePass(0);
+            pRenderer->Render(scopedCmd, g_Renderer.m_RenderGraph);
+            g_Renderer.m_RenderGraph.SetActivePass(0);
             scopedCmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]);
             pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds());
         }, bImmediateExecute);
@@ -602,7 +602,7 @@ void RenderGraph::Compile()
         }
     }
 
-    nvrhi::IDevice* device = Renderer::GetInstance()->m_RHI->m_NvrhiDevice.Get();
+    nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice.Get();
 
     m_Stats.m_NumTextures = m_Stats.m_NumBuffers = 0;
     for (const TransientTexture& tex : m_Textures) if (tex.m_IsDeclaredThisFrame) m_Stats.m_NumTextures++;
@@ -769,7 +769,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
 {
     PROFILE_FUNCTION();
 
-    nvrhi::IDevice* device = Renderer::GetInstance()->m_RHI->m_NvrhiDevice.Get();
+    nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice.Get();
     
     nvrhi::HeapDesc heapDesc;
     heapDesc.capacity = size;
@@ -924,7 +924,7 @@ void RenderGraph::FreeBlock(uint32_t heapIdx, uint64_t blockOffset)
 // Helper for generic resource allocation - abstracts over textures and buffers
 void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(uint32_t, nvrhi::HeapHandle, uint64_t)> createAndBindResource)
 {
-    nvrhi::IDevice* device = Renderer::GetInstance()->m_RHI->m_NvrhiDevice.Get();
+    nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice.Get();
 
     std::vector<uint32_t> sortedIndices;
     for (uint32_t i = 0; i < (bIsBuffer ? m_Buffers.size() : m_Textures.size()); ++i)

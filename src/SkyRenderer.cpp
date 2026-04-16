@@ -13,10 +13,10 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         // SkyRenderer handles both atmospheric sky (Normal mode) and IBL background (IBL mode)
-        if (renderer->m_Mode == RenderingMode::Normal && !renderer->m_EnableSky)
+        if (g_Renderer.m_Mode == RenderingMode::Normal && !g_Renderer.m_EnableSky)
         {
             return false;
         }
@@ -29,24 +29,24 @@ public:
     
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
         PROFILE_GPU_SCOPED("Sky Pass", commandList);
 
         nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
-        const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
+        const Vector3 camPos = g_Renderer.m_Scene.m_Camera.GetPosition();
 
         // Sky CB
         const nvrhi::BufferDesc skyCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::SkyCB), "SkyCB", 1);
-        const nvrhi::BufferHandle skyCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(skyCBD);
+        const nvrhi::BufferHandle skyCB = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(skyCBD);
         
         srrhi::SkyInputs skyInputs;
-        skyInputs.m_SkyCB.SetView(renderer->m_Scene.m_View);
+        skyInputs.m_SkyCB.SetView(g_Renderer.m_Scene.m_View);
         skyInputs.m_SkyCB.SetCameraPos(Vector4{ camPos.x, camPos.y, camPos.z, 1.0f });
-        skyInputs.m_SkyCB.SetSunDirection(renderer->m_Scene.GetSunDirection());
-        skyInputs.m_SkyCB.SetSunIntensity(renderer->m_Scene.GetSunIntensity());
-        skyInputs.m_SkyCB.SetRenderingMode((uint32_t)renderer->m_Mode);
+        skyInputs.m_SkyCB.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
+        skyInputs.m_SkyCB.SetSunIntensity(g_Renderer.m_Scene.GetSunIntensity());
+        skyInputs.m_SkyCB.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
 
         commandList->writeBuffer(skyCB, &skyInputs.m_SkyCB, sizeof(skyInputs.m_SkyCB), 0);
         skyInputs.SetSkyCB(skyCB);
@@ -58,7 +58,7 @@ public:
         fbDesc.setDepthAttachment(depthTexture);
         fbDesc.depthAttachment.isReadOnly = true;
 
-        nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
+        nvrhi::FramebufferHandle framebuffer = g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
 
         // Sky Pass (Stencil == 0)
         nvrhi::DepthStencilState ds;
@@ -76,7 +76,7 @@ public:
             .depthStencilState = &ds
         };
 
-        renderer->AddFullScreenPass(params);
+        g_Renderer.AddFullScreenPass(params);
     }
 
     const char* GetName() const override { return "Sky"; }

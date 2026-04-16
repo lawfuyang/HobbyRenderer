@@ -6,8 +6,8 @@
 
 void CommonResources::Initialize()
 {
-    Renderer* renderer = Renderer::GetInstance();
-    nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
+    
+    nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
     nvrhi::GraphicsAPI api = device->getGraphicsAPI();
 
     // Helper lambda to create samplers with error checking
@@ -83,15 +83,15 @@ void CommonResources::Initialize()
     }
 
     // Register common samplers with global sampler descriptor heap
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_CLAMP_INDEX, AnisotropicClamp);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_WRAP_INDEX, AnisotropicWrap);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX, PointClamp);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_WRAP_INDEX, PointWrap);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX, LinearClamp);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_WRAP_INDEX, LinearWrap);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX, MinReductionClamp);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_MAX_REDUCTION_INDEX, MaxReductionClamp);
-    renderer->RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX, LinearClampBorderWhite);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_CLAMP_INDEX, AnisotropicClamp);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_WRAP_INDEX, AnisotropicWrap);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX, PointClamp);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_WRAP_INDEX, PointWrap);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX, LinearClamp);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_WRAP_INDEX, LinearWrap);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX, MinReductionClamp);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_MAX_REDUCTION_INDEX, MaxReductionClamp);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX, LinearClampBorderWhite);
 
     // Initialize common raster states
     // Solid, no cull
@@ -304,7 +304,7 @@ void CommonResources::Initialize()
         }
 
         // Upload texture data using renderer's command list management
-        nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+        nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
         ScopedCommandList commandList{ cmd, "CommonResources_DefaultTextures" };
         
         const char* basePath = SDL_GetBasePath();
@@ -339,11 +339,11 @@ void CommonResources::Initialize()
         };
 
         // Load BRDF LUT
-        LoadAndUpload(renderer->m_BRDFLutTexture, "BRDF_LUT", BRDF_LUT);
+        LoadAndUpload(g_Renderer.m_BRDFLutTexture, "BRDF_LUT", BRDF_LUT);
 
         // Load IBL textures
-        LoadAndUpload(renderer->m_IrradianceTexturePath, "IrradianceTexture", IrradianceTexture, true);
-        LoadAndUpload(renderer->m_RadianceTexturePath, "RadianceTexture", RadianceTexture, true);
+        LoadAndUpload(g_Renderer.m_IrradianceTexturePath, "IrradianceTexture", IrradianceTexture, true);
+        LoadAndUpload(g_Renderer.m_RadianceTexturePath, "RadianceTexture", RadianceTexture, true);
 
         m_RadianceMipCount = RadianceTexture->getDesc().mipLevels;
 
@@ -451,21 +451,21 @@ void CommonResources::Initialize()
 
 void CommonResources::RegisterDefaultTextures()
 {
-    Renderer* renderer = Renderer::GetInstance();
+    
 
     // Register textures with the global bindless system
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK, DefaultTextureBlack);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_WHITE, DefaultTextureWhite);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_GRAY, DefaultTextureGray);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_NORMAL, DefaultTextureNormal);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_PBR, DefaultTexturePBR);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_BRDF_LUT, BRDF_LUT);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE, IrradianceTexture);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE, RadianceTexture);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK, DefaultTextureBlack);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_WHITE, DefaultTextureWhite);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_GRAY, DefaultTextureGray);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_NORMAL, DefaultTextureNormal);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_PBR, DefaultTexturePBR);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_BRDF_LUT, BRDF_LUT);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE, IrradianceTexture);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE, RadianceTexture);
 
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_TRANSMITTANCE_TEXTURE, BrunetonTransmittance);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_SCATTERING_TEXTURE, BrunetonScattering);
-    renderer->RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_IRRADIANCE_TEXTURE, BrunetonIrradiance);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_TRANSMITTANCE_TEXTURE, BrunetonTransmittance);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_SCATTERING_TEXTURE, BrunetonScattering);
+    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_IRRADIANCE_TEXTURE, BrunetonIrradiance);
 
     SDL_Log("[CommonResources] Default textures registered with bindless system");
 }

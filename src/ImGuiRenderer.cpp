@@ -52,7 +52,7 @@ bool ImGuiRenderer::Setup(RenderGraph& renderGraph)
 
 void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph)
 {
-    Renderer* renderer = Renderer::GetInstance();
+    
     ImDrawData* draw_data = ImGui::GetDrawData();
 
     int fb_width = (int)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
@@ -61,8 +61,8 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     // ============================================================================
     // Framebuffer Setup
     // ============================================================================
-    nvrhi::TextureHandle renderTarget = renderer->GetCurrentBackBufferTexture();
-    nvrhi::FramebufferHandle framebuffer = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
+    nvrhi::TextureHandle renderTarget = g_Renderer.GetCurrentBackBufferTexture();
+    nvrhi::FramebufferHandle framebuffer = g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(
         nvrhi::FramebufferDesc().addColorAttachment(renderTarget));
 
     // ============================================================================
@@ -89,7 +89,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
         bufferDesc.initialState = nvrhi::ResourceStates::VertexBuffer;
         bufferDesc.keepInitialState = true;
 
-        m_VertexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(bufferDesc);
+        m_VertexBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(bufferDesc);
         m_VertexBufferSize = (uint32_t)vertex_size;
     }
 
@@ -110,7 +110,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
         bufferDesc.initialState = nvrhi::ResourceStates::IndexBuffer;
         bufferDesc.keepInitialState = true;
 
-        m_IndexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(bufferDesc);
+        m_IndexBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(bufferDesc);
         m_IndexBufferSize = (uint32_t)index_size;
     }
 
@@ -141,8 +141,8 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     nvrhi::GraphicsState state;
     nvrhi::GraphicsPipelineDesc pipelineDesc;
 
-    pipelineDesc.VS = renderer->GetShaderHandle(ShaderID::IMGUI_VSMAIN);
-    pipelineDesc.PS = renderer->GetShaderHandle(ShaderID::IMGUI_PSMAIN);
+    pipelineDesc.VS = g_Renderer.GetShaderHandle(ShaderID::IMGUI_VSMAIN);
+    pipelineDesc.PS = g_Renderer.GetShaderHandle(ShaderID::IMGUI_PSMAIN);
     pipelineDesc.inputLayout = m_InputLayout;
     pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
     pipelineDesc.renderState.rasterState = CommonResources::GetInstance().RasterCullNone;
@@ -150,7 +150,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     pipelineDesc.renderState.depthStencilState = CommonResources::GetInstance().DepthDisabled;
 
     nvrhi::FramebufferInfoEx fbInfo;
-    fbInfo.colorFormats = { renderer->m_RHI->m_SwapchainFormat };
+    fbInfo.colorFormats = { g_Renderer.m_RHI->m_SwapchainFormat };
     state.framebuffer = framebuffer;
 
     // ============================================================================
@@ -161,11 +161,11 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     nvrhi::BindingSetDesc bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
 
     // Get or create binding layout
-    nvrhi::BindingLayoutHandle layoutForSet = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bindingSetDesc);
-    pipelineDesc.bindingLayouts = { layoutForSet, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
+    nvrhi::BindingLayoutHandle layoutForSet = g_Renderer.GetOrCreateBindingLayoutFromBindingSetDesc(bindingSetDesc);
+    pipelineDesc.bindingLayouts = { layoutForSet, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
 
-    nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bindingSetDesc, layoutForSet);
-    state.bindings = { bindingSet, renderer->GetStaticTextureDescriptorTable(), renderer->GetStaticSamplerDescriptorTable() };
+    nvrhi::BindingSetHandle bindingSet = g_Renderer.m_RHI->m_NvrhiDevice->createBindingSet(bindingSetDesc, layoutForSet);
+    state.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
 
     // Setup vertex and index buffers
     state.vertexBuffers = { nvrhi::VertexBufferBinding{ m_VertexBuffer, 0, 0 } };
@@ -184,7 +184,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     state.viewport.scissorRects.resize(1);
 
     // Create graphics pipeline
-    nvrhi::GraphicsPipelineHandle pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
+    nvrhi::GraphicsPipelineHandle pipeline = g_Renderer.GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
     if (!pipeline)
     {
         SDL_LOG_ASSERT_FAIL("Failed to obtain ImGui graphics pipeline",
@@ -264,7 +264,7 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
 void ImGuiRenderer::CreateDeviceObjects()
 {
     SDL_Log("[Init] Creating ImGui device objects");
-    Renderer* renderer = Renderer::GetInstance();
+    
 
     // Create input layout (vertex attributes)
     {
@@ -275,7 +275,7 @@ void ImGuiRenderer::CreateDeviceObjects()
         };
 
         // Note: vertexShader parameter is only used by DX11 backend
-        m_InputLayout = renderer->m_RHI->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
+        m_InputLayout = g_Renderer.m_RHI->m_NvrhiDevice->createInputLayout(attributes, 3, nullptr);
         
         if (!m_InputLayout)
         {
@@ -302,7 +302,7 @@ void ImGuiRenderer::CreateDeviceObjects()
         textureDesc.isUAV = false;
         textureDesc.debugName = "ImGui Font Texture";
 
-        m_FontTexture = renderer->m_RHI->m_NvrhiDevice->createTexture(textureDesc);
+        m_FontTexture = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(textureDesc);
         
         if (!m_FontTexture)
         {
@@ -311,7 +311,7 @@ void ImGuiRenderer::CreateDeviceObjects()
         }
 
         // Upload font texture data
-        nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+        nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
         ScopedCommandList scopedCmd{ cmd, "ImGui Font Upload" };
         scopedCmd->writeTexture(m_FontTexture, 0, 0, pixels, width * 4);
     }

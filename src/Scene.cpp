@@ -17,7 +17,7 @@ void Scene::LoadScene()
 	const std::filesystem::path sceneFilePath(scenePath);
 	const std::filesystem::path sceneDir = sceneFilePath.parent_path();
 
-	Renderer* renderer = Renderer::GetInstance();
+	
 	std::vector<srrhi::VertexQuantized> allVerticesQuantized;
 	std::vector<uint32_t> allIndices;
 
@@ -77,17 +77,17 @@ void Scene::LoadScene()
 
 	FinalizeLoadedScene();
 
-	SceneLoader::LoadTexturesFromImages(*this, sceneDir, renderer);
+	SceneLoader::LoadTexturesFromImages(*this, sceneDir);
 	SceneLoader::ApplyEnvironmentLights(*this);
-	SceneLoader::UpdateMaterialsAndCreateConstants(*this, renderer);
-	SceneLoader::CreateAndUploadGpuBuffers(*this, renderer, allVerticesQuantized, allIndices);
-	SceneLoader::CreateAndUploadLightBuffer(*this, renderer);
+	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
+	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
+	SceneLoader::CreateAndUploadLightBuffer(*this);
 	BuildAccelerationStructures();
 
 	if (!m_Cameras.empty())
 	{
 		const Scene::Camera& firstCam = m_Cameras[0];
-		renderer->SetCameraFromSceneCamera(firstCam);
+		g_Renderer.SetCameraFromSceneCamera(firstCam);
 		m_SelectedCameraIndex = 0;
 	}
 }
@@ -96,9 +96,9 @@ void Scene::BuildAccelerationStructures()
 {
 	SCOPED_TIMER("[Scene] Build Accel Structs");
 
-    Renderer* renderer = Renderer::GetInstance();
-    nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
-	nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+    
+    nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cmd, "Build Scene Accel Structs" };
 
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build

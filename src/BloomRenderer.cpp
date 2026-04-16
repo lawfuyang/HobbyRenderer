@@ -18,11 +18,11 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        if (!renderer->m_EnableBloom) return false;
+        
+        if (!g_Renderer.m_EnableBloom) return false;
 
-        const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         // Create Bloom textures
         RGTextureDesc desc;
@@ -46,13 +46,13 @@ public:
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        nvrhi::DeviceHandle device = renderer->m_RHI->m_NvrhiDevice;
+        
+        nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         PROFILE_GPU_SCOPED("Bloom", commandList);
 
-        const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         nvrhi::TextureHandle bloomDownPyramid = renderGraph.GetTexture(m_RG_BloomDownPyramid, RGResourceAccessMode::Write);
         nvrhi::TextureHandle bloomUpPyramid   = renderGraph.GetTexture(m_RG_BloomUpPyramid,   RGResourceAccessMode::Write);
@@ -61,7 +61,7 @@ public:
         // 1. Prefilter (TAAOutput -> Down[0])
         {
             srrhi::BloomPrefilterInputs inputs;
-            inputs.m_PrefilterConstants.SetKnee(renderer->m_BloomKnee);
+            inputs.m_PrefilterConstants.SetKnee(g_Renderer.m_BloomKnee);
             inputs.m_PrefilterConstants.SetStrength(1.0f);
             inputs.SetInputTexture(taaOutput);
 
@@ -78,7 +78,7 @@ public:
                 .pushConstantsSize = srrhi::BloomPrefilterInputs::PushConstantBytes,
                 .framebuffer       = fb
             };
-            renderer->AddFullScreenPass(params);
+            g_Renderer.AddFullScreenPass(params);
         }
 
         // 2. Downsample chain (Down[i-1] -> Down[i])
@@ -106,7 +106,7 @@ public:
                 .pushConstantsSize = srrhi::BloomDownsampleInputs::PushConstantBytes,
                 .framebuffer       = fb
             };
-            renderer->AddFullScreenPass(params);
+            g_Renderer.AddFullScreenPass(params);
         }
 
         // 3. Upsample chain (Up[i+1] + Down[i] -> Up[i])
@@ -125,7 +125,7 @@ public:
             srrhi::BloomUpsampleInputs inputs;
             inputs.m_UpsampleConstants.SetWidth(mipW);
             inputs.m_UpsampleConstants.SetHeight(mipH);
-            inputs.m_UpsampleConstants.SetUpsampleRadius(renderer->m_UpsampleRadius);
+            inputs.m_UpsampleConstants.SetUpsampleRadius(g_Renderer.m_UpsampleRadius);
             inputs.SetSourceTexture(bloomUpPyramid,   i + 1, 1);
             inputs.SetBloomTexture(bloomDownPyramid,  i,     1);
 
@@ -142,7 +142,7 @@ public:
                 .pushConstantsSize = srrhi::BloomUpsampleInputs::PushConstantBytes,
                 .framebuffer       = fb
             };
-            renderer->AddFullScreenPass(params);
+            g_Renderer.AddFullScreenPass(params);
         }
 
         // 4. Composite: additively blend bloom up-pyramid mip 0 into TAAOutput
@@ -150,7 +150,7 @@ public:
             PROFILE_GPU_SCOPED("Bloom Composite", commandList);
 
             srrhi::BloomCompositeInputs inputs;
-            inputs.m_CompositeConstants.SetBloomIntensity(renderer->m_BloomIntensity);
+            inputs.m_CompositeConstants.SetBloomIntensity(g_Renderer.m_BloomIntensity);
             inputs.SetBloomTexture(bloomUpPyramid, 0, 1);
 
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
@@ -168,7 +168,7 @@ public:
                 .framebuffer       = fb,
                 .blendState        = &additiveBlend
             };
-            renderer->AddFullScreenPass(params);
+            g_Renderer.AddFullScreenPass(params);
         }
     }
 

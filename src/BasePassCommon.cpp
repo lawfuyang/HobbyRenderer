@@ -4,18 +4,18 @@
 
 void BasePassResources::Initialize()
 {
-    Renderer* renderer = Renderer::GetInstance();
+    
 
     // Create pipeline statistics queries for double buffering
-    m_PipelineQueries[0] = renderer->m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
-    m_PipelineQueries[1] = renderer->m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
+    m_PipelineQueries[0] = g_Renderer.m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
+    m_PipelineQueries[1] = g_Renderer.m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
 }
 
 void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rendererName)
 {
-    Renderer* renderer = Renderer::GetInstance();
+    
 
-    uint32_t numPrimitives = (uint32_t)renderer->m_Scene.m_InstanceData.size();
+    uint32_t numPrimitives = (uint32_t)g_Renderer.m_Scene.m_InstanceData.size();
     numPrimitives = std::max(numPrimitives, 1u); // avoid zero-sized buffers
 
     {
@@ -42,7 +42,7 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
         rg.DeclareBuffer(desc, m_VisibleIndirectBuffer);
     }
 
-    if (renderer->m_EnableOcclusionCulling)
+    if (g_Renderer.m_EnableOcclusionCulling)
     {
         {
             RGBufferDesc desc;
@@ -82,7 +82,7 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
         }
     }
 
-    if (renderer->m_UseMeshletRendering)
+    if (g_Renderer.m_UseMeshletRendering)
     {
         {
             RGBufferDesc desc;

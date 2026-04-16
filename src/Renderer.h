@@ -71,6 +71,8 @@ enum class RenderingMode : uint32_t
 
 struct Renderer
 {
+    SingletonFunctionsSimple(Renderer);
+    
     static constexpr float DEPTH_NEAR = 1.0f;
     static constexpr float DEPTH_FAR = 0.0f;
     static constexpr nvrhi::Format DEPTH_FORMAT = nvrhi::Format::D24S8;
@@ -81,10 +83,6 @@ struct Renderer
     static constexpr nvrhi::Format GBUFFER_ORM_FORMAT       = nvrhi::Format::RG8_UNORM;
     static constexpr nvrhi::Format GBUFFER_EMISSIVE_FORMAT  = nvrhi::Format::RGBA16_FLOAT;
     static constexpr nvrhi::Format GBUFFER_MOTION_FORMAT    = nvrhi::Format::RGBA16_FLOAT;
-
-    // Instance Management
-    static void SetInstance(Renderer* instance);
-    static Renderer* GetInstance();
 
     // Lifecycle
     void Initialize();
@@ -296,10 +294,10 @@ private:
     void UnloadShaders();
     void ReloadShaders();
 
-    static Renderer* s_Instance;
     bool m_Running = true;
     bool m_RequestedShaderReload = false;
 };
+#define g_Renderer Renderer::GetInstance()
 
 class ScopedCommandList
 {

@@ -160,14 +160,14 @@ static nvrhi::TextureHandle LoadAndRegisterEnvMap(const std::string& path, uint3
 	}
 
 	desc.debugName = path;
-	nvrhi::TextureHandle tex = Renderer::GetInstance()->m_RHI->m_NvrhiDevice->createTexture(desc);
+	nvrhi::TextureHandle tex = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(desc);
 
-	nvrhi::CommandListHandle cmd = Renderer::GetInstance()->AcquireCommandList();
+	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cmd, name };
 
 	UploadTexture(scopedCmd, tex, desc, imgData->GetData(), imgData->GetSize());
 
-	Renderer::GetInstance()->RegisterTextureAtIndex(index, tex);
+	g_Renderer.RegisterTextureAtIndex(index, tex);
 
 	return tex;
 }
@@ -385,11 +385,11 @@ bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std:
 							std::string stem = envMapPath.stem().string();
 							std::filesystem::path parent = envMapPath.parent_path();
 
-							Renderer::GetInstance()->m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
-							SDL_assert(std::filesystem::exists(Renderer::GetInstance()->m_IrradianceTexturePath));
+							g_Renderer.m_IrradianceTexturePath = (parent / (stem + "_irradiance.dds")).string();
+							SDL_assert(std::filesystem::exists(g_Renderer.m_IrradianceTexturePath));
 
-							Renderer::GetInstance()->m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
-							SDL_assert(std::filesystem::exists(Renderer::GetInstance()->m_RadianceTexturePath));
+							g_Renderer.m_RadianceTexturePath = (parent / (stem + "_radiance.dds")).string();
+							SDL_assert(std::filesystem::exists(g_Renderer.m_RadianceTexturePath));
 						}
 					}
 					else if (type == "PerspectiveCamera" || type == "PerspectiveCameraEx")
@@ -1042,17 +1042,17 @@ static void ParseJSONAnimations(Scene& scene, const JsonContext& ctx, const jsmn
 
 void SceneLoader::ApplyEnvironmentLights(Scene& scene)
 {
-	Renderer* renderer = Renderer::GetInstance();
-	if (renderer->m_IrradianceTexturePath.empty() || renderer->m_RadianceTexturePath.empty())
+	
+	if (g_Renderer.m_IrradianceTexturePath.empty() || g_Renderer.m_RadianceTexturePath.empty())
 	{
 		return;
 	}
 
-	SDL_assert(std::filesystem::exists(renderer->m_IrradianceTexturePath));
-	SDL_assert(std::filesystem::exists(renderer->m_RadianceTexturePath));
+	SDL_assert(std::filesystem::exists(g_Renderer.m_IrradianceTexturePath));
+	SDL_assert(std::filesystem::exists(g_Renderer.m_RadianceTexturePath));
 
-	renderer->m_IrradianceTexture = ::LoadAndRegisterEnvMap(renderer->m_IrradianceTexturePath, srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE, "Upload Env Irradiance");
-	renderer->m_RadianceTexture = ::LoadAndRegisterEnvMap(renderer->m_RadianceTexturePath, srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE, "Upload Env Radiance");
+	g_Renderer.m_IrradianceTexture = ::LoadAndRegisterEnvMap(g_Renderer.m_IrradianceTexturePath, srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE, "Upload Env Irradiance");
+	g_Renderer.m_RadianceTexture = ::LoadAndRegisterEnvMap(g_Renderer.m_RadianceTexturePath, srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE, "Upload Env Radiance");
 }
 
 const char* SceneLoader::cgltf_result_tostring(cgltf_result result)
@@ -1345,7 +1345,7 @@ void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene
 	}
 }
 
-void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sceneDir, Renderer* renderer)
+void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sceneDir)
 {
 	if (Config::Get().m_SkipTextures)
 	{
@@ -1354,15 +1354,15 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 
 	SCOPED_TIMER("[Scene] LoadTextures");
 
-	const uint32_t threadCount = renderer->m_TaskScheduler->GetThreadCount() + 1;
+	const uint32_t threadCount = g_Renderer.m_TaskScheduler->GetThreadCount() + 1;
 	std::vector<nvrhi::CommandListHandle> threadCommandLists(threadCount);
 	for (uint32_t i = 0; i < threadCount; ++i)
 	{
-		threadCommandLists[i] = renderer->AcquireCommandList();
+		threadCommandLists[i] = g_Renderer.AcquireCommandList();
 		threadCommandLists[i]->open();
 	}
 
-	renderer->m_TaskScheduler->ParallelFor(static_cast<uint32_t>(scene.m_Textures.size()), [&](uint32_t i, uint32_t threadIndex)
+	g_Renderer.m_TaskScheduler->ParallelFor(static_cast<uint32_t>(scene.m_Textures.size()), [&](uint32_t i, uint32_t threadIndex)
 	{
 		Scene::Texture& tex = scene.m_Textures[i];
 		if (tex.m_Uri.empty())
@@ -1392,7 +1392,7 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 
 		desc.debugName = fullPath.string();
 		
-		tex.m_Handle = renderer->m_RHI->m_NvrhiDevice->createTexture(desc);
+		tex.m_Handle = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(desc);
 
 		nvrhi::CommandListHandle& cmd = threadCommandLists[threadIndex];
 		UploadTexture(cmd, tex.m_Handle, desc, imgData->GetData(), imgData->GetSize());
@@ -1407,7 +1407,7 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 	{
 		SDL_assert(scene.m_Textures[ti].m_Handle);
 
-		scene.m_Textures[ti].m_BindlessIndex = renderer->RegisterTexture(scene.m_Textures[ti].m_Handle);
+		scene.m_Textures[ti].m_BindlessIndex = g_Renderer.RegisterTexture(scene.m_Textures[ti].m_Handle);
 		if (scene.m_Textures[ti].m_BindlessIndex == UINT32_MAX)
 		{
 			SDL_LOG_ASSERT_FAIL("Bindless texture registration failed", "[Scene] Bindless texture registration failed for %s", scene.m_Textures[ti].m_Uri.c_str());
@@ -1447,7 +1447,7 @@ srrhi::MaterialConstants MaterialConstantsFromMaterial(const Scene::Material& ma
 	return mc;
 }
 
-void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* renderer)
+void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene)
 {
 	SCOPED_TIMER("[Scene] MaterialConstants");
 
@@ -1478,9 +1478,9 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, Renderer* rend
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
 			.setDebugName("MaterialConstantsBuffer");
-		scene.m_MaterialConstantsBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(matBufDesc);
+		scene.m_MaterialConstantsBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(matBufDesc);
 
-		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 		ScopedCommandList scopedCmd{ cmd, "Upload MaterialConstants" };
 		scopedCmd->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(srrhi::MaterialConstants));
 	}
@@ -1671,8 +1671,8 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		}
 	}
 
-	Renderer* renderer = Renderer::GetInstance();
-	renderer->m_TaskScheduler->ParallelFor((uint32_t)jobs.size(), [&](uint32_t jobIdx, uint32_t threadIndex)
+	
+	g_Renderer.m_TaskScheduler->ParallelFor((uint32_t)jobs.size(), [&](uint32_t jobIdx, uint32_t threadIndex)
 	{
 		const PrimitiveJob& job = jobs[jobIdx];
 		const cgltf_primitive& prim = *job.prim;
@@ -2154,11 +2154,11 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene,
 	}
 }
 
-void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices)
+void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices)
 {
 	SCOPED_TIMER("[Scene] GPU Upload");
 
-	nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cmd, "Upload Scene Buffers" };
 
 	// Create quantized vertex buffer
@@ -2173,7 +2173,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_VertexBufferQuantized";
-		scene.m_VertexBufferQuantized = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_VertexBufferQuantized = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_VertexBufferQuantized, allVerticesQuantized.data(), vqbytes, 0);
 	}
@@ -2190,7 +2190,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_IndexBuffer";
 		desc.isAccelStructBuildInput = true;
-		scene.m_IndexBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_IndexBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_IndexBuffer, allIndices.data(), ibytes, 0);
 	}
@@ -2204,7 +2204,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshDataBuffer";
-		scene.m_MeshDataBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshDataBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_MeshDataBuffer, scene.m_MeshData.data(), scene.m_MeshData.size() * sizeof(srrhi::MeshData), 0);
 	}
@@ -2218,7 +2218,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshletBuffer";
-		scene.m_MeshletBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshletBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_MeshletBuffer, scene.m_Meshlets.data(), scene.m_Meshlets.size() * sizeof(srrhi::Meshlet), 0);
 	}
@@ -2231,7 +2231,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshletVerticesBuffer";
-		scene.m_MeshletVerticesBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshletVerticesBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_MeshletVerticesBuffer, scene.m_MeshletVertices.data(), scene.m_MeshletVertices.size() * sizeof(uint32_t), 0);
 	}
@@ -2244,7 +2244,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_MeshletTrianglesBuffer";
-		scene.m_MeshletTrianglesBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_MeshletTrianglesBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 
 		cmd->writeBuffer(scene.m_MeshletTrianglesBuffer, scene.m_MeshletTriangles.data(), scene.m_MeshletTriangles.size() * sizeof(uint32_t), 0);
 	}
@@ -2259,7 +2259,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_InstanceDataBuffer";
-		scene.m_InstanceDataBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_InstanceDataBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 	}
 
 	// Create per-instance LOD index buffer: instanceLOD[instanceIndex] = lodIndex.
@@ -2273,7 +2273,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		desc.initialState = nvrhi::ResourceStates::UnorderedAccess;
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_InstanceLODBuffer";
-		scene.m_InstanceLODBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_InstanceLODBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 	}
 
 	// Upload instance data
@@ -2301,7 +2301,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, Renderer* renderer, co
 		(scene.m_InstanceData.size() * sizeof(srrhi::PerInstanceData)) / (1024.0f * 1024.0f), scene.m_InstanceData.size());
 }
 
-void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
+void SceneLoader::CreateAndUploadLightBuffer(Scene& scene)
 {
 	std::vector<srrhi::GPULight> gpuLights;
 
@@ -2352,10 +2352,10 @@ void SceneLoader::CreateAndUploadLightBuffer(Scene& scene, Renderer* renderer)
 			desc.keepInitialState = true;
 			desc.canHaveUAVs = true; // For potential future compute sorting
 
-			scene.m_LightBuffer = renderer->m_RHI->m_NvrhiDevice->createBuffer(desc);
+			scene.m_LightBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 		}
 
-		nvrhi::CommandListHandle cmd = renderer->AcquireCommandList();
+		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 		ScopedCommandList scopedCmd(cmd, "Upload Light Buffer");
 		cmd->writeBuffer(scene.m_LightBuffer, gpuLights.data(), (uint32_t)(gpuLights.size() * sizeof(srrhi::GPULight)));
 	}

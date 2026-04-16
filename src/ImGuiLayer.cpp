@@ -8,7 +8,7 @@
 
 void ImGuiLayer::Initialize()
 {
-    SDL_Window* window = Renderer::GetInstance()->m_Window;
+    SDL_Window* window = g_Renderer.m_Window;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -44,18 +44,18 @@ void ImGuiLayer::UpdateFrame()
     PROFILE_FUNCTION();
     
     // Build ImGui UI and end with ImGui::Render(); rendering happens in ImGuiRenderer::Render
-    Renderer* renderer = Renderer::GetInstance();
-    Scene& scene = renderer->m_Scene;
+    
+    Scene& scene = g_Renderer.m_Scene;
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
     if (ImGui::BeginMainMenuBar())
     {
-        ImGui::Text("FPS: %.1f", renderer->m_FPS);
+        ImGui::Text("FPS: %.1f", g_Renderer.m_FPS);
         ImGui::Separator();
-        ImGui::Text("CPU Time: %.3f ms", renderer->m_FrameTime);
+        ImGui::Text("CPU Time: %.3f ms", g_Renderer.m_FrameTime);
         ImGui::Separator();
-        ImGui::Text("VRAM: %.1f MB", renderer->m_RHI->GetVRAMUsageMB());
+        ImGui::Text("VRAM: %.1f MB", g_Renderer.m_RHI->GetVRAMUsageMB());
         ImGui::EndMainMenuBar();
     }
 
@@ -70,44 +70,44 @@ void ImGuiLayer::UpdateFrame()
         //ImGui::Checkbox("Show Demo Window", &s_ShowDemoWindow);
 
         // Target FPS control
-        ImGui::DragInt("Target FPS", (int*)&renderer->m_TargetFPS, 1.0f, 10, 200);
+        ImGui::DragInt("Target FPS", (int*)&g_Renderer.m_TargetFPS, 1.0f, 10, 200);
 
         // Rendering options
         if (ImGui::TreeNode("Rendering"))
         {
             static const char* kRenderingModes[] = { "Normal", "Image Based Lighting", "Reference Pathtracer" };
-            int currentMode = static_cast<int>(renderer->m_Mode);
+            int currentMode = static_cast<int>(g_Renderer.m_Mode);
             if (ImGui::Combo("Rendering Mode", &currentMode, kRenderingModes, IM_ARRAYSIZE(kRenderingModes)))
             {
-                renderer->m_Mode = static_cast<RenderingMode>(currentMode);
+                g_Renderer.m_Mode = static_cast<RenderingMode>(currentMode);
             }
 
-            ImGui::Checkbox("Use Meshlet Rendering", &renderer->m_UseMeshletRendering);
-            ImGui::Checkbox("Enable RT Shadows", &renderer->m_EnableRTShadows);
-            ImGui::Checkbox("Enable Sky", &renderer->m_EnableSky);
+            ImGui::Checkbox("Use Meshlet Rendering", &g_Renderer.m_UseMeshletRendering);
+            ImGui::Checkbox("Enable RT Shadows", &g_Renderer.m_EnableRTShadows);
+            ImGui::Checkbox("Enable Sky", &g_Renderer.m_EnableSky);
 
             static const char* kDebugModes[] = {
                 "None", "Instances", "Meshlets", "World Normals", "Albedo", "Roughness", "Metallic", "Emissive", "LOD", "Motion Vectors", "ReGIR Cells"
             };
-            ImGui::Combo("Debug Mode", &renderer->m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
+            ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 
             const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
-            int forcedLODIdx = renderer->m_ForcedLOD + 1;
+            int forcedLODIdx = g_Renderer.m_ForcedLOD + 1;
             if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, srrhi::CommonConsts::MAX_LOD_COUNT))
             {
-                renderer->m_ForcedLOD = forcedLODIdx - 1;
+                g_Renderer.m_ForcedLOD = forcedLODIdx - 1;
             }
             ImGui::SameLine();
             ImGui::Text("%s", lodNames[forcedLODIdx]);
 
-            ImGui::Checkbox("ReSTIR DI", &renderer->m_EnableReSTIRDI);
-            if (renderer->m_EnableReSTIRDI)
+            ImGui::Checkbox("ReSTIR DI", &g_Renderer.m_EnableReSTIRDI);
+            if (g_Renderer.m_EnableReSTIRDI)
             {
                 extern void RTXDIIMGUISettings();
                 RTXDIIMGUISettings();
             }
 
-            ImGui::Checkbox("Enable Animations", &renderer->m_EnableAnimations);
+            ImGui::Checkbox("Enable Animations", &g_Renderer.m_EnableAnimations);
 
             ImGui::TreePop();
         }
@@ -115,10 +115,10 @@ void ImGuiLayer::UpdateFrame()
         // Path Tracer settings
         if (ImGui::TreeNode("Path Tracer"))
         {
-            int maxBounces = (int)renderer->m_PathTracerMaxBounces;
+            int maxBounces = (int)g_Renderer.m_PathTracerMaxBounces;
             if (ImGui::SliderInt("Max Bounces", &maxBounces, 1, 12))
             {
-                renderer->m_PathTracerMaxBounces = (uint32_t)maxBounces;
+                g_Renderer.m_PathTracerMaxBounces = (uint32_t)maxBounces;
             }
             ImGui::TreePop();
         }
@@ -126,20 +126,20 @@ void ImGuiLayer::UpdateFrame()
         // Post-processing settings
         if (ImGui::TreeNode("Post-Processing"))
         {
-            ImGui::Checkbox("Enable Bloom", &renderer->m_EnableBloom);
-            ImGui::Checkbox("Debug Bloom Only", &renderer->m_DebugBloom);
-            ImGui::DragFloat("Bloom Intensity", &renderer->m_BloomIntensity, 0.001f, 0.0f, 1.0f);
-            ImGui::DragFloat("Bloom Knee", &renderer->m_BloomKnee, 0.01f, 0.0f, 1.0f);
-            ImGui::DragFloat("Bloom Upsample Radius", &renderer->m_UpsampleRadius, 0.01f, 0.1f, 2.0f);
+            ImGui::Checkbox("Enable Bloom", &g_Renderer.m_EnableBloom);
+            ImGui::Checkbox("Debug Bloom Only", &g_Renderer.m_DebugBloom);
+            ImGui::DragFloat("Bloom Intensity", &g_Renderer.m_BloomIntensity, 0.001f, 0.0f, 1.0f);
+            ImGui::DragFloat("Bloom Knee", &g_Renderer.m_BloomKnee, 0.01f, 0.0f, 1.0f);
+            ImGui::DragFloat("Bloom Upsample Radius", &g_Renderer.m_UpsampleRadius, 0.01f, 0.1f, 2.0f);
 
             ImGui::Separator();
 
-            ImGui::Checkbox("Auto Exposure", &renderer->m_EnableAutoExposure);
-            if (renderer->m_EnableAutoExposure)
+            ImGui::Checkbox("Auto Exposure", &g_Renderer.m_EnableAutoExposure);
+            if (g_Renderer.m_EnableAutoExposure)
             {
                 ImGui::DragFloat("EV Min", &scene.m_Camera.m_ExposureValueMin, 0.1f, -20.0f, 20.0f);
                 ImGui::DragFloat("EV Max", &scene.m_Camera.m_ExposureValueMax, 0.1f, -20.0f, 20.0f);
-                ImGui::DragFloat("Adaptation Speed", &renderer->m_AdaptationSpeed, 0.1f, 0.0f, 20.0f);
+                ImGui::DragFloat("Adaptation Speed", &g_Renderer.m_AdaptationSpeed, 0.1f, 0.0f, 20.0f);
             }
             else
             {
@@ -154,12 +154,12 @@ void ImGuiLayer::UpdateFrame()
         // TAA (FSR3) controls
         if (ImGui::TreeNode("TAA"))
         {
-            ImGui::Checkbox("Enable TAA", &renderer->m_bTAAEnabled);
+            ImGui::Checkbox("Enable TAA", &g_Renderer.m_bTAAEnabled);
 
-            if (renderer->m_bTAAEnabled)
+            if (g_Renderer.m_bTAAEnabled)
             {
-                ImGui::Checkbox("Debug View", &renderer->m_bTAADebugView);
-                ImGui::SliderFloat("Sharpness", &renderer->m_TAASharpness, 0.0f, 1.0f);
+                ImGui::Checkbox("Debug View", &g_Renderer.m_bTAADebugView);
+                ImGui::SliderFloat("Sharpness", &g_Renderer.m_TAASharpness, 0.0f, 1.0f);
             }
 
             ImGui::TreePop();
@@ -207,9 +207,9 @@ void ImGuiLayer::UpdateFrame()
                     }
                     if (light.m_NodeIndex >= 0)
                     {
-                        bool highlighted = (renderer->m_SelectedNodeIndex == light.m_NodeIndex);
+                        bool highlighted = (g_Renderer.m_SelectedNodeIndex == light.m_NodeIndex);
                         if (ImGui::Checkbox("Highlight", &highlighted))
-                            renderer->m_SelectedNodeIndex = highlighted ? light.m_NodeIndex : -1;
+                            g_Renderer.m_SelectedNodeIndex = highlighted ? light.m_NodeIndex : -1;
                     }
                     ImGui::TreePop();
                 }
@@ -244,7 +244,7 @@ void ImGuiLayer::UpdateFrame()
                     if (scene.m_SelectedCameraIndex >= 0 && scene.m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
                     {
                         const Scene::Camera& selectedCam = scene.m_Cameras[scene.m_SelectedCameraIndex];
-                        renderer->SetCameraFromSceneCamera(selectedCam);
+                        g_Renderer.SetCameraFromSceneCamera(selectedCam);
                     }
                 }
             }
@@ -254,7 +254,7 @@ void ImGuiLayer::UpdateFrame()
                 if (scene.m_SelectedCameraIndex >= 0 && scene.m_SelectedCameraIndex < static_cast<int>(scene.m_Cameras.size()))
                 {
                     const Scene::Camera& selectedCam = scene.m_Cameras[scene.m_SelectedCameraIndex];
-                    renderer->SetCameraFromSceneCamera(selectedCam);
+                    g_Renderer.SetCameraFromSceneCamera(selectedCam);
                 }
                 else
                 {
@@ -269,23 +269,23 @@ void ImGuiLayer::UpdateFrame()
         // Selected Node Highlight
         if (ImGui::TreeNode("Node Highlight"))
         {
-            const char* currentLabel = renderer->m_SelectedNodeIndex == -1 ? "None" : scene.m_Nodes[renderer->m_SelectedNodeIndex].m_Name.c_str();
+            const char* currentLabel = g_Renderer.m_SelectedNodeIndex == -1 ? "None" : scene.m_Nodes[g_Renderer.m_SelectedNodeIndex].m_Name.c_str();
 
             if (ImGui::BeginCombo("Highlighted Node", currentLabel))
             {
-                if (ImGui::Selectable("None", renderer->m_SelectedNodeIndex == -1))
-                    renderer->m_SelectedNodeIndex = -1;
+                if (ImGui::Selectable("None", g_Renderer.m_SelectedNodeIndex == -1))
+                    g_Renderer.m_SelectedNodeIndex = -1;
 
                 for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
                 {
                     const Scene::Node& node = scene.m_Nodes[i];
 
-                    bool isSelected = (renderer->m_SelectedNodeIndex == i);
+                    bool isSelected = (g_Renderer.m_SelectedNodeIndex == i);
                     const std::string& nodeName = node.m_Name;
                     std::string label = std::to_string(i) + ": " + (nodeName.empty() ? "Unnamed Node" : nodeName);
 
                     if (ImGui::Selectable(label.c_str(), isSelected))
-                        renderer->m_SelectedNodeIndex = i;
+                        g_Renderer.m_SelectedNodeIndex = i;
 
                     if (isSelected)
                         ImGui::SetItemDefaultFocus();
@@ -298,13 +298,13 @@ void ImGuiLayer::UpdateFrame()
         // Culling controls
         if (ImGui::TreeNode("Culling"))
         {
-            ImGui::Checkbox("Enable Frustum Culling", &renderer->m_EnableFrustumCulling);
-            ImGui::Checkbox("Enable Cone Culling", &renderer->m_EnableConeCulling);
-            ImGui::Checkbox("Enable Occlusion Culling", &renderer->m_EnableOcclusionCulling);
+            ImGui::Checkbox("Enable Frustum Culling", &g_Renderer.m_EnableFrustumCulling);
+            ImGui::Checkbox("Enable Cone Culling", &g_Renderer.m_EnableConeCulling);
+            ImGui::Checkbox("Enable Occlusion Culling", &g_Renderer.m_EnableOcclusionCulling);
 
-            bool prevFreeze = renderer->m_FreezeCullingCamera;
-            ImGui::Checkbox("Freeze Culling Camera", &renderer->m_FreezeCullingCamera);
-            if (!prevFreeze && renderer->m_FreezeCullingCamera)
+            bool prevFreeze = g_Renderer.m_FreezeCullingCamera;
+            ImGui::Checkbox("Freeze Culling Camera", &g_Renderer.m_FreezeCullingCamera);
+            if (!prevFreeze && g_Renderer.m_FreezeCullingCamera)
             {
                 scene.m_FrozenCullingViewMatrix = scene.m_Camera.GetViewMatrix();
                 scene.m_FrozenCullingCameraPos = scene.m_Camera.GetPosition();
@@ -334,7 +334,7 @@ void ImGuiLayer::UpdateFrame()
                 ImGui::TableSetupColumn("CPU (ms)");
                 ImGui::TableSetupColumn("GPU (ms)");
                 ImGui::TableHeadersRow();
-                for (const std::shared_ptr<IRenderer>& r : renderer->m_Renderers)
+                for (const std::shared_ptr<IRenderer>& r : g_Renderer.m_Renderers)
                 {
                     if (!r->m_bPassEnabled)
                     {
@@ -359,32 +359,32 @@ void ImGuiLayer::UpdateFrame()
         if (ImGui::TreeNode("Base Pass Pipeline Statistics"))
         {
             const char* currentRendererName = "None";
-            if (renderer->m_SelectedRendererIndexForPipelineStatistics != -1)
+            if (g_Renderer.m_SelectedRendererIndexForPipelineStatistics != -1)
             {
-                currentRendererName = renderer->m_Renderers[renderer->m_SelectedRendererIndexForPipelineStatistics]->GetName();
+                currentRendererName = g_Renderer.m_Renderers[g_Renderer.m_SelectedRendererIndexForPipelineStatistics]->GetName();
             }
 
             if (ImGui::BeginCombo("Select Base Pass Renderer", currentRendererName))
             {
-                const bool bIsNoneSelected = (renderer->m_SelectedRendererIndexForPipelineStatistics == -1);
+                const bool bIsNoneSelected = (g_Renderer.m_SelectedRendererIndexForPipelineStatistics == -1);
                 if (ImGui::Selectable("None", bIsNoneSelected))
                 {
-                    renderer->m_SelectedRendererIndexForPipelineStatistics = -1;
+                    g_Renderer.m_SelectedRendererIndexForPipelineStatistics = -1;
                 }
                 if (bIsNoneSelected)
                 {
                     ImGui::SetItemDefaultFocus();
                 }
 
-                for (int i = 0; i < (int)renderer->m_Renderers.size(); ++i)
+                for (int i = 0; i < (int)g_Renderer.m_Renderers.size(); ++i)
                 {
-                    const char* name = renderer->m_Renderers[i]->GetName();
-                    const bool bIsSelected = (renderer->m_SelectedRendererIndexForPipelineStatistics == i);
-                    if (renderer->m_Renderers[i]->IsBasePassRenderer())
+                    const char* name = g_Renderer.m_Renderers[i]->GetName();
+                    const bool bIsSelected = (g_Renderer.m_SelectedRendererIndexForPipelineStatistics == i);
+                    if (g_Renderer.m_Renderers[i]->IsBasePassRenderer())
                     {
                         if (ImGui::Selectable(name, bIsSelected))
                         {
-                            renderer->m_SelectedRendererIndexForPipelineStatistics = i;
+                            g_Renderer.m_SelectedRendererIndexForPipelineStatistics = i;
                         }
                     }
                     if (bIsSelected)
@@ -396,11 +396,11 @@ void ImGuiLayer::UpdateFrame()
 
                 if (bIsNoneSelected)
                 {
-                    memset(&renderer->m_SelectedBasePassPipelineStatistics, 0, sizeof(renderer->m_SelectedBasePassPipelineStatistics));
+                    memset(&g_Renderer.m_SelectedBasePassPipelineStatistics, 0, sizeof(g_Renderer.m_SelectedBasePassPipelineStatistics));
                 }
             }
 
-            const nvrhi::PipelineStatistics& stats = renderer->m_SelectedBasePassPipelineStatistics;
+            const nvrhi::PipelineStatistics& stats = g_Renderer.m_SelectedBasePassPipelineStatistics;
             ImGui::Text("Input Assembly Vertices: %llu", stats.IAVertices);
             ImGui::Text("Input Assembly Primitives: %llu", stats.IAPrimitives);
             ImGui::Text("Vertex Shader Invocations: %llu", stats.VSInvocations);
@@ -419,13 +419,13 @@ void ImGuiLayer::UpdateFrame()
         }
 
         // Render Graph debug UI
-        renderer->m_RenderGraph.RenderDebugUI();
+        g_Renderer.m_RenderGraph.RenderDebugUI();
     }
     ImGui::End();
 
-    if (renderer->m_SelectedNodeIndex >= 0 && renderer->m_SelectedNodeIndex < (int)scene.m_Nodes.size())
+    if (g_Renderer.m_SelectedNodeIndex >= 0 && g_Renderer.m_SelectedNodeIndex < (int)scene.m_Nodes.size())
     {
-        const Scene::Node& node = scene.m_Nodes[renderer->m_SelectedNodeIndex];
+        const Scene::Node& node = scene.m_Nodes[g_Renderer.m_SelectedNodeIndex];
 
         DirectX::XMMATRIX view = DirectX::XMLoadFloat4x4(&scene.m_View.m_MatWorldToView);
         DirectX::XMMATRIX invView = DirectX::XMLoadFloat4x4(&scene.m_View.m_MatViewToWorld);
@@ -479,7 +479,7 @@ void ImGuiLayer::UpdateFrame()
             ImDrawList* drawList = ImGui::GetForegroundDrawList();
             drawList->AddCircle(ImVec2(cx, cy), radiusPx, IM_COL32(255, 255, 0, 255), 64, 2.5f);
 
-            std::string text = (node.m_Name.empty() ? "Node" : node.m_Name) + " [" + std::to_string(renderer->m_SelectedNodeIndex) + "]";
+            std::string text = (node.m_Name.empty() ? "Node" : node.m_Name) + " [" + std::to_string(g_Renderer.m_SelectedNodeIndex) + "]";
             drawList->AddText(ImVec2(cx, cy - radiusPx - 20), IM_COL32(255, 255, 0, 255), text.c_str());
 
             // --- Spotlight cone visualization ---
@@ -678,7 +678,7 @@ void ImGuiLayer::UpdateFrame()
                 ImVec2(shaftEnd.x + sx, shaftEnd.y + sy),
                 color);
 
-            std::string text = "LOOK [" + std::to_string(renderer->m_SelectedNodeIndex) + "]";
+            std::string text = "LOOK [" + std::to_string(g_Renderer.m_SelectedNodeIndex) + "]";
             drawList->AddText(ImVec2(ax - 20, ay + 20), color, text.c_str());
         }
     }

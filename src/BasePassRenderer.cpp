@@ -30,15 +30,15 @@ struct ScopedBasePassPipelineQuery
         : m_CommandList(commandList)
         , m_Res(res)
     {
-        Renderer* renderer = Renderer::GetInstance();
-        m_IsSelected = (renderer->m_SelectedRendererIndexForPipelineStatistics != -1 && renderer->m_Renderers[renderer->m_SelectedRendererIndexForPipelineStatistics].get() == rendererPtr);
+        
+        m_IsSelected = (g_Renderer.m_SelectedRendererIndexForPipelineStatistics != -1 && g_Renderer.m_Renderers[g_Renderer.m_SelectedRendererIndexForPipelineStatistics].get() == rendererPtr);
         if (m_IsSelected)
         {
-            nvrhi::DeviceHandle device = renderer->m_RHI->m_NvrhiDevice;
+            nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
 
-            m_WriteIndex = renderer->m_FrameNumber % 2;
+            m_WriteIndex = g_Renderer.m_FrameNumber % 2;
             const uint32_t readIndex = 1 - m_WriteIndex;
-            renderer->m_SelectedBasePassPipelineStatistics = device->getPipelineStatistics(m_Res.m_PipelineQueries[readIndex]);
+            g_Renderer.m_SelectedBasePassPipelineStatistics = device->getPipelineStatistics(m_Res.m_PipelineQueries[readIndex]);
 
             device->resetPipelineStatisticsQuery(m_Res.m_PipelineQueries[m_WriteIndex]);
             m_CommandList->beginPipelineStatisticsQuery(m_Res.m_PipelineQueries[m_WriteIndex]);
@@ -59,7 +59,7 @@ static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi:
 {
     PROFILE_FUNCTION();
 
-    Renderer* renderer = Renderer::GetInstance();
+    
 
     PROFILE_GPU_SCOPED("DownsampleTextureToPow2", commandList);
 
@@ -88,16 +88,16 @@ static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi:
     params.dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 };
     params.pushConstants = &consts;
     params.pushConstantsSize = srrhi::DownsampleTextureToPow2Inputs::PushConstantBytes;
-    renderer->AddComputePass(params);
+    g_Renderer.AddComputePass(params);
 }
 
 static void GenerateHZBMips(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph, nvrhi::BufferHandle spdAtomicCounter)
 {
     PROFILE_FUNCTION();
 
-    Renderer* renderer = Renderer::GetInstance();
+    
 
-    if (!renderer->m_EnableOcclusionCulling || renderer->m_FreezeCullingCamera)
+    if (!g_Renderer.m_EnableOcclusionCulling || g_Renderer.m_FreezeCullingCamera)
     {
         return;
     }
@@ -109,7 +109,7 @@ static void GenerateHZBMips(nvrhi::CommandListHandle commandList, const RenderGr
     DownsampleTextureToPow2(commandList, depth, hzb, srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX);
 
     // Then generate the rest of the mip chain using SPD
-    renderer->GenerateMipsUsingSPD(hzb, spdAtomicCounter, commandList, "Generate HZB Mips", srrhi::CommonConsts::SPD_REDUCTION_MIN);
+    g_Renderer.GenerateMipsUsingSPD(hzb, spdAtomicCounter, commandList, "Generate HZB Mips", srrhi::CommonConsts::SPD_REDUCTION_MIN);
 }
 
 class BasePassRendererBase : public IRenderer
@@ -185,7 +185,7 @@ protected:
     {
         PROFILE_FUNCTION();
 
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         char marker[256]{};
         sprintf(marker, "Occlusion Culling Phase %d - %s", args.m_CullingPhase + 1, args.m_BucketName);
@@ -200,39 +200,39 @@ protected:
             // Clear visible count buffer for Phase 2
             commandList->clearBufferUInt(handles.visibleCount, 0);
 
-            if (renderer->m_UseMeshletRendering)
+            if (g_Renderer.m_UseMeshletRendering)
             {
                 commandList->clearBufferUInt(handles.meshletJobCount, 0);
             }
         }
 
         const nvrhi::BufferDesc cullCBD = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::CullingConstants), args.m_CullingPhase == 0 ? "CullingCB" : "CullingCB_Phase2", 1);
-        const nvrhi::BufferHandle cullCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cullCBD);
+        const nvrhi::BufferHandle cullCB = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(cullCBD);
 
-        const Matrix& projectionMatrix = renderer->m_Scene.m_Camera.GetProjMatrix();
+        const Matrix& projectionMatrix = g_Renderer.m_Scene.m_Camera.GetProjMatrix();
 
         srrhi::CullingConstants cullData;
         cullData.SetNumPrimitives(args.m_NumInstances);
         cullData.SetFrustumPlanes(reinterpret_cast<const DirectX::XMFLOAT4*>(args.m_FrustumPlanes));
         cullData.SetView(args.m_View);
         cullData.SetViewProj(args.m_ViewProj);
-        cullData.SetEnableFrustumCulling(renderer->m_EnableFrustumCulling ? 1 : 0);
-        cullData.SetEnableOcclusionCulling((renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
+        cullData.SetEnableFrustumCulling(g_Renderer.m_EnableFrustumCulling ? 1 : 0);
+        cullData.SetEnableOcclusionCulling((g_Renderer.m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
         cullData.SetHZBWidth(handles.hzb ? handles.hzb->getDesc().width : 0);
         cullData.SetHZBHeight(handles.hzb ? handles.hzb->getDesc().height : 0);
         cullData.SetPhase(args.m_CullingPhase);
-        cullData.SetUseMeshletRendering(renderer->m_UseMeshletRendering ? 1 : 0);
+        cullData.SetUseMeshletRendering(g_Renderer.m_UseMeshletRendering ? 1 : 0);
         cullData.SetP00(projectionMatrix.m[0][0]);
         cullData.SetP11(projectionMatrix.m[1][1]);
-        cullData.SetForcedLOD(renderer->m_ForcedLOD);
+        cullData.SetForcedLOD(g_Renderer.m_ForcedLOD);
         cullData.SetInstanceBaseIndex(args.m_InstanceBaseIndex);
         commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
         srrhi::GPUCullingInputs inputs;
         inputs.SetCullingCB(cullCB);
-        inputs.SetInstanceData(renderer->m_Scene.m_InstanceDataBuffer);
+        inputs.SetInstanceData(g_Renderer.m_Scene.m_InstanceDataBuffer);
         inputs.SetHZB(handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite);
-        inputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
+        inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
         inputs.SetVisibleArgs(handles.visibleIndirect);
         inputs.SetVisibleCount(handles.visibleCount);
         inputs.SetOccludedIndices(handles.occludedIndices ? handles.occludedIndices : CommonResources::GetInstance().DummyUAVStructuredBuffer);
@@ -241,7 +241,7 @@ protected:
         inputs.SetMeshletJobs(handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummyUAVStructuredBuffer);
         inputs.SetMeshletJobCount(handles.meshletJobCount ? handles.meshletJobCount : CommonResources::GetInstance().DummyUAVStructuredBuffer);
         inputs.SetMeshletIndirectArgs(handles.meshletIndirect ? handles.meshletIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetInstanceLOD(renderer->m_Scene.m_InstanceLODBuffer);
+        inputs.SetInstanceLOD(g_Renderer.m_Scene.m_InstanceLODBuffer);
 
         nvrhi::BindingSetDesc cullBset = Renderer::CreateBindingSetDesc(inputs);
 
@@ -253,7 +253,7 @@ protected:
             params.shaderID = ShaderID::GPUCULLING_CULLING_CSMAIN;
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .x = dispatchX, .y = 1, .z = 1 };
-            renderer->AddComputePass(params);
+            g_Renderer.AddComputePass(params);
         }
         else
         {
@@ -262,7 +262,7 @@ protected:
             params.shaderID = ShaderID::GPUCULLING_CULLING_CSMAIN;
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .indirectBuffer = handles.occludedIndirect, .indirectOffsetBytes = 0 };
-            renderer->AddComputePass(params);
+            g_Renderer.AddComputePass(params);
         }
 
         PROFILE_GPU_SCOPED("Build Indirect Arguments", commandList);
@@ -275,7 +275,7 @@ protected:
             params.shaderID = ShaderID::GPUCULLING_BUILDINDIRECT_CSMAIN;
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .x = 1, .y = 1, .z = 1 };
-            renderer->AddComputePass(params);
+            g_Renderer.AddComputePass(params);
         }
     }
 
@@ -283,7 +283,7 @@ protected:
     {
         PROFILE_FUNCTION();
 
-        Renderer* renderer = Renderer::GetInstance();
+        
         
         nvrhi::BufferHandle visibleIndirect = handles.visibleIndirect;
         nvrhi::BufferHandle meshletIndirect = handles.meshletIndirect;
@@ -307,8 +307,8 @@ protected:
         const bool bUseAlphaBlend = (args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_BLEND);
 
         const nvrhi::FramebufferHandle framebuffer = bUseAlphaBlend ? 
-            renderer->m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor).setDepthAttachment(depthTexture)) :
-            renderer->m_RHI->m_NvrhiDevice->createFramebuffer(
+            g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor).setDepthAttachment(depthTexture)) :
+            g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(
             nvrhi::FramebufferDesc()
             .addColorAttachment(gbufferAlbedo)
             .addColorAttachment(gbufferNormals)
@@ -336,8 +336,8 @@ protected:
         }
         fbInfo.setDepthFormat(Renderer::DEPTH_FORMAT);
 
-        const uint32_t w = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t h = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t w = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t h = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         nvrhi::ViewportState viewportState;
         viewportState.viewports.push_back(nvrhi::Viewport(0.0f, (float)w, 0.0f, (float)h, 0.0f, 1.0f));
@@ -348,60 +348,60 @@ protected:
         viewportState.scissorRects[0].maxY = (int)h;
 
         const nvrhi::BufferDesc cbd = nvrhi::utils::CreateVolatileConstantBufferDesc((uint32_t)sizeof(srrhi::BasePassConstants), "PerFrameCB", 1);
-        const nvrhi::BufferHandle perFrameCB = renderer->m_RHI->m_NvrhiDevice->createBuffer(cbd);
+        const nvrhi::BufferHandle perFrameCB = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(cbd);
 
-        Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
+        Vector3 camPos = g_Renderer.m_Scene.m_Camera.GetPosition();
         Vector3 cullingCamPos = camPos;
-        if (renderer->m_FreezeCullingCamera)
+        if (g_Renderer.m_FreezeCullingCamera)
         {
-            cullingCamPos = renderer->m_Scene.m_FrozenCullingCameraPos;
+            cullingCamPos = g_Renderer.m_Scene.m_FrozenCullingCameraPos;
         }
 
         srrhi::BasePassConstants cb;
-        cb.SetView(renderer->m_Scene.m_View);
-        cb.SetPrevView(renderer->m_Scene.m_ViewPrev);
+        cb.SetView(g_Renderer.m_Scene.m_View);
+        cb.SetPrevView(g_Renderer.m_Scene.m_ViewPrev);
         cb.SetFrustumPlanes(reinterpret_cast<const DirectX::XMFLOAT4*>(args.m_FrustumPlanes));
         cb.SetCameraPos(DirectX::XMFLOAT4{ camPos.x, camPos.y, camPos.z, 0.0f });
         cb.SetCullingCameraPos(DirectX::XMFLOAT4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f });
-        cb.SetLightCount(renderer->m_Scene.m_LightCount);
-        cb.SetEnableRTShadows(renderer->m_EnableRTShadows ? 1 : 0);
-        cb.SetDebugMode((uint32_t)renderer->m_DebugMode);
-        cb.SetEnableFrustumCulling(renderer->m_EnableFrustumCulling ? 1 : 0);
-        cb.SetEnableConeCulling((renderer->m_EnableConeCulling && args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? 1 : 0);
-        cb.SetEnableOcclusionCulling((renderer->m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
+        cb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
+        cb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
+        cb.SetDebugMode((uint32_t)g_Renderer.m_DebugMode);
+        cb.SetEnableFrustumCulling(g_Renderer.m_EnableFrustumCulling ? 1 : 0);
+        cb.SetEnableConeCulling((g_Renderer.m_EnableConeCulling && args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? 1 : 0);
+        cb.SetEnableOcclusionCulling((g_Renderer.m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
         cb.SetHZBWidth(handles.hzb ? (uint32_t)handles.hzb->getDesc().width : 0);
         cb.SetHZBHeight(handles.hzb ? (uint32_t)handles.hzb->getDesc().height : 0);
-        cb.SetP00(renderer->m_Scene.m_View.m_MatViewToClip._11);
-        cb.SetP11(renderer->m_Scene.m_View.m_MatViewToClip._22);
+        cb.SetP00(g_Renderer.m_Scene.m_View.m_MatViewToClip._11);
+        cb.SetP11(g_Renderer.m_Scene.m_View.m_MatViewToClip._22);
         cb.SetOpaqueColorDimensions(DirectX::XMFLOAT2{ (float)opaqueColor->getDesc().width, (float)opaqueColor->getDesc().height });
         cb.SetOpaqueColorMipCount(opaqueColor->getDesc().mipLevels);
-        cb.SetEnableSky(renderer->m_EnableSky ? 1 : 0);
-        cb.SetSunDirection(renderer->m_Scene.GetSunDirection());
-        cb.SetRenderingMode((uint32_t)renderer->m_Mode);
+        cb.SetEnableSky(g_Renderer.m_EnableSky ? 1 : 0);
+        cb.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
+        cb.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
         cb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
 
         commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
         srrhi::BasePassInputs inputs;
         inputs.SetPerFrameCB(perFrameCB);
-        inputs.SetInstances(renderer->m_Scene.m_InstanceDataBuffer);
-        inputs.SetMaterials(renderer->m_Scene.m_MaterialConstantsBuffer);
-        inputs.SetVertices(renderer->m_Scene.m_VertexBufferQuantized);
-        inputs.SetMeshlets(renderer->m_Scene.m_MeshletBuffer);
-        inputs.SetMeshletVertices(renderer->m_Scene.m_MeshletVerticesBuffer);
-        inputs.SetMeshletTriangles(renderer->m_Scene.m_MeshletTrianglesBuffer);
+        inputs.SetInstances(g_Renderer.m_Scene.m_InstanceDataBuffer);
+        inputs.SetMaterials(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
+        inputs.SetVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
+        inputs.SetMeshlets(g_Renderer.m_Scene.m_MeshletBuffer);
+        inputs.SetMeshletVertices(g_Renderer.m_Scene.m_MeshletVerticesBuffer);
+        inputs.SetMeshletTriangles(g_Renderer.m_Scene.m_MeshletTrianglesBuffer);
         inputs.SetMeshletJobs(meshletJob ? meshletJob : CommonResources::GetInstance().DummySRVStructuredBuffer);
-        inputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
+        inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
         inputs.SetHZB(handles.hzb);
-        inputs.SetSceneAS(renderer->m_Scene.m_TLAS);
-        inputs.SetIndices(renderer->m_Scene.m_IndexBuffer);
+        inputs.SetSceneAS(g_Renderer.m_Scene.m_TLAS);
+        inputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
         inputs.SetOpaqueColor(opaqueColor);
-        inputs.SetLights(renderer->m_Scene.m_LightBuffer);
+        inputs.SetLights(g_Renderer.m_Scene.m_LightBuffer);
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
-        const nvrhi::BindingLayoutHandle layout = renderer->GetOrCreateBindingLayoutFromBindingSetDesc(bset);
-        const nvrhi::BindingSetHandle bindingSet = renderer->m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
+        const nvrhi::BindingLayoutHandle layout = g_Renderer.GetOrCreateBindingLayoutFromBindingSetDesc(bset);
+        const nvrhi::BindingSetHandle bindingSet = g_Renderer.m_RHI->m_NvrhiDevice->createBindingSet(bset, layout);
 
         nvrhi::RenderState renderState;
         renderState.rasterState = args.m_BackFaceCull ? CommonResources::GetInstance().RasterCullBack : CommonResources::GetInstance().RasterCullNone;
@@ -426,22 +426,22 @@ protected:
                             bUseAlphaBlend ? ShaderID::BASEPASS_FORWARD_PSMAIN_FORWARD_TRANSPARENT_FORWARD_TRANSPARENT_1 : 
                             ShaderID::BASEPASS_GBUFFER_PSMAIN;
 
-        if (renderer->m_UseMeshletRendering)
+        if (g_Renderer.m_UseMeshletRendering)
         {
             nvrhi::MeshletPipelineDesc meshPipelineDesc;
-            meshPipelineDesc.AS = renderer->GetShaderHandle(ShaderID::BASEPASS_ASMAIN);
-            meshPipelineDesc.MS = renderer->GetShaderHandle(ShaderID::BASEPASS_MSMAIN);
-            meshPipelineDesc.PS = renderer->GetShaderHandle(psID);
+            meshPipelineDesc.AS = g_Renderer.GetShaderHandle(ShaderID::BASEPASS_ASMAIN);
+            meshPipelineDesc.MS = g_Renderer.GetShaderHandle(ShaderID::BASEPASS_MSMAIN);
+            meshPipelineDesc.PS = g_Renderer.GetShaderHandle(psID);
             meshPipelineDesc.renderState = renderState;
-            meshPipelineDesc.bindingLayouts = { layout, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
+            meshPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
             meshPipelineDesc.useDrawIndex = true;
 
-            const nvrhi::MeshletPipelineHandle meshPipeline = renderer->GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
+            const nvrhi::MeshletPipelineHandle meshPipeline = g_Renderer.GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
 
             nvrhi::MeshletState meshState;
             meshState.framebuffer = framebuffer;
             meshState.pipeline = meshPipeline;
-            meshState.bindings = { bindingSet, renderer->GetStaticTextureDescriptorTable(), renderer->GetStaticSamplerDescriptorTable() };
+            meshState.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
             meshState.viewport = viewportState;
             meshState.indirectParams = handles.meshletIndirect;
             meshState.indirectCountBuffer = handles.meshletJobCount;
@@ -452,19 +452,19 @@ protected:
         else
         {
             nvrhi::GraphicsPipelineDesc pipelineDesc;
-            pipelineDesc.VS = renderer->GetShaderHandle(ShaderID::BASEPASS_VSMAIN);
-            pipelineDesc.PS = renderer->GetShaderHandle(psID);
+            pipelineDesc.VS = g_Renderer.GetShaderHandle(ShaderID::BASEPASS_VSMAIN);
+            pipelineDesc.PS = g_Renderer.GetShaderHandle(psID);
             pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
             pipelineDesc.renderState = renderState;
-            pipelineDesc.bindingLayouts = { layout, renderer->GetStaticTextureBindingLayout(), renderer->GetStaticSamplerBindingLayout() };
+            pipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
             pipelineDesc.useDrawIndex = true;
 
             nvrhi::GraphicsState state;
             state.framebuffer = framebuffer;
             state.viewport = viewportState;
-            state.indexBuffer = nvrhi::IndexBufferBinding{ renderer->m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
-            state.bindings = { bindingSet, renderer->GetStaticTextureDescriptorTable(), renderer->GetStaticSamplerDescriptorTable() };
-            state.pipeline = renderer->GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
+            state.indexBuffer = nvrhi::IndexBufferBinding{ g_Renderer.m_Scene.m_IndexBuffer, nvrhi::Format::R32_UINT, 0 };
+            state.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
+            state.pipeline = g_Renderer.GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
             state.indirectParams = handles.visibleIndirect;
             state.indirectCountBuffer = handles.visibleCount;
             commandList->setGraphicsState(state);
@@ -475,16 +475,16 @@ protected:
 
     void PrepareRenderingData(Matrix& outView, Matrix& outViewProjForCulling, Vector4 outFrustumPlanes[5])
     {
-        Renderer* renderer = Renderer::GetInstance();
-        Camera* cam = &renderer->m_Scene.m_Camera;
+        
+        Camera* cam = &g_Renderer.m_Scene.m_Camera;
         const Matrix viewProj = cam->GetViewProjMatrix();
         outView = cam->GetViewMatrix();
         outViewProjForCulling = viewProj;
-        if (renderer->m_FreezeCullingCamera)
+        if (g_Renderer.m_FreezeCullingCamera)
         {
-            outView = renderer->m_Scene.m_FrozenCullingViewMatrix;
+            outView = g_Renderer.m_Scene.m_FrozenCullingViewMatrix;
             const Matrix proj = cam->GetProjMatrix();
-            const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&renderer->m_Scene.m_FrozenCullingViewMatrix);
+            const DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&g_Renderer.m_Scene.m_FrozenCullingViewMatrix);
             const DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&proj);
             DirectX::XMStoreFloat4x4(&outViewProjForCulling, v * p);
         }
@@ -493,14 +493,14 @@ protected:
 
     void ClearAllCounters(nvrhi::CommandListHandle commandList, const ResourceHandles& handles)
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
         PROFILE_GPU_SCOPED("Clear All Counters", commandList);
         commandList->clearBufferUInt(handles.visibleCount, 0);
-        if (renderer->m_EnableOcclusionCulling)
+        if (g_Renderer.m_EnableOcclusionCulling)
         {
             commandList->clearBufferUInt(handles.occludedCount, 0);
         }
-        if (renderer->m_UseMeshletRendering)
+        if (g_Renderer.m_UseMeshletRendering)
         {
             commandList->clearBufferUInt(handles.meshletJobCount, 0);
         }
@@ -514,7 +514,7 @@ class OpaqueRenderer : public BasePassRendererBase
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         BasePassResources& res = m_BasePassResources;
         res.DeclareResources(renderGraph, GetName());
@@ -522,7 +522,7 @@ public:
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
 
-        if (renderer->m_EnableOcclusionCulling)
+        if (g_Renderer.m_EnableOcclusionCulling)
         {
             renderGraph.WriteTexture(g_RG_HZBTexture);
             renderGraph.WriteBuffer(res.m_OccludedCountBuffer);
@@ -530,7 +530,7 @@ public:
             renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
         }
 
-        if (renderer->m_UseMeshletRendering)
+        if (g_Renderer.m_UseMeshletRendering)
         {
             renderGraph.WriteBuffer(res.m_MeshletJobBuffer);
             renderGraph.WriteBuffer(res.m_MeshletJobCountBuffer);
@@ -555,9 +555,9 @@ public:
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         ScopedBasePassPipelineQuery query{ commandList, m_BasePassResources, this };
-        Renderer* renderer = Renderer::GetInstance();
+        
 
-        const uint32_t numOpaque = renderer->m_Scene.m_OpaqueBucket.m_Count;
+        const uint32_t numOpaque = g_Renderer.m_Scene.m_OpaqueBucket.m_Count;
         if (numOpaque == 0) return;
 
         Matrix view, viewProjForCulling;
@@ -568,15 +568,15 @@ public:
         BasePassResources& res = m_BasePassResources;
         handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
         handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);
-        handles.occludedCount = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.occludedIndices = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndicesBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.occludedIndirect = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletJob = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletJobCount = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobCountBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedCount = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedIndices = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndicesBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedIndirect = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletJob = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletJobCount = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobCountBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletIndirect = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
-        handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write) : nullptr;
+        handles.hzb = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write) : nullptr;
         handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
         handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
         handles.geoNormals = renderGraph.GetTexture(g_RG_GBufferGeoNormals, RGResourceAccessMode::Write);
@@ -591,7 +591,7 @@ public:
         args.m_View = view;
         args.m_ViewProj = viewProjForCulling;
         args.m_NumInstances = numOpaque;
-        args.m_InstanceBaseIndex = renderer->m_Scene.m_OpaqueBucket.m_BaseIndex;
+        args.m_InstanceBaseIndex = g_Renderer.m_Scene.m_OpaqueBucket.m_BaseIndex;
         args.m_BucketName = "Opaque";
         args.m_CullingPhase = 0;
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
@@ -616,7 +616,7 @@ class MaskedPassRenderer : public BasePassRendererBase
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         BasePassResources& res = m_BasePassResources;
         res.DeclareResources(renderGraph, GetName());
@@ -624,14 +624,14 @@ public:
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
 
-        if (renderer->m_EnableOcclusionCulling)
+        if (g_Renderer.m_EnableOcclusionCulling)
         {
             renderGraph.ReadTexture(g_RG_HZBTexture);
             renderGraph.WriteBuffer(res.m_OccludedCountBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndicesBuffer);
             renderGraph.WriteBuffer(res.m_OccludedIndirectBuffer);
         }
-        if (renderer->m_UseMeshletRendering)
+        if (g_Renderer.m_UseMeshletRendering)
         {
             renderGraph.WriteBuffer(res.m_MeshletJobBuffer);
             renderGraph.WriteBuffer(res.m_MeshletJobCountBuffer);
@@ -652,8 +652,8 @@ public:
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         ScopedBasePassPipelineQuery query{ commandList, m_BasePassResources, this };
-        Renderer* renderer = Renderer::GetInstance();
-        const uint32_t numMasked = renderer->m_Scene.m_MaskedBucket.m_Count;
+        
+        const uint32_t numMasked = g_Renderer.m_Scene.m_MaskedBucket.m_Count;
         if (numMasked == 0) return;
 
         Matrix view, viewProjForCulling;
@@ -664,15 +664,15 @@ public:
         BasePassResources& res = m_BasePassResources;
         handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
         handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);
-        handles.occludedCount = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.occludedIndices = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndicesBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.occludedIndirect = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletJob =  renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletJobCount = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobCountBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedCount = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedIndices = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndicesBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedIndirect = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletJob =  g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletJobCount = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobCountBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletIndirect = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
-        handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
+        handles.hzb = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
         handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
         handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
         handles.geoNormals = renderGraph.GetTexture(g_RG_GBufferGeoNormals, RGResourceAccessMode::Write);
@@ -687,8 +687,8 @@ public:
         args.m_View = view;
         args.m_ViewProj = viewProjForCulling;
         args.m_NumInstances = numMasked;
-        args.m_InstanceBaseIndex = renderer->m_Scene.m_MaskedBucket.m_BaseIndex;
-        args.m_BucketName = renderer->m_EnableOcclusionCulling ? "Masked" : "Masked (No Occlusion)";
+        args.m_InstanceBaseIndex = g_Renderer.m_Scene.m_MaskedBucket.m_BaseIndex;
+        args.m_BucketName = g_Renderer.m_EnableOcclusionCulling ? "Masked" : "Masked (No Occlusion)";
         args.m_CullingPhase = 0;
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_MASK;
 
@@ -704,13 +704,13 @@ class TransparentPassRenderer : public BasePassRendererBase
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         BasePassResources& res = m_BasePassResources;
         res.DeclareResources(renderGraph, GetName());
 
-        const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         // Opaque Color Texture (used for transmission/refraction)
         // Resize to next lowest power of 2 for efficient mip generation
@@ -744,13 +744,13 @@ public:
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
 
-        if (renderer->m_UseMeshletRendering)
+        if (g_Renderer.m_UseMeshletRendering)
         {
             renderGraph.WriteBuffer(res.m_MeshletJobBuffer);
             renderGraph.WriteBuffer(res.m_MeshletJobCountBuffer);
             renderGraph.WriteBuffer(res.m_MeshletIndirectBuffer);
         }
-        if (renderer->m_EnableOcclusionCulling)
+        if (g_Renderer.m_EnableOcclusionCulling)
         {
             renderGraph.ReadTexture(g_RG_HZBTexture);
             renderGraph.WriteBuffer(res.m_OccludedCountBuffer);
@@ -767,23 +767,23 @@ public:
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         ScopedBasePassPipelineQuery query{ commandList, m_BasePassResources, this };
-        Renderer* renderer = Renderer::GetInstance();
-        const uint32_t numTransparent = renderer->m_Scene.m_TransparentBucket.m_Count;
+        
+        const uint32_t numTransparent = g_Renderer.m_Scene.m_TransparentBucket.m_Count;
         if (numTransparent == 0) return;
 
         BasePassResources& res = m_BasePassResources;
         ResourceHandles handles;
         handles.visibleCount = renderGraph.GetBuffer(res.m_VisibleCountBuffer, RGResourceAccessMode::Write);
         handles.visibleIndirect = renderGraph.GetBuffer(res.m_VisibleIndirectBuffer, RGResourceAccessMode::Write);
-        handles.occludedCount = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.occludedIndices = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndicesBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.occludedIndirect = renderer->m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletJob = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletJobCount = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobCountBuffer, RGResourceAccessMode::Write) : nullptr;
-        handles.meshletIndirect = renderer->m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedCount = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedCountBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedIndices = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndicesBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.occludedIndirect = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetBuffer(res.m_OccludedIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletJob = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletJobCount = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletJobCountBuffer, RGResourceAccessMode::Write) : nullptr;
+        handles.meshletIndirect = g_Renderer.m_UseMeshletRendering ? renderGraph.GetBuffer(res.m_MeshletIndirectBuffer, RGResourceAccessMode::Write) : nullptr;
 
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
-        handles.hzb = renderer->m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
+        handles.hzb = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
         handles.hdr = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
         handles.opaque = renderGraph.GetTexture(g_RG_OpaqueColor, RGResourceAccessMode::Write);
 
@@ -792,7 +792,7 @@ public:
 
         // Generate mips for opaque color using SPD
         nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
-        renderer->GenerateMipsUsingSPD(handles.opaque, spdAtomicCounter, commandList, "Generate Mips for Opaque Color", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
+        g_Renderer.GenerateMipsUsingSPD(handles.opaque, spdAtomicCounter, commandList, "Generate Mips for Opaque Color", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
 
         Matrix view, viewProjForCulling;
         Vector4 frustumPlanes[5];
@@ -805,7 +805,7 @@ public:
         args.m_View = view;
         args.m_ViewProj = viewProjForCulling;
         args.m_NumInstances = numTransparent;
-        args.m_InstanceBaseIndex = renderer->m_Scene.m_TransparentBucket.m_BaseIndex;
+        args.m_InstanceBaseIndex = g_Renderer.m_Scene.m_TransparentBucket.m_BaseIndex;
         args.m_BucketName = "Transparent";
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_BLEND;
         args.m_CullingPhase = 0;
@@ -826,8 +826,8 @@ class HZBGeneratorPhase2 : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        if (!renderer->m_EnableOcclusionCulling) return false;
+        
+        if (!g_Renderer.m_EnableOcclusionCulling) return false;
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.WriteTexture(g_RG_HZBTexture);

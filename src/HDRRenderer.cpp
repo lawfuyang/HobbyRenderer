@@ -23,10 +23,10 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
         
         // Luminance Histogram
-        if (renderer->m_EnableAutoExposure)
+        if (g_Renderer.m_EnableAutoExposure)
         {
             RGBufferDesc desc;
             desc.m_NvrhiDesc.structStride = sizeof(uint32_t);
@@ -58,7 +58,7 @@ public:
                 rbDesc.byteSize = sizeof(float);
                 rbDesc.debugName = i == 0 ? "ExposureReadback0" : "ExposureReadback1";
                 rbDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
-                m_ExposureReadbackBuffers[i] = renderer->m_RHI->m_NvrhiDevice->createBuffer(rbDesc);
+                m_ExposureReadbackBuffers[i] = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(rbDesc);
             }
             m_ReadbackInitialized = true;
         }
@@ -72,17 +72,17 @@ public:
     
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         PROFILE_GPU_SCOPED("HDR Post-Processing", commandList);
 
-        nvrhi::BufferHandle luminanceHistogram = renderer->m_EnableAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
+        nvrhi::BufferHandle luminanceHistogram = g_Renderer.m_EnableAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
         nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(m_RG_ExposureBuffer, RGResourceAccessMode::Write);
 
         nvrhi::TextureHandle sceneColor = renderGraph.GetTexture(g_RG_TAAOutput, RGResourceAccessMode::Read);
 
         // 1. Histogram Pass
-        if (renderer->m_EnableAutoExposure)
+        if (g_Renderer.m_EnableAutoExposure)
         {
             PROFILE_GPU_SCOPED("Luminance Histogram", commandList);
 
@@ -90,8 +90,8 @@ public:
             commandList->clearBufferUInt(luminanceHistogram, 0);
 
             srrhi::LuminanceHistogramInputs inputs;
-            inputs.m_HistogramConstants.SetWidth(renderer->m_RHI->m_SwapchainExtent.x);
-            inputs.m_HistogramConstants.SetHeight(renderer->m_RHI->m_SwapchainExtent.y);
+            inputs.m_HistogramConstants.SetWidth(g_Renderer.m_RHI->m_SwapchainExtent.x);
+            inputs.m_HistogramConstants.SetHeight(g_Renderer.m_RHI->m_SwapchainExtent.y);
             inputs.m_HistogramConstants.SetMinLogLuminance(kMinLogLuminance);
             inputs.m_HistogramConstants.SetMaxLogLuminance(kMaxLogLuminance);
 
@@ -100,8 +100,8 @@ public:
 
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
-            const uint32_t dispatchX = DivideAndRoundUp(renderer->m_RHI->m_SwapchainExtent.x, 16);
-            const uint32_t dispatchY = DivideAndRoundUp(renderer->m_RHI->m_SwapchainExtent.y, 16);
+            const uint32_t dispatchX = DivideAndRoundUp(g_Renderer.m_RHI->m_SwapchainExtent.x, 16);
+            const uint32_t dispatchY = DivideAndRoundUp(g_Renderer.m_RHI->m_SwapchainExtent.y, 16);
 
             Renderer::RenderPassParams params{
                 .commandList = commandList,
@@ -112,24 +112,24 @@ public:
                 .dispatchParams = { .x = dispatchX, .y = dispatchY, .z = 1 }
             };
 
-            renderer->AddComputePass(params);
+            g_Renderer.AddComputePass(params);
         }
 
         // 2. Exposure Adaptation Pass
         {
             PROFILE_GPU_SCOPED("Exposure Adaptation", commandList);
             
-            if (renderer->m_EnableAutoExposure)
+            if (g_Renderer.m_EnableAutoExposure)
             {
                 srrhi::ExposureAdaptationInputs inputs;
-                inputs.m_AdaptationConstants.SetDeltaTime((float)renderer->m_FrameTime / 1000.0f);
-                inputs.m_AdaptationConstants.SetAdaptationSpeed(renderer->m_AdaptationSpeed);
-                inputs.m_AdaptationConstants.SetNumPixels(renderer->m_RHI->m_SwapchainExtent.x * renderer->m_RHI->m_SwapchainExtent.y);
+                inputs.m_AdaptationConstants.SetDeltaTime((float)g_Renderer.m_FrameTime / 1000.0f);
+                inputs.m_AdaptationConstants.SetAdaptationSpeed(g_Renderer.m_AdaptationSpeed);
+                inputs.m_AdaptationConstants.SetNumPixels(g_Renderer.m_RHI->m_SwapchainExtent.x * g_Renderer.m_RHI->m_SwapchainExtent.y);
                 inputs.m_AdaptationConstants.SetMinLogLuminance(kMinLogLuminance);
                 inputs.m_AdaptationConstants.SetMaxLogLuminance(kMaxLogLuminance);
-                inputs.m_AdaptationConstants.SetExposureValueMin(renderer->m_Scene.m_Camera.m_ExposureValueMin);
-                inputs.m_AdaptationConstants.SetExposureValueMax(renderer->m_Scene.m_Camera.m_ExposureValueMax);
-                inputs.m_AdaptationConstants.SetExposureCompensation(renderer->m_Scene.m_Camera.m_ExposureCompensation);
+                inputs.m_AdaptationConstants.SetExposureValueMin(g_Renderer.m_Scene.m_Camera.m_ExposureValueMin);
+                inputs.m_AdaptationConstants.SetExposureValueMax(g_Renderer.m_Scene.m_Camera.m_ExposureValueMax);
+                inputs.m_AdaptationConstants.SetExposureCompensation(g_Renderer.m_Scene.m_Camera.m_ExposureCompensation);
 
                 nvrhi::TextureHandle exposureTexture = renderGraph.GetTexture(g_RG_ExposureTexture, RGResourceAccessMode::Write);
 
@@ -148,33 +148,33 @@ public:
                     .dispatchParams = { .x = 1, .y = 1, .z = 1 }
                 };
 
-                renderer->AddComputePass(params);
+                g_Renderer.AddComputePass(params);
             }
             else
             {
                 // Manual mode: write the exposure value directly to both buffer and texture
-                commandList->writeBuffer(exposureBuffer, &renderer->m_Scene.m_Camera.m_Exposure, sizeof(float));
+                commandList->writeBuffer(exposureBuffer, &g_Renderer.m_Scene.m_Camera.m_Exposure, sizeof(float));
 
                 // Also write to the 1x1 exposure texture for FSR3
                 nvrhi::TextureHandle exposureTexture = renderGraph.GetTexture(g_RG_ExposureTexture, RGResourceAccessMode::Write);
-                commandList->writeTexture(exposureTexture, 0, 0, &renderer->m_Scene.m_Camera.m_Exposure, sizeof(float));
+                commandList->writeTexture(exposureTexture, 0, 0, &g_Renderer.m_Scene.m_Camera.m_Exposure, sizeof(float));
             }
         }
 
         // Readback previous frame's exposure for FSR3 preExposure
         {
-            const uint32_t writeIdx = renderer->m_FrameNumber % 2;
+            const uint32_t writeIdx = g_Renderer.m_FrameNumber % 2;
             const uint32_t readIdx = 1 - writeIdx;
 
             // Copy current exposure to staging buffer for next frame readback
             commandList->copyBuffer(m_ExposureReadbackBuffers[writeIdx], 0, exposureBuffer, 0, sizeof(float));
 
             // Read back the previous frame's value
-            float* mapped = static_cast<float*>(renderer->m_RHI->m_NvrhiDevice->mapBuffer(m_ExposureReadbackBuffers[readIdx], nvrhi::CpuAccessMode::Read));
+            float* mapped = static_cast<float*>(g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(m_ExposureReadbackBuffers[readIdx], nvrhi::CpuAccessMode::Read));
             if (mapped)
             {
-                renderer->m_PrevFrameExposure = *mapped;
-                renderer->m_RHI->m_NvrhiDevice->unmapBuffer(m_ExposureReadbackBuffers[readIdx]);
+                g_Renderer.m_PrevFrameExposure = *mapped;
+                g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(m_ExposureReadbackBuffers[readIdx]);
             }
         }
 
@@ -183,8 +183,8 @@ public:
             PROFILE_GPU_SCOPED("Tonemapping", commandList);
 
             srrhi::TonemappingInputs inputs;
-            inputs.m_TonemapConstants.SetWidth(renderer->m_RHI->m_SwapchainExtent.x);
-            inputs.m_TonemapConstants.SetHeight(renderer->m_RHI->m_SwapchainExtent.y);
+            inputs.m_TonemapConstants.SetWidth(g_Renderer.m_RHI->m_SwapchainExtent.x);
+            inputs.m_TonemapConstants.SetHeight(g_Renderer.m_RHI->m_SwapchainExtent.y);
 
             inputs.SetHDRColorInput(sceneColor);
             inputs.SetExposureInput(exposureBuffer);
@@ -192,8 +192,8 @@ public:
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
             nvrhi::FramebufferDesc fbDesc;
-            fbDesc.addColorAttachment(renderer->GetCurrentBackBufferTexture());
-            nvrhi::FramebufferHandle fb = renderer->m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
+            fbDesc.addColorAttachment(g_Renderer.GetCurrentBackBufferTexture());
+            nvrhi::FramebufferHandle fb = g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(fbDesc);
 
             Renderer::RenderPassParams params{
                 .commandList = commandList,
@@ -204,7 +204,7 @@ public:
                 .framebuffer = fb
             };
 
-            renderer->AddFullScreenPass(params);
+            g_Renderer.AddFullScreenPass(params);
         }
     }
 

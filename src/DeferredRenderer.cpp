@@ -17,7 +17,7 @@ class DeferredRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.ReadTexture(g_RG_GBufferAlbedo);
@@ -29,7 +29,7 @@ public:
         renderGraph.WriteTexture(g_RG_HDRColor);
 
         // Conditionally read the RTXDI composited output when ReSTIR DI is enabled
-        if (renderer->m_EnableReSTIRDI)
+        if (g_Renderer.m_EnableReSTIRDI)
             renderGraph.ReadTexture(g_RG_RTXDIDIComposited);
 
         return true;
@@ -38,8 +38,8 @@ public:
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         PROFILE_FUNCTION();
-        Renderer* renderer = Renderer::GetInstance();
-        nvrhi::DeviceHandle device = renderer->m_RHI->m_NvrhiDevice;
+        
+        nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         nvrhi::TextureHandle depthTexture = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Read);
         nvrhi::TextureHandle gbufferAlbedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Read);
@@ -49,8 +49,8 @@ public:
         nvrhi::TextureHandle gbufferMotionVectors = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Write);
 
-        const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
-        float skyVisFarPlane = renderer->m_Scene.GetSceneBoundingRadius();
+        const Vector3 camPos = g_Renderer.m_Scene.m_Camera.GetPosition();
+        float skyVisFarPlane = g_Renderer.m_Scene.GetSceneBoundingRadius();
 
 
         // Deferred CB
@@ -58,21 +58,21 @@ public:
         const nvrhi::BufferHandle deferredCB = device->createBuffer(deferredCBD);
 
         srrhi::DeferredLightingConstants dcb;
-        dcb.SetView(renderer->m_Scene.m_View);
+        dcb.SetView(g_Renderer.m_Scene.m_View);
         dcb.SetCameraPos(DirectX::XMFLOAT4{ camPos.x, camPos.y, camPos.z, 1.0f });
-        dcb.SetSunDirection(renderer->m_Scene.GetSunDirection());
-        dcb.SetEnableSky(renderer->m_EnableSky ? 1 : 0);
-        dcb.SetRenderingMode((uint32_t)renderer->m_Mode);
+        dcb.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
+        dcb.SetEnableSky(g_Renderer.m_EnableSky ? 1 : 0);
+        dcb.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
         dcb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
-        dcb.SetLightCount(renderer->m_Scene.m_LightCount);
-        dcb.SetEnableRTShadows(renderer->m_EnableRTShadows ? 1 : 0);
-        dcb.SetDebugMode(renderer->m_DebugMode);
-        dcb.SetUseReSTIRDI(renderer->m_EnableReSTIRDI ? 1u : 0u);
+        dcb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
+        dcb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
+        dcb.SetDebugMode(g_Renderer.m_DebugMode);
+        dcb.SetUseReSTIRDI(g_Renderer.m_EnableReSTIRDI ? 1u : 0u);
         dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
         // t8: RTXDI composited output (DI + emissive, already remodulated by CompositingPass)
-        nvrhi::TextureHandle rtxdiComposited = renderer->m_EnableReSTIRDI
+        nvrhi::TextureHandle rtxdiComposited = g_Renderer.m_EnableReSTIRDI
             ? renderGraph.GetTexture(g_RG_RTXDIDIComposited, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureBlack;
 
@@ -84,13 +84,13 @@ public:
         dlInputs.SetGBufferEmissive(gbufferEmissive);
         dlInputs.SetGBufferMotion(gbufferMotionVectors);
         dlInputs.SetDepth(depthTexture);
-        dlInputs.SetSceneAS(renderer->m_Scene.m_TLAS);
-        dlInputs.SetLights(renderer->m_Scene.m_LightBuffer);
-        dlInputs.SetInstances(renderer->m_Scene.m_InstanceDataBuffer);
-        dlInputs.SetMaterials(renderer->m_Scene.m_MaterialConstantsBuffer);
-        dlInputs.SetVertices(renderer->m_Scene.m_VertexBufferQuantized);
-        dlInputs.SetMeshData(renderer->m_Scene.m_MeshDataBuffer);
-        dlInputs.SetIndices(renderer->m_Scene.m_IndexBuffer);
+        dlInputs.SetSceneAS(g_Renderer.m_Scene.m_TLAS);
+        dlInputs.SetLights(g_Renderer.m_Scene.m_LightBuffer);
+        dlInputs.SetInstances(g_Renderer.m_Scene.m_InstanceDataBuffer);
+        dlInputs.SetMaterials(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
+        dlInputs.SetVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
+        dlInputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
+        dlInputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
         dlInputs.SetRTXDIDIComposited(rtxdiComposited);
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(dlInputs);
 
@@ -121,7 +121,7 @@ public:
             .depthStencilState = &ds
         };
 
-        renderer->AddFullScreenPass(params);
+        g_Renderer.AddFullScreenPass(params);
     }
 
     const char* GetName() const override { return "Deferred"; }

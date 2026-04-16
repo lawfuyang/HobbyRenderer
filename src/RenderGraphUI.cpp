@@ -6,7 +6,7 @@ using namespace RenderGraphInternal;
 
 void RenderGraph::RenderDebugUI()
 {
-    nvrhi::IDevice* device = Renderer::GetInstance()->m_RHI->m_NvrhiDevice.Get();
+    nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice.Get();
 
     static ImGuiTextFilter visFilter;
     static ImGuiTextFilter texFilter;

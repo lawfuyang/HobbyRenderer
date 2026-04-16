@@ -74,7 +74,7 @@ bool g_ReGIR_VisualizeRegirCells = false;
 
 void RTXDIIMGUISettings()
 {
-    Renderer* renderer = Renderer::GetInstance();
+    
 
     ImGui::Indent();
 
@@ -94,8 +94,8 @@ void RTXDIIMGUISettings()
 
     // ---- RELAX Denoising toggle -------------------------------------------
     ImGui::Separator();
-    ImGui::Checkbox("Enable RELAX Denoising (NRD)", &renderer->m_EnableReSTIRDIRelaxDenoising);
-    if (renderer->m_EnableReSTIRDIRelaxDenoising)
+    ImGui::Checkbox("Enable RELAX Denoising (NRD)", &g_Renderer.m_EnableReSTIRDIRelaxDenoising);
+    if (g_Renderer.m_EnableReSTIRDIRelaxDenoising)
         ImGui::TextDisabled("  Diffuse + specular denoised separately via RELAX D+S.");
 
     ImGui::Separator();
@@ -529,10 +529,10 @@ public:
 
     void CreateRTXDIContext()
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
-        const uint32_t width = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         // Reset the allocator so it can be reused if context is recreated
         m_RISBufferSegmentAllocator = rtxdi::RISBufferSegmentAllocator{};
@@ -570,7 +570,7 @@ public:
 
     void Initialize() override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         // Initialize ReSTIR DI parameter structs to library defaults
         g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
@@ -625,11 +625,11 @@ public:
 
     void PostSceneLoad() override
     {
-        Renderer* renderer = Renderer::GetInstance();
-        nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
+        
+        nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         // ---- TLAS History (for temporal effects) -------------------
-        const uint32_t maxInstances = static_cast<uint32_t>(renderer->m_Scene.m_InstanceData.size());
+        const uint32_t maxInstances = static_cast<uint32_t>(g_Renderer.m_Scene.m_InstanceData.size());
 
         nvrhi::rt::AccelStructDesc tlasHistoryDesc;
         tlasHistoryDesc.topLevelMaxInstances = maxInstances;
@@ -637,9 +637,9 @@ public:
         tlasHistoryDesc.isTopLevel = true;
         m_TLASHistory = device->createAccelStruct(tlasHistoryDesc);
 
-        nvrhi::CommandListHandle cl = renderer->AcquireCommandList();
+        nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
         ScopedCommandList scopeCl{ cl, "RTXDI::Initialize" };
-        scopeCl->buildTopLevelAccelStructFromBuffer(m_TLASHistory, renderer->m_Scene.m_RTInstanceDescBuffer, 0, (uint32_t)renderer->m_Scene.m_RTInstanceDescs.size());
+        scopeCl->buildTopLevelAccelStructFromBuffer(m_TLASHistory, g_Renderer.m_Scene.m_RTInstanceDescBuffer, 0, (uint32_t)g_Renderer.m_Scene.m_RTInstanceDescs.size());
 
         // Build and cache light buffer params — analytical scene lights are static
         // so this only needs to happen once after the scene is loaded.
@@ -650,7 +650,7 @@ public:
         // because triangle lights are never streamed in/out.
         // ------------------------------------------------------------------
         {
-            Scene& scene = renderer->m_Scene;
+            Scene& scene = g_Renderer.m_Scene;
 
             // Count total geometry instances (one per primitive across all nodes)
             const uint32_t totalGeometryInstances = static_cast<uint32_t>(scene.m_InstanceData.size());
@@ -719,16 +719,16 @@ public:
     // ------------------------------------------------------------------
     bool Setup(RenderGraph& renderGraph) override
     {
-        Renderer* renderer = Renderer::GetInstance();
+        
 
         // If the user turned RTXDI off, we want the DeferredRenderer to take
         // the classic path — don't participate in the render graph at all.
-        if (!renderer->m_EnableReSTIRDI)
+        if (!g_Renderer.m_EnableReSTIRDI)
             return false;
 
-        nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
-        const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         // RIS buffer capacity covers local-light tiles, env-light tiles, and ReGIR cell slots.
         // The env segment always reserves k_EnvRISTileSize × k_EnvRISTileCount
@@ -741,7 +741,7 @@ public:
         // ------------------------------------------------------------------
         // RELAX denoising output textures (only when denoising is enabled)
         // ------------------------------------------------------------------
-        if (renderer->m_EnableReSTIRDIRelaxDenoising)
+        if (g_Renderer.m_EnableReSTIRDIRelaxDenoising)
         {
             m_NrdIntegration->Setup(renderGraph);
 
@@ -1038,7 +1038,7 @@ public:
 
         // GeometryInstanceToLight mapping (uint per instance)
         {
-            const uint32_t numInstances = std::max((uint32_t)renderer->m_Scene.m_InstanceData.size(), 1u);
+            const uint32_t numInstances = std::max((uint32_t)g_Renderer.m_Scene.m_InstanceData.size(), 1u);
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(numInstances) * sizeof(uint32_t);
             bd.m_NvrhiDesc.format       = nvrhi::Format::R32_UINT;
@@ -1112,11 +1112,11 @@ public:
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         PROFILE_FUNCTION();
-        Renderer* renderer = Renderer::GetInstance();
-        nvrhi::IDevice* device = renderer->m_RHI->m_NvrhiDevice;
+        
+        nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         // Advance the frame index so the context produces fresh buffer indices
-        m_Context->SetFrameIndex(renderer->m_FrameNumber);
+        m_Context->SetFrameIndex(g_Renderer.m_FrameNumber);
 
         // Apply all ReSTIR DI parameters from renderer settings to the context.
         // Fused spatiotemporal mode is not implemented in this shader path, so map
@@ -1136,7 +1136,7 @@ public:
         // Apply ReSTIR GI parameters to context
         if (m_ReSTIRGIContext)
         {
-            m_ReSTIRGIContext->SetFrameIndex(renderer->m_FrameNumber);
+            m_ReSTIRGIContext->SetFrameIndex(g_Renderer.m_FrameNumber);
             m_ReSTIRGIContext->SetResamplingMode(g_ReSTIRGI_ResamplingMode);
             m_ReSTIRGIContext->SetTemporalResamplingParameters(g_ReSTIRGI_TemporalParams);
             m_ReSTIRGIContext->SetBoilingFilterParameters(g_ReSTIRGI_BoilingParams);
@@ -1158,11 +1158,11 @@ public:
         //  the first frame after PostSceneLoad via m_AnalyticalLightsDirty).
         // Triangle lights are static and never need a per-frame rebuild.
         {
-            const Vector3 sunDir = renderer->m_Scene.GetSunDirection();
+            const Vector3 sunDir = g_Renderer.m_Scene.GetSunDirection();
             const bool sunChanged = (sunDir.x != m_CachedSunDirection.x ||
                                      sunDir.y != m_CachedSunDirection.y ||
                                      sunDir.z != m_CachedSunDirection.z);
-            if (m_AnalyticalLightsDirty || renderer->m_Scene.m_LightsDirty || sunChanged)
+            if (m_AnalyticalLightsDirty || g_Renderer.m_Scene.m_LightsDirty || sunChanged)
             {
                 m_CachedLightBufferParams = BuildLightBufferParams(m_CachedPrimitiveLights);
                 m_CachedSunDirection      = sunDir;
@@ -1181,8 +1181,8 @@ public:
         lbp.environmentLightParams.lightIndex = lbp.infiniteLightBufferRegion.firstLightIndex + lbp.infiniteLightBufferRegion.numLights;
         lbp.environmentLightParams.lightPresent = m_CachedLightBufferParams.environmentLightParams.lightPresent;
 
-        const uint32_t width  = renderer->m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = renderer->m_RHI->m_SwapchainExtent.y;
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         srrhi::ResamplingConstants g_Const{};
 
@@ -1190,7 +1190,7 @@ public:
         // Fill srrhi::PlanarViewConstants with field names (m_Mat*) shared between
         // ShaderShared.h and ShaderParameters.h via srrhi generated types.
         // We copy the whole struct — field layout is identical.
-        static_assert(sizeof(srrhi::PlanarViewConstants) == sizeof(renderer->m_Scene.m_View),
+        static_assert(sizeof(srrhi::PlanarViewConstants) == sizeof(g_Renderer.m_Scene.m_View),
             "srrhi::PlanarViewConstants size mismatch between ShaderShared.h and RTXDI.sr");
 
         // Fill cameraDirectionOrPosition from matViewToWorld translation row
@@ -1204,9 +1204,9 @@ public:
         };
 
         srrhi::PlanarViewConstants viewCopy, prevViewCopy, prevPrevViewCopy;
-        memcpy(&viewCopy,         &renderer->m_Scene.m_View,     sizeof(viewCopy));
-        memcpy(&prevViewCopy,     &renderer->m_Scene.m_ViewPrev, sizeof(prevViewCopy));
-        memcpy(&prevPrevViewCopy, &renderer->m_Scene.m_ViewPrev, sizeof(prevPrevViewCopy));
+        memcpy(&viewCopy,         &g_Renderer.m_Scene.m_View,     sizeof(viewCopy));
+        memcpy(&prevViewCopy,     &g_Renderer.m_Scene.m_ViewPrev, sizeof(prevViewCopy));
+        memcpy(&prevPrevViewCopy, &g_Renderer.m_Scene.m_ViewPrev, sizeof(prevPrevViewCopy));
         FillCameraPos(viewCopy);
         FillCameraPos(prevViewCopy);
         FillCameraPos(prevPrevViewCopy);
@@ -1218,20 +1218,20 @@ public:
         g_Const.SetRuntimeParams(rtp);
 
         // ---- Denoiser mode ----
-        g_Const.SetDenoiserMode(renderer->m_EnableReSTIRDIRelaxDenoising
+        g_Const.SetDenoiserMode(g_Renderer.m_EnableReSTIRDIRelaxDenoising
             ? srrhi::RTXDIConstants::DENOISER_MODE_RELAX : srrhi::RTXDIConstants::DENOISER_MODE_OFF);
 
         // ---- Scene constants ----
         {
             srrhi::SceneConstants sc{};
-            sc.enableEnvironmentMap       = renderer->m_EnableSky ? 1u : 0u;
+            sc.enableEnvironmentMap       = g_Renderer.m_EnableSky ? 1u : 0u;
             sc.environmentMapTextureIndex = 0u; // Bruneton sky — no texture index
             sc.environmentScale           = 1.0f;
             sc.environmentRotation        = 0.0f;
             sc.enableAlphaTestedGeometry  = 1u;
             sc.enableTransparentGeometry  = 0u;
-            sc.sunIntensity               = renderer->m_Scene.GetSunIntensity();
-            sc.sunDirection               = renderer->m_Scene.GetSunDirection();
+            sc.sunIntensity               = g_Renderer.m_Scene.GetSunIntensity();
+            sc.sunDirection               = g_Renderer.m_Scene.GetSunDirection();
             g_Const.SetSceneConstants(sc);
         }
 
@@ -1246,7 +1246,7 @@ public:
             localSeg.tileCount    = k_RISTileCount;
             g_Const.SetLocalLightsRISBufferSegmentParams(localSeg);
         }
-        if (renderer->m_EnableSky)
+        if (g_Renderer.m_EnableSky)
         {
             RTXDI_RISBufferSegmentParameters envSeg{};
             envSeg.bufferOffset = k_RISTileSize * k_RISTileCount;
@@ -1275,7 +1275,7 @@ public:
             // only when GI is disabled. When GI is enabled, GI FinalShading (isLastPass=true)
             // is the NRD-packing pass for the combined DI+GI signal.
             restirDI.shadingParams.enableDenoiserInputPacking =
-                (renderer->m_EnableReSTIRDIRelaxDenoising && !g_ReSTIRGI_Enabled) ? 1u : 0u;
+                (g_Renderer.m_EnableReSTIRDIRelaxDenoising && !g_ReSTIRGI_Enabled) ? 1u : 0u;
 
             g_Const.SetRestirDI(restirDI);
         }
@@ -1288,7 +1288,7 @@ public:
         g_Const.SetEnableAccumulation(0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
         // Sync the standalone bool with the debug mode combo so both paths work
-        g_ReGIR_VisualizeRegirCells = (renderer->m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
+        g_ReGIR_VisualizeRegirCells = (g_Renderer.m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
         g_Const.SetVisualizeRegirCells(g_ReGIR_VisualizeRegirCells ? 1u : 0u);
 
         // ---- ReSTIR GI parameters ----
@@ -1322,7 +1322,7 @@ public:
 
             // Update the grid center to follow the camera so the Onion grid
             // is always centered on the viewer.
-            const Vector3 camPos = renderer->m_Scene.m_Camera.GetPosition();
+            const Vector3 camPos = g_Renderer.m_Scene.m_Camera.GetPosition();
             g_ReGIR_DynamicParams.center = { camPos.x, camPos.y, camPos.z };
             m_ReGIRContext->SetDynamicParameters(g_ReGIR_DynamicParams);
             // Re-fetch dynamic params after updating center
@@ -1418,7 +1418,7 @@ public:
             srrhi::BuildEnvLightPDFInputs buildEnvPDFInputs;
             buildEnvPDFInputs.SetConst(rtxdiCB);
             buildEnvPDFInputs.SetEnvLightPdfMip0(envLightPDFTex, 0);
-            renderer->AddComputePass({
+            g_Renderer.AddComputePass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_BUILDENVLIGHTPDF_MAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(buildEnvPDFInputs),
@@ -1441,7 +1441,7 @@ public:
             : cr.DummyUAVStructuredBuffer;
 
         // Denoising path outputs
-        const bool bDenoise = renderer->m_EnableReSTIRDIRelaxDenoising;
+        const bool bDenoise = g_Renderer.m_EnableReSTIRDIRelaxDenoising;
         nvrhi::TextureHandle rawDiffuseTex      = bDenoise ? renderGraph.GetTexture(m_RG_RawDiffuseOutput,  RGResourceAccessMode::Write) : cr.DummyUAVTexture;
         nvrhi::TextureHandle rawSpecularTex     = bDenoise ? renderGraph.GetTexture(m_RG_RawSpecularOutput, RGResourceAccessMode::Write) : cr.DummyUAVTexture;
         nvrhi::TextureHandle denoisedDiffuseTex = bDenoise ? renderGraph.GetTexture(g_RG_RTXDIDiffuseOutput,  RGResourceAccessMode::Write) : cr.DummyUAVTexture;
@@ -1496,16 +1496,16 @@ public:
         resamplingInputs.SetPrevGBufferDepth(depthHistoryTex);
         resamplingInputs.SetLocalLightPdfTexture(localLightPDFTex);
         resamplingInputs.SetEnvironmentPdfTexture(envLightPDFTex);
-        resamplingInputs.SetSceneBVH(renderer->m_Scene.m_TLAS);
+        resamplingInputs.SetSceneBVH(g_Renderer.m_Scene.m_TLAS);
         resamplingInputs.SetPrevSceneBVH(m_TLASHistory);
         resamplingInputs.SetLightDataBuffer(lightDataBuf);
         resamplingInputs.SetGBufferEmissive(emissiveTex);
         resamplingInputs.SetGeometryInstanceToLight(geoInstToLightBuf);
-        resamplingInputs.SetInstanceData(renderer->m_Scene.m_InstanceDataBuffer);
-        resamplingInputs.SetGeometryData(renderer->m_Scene.m_MeshDataBuffer);
-        resamplingInputs.SetMaterialConstants(renderer->m_Scene.m_MaterialConstantsBuffer);
-        resamplingInputs.SetSceneIndices(renderer->m_Scene.m_IndexBuffer);
-        resamplingInputs.SetSceneVertices(renderer->m_Scene.m_VertexBufferQuantized);
+        resamplingInputs.SetInstanceData(g_Renderer.m_Scene.m_InstanceDataBuffer);
+        resamplingInputs.SetGeometryData(g_Renderer.m_Scene.m_MeshDataBuffer);
+        resamplingInputs.SetMaterialConstants(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
+        resamplingInputs.SetSceneIndices(g_Renderer.m_Scene.m_IndexBuffer);
+        resamplingInputs.SetSceneVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
         resamplingInputs.SetLightReservoirs(lightReservoirBuf);
         resamplingInputs.SetRisBuffer(risBuffer);
         resamplingInputs.SetRisLightDataBuffer(risLightDataBuf);
@@ -1526,7 +1526,7 @@ public:
             vzInputs.SetConst(rtxdiCB);
             vzInputs.SetDepth(depthTex);
             vzInputs.SetLinearDepth(linearDepthTex, 0);
-            renderer->AddComputePass({
+            g_Renderer.AddComputePass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_GENERATEVIEWZ_MAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(vzInputs),
@@ -1566,7 +1566,7 @@ public:
             ds.stencilRefValue = 1;
             ds.frontFaceStencil.stencilFunc = nvrhi::ComparisonFunc::Equal;
 
-            renderer->AddFullScreenPass({
+            g_Renderer.AddFullScreenPass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_POSTPROCESSGBUFFER_MAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(ppInputs),
@@ -1646,15 +1646,15 @@ public:
                 plInputs.SetConst(plCBHandle);
                 plInputs.SetTaskBuffer(prepareLightsTaskBuf);
                 plInputs.SetPrimitiveLightBuffer(primitiveLightBuf);
-                plInputs.SetInstanceData(renderer->m_Scene.m_InstanceDataBuffer);
-                plInputs.SetGeometryData(renderer->m_Scene.m_MeshDataBuffer);
-                plInputs.SetMaterialConstants(renderer->m_Scene.m_MaterialConstantsBuffer);
-                plInputs.SetSceneIndices(renderer->m_Scene.m_IndexBuffer);
-                plInputs.SetSceneVertices(renderer->m_Scene.m_VertexBufferQuantized);
+                plInputs.SetInstanceData(g_Renderer.m_Scene.m_InstanceDataBuffer);
+                plInputs.SetGeometryData(g_Renderer.m_Scene.m_MeshDataBuffer);
+                plInputs.SetMaterialConstants(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
+                plInputs.SetSceneIndices(g_Renderer.m_Scene.m_IndexBuffer);
+                plInputs.SetSceneVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
                 plInputs.SetLightDataBuffer(lightDataBuf);
                 plInputs.SetLightIndexMappingBuffer(lightIndexMapBuf);
                 plInputs.SetLocalLightPdfTexture(localLightPDFTex, 0);
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_PREPARELIGHTS_MAIN,
                     .bindingSetDesc = Renderer::CreateBindingSetDesc(plInputs),
@@ -1674,7 +1674,7 @@ public:
         // the local light PDF texture at the env light's index, corrupting it).
         // The env light entry is at lbp.environmentLightParams.lightIndex.
         // ------------------------------------------------------------------
-        if (renderer->m_EnableSky)
+        if (g_Renderer.m_EnableSky)
         {
             auto f32tof16 = [](float v) -> uint32_t {
                 uint32_t bits;
@@ -1717,14 +1717,14 @@ public:
             if (m_PDFMipCount > 1u)
             {
                 nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
-                renderer->GenerateMipsUsingSPD(localLightPDFTex, spdAtomicCounter, commandList, "Generate Local Light PDF Mips", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
+                g_Renderer.GenerateMipsUsingSPD(localLightPDFTex, spdAtomicCounter, commandList, "Generate Local Light PDF Mips", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
             }
 
             {
                 PROFILE_SCOPED("Presample Local Lights");
 
                 const uint32_t presampleGroupsX = DivideAndRoundUp(k_RISTileSize, srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE);
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_PRESAMPLELIGHTS_MAIN,
                     .bindingSetDesc = bset,
@@ -1740,19 +1740,19 @@ public:
         // which samples the Bruneton sky to produce an importance-sampled PDF.
         // We generate the remaining mips via SPD and then presample.
         // ------------------------------------------------------------------
-        if (renderer->m_EnableSky)
+        if (g_Renderer.m_EnableSky)
         {
             if (m_EnvPDFMipCount > 1u)
             {
                 nvrhi::BufferHandle spdEnvCounter = renderGraph.GetBuffer(m_RG_SPDEnvAtomicCounter, RGResourceAccessMode::Write);
-                renderer->GenerateMipsUsingSPD(envLightPDFTex, spdEnvCounter, commandList, "Generate Env Light PDF Mips", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
+                g_Renderer.GenerateMipsUsingSPD(envLightPDFTex, spdEnvCounter, commandList, "Generate Env Light PDF Mips", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
             }
 
             {
                 PROFILE_SCOPED("Presample Environment Light");
 
                 const uint32_t presampleGroupsX = DivideAndRoundUp(k_EnvRISTileSize, srrhi::RTXDIConstants::RTXDI_PRESAMPLING_GROUP_SIZE);
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_PRESAMPLEENVIRONMENTMAP_MAIN,
                     .bindingSetDesc = bset,
@@ -1773,7 +1773,7 @@ public:
             if (regirSlots > 0)
             {
                 const uint32_t dispatchX = DivideAndRoundUp(regirSlots, srrhi::RTXDIConstants::RTXDI_GRID_BUILD_GROUP_SIZE);
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_PRESAMPLING_PRESAMPLEREGIR_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                     .bindingSetDesc = bset,
@@ -1789,7 +1789,7 @@ public:
         {
             PROFILE_SCOPED("Generate Initial Samples");
 
-            renderer->AddComputePass({
+            g_Renderer.AddComputePass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_GENERATEINITIALSAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                 .bindingSetDesc = bset,
@@ -1811,7 +1811,7 @@ public:
         {
             PROFILE_SCOPED("Temporal Resampling");
 
-            renderer->AddComputePass({
+            g_Renderer.AddComputePass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_TEMPORALRESAMPLING_MAIN,
                 .bindingSetDesc = bset,
@@ -1833,7 +1833,7 @@ public:
         {
             PROFILE_SCOPED("Spatial Resampling");
 
-            renderer->AddComputePass({
+            g_Renderer.AddComputePass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_SPATIALRESAMPLING_MAIN,
                 .bindingSetDesc = bset,
@@ -1852,7 +1852,7 @@ public:
         {
             PROFILE_SCOPED(bDenoise ? "Shade Samples (RELAX)" : "Shade Samples");
 
-            renderer->AddComputePass({
+            g_Renderer.AddComputePass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_SHADESAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                 .bindingSetDesc = bset,
@@ -1873,7 +1873,7 @@ public:
             // 1. BrdfRayTracing — traces BRDF rays and fills the secondary GBuffer
             {
                 PROFILE_SCOPED("GI BrdfRayTracing");
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_BRDFRAYTRACING_MAIN,
                     .bindingSetDesc = bset,
@@ -1889,7 +1889,7 @@ public:
             // 2. ShadeSecondarySurfaces — shades secondary GBuffer hits and seeds GI reservoirs
             {
                 PROFILE_SCOPED("GI ShadeSecondarySurfaces");
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
                     .bindingSetDesc = bset,
@@ -1909,7 +1909,7 @@ public:
             if (giHasTemporal)
             {
                 PROFILE_SCOPED("GI Temporal Resampling");
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_TEMPORALRESAMPLING_MAIN,
                     .bindingSetDesc = bset,
@@ -1929,7 +1929,7 @@ public:
             if (giHasSpatial)
             {
                 PROFILE_SCOPED("GI Spatial Resampling");
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_SPATIALRESAMPLING_MAIN,
                     .bindingSetDesc = bset,
@@ -1946,7 +1946,7 @@ public:
             //    isLastPass=true (hardcoded in shader): writes NRD-packed signal when denoising is on
             {
                 PROFILE_SCOPED("GI Final Shading");
-                renderer->AddComputePass({
+                g_Renderer.AddComputePass({
                     .commandList    = commandList,
                     .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_FINALSHADING_MAIN,
                     .bindingSetDesc = bset,
@@ -2013,7 +2013,7 @@ public:
             ds.stencilRefValue = 1;
             ds.frontFaceStencil.stencilFunc = nvrhi::ComparisonFunc::Equal;
 
-            renderer->AddFullScreenPass({
+            g_Renderer.AddFullScreenPass({
                 .commandList    = commandList,
                 .shaderID       = ShaderID::RTXDI_COMPOSITINGPASS_COMPOSITINGPASS_PSMAIN,
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(compInputs),
@@ -2036,9 +2036,9 @@ public:
             commandList->copyTexture(geoNormalsHistTex, nvrhi::TextureSlice{}, geoNormalsTex, nvrhi::TextureSlice{});
 
             // Copy current TLAS to history for next frame
-            if (m_TLASHistory && renderer->m_Scene.m_TLAS)
+            if (m_TLASHistory && g_Renderer.m_Scene.m_TLAS)
             {
-                commandList->copyRaytracingAccelerationStructure(m_TLASHistory, renderer->m_Scene.m_TLAS);
+                commandList->copyRaytracingAccelerationStructure(m_TLASHistory, g_Renderer.m_Scene.m_TLAS);
             }
         }
     }
@@ -2166,7 +2166,7 @@ private:
                                     << srrhi::RTXDIConstants::kPolymorphicLightTypeShift;
             PackLightColor(col, out);
             // Use toward-sun convention (-Z of light node), consistent with deferred path's GetSunDirection().
-            const Vector3 sunDir = Renderer::GetInstance()->m_Scene.GetSunDirection();
+            const Vector3 sunDir = g_Renderer.m_Scene.GetSunDirection();
             out.direction1 = PackNormalizedVector(sunDir);
             out.scalars    = PackFloat2ToUint(halfAngRad, solidAngle);
             return true;
@@ -2250,20 +2250,18 @@ private:
     // packed in RTXDI expected order: local finite lights first, infinite lights after.
     static RTXDI_LightBufferParameters BuildLightBufferParams(std::vector<srrhi::PolymorphicLightInfo>& outPrimitiveLights)
     {
-        const Renderer* renderer = Renderer::GetInstance();
-
         RTXDI_LightBufferParameters lbp{};
 
         std::vector<srrhi::PolymorphicLightInfo> localLights;
         std::vector<srrhi::PolymorphicLightInfo> infiniteLights;
-        localLights.reserve(renderer->m_Scene.m_LightCount);
-        infiniteLights.reserve(renderer->m_Scene.m_LightCount);
+        localLights.reserve(g_Renderer.m_Scene.m_LightCount);
+        infiniteLights.reserve(g_Renderer.m_Scene.m_LightCount);
 
-        for (uint32_t i = 0; i < renderer->m_Scene.m_LightCount; ++i)
+        for (uint32_t i = 0; i < g_Renderer.m_Scene.m_LightCount; ++i)
         {
-            const Scene::Light& light = renderer->m_Scene.m_Lights[i];
+            const Scene::Light& light = g_Renderer.m_Scene.m_Lights[i];
             SDL_assert(light.m_NodeIndex >= 0);
-            const Scene::Node& node = renderer->m_Scene.m_Nodes[light.m_NodeIndex];
+            const Scene::Node& node = g_Renderer.m_Scene.m_Nodes[light.m_NodeIndex];
 
             srrhi::PolymorphicLightInfo info{};
             if (!ConvertAnalyticalLight(light, node, info))
@@ -2296,7 +2294,7 @@ private:
         // to the light data buffer in Execute() via commandList->writeBuffer after PrepareLights.
         const uint32_t envLightIndex = lbp.infiniteLightBufferRegion.firstLightIndex
                                      + lbp.infiniteLightBufferRegion.numLights;
-        lbp.environmentLightParams.lightPresent = renderer->m_EnableSky ? 1u : 0u;
+        lbp.environmentLightParams.lightPresent = g_Renderer.m_EnableSky ? 1u : 0u;
         lbp.environmentLightParams.lightIndex   = envLightIndex;
 
         return lbp;

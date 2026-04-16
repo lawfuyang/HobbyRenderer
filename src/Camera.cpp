@@ -100,8 +100,8 @@ void Camera::ProcessEvent(const SDL_Event& event)
 void Camera::Update()
 {
     // Retrieve frame time from renderer (ms -> seconds)
-    Renderer* renderer = Renderer::GetInstance();
-    float dt = static_cast<float>(renderer->GetFrameTimeMs() * 0.001);
+    
+    float dt = static_cast<float>(g_Renderer.GetFrameTimeMs() * 0.001);
 
     // Compute exposure multiplier (manual mode)
     float finalEV = m_ExposureValue - m_ExposureCompensation;
@@ -221,12 +221,12 @@ void Camera::FillPlanarViewConstants(srrhi::PlanarViewConstants& constants, floa
     // Jittered versions — only apply sub-pixel jitter when TAA is enabled.
     // When TAA is off the "jittered" matrices are identical to the non-jittered
     // ones so that nothing on screen jitters.
-    Renderer* renderer = Renderer::GetInstance();
+    
     Vector2 jitter = { 0.0f, 0.0f };
 
-    if (renderer->m_bTAAEnabled)
+    if (g_Renderer.m_bTAAEnabled)
     {
-        uint32_t frameIndex = renderer->m_FrameNumber;
+        uint32_t frameIndex = g_Renderer.m_FrameNumber;
         jitter = { Halton(frameIndex % 16 + 1, 2) - 0.5f, Halton(frameIndex % 16 + 1, 3) - 0.5f };
     }
 
