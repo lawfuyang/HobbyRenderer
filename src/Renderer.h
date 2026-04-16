@@ -182,6 +182,9 @@ struct Renderer
     double GetFrameTimeMs() const { return m_FrameTime; }
     void SetCameraFromSceneCamera(const Scene::Camera& sceneCam);
 
+    // Returns the swapchain extent (width, height) as a pair.
+    std::pair<uint32_t, uint32_t> SwapchainSize();
+
     static MicroProfileThreadLogGpu*& GetGPULogForCurrentThread();
 
     static nvrhi::BindingSetDesc CreateBindingSetDesc(std::span<const srrhi::ResourceEntry> resources, uint32_t pushConstantBytes = 0);
@@ -305,7 +308,6 @@ struct Renderer
     void UnloadShaders();
     void ReloadShaders();
 
-    bool m_HeadlessMode = false; // If true, skips GPU initialization and any rendering-related setup. Used for --run-tests.
     bool m_Running = true;
     bool m_RequestedShaderReload = false;
 };

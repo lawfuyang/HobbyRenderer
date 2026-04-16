@@ -337,6 +337,19 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
     m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
 
+    m_ImGuiLayer.Initialize();
+
+    // Initialize renderers now that shaders and device are ready
+    for (const RendererRegistry::Creator& creator : RendererRegistry::GetCreators())
+    {
+        std::shared_ptr<IRenderer> renderer = creator();
+        renderer->Initialize();
+        
+        m_Renderers.push_back(renderer);
+        renderer->m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
+        renderer->m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
+    }
+
     // Flush any pending uploads from CommonResources::Initialize().
     ExecutePendingCommandLists();
 
@@ -368,19 +381,6 @@ void Renderer::Initialize()
         return;
     }
 
-    m_ImGuiLayer.Initialize();
-
-    // Initialize renderers now that shaders and device are ready
-    for (const RendererRegistry::Creator& creator : RendererRegistry::GetCreators())
-    {
-        std::shared_ptr<IRenderer> renderer = creator();
-        renderer->Initialize();
-        
-        m_Renderers.push_back(renderer);
-        renderer->m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
-        renderer->m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
-    }
-
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
@@ -410,8 +410,6 @@ void Renderer::InitializeForTests()
     //   • Scene loading (Phase 3+ tests handle this themselves)
     // -----------------------------------------------------------------------
     ScopedTimerLog initScope{"[Tests] InitializeForTests:"};
-
-    m_HeadlessMode = true;
 
     MicroProfileOnThreadCreate("TestMain");
     MicroProfileSetEnableAllGroups(true);
@@ -728,10 +726,7 @@ void Renderer::Shutdown()
     m_PendingCommandLists.clear();
     m_CommandListFreeList.clear();
 
-    if (!m_HeadlessMode)
-    {
-        m_ImGuiLayer.Shutdown();
-    }
+    m_ImGuiLayer.Shutdown();
     CommonResources::GetInstance().Shutdown();
 
     // Shutdown global bindless systems
@@ -1465,6 +1460,12 @@ void Renderer::ExecutePendingCommandLists()
         m_InFlightCommandLists.insert(m_InFlightCommandLists.end(), m_PendingCommandLists.begin(), m_PendingCommandLists.end());
         m_PendingCommandLists.clear();
     }
+}
+
+std::pair<uint32_t, uint32_t> Renderer::SwapchainSize()
+{
+    const auto& ext = m_RHI->m_SwapchainExtent;
+    return { ext.x, ext.y };
 }
 
 MicroProfileThreadLogGpu*& Renderer::GetGPULogForCurrentThread()

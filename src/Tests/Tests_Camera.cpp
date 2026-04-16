@@ -404,7 +404,7 @@ TEST_SUITE("Camera_InverseMatrices")
         const Matrix invView = MatInv(view);
         const Matrix product = MatMul(view, invView);
 
-        CHECK(MatrixNearEqual(product, Matrix{}, 1e-3f));
+        CHECK(MatrixNearEqual(product, IdentityMatrix(), 1e-3f));
     }
 
     // ------------------------------------------------------------------
