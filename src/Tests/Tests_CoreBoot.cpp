@@ -1,4 +1,4 @@
-// Tests_CoreBoot.cpp — Phase 1: Core Boot Tests
+// Tests_CoreBoot.cpp — Core Boot Tests
 //
 // Systems under test: TaskScheduler, Config, Utilities (timer, math)
 // Setup required: None (CPU-only, no GPU/RHI)
