@@ -24,7 +24,6 @@ public:
     // Main GLTF loading function
     static bool LoadGLTFScene(Scene& scene, const std::string& scenePath, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices, bool bFromJSONScene);
     static bool LoadJSONScene(Scene& scene, const std::string& scenePath, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices);
-    static void ApplyEnvironmentLights(Scene& scene);
 
     // Helper functions for processing GLTF data
     static void ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir, const SceneOffsets& offsets);

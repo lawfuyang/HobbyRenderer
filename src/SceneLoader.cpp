@@ -174,7 +174,7 @@ static nvrhi::TextureHandle LoadAndRegisterEnvMap(const std::string& path, uint3
 
 bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices)
 {
-	SCOPED_TIMER("[Scene] LoadJSONScene");
+	//SCOPED_TIMER("[Scene] LoadJSONScene");
 
 	SDL_Log("[Scene] Starting to load JSON scene: %s", scenePath.c_str());
 
@@ -701,7 +701,7 @@ static void ParseJSONAnimations(Scene& scene, const JsonContext& ctx, const jsmn
 {
 	if (tokens[animationsTokenIdx].type != JSMN_ARRAY) return;
 
-	SCOPED_TIMER("[Scene] ParseJSONAnimations");
+	//SCOPED_TIMER("[Scene] ParseJSONAnimations");
 
 	const int numAnims = tokens[animationsTokenIdx].size;
 	SDL_Log("[Scene] Parsing %d JSON animations", numAnims);
@@ -1040,21 +1040,6 @@ static void ParseJSONAnimations(Scene& scene, const JsonContext& ctx, const jsmn
 	SDL_Log("[Scene] JSON animations parsed: %zu animations loaded", scene.m_Animations.size());
 }
 
-void SceneLoader::ApplyEnvironmentLights(Scene& scene)
-{
-	
-	if (g_Renderer.m_IrradianceTexturePath.empty() || g_Renderer.m_RadianceTexturePath.empty())
-	{
-		return;
-	}
-
-	SDL_assert(std::filesystem::exists(g_Renderer.m_IrradianceTexturePath));
-	SDL_assert(std::filesystem::exists(g_Renderer.m_RadianceTexturePath));
-
-	g_Renderer.m_IrradianceTexture = ::LoadAndRegisterEnvMap(g_Renderer.m_IrradianceTexturePath, srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE, "Upload Env Irradiance");
-	g_Renderer.m_RadianceTexture = ::LoadAndRegisterEnvMap(g_Renderer.m_RadianceTexturePath, srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE, "Upload Env Radiance");
-}
-
 const char* SceneLoader::cgltf_result_tostring(cgltf_result result)
 {
 	switch (result)
@@ -1203,7 +1188,7 @@ void SceneLoader::SetTextureAndSampler(const cgltf_texture* tex, int& textureInd
 
 void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir, const SceneOffsets& offsets)
 {
-	SCOPED_TIMER("[Scene] Materials+Images");
+	//SCOPED_TIMER("[Scene] Materials+Images");
 
 	// Materials
 	for (cgltf_size i = 0; i < data->materials_count; ++i)
@@ -1352,7 +1337,7 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 		return;
 	}
 
-	SCOPED_TIMER("[Scene] LoadTextures");
+	//SCOPED_TIMER("[Scene] LoadTextures");
 
 	const uint32_t threadCount = g_Renderer.m_TaskScheduler->GetThreadCount() + 1;
 	std::vector<nvrhi::CommandListHandle> threadCommandLists(threadCount);
@@ -1449,7 +1434,7 @@ srrhi::MaterialConstants MaterialConstantsFromMaterial(const Scene::Material& ma
 
 void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene)
 {
-	SCOPED_TIMER("[Scene] MaterialConstants");
+	//SCOPED_TIMER("[Scene] MaterialConstants");
 
 	for (Scene::Material& mat : scene.m_Materials)
 	{
@@ -1488,7 +1473,7 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene)
 
 void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	SCOPED_TIMER("[Scene] Cameras");
+	//SCOPED_TIMER("[Scene] Cameras");
 	for (cgltf_size i = 0; i < data->cameras_count; ++i)
 	{
 		const cgltf_camera& cgCam = data->cameras[i];
@@ -1515,7 +1500,7 @@ void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const Sce
 
 void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	SCOPED_TIMER("[Scene] Lights");
+	//SCOPED_TIMER("[Scene] Lights");
 
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
 	{
@@ -1557,7 +1542,7 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 
 void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	SCOPED_TIMER("[Scene] Animations");
+	//SCOPED_TIMER("[Scene] Animations");
 	for (cgltf_size i = 0; i < data->animations_count; ++i)
 	{
 		const cgltf_animation& cgAnim = data->animations[i];
@@ -1632,7 +1617,7 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const 
 
 void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<srrhi::VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets)
 {
-	SCOPED_TIMER("[Scene] Meshes");
+	//SCOPED_TIMER("[Scene] Meshes");
 
 	struct PrimitiveResult
 	{
@@ -1949,8 +1934,8 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		res.minimalPrim.m_VertexCount = (uint32_t)uniqueVertices;
 		res.minimalPrim.m_MaterialIndex = prim.material ? static_cast<int>(cgltf_material_index(data, prim.material)) + offsets.materialOffset : -1;
 
-		SDL_Log("[Scene] Processed Mesh %u Primitive %u: %zu vertices, %zu indices, %zu meshlets",
-			job.meshIdx, job.primIdx, res.vertices.size(), res.indices.size(), res.meshlets.size());
+		// SDL_Log("[Scene] Processed Mesh %u Primitive %u: %zu vertices, %zu indices, %zu meshlets",
+		// 	job.meshIdx, job.primIdx, res.vertices.size(), res.indices.size(), res.meshlets.size());
 	});
 
 	// Merging results
@@ -2029,23 +2014,23 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		mesh.m_Center = (Vector3)s.Center;
 		mesh.m_Radius = s.Radius;
 
-		SDL_Log("[Scene] Mesh %u [%s]: %zu primitives", mi, meshRes.name.c_str(), meshRes.primitives.size());
+		//SDL_Log("[Scene] Mesh %u [%s]: %zu primitives", mi, meshRes.name.c_str(), meshRes.primitives.size());
 		scene.m_Meshes.push_back(std::move(mesh));
 	}
 
-	SDL_Log("[Scene] ProcessMeshes completed:\n"
-		"  Vertices (Quant):  %zu\n"
-		"  Indices:           %zu\n"
-		"  Meshlets:          %zu\n"
-		"  Meshlet Vertices:  %zu\n"
-		"  Meshlet Triangles: %zu",
-		outVerticesQuantized.size(), outIndices.size(), scene.m_Meshlets.size(), 
-		scene.m_MeshletVertices.size(), scene.m_MeshletTriangles.size() / 3);
+	// SDL_Log("[Scene] ProcessMeshes completed:\n"
+	// 	"  Vertices (Quant):  %zu\n"
+	// 	"  Indices:           %zu\n"
+	// 	"  Meshlets:          %zu\n"
+	// 	"  Meshlet Vertices:  %zu\n"
+	// 	"  Meshlet Triangles: %zu",
+	// 	outVerticesQuantized.size(), outIndices.size(), scene.m_Meshlets.size(), 
+	// 	scene.m_MeshletVertices.size(), scene.m_MeshletTriangles.size() / 3);
 }
 
 void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	SCOPED_TIMER("[Scene] Nodes+Hierarchy");
+	//SCOPED_TIMER("[Scene] Nodes+Hierarchy");
 	std::unordered_map<cgltf_size, int> nodeMap;
 	for (cgltf_size ni = 0; ni < data->nodes_count; ++ni)
 	{
@@ -2156,7 +2141,7 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene,
 
 void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices)
 {
-	SCOPED_TIMER("[Scene] GPU Upload");
+	//SCOPED_TIMER("[Scene] GPU Upload");
 
 	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cmd, "Upload Scene Buffers" };
@@ -2284,21 +2269,21 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrh
 	}
 
 	// print buffers memory stats
-	SDL_Log("[Scene] GPU Buffers Uploaded:\n"
-		"  Vertex Buffer (Quant): %.2f MB (%zu vertices)\n"
-		"  Index Buffer:          %.2f MB (%zu indices)\n"
-		"  Mesh Data Buffer:      %.2f MB (%zu mesh data entries)\n"
-		"  Meshlet Buffer:        %.2f MB (%zu meshlets)\n"
-		"  Meshlet Vertices Buf:  %.2f MB (%zu meshlet vertices)\n"
-		"  Meshlet Triangles Buf: %.2f MB (%zu meshlet triangles)\n"
-		"  Instance Data Buffer:  %.2f MB (%zu instances)",
-		(allVerticesQuantized.size() * sizeof(srrhi::VertexQuantized)) / (1024.0f * 1024.0f), allVerticesQuantized.size(),
-		(allIndices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), allIndices.size(),
-		(scene.m_MeshData.size() * sizeof(srrhi::MeshData)) / (1024.0f * 1024.0f), scene.m_MeshData.size(),
-		(scene.m_Meshlets.size() * sizeof(srrhi::Meshlet)) / (1024.0f * 1024.0f), scene.m_Meshlets.size(),
-		(scene.m_MeshletVertices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletVertices.size(),
-		(scene.m_MeshletTriangles.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletTriangles.size(),
-		(scene.m_InstanceData.size() * sizeof(srrhi::PerInstanceData)) / (1024.0f * 1024.0f), scene.m_InstanceData.size());
+	// SDL_Log("[Scene] GPU Buffers Uploaded:\n"
+	// 	"  Vertex Buffer (Quant): %.2f MB (%zu vertices)\n"
+	// 	"  Index Buffer:          %.2f MB (%zu indices)\n"
+	// 	"  Mesh Data Buffer:      %.2f MB (%zu mesh data entries)\n"
+	// 	"  Meshlet Buffer:        %.2f MB (%zu meshlets)\n"
+	// 	"  Meshlet Vertices Buf:  %.2f MB (%zu meshlet vertices)\n"
+	// 	"  Meshlet Triangles Buf: %.2f MB (%zu meshlet triangles)\n"
+	// 	"  Instance Data Buffer:  %.2f MB (%zu instances)",
+	// 	(allVerticesQuantized.size() * sizeof(srrhi::VertexQuantized)) / (1024.0f * 1024.0f), allVerticesQuantized.size(),
+	// 	(allIndices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), allIndices.size(),
+	// 	(scene.m_MeshData.size() * sizeof(srrhi::MeshData)) / (1024.0f * 1024.0f), scene.m_MeshData.size(),
+	// 	(scene.m_Meshlets.size() * sizeof(srrhi::Meshlet)) / (1024.0f * 1024.0f), scene.m_Meshlets.size(),
+	// 	(scene.m_MeshletVertices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletVertices.size(),
+	// 	(scene.m_MeshletTriangles.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletTriangles.size(),
+	// 	(scene.m_InstanceData.size() * sizeof(srrhi::PerInstanceData)) / (1024.0f * 1024.0f), scene.m_InstanceData.size());
 }
 
 void SceneLoader::CreateAndUploadLightBuffer(Scene& scene)

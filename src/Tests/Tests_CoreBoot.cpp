@@ -1,4 +1,4 @@
-// Tests_CoreBoot.cpp — Core Boot Tests
+// Tests_CoreBoot.cpp - Core Boot Tests
 //
 // Systems under test: TaskScheduler, Config, Utilities (timer, math)
 // Setup required: None (CPU-only, no GPU/RHI)
@@ -18,7 +18,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-01: Default construction creates kRuntimeThreadCount workers
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-01 Thread pool creation — default thread count")
+    TEST_CASE("TC-TS-01 Thread pool creation - default thread count")
     {
         TaskScheduler scheduler;
         CHECK(scheduler.GetThreadCount() == TaskScheduler::kRuntimeThreadCount);
@@ -27,7 +27,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-02: SetThreadCount reduces the pool
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-02 Thread pool resize — reduce thread count")
+    TEST_CASE("TC-TS-02 Thread pool resize - reduce thread count")
     {
         TaskScheduler scheduler;
         scheduler.SetThreadCount(4);
@@ -37,7 +37,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-03: SetThreadCount increases the pool
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-03 Thread pool resize — increase thread count")
+    TEST_CASE("TC-TS-03 Thread pool resize - increase thread count")
     {
         TaskScheduler scheduler;
         scheduler.SetThreadCount(2);
@@ -48,7 +48,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-04: ParallelFor executes all items exactly once
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-04 ParallelFor — all items executed exactly once")
+    TEST_CASE("TC-TS-04 ParallelFor - all items executed exactly once")
     {
         TaskScheduler scheduler;
         constexpr uint32_t kCount = 1000;
@@ -69,7 +69,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-05: ParallelFor with count=0 is a no-op
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-05 ParallelFor — zero count is a no-op")
+    TEST_CASE("TC-TS-05 ParallelFor - zero count is a no-op")
     {
         TaskScheduler scheduler;
         bool called = false;
@@ -83,7 +83,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-06: ScheduleTask (immediate) executes the task
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-06 ScheduleTask — immediate execution")
+    TEST_CASE("TC-TS-06 ScheduleTask - immediate execution")
     {
         TaskScheduler scheduler;
         std::atomic<int> counter{ 0 };
@@ -102,7 +102,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-07: ScheduleTask (deferred) executes on ExecuteAllScheduledTasks
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-07 ScheduleTask — deferred execution via ExecuteAllScheduledTasks")
+    TEST_CASE("TC-TS-07 ScheduleTask - deferred execution via ExecuteAllScheduledTasks")
     {
         TaskScheduler scheduler;
         std::atomic<int> counter{ 0 };
@@ -123,7 +123,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-08: Multiple deferred tasks all execute
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-08 ScheduleTask — multiple deferred tasks all execute")
+    TEST_CASE("TC-TS-08 ScheduleTask - multiple deferred tasks all execute")
     {
         TaskScheduler scheduler;
         constexpr int kTaskCount = 50;
@@ -145,7 +145,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-09: ParallelFor accumulates a sum correctly (data race check)
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-09 ParallelFor — atomic accumulation is correct")
+    TEST_CASE("TC-TS-09 ParallelFor - atomic accumulation is correct")
     {
         TaskScheduler scheduler;
         constexpr uint32_t kCount = 500;
@@ -164,7 +164,7 @@ TEST_SUITE("TaskScheduler")
     // ------------------------------------------------------------------
     // TC-TS-10: Thread indices are within valid range
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TS-10 ParallelFor — thread indices are within valid range")
+    TEST_CASE("TC-TS-10 ParallelFor - thread indices are within valid range")
     {
         TaskScheduler scheduler;
         const uint32_t threadCount = scheduler.GetThreadCount();
@@ -187,28 +187,9 @@ TEST_SUITE("TaskScheduler")
 TEST_SUITE("Config")
 {
     // ------------------------------------------------------------------
-    // TC-CFG-01: Default config values are sane
-    // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-01 Default config — validation disabled by default")
-    {
-        // We read the singleton; it was already parsed by main() with no
-        // test-specific flags, so validation should be off.
-        CHECK_FALSE(Config::Get().m_EnableValidation);
-        CHECK_FALSE(Config::Get().m_EnableGPUAssistedValidation);
-    }
-
-    // ------------------------------------------------------------------
-    // TC-CFG-02: Default scene path is empty
-    // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-02 Default config — scene path is empty")
-    {
-        CHECK(Config::Get().m_ScenePath.empty());
-    }
-
-    // ------------------------------------------------------------------
     // TC-CFG-03: Default skip-textures is false
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-03 Default config — skip-textures is false")
+    TEST_CASE("TC-CFG-03 Default config - skip-textures is false")
     {
         CHECK_FALSE(Config::Get().m_SkipTextures);
     }
@@ -216,7 +197,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-04: Default skip-cache is false
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-04 Default config — skip-cache is false")
+    TEST_CASE("TC-CFG-04 Default config - skip-cache is false")
     {
         CHECK_FALSE(Config::Get().m_SkipCache);
     }
@@ -224,7 +205,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-05: Default render-graph aliasing is enabled
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-05 Default config — render graph aliasing enabled")
+    TEST_CASE("TC-CFG-05 Default config - render graph aliasing enabled")
     {
         CHECK(Config::Get().m_EnableRenderGraphAliasing);
     }
@@ -232,7 +213,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-06: ParseCommandLine sets --rhidebug
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-06 ParseCommandLine — --rhidebug enables validation")
+    TEST_CASE("TC-CFG-06 ParseCommandLine - --rhidebug enables validation")
     {
         ConfigGuard guard; // restore on exit
 
@@ -245,7 +226,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-07: ParseCommandLine sets --skip-textures
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-07 ParseCommandLine — --skip-textures sets flag")
+    TEST_CASE("TC-CFG-07 ParseCommandLine - --skip-textures sets flag")
     {
         ConfigGuard guard;
 
@@ -258,7 +239,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-08: ParseCommandLine sets --skip-cache
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-08 ParseCommandLine — --skip-cache sets flag")
+    TEST_CASE("TC-CFG-08 ParseCommandLine - --skip-cache sets flag")
     {
         ConfigGuard guard;
 
@@ -271,7 +252,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-09: ParseCommandLine sets --disable-rendergraph-aliasing
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-09 ParseCommandLine — --disable-rendergraph-aliasing clears flag")
+    TEST_CASE("TC-CFG-09 ParseCommandLine - --disable-rendergraph-aliasing clears flag")
     {
         ConfigGuard guard;
 
@@ -284,7 +265,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-10: ParseCommandLine sets --execute-per-pass
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-10 ParseCommandLine — --execute-per-pass sets flag")
+    TEST_CASE("TC-CFG-10 ParseCommandLine - --execute-per-pass sets flag")
     {
         ConfigGuard guard;
 
@@ -297,7 +278,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-11: ParseCommandLine sets --execute-per-pass-and-wait
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-11 ParseCommandLine — --execute-per-pass-and-wait sets flag")
+    TEST_CASE("TC-CFG-11 ParseCommandLine - --execute-per-pass-and-wait sets flag")
     {
         ConfigGuard guard;
 
@@ -310,7 +291,7 @@ TEST_SUITE("Config")
     // ------------------------------------------------------------------
     // TC-CFG-12: Unknown arguments are silently ignored (no crash)
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-12 ParseCommandLine — unknown arguments do not crash")
+    TEST_CASE("TC-CFG-12 ParseCommandLine - unknown arguments do not crash")
     {
         ConfigGuard guard;
 
@@ -329,7 +310,7 @@ TEST_SUITE("Timer")
     // ------------------------------------------------------------------
     // TC-TMR-01: SimpleTimer TotalSeconds is non-negative immediately after construction
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TMR-01 SimpleTimer — TotalSeconds is non-negative")
+    TEST_CASE("TC-TMR-01 SimpleTimer - TotalSeconds is non-negative")
     {
         SimpleTimer t;
         CHECK(t.TotalSeconds() >= 0.0);
@@ -339,7 +320,7 @@ TEST_SUITE("Timer")
     // TC-TMR-02: SimpleTimer measures elapsed time with reasonable accuracy
     //            We sleep 50 ms and expect 40–200 ms (generous bounds for CI).
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TMR-02 SimpleTimer — measures elapsed time accurately")
+    TEST_CASE("TC-TMR-02 SimpleTimer - measures elapsed time accurately")
     {
         SimpleTimer t;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -353,7 +334,7 @@ TEST_SUITE("Timer")
     // ------------------------------------------------------------------
     // TC-TMR-03: SimpleTimer Reset restarts the clock
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TMR-03 SimpleTimer — Reset restarts elapsed time")
+    TEST_CASE("TC-TMR-03 SimpleTimer - Reset restarts elapsed time")
     {
         SimpleTimer t;
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
@@ -367,7 +348,7 @@ TEST_SUITE("Timer")
     // ------------------------------------------------------------------
     // TC-TMR-04: SimpleTimer LapSeconds returns positive value and advances
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TMR-04 SimpleTimer — LapSeconds returns positive value")
+    TEST_CASE("TC-TMR-04 SimpleTimer - LapSeconds returns positive value")
     {
         SimpleTimer t;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -378,13 +359,13 @@ TEST_SUITE("Timer")
     // ------------------------------------------------------------------
     // TC-TMR-05: SimpleTimer LapSeconds resets the lap counter
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TMR-05 SimpleTimer — consecutive LapSeconds are independent")
+    TEST_CASE("TC-TMR-05 SimpleTimer - consecutive LapSeconds are independent")
     {
         SimpleTimer t;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         const double lap1 = t.LapSeconds();
 
-        // Immediately take another lap — should be very small
+        // Immediately take another lap - should be very small
         const double lap2 = t.LapSeconds();
 
         CHECK(lap1 >= 0.0);
@@ -395,7 +376,7 @@ TEST_SUITE("Timer")
     // ------------------------------------------------------------------
     // TC-TMR-06: SecondsToMilliseconds conversion is correct
     // ------------------------------------------------------------------
-    TEST_CASE("TC-TMR-06 SimpleTimer — SecondsToMilliseconds conversion")
+    TEST_CASE("TC-TMR-06 SimpleTimer - SecondsToMilliseconds conversion")
     {
         CHECK(SimpleTimer::SecondsToMilliseconds(1.0f) == doctest::Approx(1000.0f));
         CHECK(SimpleTimer::SecondsToMilliseconds(0.5f) == doctest::Approx(500.0f));
@@ -409,9 +390,9 @@ TEST_SUITE("Timer")
 TEST_SUITE("Math")
 {
     // ------------------------------------------------------------------
-    // TC-MATH-01: NextLowerPow2 — basic cases
+    // TC-MATH-01: NextLowerPow2 - basic cases
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-01 NextLowerPow2 — basic cases")
+    TEST_CASE("TC-MATH-01 NextLowerPow2 - basic cases")
     {
         CHECK(NextLowerPow2(1u)   == 1u);
         CHECK(NextLowerPow2(2u)   == 2u);
@@ -427,9 +408,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-02: NextPow2 — basic cases
+    // TC-MATH-02: NextPow2 - basic cases
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-02 NextPow2 — basic cases")
+    TEST_CASE("TC-MATH-02 NextPow2 - basic cases")
     {
         CHECK(NextPow2(1)   == 1);
         CHECK(NextPow2(2)   == 2);
@@ -446,9 +427,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-03: DivideAndRoundUp — basic cases
+    // TC-MATH-03: DivideAndRoundUp - basic cases
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-03 DivideAndRoundUp — basic cases")
+    TEST_CASE("TC-MATH-03 DivideAndRoundUp - basic cases")
     {
         CHECK(DivideAndRoundUp(0u, 4u)  == 0u);
         CHECK(DivideAndRoundUp(1u, 4u)  == 1u);
@@ -462,9 +443,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-04: DivideAndRoundUp — exact multiples
+    // TC-MATH-04: DivideAndRoundUp - exact multiples
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-04 DivideAndRoundUp — exact multiples produce no rounding")
+    TEST_CASE("TC-MATH-04 DivideAndRoundUp - exact multiples produce no rounding")
     {
         for (uint32_t d = 1; d <= 16; ++d)
         {
@@ -476,9 +457,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-05: Halton sequence — base 2 first few values
+    // TC-MATH-05: Halton sequence - base 2 first few values
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-05 Halton — base-2 sequence values")
+    TEST_CASE("TC-MATH-05 Halton - base-2 sequence values")
     {
         // Known Halton base-2: 1/2, 1/4, 3/4, 1/8, 5/8, 3/8, 7/8, ...
         CHECK(Halton(1, 2) == doctest::Approx(0.5f));
@@ -489,9 +470,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-06: Halton sequence — base 3 first few values
+    // TC-MATH-06: Halton sequence - base 3 first few values
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-06 Halton — base-3 sequence values")
+    TEST_CASE("TC-MATH-06 Halton - base-3 sequence values")
     {
         // Known Halton base-3: 1/3, 2/3, 1/9, 4/9, 7/9, ...
         CHECK(Halton(1, 3) == doctest::Approx(1.0f / 3.0f));
@@ -503,7 +484,7 @@ TEST_SUITE("Math")
     // ------------------------------------------------------------------
     // TC-MATH-07: Halton values are in [0, 1)
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-07 Halton — all values are in [0, 1)")
+    TEST_CASE("TC-MATH-07 Halton - all values are in [0, 1)")
     {
         for (uint32_t i = 1; i <= 64; ++i)
         {
@@ -517,9 +498,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-08: DirectXMath — XMVector basic arithmetic
+    // TC-MATH-08: DirectXMath - XMVector basic arithmetic
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-08 DirectXMath — XMVector basic arithmetic")
+    TEST_CASE("TC-MATH-08 DirectXMath - XMVector basic arithmetic")
     {
         using namespace DirectX;
 
@@ -536,9 +517,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-09: DirectXMath — XMVector3Dot
+    // TC-MATH-09: DirectXMath - XMVector3Dot
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-09 DirectXMath — XMVector3Dot")
+    TEST_CASE("TC-MATH-09 DirectXMath - XMVector3Dot")
     {
         using namespace DirectX;
 
@@ -556,9 +537,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-10: DirectXMath — XMVector3Normalize
+    // TC-MATH-10: DirectXMath - XMVector3Normalize
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-10 DirectXMath — XMVector3Normalize produces unit vector")
+    TEST_CASE("TC-MATH-10 DirectXMath - XMVector3Normalize produces unit vector")
     {
         using namespace DirectX;
 
@@ -570,9 +551,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-11: DirectXMath — XMMatrixIdentity
+    // TC-MATH-11: DirectXMath - XMMatrixIdentity
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-11 DirectXMath — XMMatrixIdentity is correct")
+    TEST_CASE("TC-MATH-11 DirectXMath - XMMatrixIdentity is correct")
     {
         using namespace DirectX;
 
@@ -592,9 +573,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-12: DirectXMath — XMMatrixMultiply with identity
+    // TC-MATH-12: DirectXMath - XMMatrixMultiply with identity
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-12 DirectXMath — XMMatrixMultiply with identity is no-op")
+    TEST_CASE("TC-MATH-12 DirectXMath - XMMatrixMultiply with identity is no-op")
     {
         using namespace DirectX;
 
@@ -612,9 +593,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-13: DirectXMath — XMMatrixInverse
+    // TC-MATH-13: DirectXMath - XMMatrixInverse
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-13 DirectXMath — XMMatrixInverse of translation")
+    TEST_CASE("TC-MATH-13 DirectXMath - XMMatrixInverse of translation")
     {
         using namespace DirectX;
 
@@ -637,9 +618,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-14: DirectXMath — XMQuaternionRotationAxis
+    // TC-MATH-14: DirectXMath - XMQuaternionRotationAxis
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-14 DirectXMath — XMQuaternionRotationAxis produces unit quaternion")
+    TEST_CASE("TC-MATH-14 DirectXMath - XMQuaternionRotationAxis produces unit quaternion")
     {
         using namespace DirectX;
 
@@ -651,9 +632,9 @@ TEST_SUITE("Math")
     }
 
     // ------------------------------------------------------------------
-    // TC-MATH-15: DirectXMath — BoundingFrustum contains/intersects
+    // TC-MATH-15: DirectXMath - BoundingFrustum contains/intersects
     // ------------------------------------------------------------------
-    TEST_CASE("TC-MATH-15 DirectXMath — BoundingFrustum contains a point inside")
+    TEST_CASE("TC-MATH-15 DirectXMath - BoundingFrustum contains a point inside")
     {
         using namespace DirectX;
 

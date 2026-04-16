@@ -21,7 +21,7 @@ void Scene::LoadScene()
 	std::vector<srrhi::VertexQuantized> allVerticesQuantized;
 	std::vector<uint32_t> allIndices;
 
-	SCOPED_TIMER("[Scene] LoadScene Total");
+	//SCOPED_TIMER("[Scene] LoadScene Total");
 
 	bool loadedFromCache = false;
 	const std::string filename = sceneFilePath.filename().string();
@@ -78,7 +78,6 @@ void Scene::LoadScene()
 	FinalizeLoadedScene();
 
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir);
-	SceneLoader::ApplyEnvironmentLights(*this);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
 	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
@@ -94,9 +93,8 @@ void Scene::LoadScene()
 
 void Scene::BuildAccelerationStructures()
 {
-	SCOPED_TIMER("[Scene] Build Accel Structs");
+	//SCOPED_TIMER("[Scene] Build Accel Structs");
 
-    
     nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cmd, "Build Scene Accel Structs" };
@@ -150,7 +148,7 @@ void Scene::BuildAccelerationStructures()
 		}
 	}
 
-	SDL_Log("[Scene] Total BLAS memory across all LODs: %.2f MB", totalBLASMemoryBytes / (1024.0 * 1024.0));
+	//SDL_Log("[Scene] Total BLAS memory across all LODs: %.2f MB", totalBLASMemoryBytes / (1024.0 * 1024.0));
 
 	// 2. Build TLAS for the scene
 	nvrhi::rt::AccelStructDesc tlasDesc;
@@ -244,7 +242,7 @@ void Scene::BuildAccelerationStructures()
 
 void Scene::FinalizeLoadedScene()
 {
-    SCOPED_TIMER("[Scene] Finalize Scene");
+    //SCOPED_TIMER("[Scene] Finalize Scene");
 
     // 1. Identify dynamic nodes and sort them topologically
     // Mark nodes targeted by animations as animated before the dynamic pass.
@@ -361,7 +359,7 @@ void Scene::FinalizeLoadedScene()
 		DirectX::BoundingSphere::CreateMerged(m_SceneBoundingSphere, m_SceneBoundingSphere, nodeSphere);
 	}
 
-    SDL_Log("[Scene] Finalized: Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
+    //SDL_Log("[Scene] Finalized: Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
 }
 
 // ─── Animation evaluation helper ─────────────────────────────────────────────

@@ -23,16 +23,6 @@ class TeeStreambuf : public std::streambuf
 public:
     explicit TeeStreambuf(const std::filesystem::path& filePath)
     {
-        m_file.open(filePath, std::ios::out | std::ios::trunc);
-        if (!m_file.is_open())
-            SDL_Log("[Tests] WARNING: could not open output file: %s",
-                    filePath.string().c_str());
-    }
-
-    ~TeeStreambuf() override
-    {
-        if (m_file.is_open())
-            m_file.close();
     }
 
 protected:
@@ -44,17 +34,11 @@ protected:
 
         const char ch = static_cast<char>(c);
 
-        // 1. stdout
-        std::cout.put(ch);
-
-        // 2. file
-        if (m_file.is_open())
-            m_file.put(ch);
-
-        // 3. OutputDebugStringA — accumulate into a line buffer and flush on '\n'
-        m_debugLine += ch;
+        m_DebugLine += ch;
         if (ch == '\n')
+        {
             FlushDebugLine();
+        }
 
         return c;
     }
@@ -62,30 +46,19 @@ protected:
     // Called when the stream flushes.
     int sync() override
     {
-        std::cout.flush();
-        if (m_file.is_open())
-            m_file.flush();
-        if (!m_debugLine.empty())
-            FlushDebugLine();
         return 0;
     }
 
     // Called for bulk writes — override for efficiency.
     std::streamsize xsputn(const char* s, std::streamsize count) override
     {
-        // 1. stdout
-        std::cout.write(s, count);
-
-        // 2. file
-        if (m_file.is_open())
-            m_file.write(s, count);
-
-        // 3. OutputDebugStringA — accumulate and flush on newlines
         for (std::streamsize i = 0; i < count; ++i)
         {
-            m_debugLine += s[i];
+            m_DebugLine += s[i];
             if (s[i] == '\n')
+            {
                 FlushDebugLine();
+            }
         }
 
         return count;
@@ -94,15 +67,14 @@ protected:
 private:
     void FlushDebugLine()
     {
-        if (!m_debugLine.empty())
+        if (!m_DebugLine.empty())
         {
-            OutputDebugStringA(m_debugLine.c_str());
-            m_debugLine.clear();
+            SDL_Log("%s", m_DebugLine.c_str());
+            m_DebugLine.clear();
         }
     }
 
-    std::ofstream m_file;
-    std::string   m_debugLine; // accumulates until '\n' for OutputDebugStringA
+    std::string m_DebugLine; // accumulates until '\n'
 };
 
 // ============================================================================
@@ -131,6 +103,9 @@ struct SDLLogListener : public doctest::IReporter
     const doctest::ContextOptions& opt;
     const doctest::TestCaseData*   tc = nullptr;
     std::mutex                     mutex;
+
+    // Accumulates the names of every test case that had at least one failure.
+    inline static std::vector<std::string> ms_FailedTests;
 
     explicit SDLLogListener(const doctest::ContextOptions& in) : opt(in) {}
 
@@ -166,7 +141,11 @@ struct SDLLogListener : public doctest::IReporter
             if (stats.failure_flags == 0)
                 SDL_Log("[Tests] [  OK  ] %s", tc->m_name);
             else
+            {
                 SDL_Log("[Tests] [ FAIL ] %s", tc->m_name);
+                const std::lock_guard<std::mutex> lock(mutex);
+                ms_FailedTests.push_back(tc->m_name);
+            }
         }
     }
 
@@ -252,11 +231,19 @@ int RunTests(int argc, char* argv[])
 {
     SimpleTimer timer;
 
+    // Parse command-line arguments so Config fields (e.g. m_GltfSamplesPath)
+    // are populated before any test suite runs.
+    // We call ParseCommandLine here (before InitializeForTests) so that
+    // --gltf-samples, --skip-cache, etc. are honoured by Phase 3+ tests.
+    Config::ParseCommandLine(argc, argv);
+
     // Renderer singleton — must outlive the entire test run.
     // InitializeForTests() brings up the minimum GPU stack needed by
     // Graphics_RHI and all subsequent GPU test suites:
     //   hidden window → D3D12 device + swapchain → bindless heaps
     //   → shaders → CommonResources (samplers, default textures, …)
+    Config::Get().m_EnableValidation = true; // force validation for tests
+    Config::Get().m_EnableGPUAssistedValidation = true; // force GPU validation for tests
     Renderer renderer;
     renderer.InitializeForTests();
 
@@ -329,11 +316,25 @@ int RunTests(int argc, char* argv[])
 
     ctx.setOption("no-intro", true);   // suppress doctest banner
     ctx.setOption("no-version", true);
+    ctx.setOption("no-breaks", true);  // never break into debugger on assertion failure
+    ctx.setOption("duration", true);  // show duration of each test case
 
     SDL_Log("[Tests] Starting test run (%d doctest arg(s))",
             static_cast<int>(doctestArgv.size()) - 1);
 
     const int result = ctx.run();
+
+    // ------------------------------------------------------------------
+    // Print a summary of every test that failed.
+    // ------------------------------------------------------------------
+    if (!SDLLogListener::ms_FailedTests.empty())
+    {
+        SDL_Log("[Tests] ========== FAILED TESTS (%zu) ==========",
+                SDLLogListener::ms_FailedTests.size());
+        for (size_t i = 0; i < SDLLogListener::ms_FailedTests.size(); ++i)
+            SDL_Log("[Tests]   [%zu] %s", i + 1, SDLLogListener::ms_FailedTests[i].c_str());
+        SDL_Log("[Tests] ===========================================");
+    }
 
     SDL_Log("[Tests] Total execution time: %.2fs", timer.TotalSeconds());
 

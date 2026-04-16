@@ -41,6 +41,18 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_SkipCache = true;
             SDL_Log("[Config] Skipping scene cache via command line");
         }
+        else if (std::strcmp(arg, "--gltf-samples") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_GltfSamplesPath = argv[++i];
+                SDL_Log("[Config] glTF-Sample-Assets path set via command line: %s", s_Instance.m_GltfSamplesPath.c_str());
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --gltf-samples", "[Config] Missing value for --gltf-samples");
+            }
+        }
         else if (std::strcmp(arg, "--irradiance") == 0)
         {
             if (i + 1 < argc)
@@ -133,6 +145,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --scene <path>                   Load the specified scene file");
             SDL_Log("  --skip-textures                  Skip loading textures from scene");
             SDL_Log("  --skip-cache                     Skip loading/saving scene cache");
+            SDL_Log("  --gltf-samples <path>            Path to KhronosGroup/glTF-Sample-Assets repo root (for tests)");
             SDL_Log("  --irradiance <path>              Path to irradiance cubemap texture (DDS)");
             SDL_Log("  --radiance <path>                Path to radiance cubemap texture (DDS)");
             SDL_Log("  --envmap <path>                  Path to environment map (.hdr/.exr for auto-inference of DDS)");

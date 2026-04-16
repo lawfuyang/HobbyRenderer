@@ -275,9 +275,6 @@ struct Renderer
     std::string m_RadianceTexturePath = "radiance.dds";
     std::string m_BRDFLutTexture = "brdf_lut.dds";
 
-    nvrhi::TextureHandle m_RadianceTexture;
-    nvrhi::TextureHandle m_IrradianceTexture;
-
     // Internal State
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
     std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;

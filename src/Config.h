@@ -9,6 +9,8 @@ struct Config
     bool m_EnableGPUAssistedValidation = false;
     // Path to a scene to load (empty = none)
     std::string m_ScenePath = "";
+    // Path to the KhronosGroup/glTF-Sample-Assets repository root (for tests)
+    std::string m_GltfSamplesPath = "";
     // Skip loading textures from scene
     bool m_SkipTextures = false;
     // Skip loading/saving scene cache
@@ -25,7 +27,7 @@ struct Config
     // int renderHeight = 1080;
     // float renderScale = 1.0f;
 
-    static const Config& Get() { return s_Instance; }
+    static Config& Get() { return s_Instance; }
     static void ParseCommandLine(int argc, char* argv[]);
 
 private:

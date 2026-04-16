@@ -21,6 +21,7 @@
 #include "../Renderer.h"
 #include "../TaskScheduler.h"
 #include "../Utilities.h"
+#include "../SceneLoader.h"
 
 // Convenience alias
 static CommonResources& CR() { return CommonResources::GetInstance(); }
@@ -43,3 +44,54 @@ struct ConfigGuard
         const_cast<Config&>(Config::Get()) = snapshot;
     }
 };
+
+// Returns the glTF-Sample-Assets root path from Config, or "" if not set.
+inline std::string GltfSamplesRoot()
+{
+    return Config::Get().m_GltfSamplesPath;
+}
+
+// Build a full path to a model inside the glTF-Sample-Assets repo.
+// e.g. GltfSampleModel("BoxTextured/glTF/BoxTextured.gltf")
+std::string GltfSampleModel(const char* relPath);
+
+// Returns true if the glTF-Sample-Assets path is configured AND the given
+// model file actually exists on disk.
+bool SampleModelExists(const char* relPath);
+
+// ============================================================================
+// RAII helper: loads a scene into g_Renderer.m_Scene for the duration of a
+// test, then shuts it down cleanly on destruction.
+//
+// Usage:
+//   SceneScope scope("BoxTextured/glTF/BoxTextured.gltf");
+//   REQUIRE(scope.loaded);
+//   CHECK(g_Renderer.m_Scene.m_Meshes.size() > 0);
+// ============================================================================
+struct SceneScope
+{
+    bool loaded = false;
+
+    explicit SceneScope(const char* modelRelPath, bool skipCache = true);
+    ~SceneScope();
+
+    // Non-copyable
+    SceneScope(const SceneScope&) = delete;
+    SceneScope& operator=(const SceneScope&) = delete;
+};
+
+// Macro: skip the entire test if glTF-Sample-Assets path is not configured
+// or the specific model file is missing.
+#define SKIP_IF_NO_SAMPLES(modelRelPath)                                         \
+    do {                                                                        \
+        if (GltfSamplesRoot().empty())                                          \
+        {                                                                       \
+            WARN("Skipping: --gltf-samples not provided");                      \
+            return;                                                             \
+        }                                                                       \
+        if (!SampleModelExists(modelRelPath))                                   \
+        {                                                                       \
+            WARN("Skipping: model not found");                   \
+            return;                                                             \
+        }                                                                       \
+    } while (0)

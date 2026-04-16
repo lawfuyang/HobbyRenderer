@@ -745,9 +745,6 @@ void Renderer::Shutdown()
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
 
-    m_RadianceTexture = nullptr;
-    m_IrradianceTexture = nullptr;
-
     // Free renderer instances
     m_Renderers.clear();
 
