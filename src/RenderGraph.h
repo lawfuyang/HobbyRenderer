@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pch.h"
+
 #include "GraphicRHI.h"
 
 class RenderGraph;

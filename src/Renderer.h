@@ -1,8 +1,7 @@
 ﻿#pragma once
 
-#include "pch.h"
+
 #include "GraphicRHI.h"
-#include "ImGuiLayer.h"
 #include "Scene.h"
 #include "Camera.h"
 #include "RenderGraph.h"
@@ -62,6 +61,15 @@ static bool s_##ClassName##Registered = []() { \
     return true; \
 }();
 
+class ImGuiLayer
+{
+public:
+    void Initialize();
+    void Shutdown();
+    void ProcessEvent(const SDL_Event& event);
+    void UpdateFrame();
+};
+
 enum class RenderingMode : uint32_t
 {
     Normal = srrhi::CommonConsts::RENDERING_MODE_NORMAL,
@@ -86,6 +94,7 @@ struct Renderer
 
     // Lifecycle
     void Initialize();
+    void InitializeForTests(); // Headless init for --run-tests: RHI + CommonResources, no scene/renderers
     void Run();
     void Shutdown();
 
@@ -149,6 +158,12 @@ struct Renderer
     void AddFullScreenPass(const RenderPassParams& params);
     void GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, uint32_t reductionType);
     nvrhi::ShaderHandle GetShaderHandle(uint32_t shaderID) const;
+
+    // Shared GPU stack init used by both Initialize() and InitializeForTests().
+    // Creates RHI device + swapchain against the given window, resolves asset
+    // paths, initialises bindless heaps, loads shaders, and brings up
+    // CommonResources.  Returns false on any fatal failure.
+    bool InitializeGPUStack(SDL_Window* window);
 
     // Global Bindless Texture System
     void InitializeStaticBindlessTextures();
@@ -263,7 +278,6 @@ struct Renderer
     nvrhi::TextureHandle m_RadianceTexture;
     nvrhi::TextureHandle m_IrradianceTexture;
 
-private:
     // Internal State
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
     std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;
@@ -294,6 +308,7 @@ private:
     void UnloadShaders();
     void ReloadShaders();
 
+    bool m_HeadlessMode = false; // If true, skips GPU initialization and any rendering-related setup. Used for --run-tests.
     bool m_Running = true;
     bool m_RequestedShaderReload = false;
 };

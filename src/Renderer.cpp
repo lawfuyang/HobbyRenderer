@@ -268,13 +268,88 @@ void Renderer::SaveBackBufferScreenshot()
     m_RHI->m_NvrhiDevice->unmapStagingTexture(stagingTexture);
 }
 
+// ----------------------------------------------------------------------------
+// InitializeGPUStack — shared helper called by both Initialize() and
+// InitializeForTests().  Assumes m_Window is already set.
+//
+// Responsibilities:
+//   • Create + init the D3D12 RHI device
+//   • Create the swapchain against the given window
+//   • Resolve asset paths (irradiance / radiance / BRDF LUT)
+//   • Initialise static bindless texture + sampler heaps
+//   • Load compiled shader blobs
+//   • Bring up CommonResources (samplers, states, default textures)
+//   • Allocate per-renderer GPU timer queries
+//   • Flush any pending upload command lists
+//
+// Returns true on success, false on any fatal failure.
+// ----------------------------------------------------------------------------
+bool Renderer::InitializeGPUStack(SDL_Window* window)
+{
+    m_RHI = CreateGraphicRHI();
+    m_RHI->Initialize(window);
+
+    if (!m_RHI->m_NvrhiDevice)
+    {
+        SDL_LOG_ASSERT_FAIL("NVRHI device is null after RHI initialization",
+                            "[Init] RHI device creation failed");
+        return false;
+    }
+
+    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::HeapDirectlyIndexed));
+    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::Meshlets));
+    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayQuery));
+    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingAccelStruct));
+
+    int windowWidth  = 0;
+    int windowHeight = 0;
+    SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+
+    if (!m_RHI->CreateSwapchain(static_cast<uint32_t>(windowWidth),
+                                static_cast<uint32_t>(windowHeight)))
+    {
+        SDL_LOG_ASSERT_FAIL("Swapchain creation failed", "[Init] CreateSwapchain failed");
+        return false;
+    }
+
+    // Resolve asset paths.
+    if (const char* basePathCStr = SDL_GetBasePath())
+    {
+        const std::filesystem::path exeDir{ basePathCStr };
+        m_IrradianceTexturePath = (exeDir / "irradiance.dds").string();
+        m_RadianceTexturePath   = (exeDir / "radiance.dds").string();
+        m_BRDFLutTexture        = (exeDir / "brdf_lut.dds").string();
+    }
+
+    // Bindless heaps must exist before CommonResources::Initialize() runs.
+    InitializeStaticBindlessTextures();
+    InitializeStaticBindlessSamplers();
+
+    // Shaders must be loaded before CommonResources uploads textures via
+    // command lists (the upload path calls AcquireCommandList internally).
+    LoadShaders();
+
+    // CommonResources: samplers, raster/blend/depth states, default textures.
+    CommonResources::GetInstance().Initialize();
+    CommonResources::GetInstance().RegisterDefaultTextures();
+
+    // GPU timer queries for the Renderer itself.
+    m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
+    m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
+
+    // Flush any pending uploads from CommonResources::Initialize().
+    ExecutePendingCommandLists();
+
+    return true;
+}
+
 void Renderer::Initialize()
 {
     ScopedTimerLog initScope{"[Timing] Init phase:"};
 
     MicroProfileOnThreadCreate("Main");
-	MicroProfileSetEnableAllGroups(true);
-	MicroProfileSetForceMetaCounters(true);
+    MicroProfileSetEnableAllGroups(true);
+    MicroProfileSetForceMetaCounters(true);
 
     m_TaskScheduler = std::make_unique<TaskScheduler>();
 
@@ -287,35 +362,11 @@ void Renderer::Initialize()
         return;
     }
 
-    m_RHI = CreateGraphicRHI();
-    m_RHI->Initialize(m_Window);
-
-    SDL_assert(m_RHI->m_NvrhiDevice && "NVRHI device is null after RHI initialization");
-    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::HeapDirectlyIndexed));
-    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::Meshlets));
-    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayQuery));
-    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingAccelStruct));
-
-    int windowWidth = 0;
-    int windowHeight = 0;
-    SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
-
-    if (!m_RHI->CreateSwapchain(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight)))
+    if (!InitializeGPUStack(m_Window))
     {
         Shutdown();
         return;
     }
-
-    const char* basePathCStr = SDL_GetBasePath();
-    m_IrradianceTexturePath = (std::filesystem::path{ basePathCStr } / "irradiance.dds").string();
-    m_RadianceTexturePath = (std::filesystem::path{ basePathCStr } / "radiance.dds").string();
-    m_BRDFLutTexture = (std::filesystem::path{ basePathCStr } / "brdf_lut.dds").string();
-
-    InitializeStaticBindlessTextures();
-    InitializeStaticBindlessSamplers();
-    CommonResources::GetInstance().Initialize();
-    CommonResources::GetInstance().RegisterDefaultTextures();
-    LoadShaders();
 
     m_ImGuiLayer.Initialize();
 
@@ -330,9 +381,6 @@ void Renderer::Initialize()
         renderer->m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
     }
 
-    m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
-    m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
-
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
@@ -343,6 +391,52 @@ void Renderer::Initialize()
     }
 
     ExecutePendingCommandLists();
+}
+
+void Renderer::InitializeForTests()
+{
+    // -----------------------------------------------------------------------
+    // Absolute-minimum headless initialization for --run-tests mode.
+    //
+    // What we DO init (required by Graphics_RHI and later suites):
+    //   • MicroProfile thread registration
+    //   • TaskScheduler (used by some renderers / utilities)
+    //   • A tiny hidden SDL window  (needed for DXGI swapchain creation)
+    //   • Full GPU stack via InitializeGPUStack()
+    //
+    // What we deliberately SKIP:
+    //   • ImGuiLayer (no UI in test mode)
+    //   • IRenderer instances (Phase 6+ tests will init them on demand)
+    //   • Scene loading (Phase 3+ tests handle this themselves)
+    // -----------------------------------------------------------------------
+    ScopedTimerLog initScope{"[Tests] InitializeForTests:"};
+
+    m_HeadlessMode = true;
+
+    MicroProfileOnThreadCreate("TestMain");
+    MicroProfileSetEnableAllGroups(true);
+    MicroProfileSetForceMetaCounters(true);
+
+    m_TaskScheduler = std::make_unique<TaskScheduler>();
+
+    // Create a minimal hidden window so DXGI can create a swapchain.
+    // SDL_WINDOW_HIDDEN keeps it off-screen; 320×240 is the smallest
+    // size that satisfies DXGI's minimum swapchain requirements.
+    constexpr int kTestWindowW = 320;
+    constexpr int kTestWindowH = 240;
+    m_Window = SDL_CreateWindow("HobbyRenderer-Tests", kTestWindowW, kTestWindowH,
+                                SDL_WINDOW_HIDDEN);
+    if (!m_Window)
+    {
+        SDL_LOG_ASSERT_FAIL("SDL_CreateWindow failed for test window",
+                            "[Tests] SDL_CreateWindow failed: %s", SDL_GetError());
+        return;
+    }
+
+    if (!InitializeGPUStack(m_Window))
+        return;
+
+    SDL_Log("[Tests] InitializeForTests complete — RHI + CommonResources ready");
 }
 
 void Renderer::Run()
@@ -634,7 +728,10 @@ void Renderer::Shutdown()
     m_PendingCommandLists.clear();
     m_CommandListFreeList.clear();
 
-    m_ImGuiLayer.Shutdown();
+    if (!m_HeadlessMode)
+    {
+        m_ImGuiLayer.Shutdown();
+    }
     CommonResources::GetInstance().Shutdown();
 
     // Shutdown global bindless systems

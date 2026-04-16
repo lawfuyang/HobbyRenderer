@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pch.h"
+
 
 static constexpr uint32_t NextLowerPow2(uint32_t v)
 {

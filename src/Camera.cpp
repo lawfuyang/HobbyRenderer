@@ -1,4 +1,4 @@
-#include "pch.h"
+
 #include "Camera.h"
 #include "Renderer.h"
 #include "Utilities.h"

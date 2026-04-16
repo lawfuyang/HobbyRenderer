@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pch.h"
+
 #include "NRD.h"
 #include "RenderGraph.h"
 

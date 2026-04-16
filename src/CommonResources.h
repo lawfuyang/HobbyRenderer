@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pch.h"
+
 
 // Common GPU resources shared across the application (samplers, default textures, etc.)
 class CommonResources

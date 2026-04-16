@@ -252,6 +252,14 @@ int RunTests(int argc, char* argv[])
 {
     SimpleTimer timer;
 
+    // Renderer singleton — must outlive the entire test run.
+    // InitializeForTests() brings up the minimum GPU stack needed by
+    // Graphics_RHI and all subsequent GPU test suites:
+    //   hidden window → D3D12 device + swapchain → bindless heaps
+    //   → shaders → CommonResources (samplers, default textures, …)
+    Renderer renderer;
+    renderer.InitializeForTests();
+
     // ------------------------------------------------------------------
     // Set up the tee output stream: stdout + OutputDebugStringA + file
     // ------------------------------------------------------------------
@@ -328,6 +336,9 @@ int RunTests(int argc, char* argv[])
     const int result = ctx.run();
 
     SDL_Log("[Tests] Total execution time: %.2fs", timer.TotalSeconds());
+
+    // Tear down the GPU stack cleanly so D3D12 debug layer reports no leaks.
+    renderer.Shutdown();
 
     if (ctx.shouldExit())
         return result;

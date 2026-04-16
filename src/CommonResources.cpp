@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+﻿
 #include "CommonResources.h"
 #include "Renderer.h"
 #include "TextureLoader.h"

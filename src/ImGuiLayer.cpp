@@ -1,5 +1,4 @@
-﻿#include "pch.h"
-#include "ImGuiLayer.h"
+﻿
 #include "Renderer.h"
 #include "CommonResources.h"
 

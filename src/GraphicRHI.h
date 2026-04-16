@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pch.h"
+
 
 class NvrhiErrorCallback : public nvrhi::IMessageCallback
 {

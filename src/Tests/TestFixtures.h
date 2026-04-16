@@ -15,10 +15,16 @@
 // doctest.h without the implementation macro — just the test macros.
 #include "../external/doctest.h"
 
-#include "../TaskScheduler.h"
+#include "../CommonResources.h"
 #include "../Config.h"
-#include "../Utilities.h"
+#include "../GraphicRHI.h"
 #include "../Renderer.h"
+#include "../TaskScheduler.h"
+#include "../Utilities.h"
+
+// Convenience alias
+static CommonResources& CR() { return CommonResources::GetInstance(); }
+static nvrhi::IDevice*  DEV() { return g_Renderer.m_RHI->m_NvrhiDevice; }
 
 // ============================================================================
 // Helper: tiny RAII wrapper that resets Config to defaults after a test
