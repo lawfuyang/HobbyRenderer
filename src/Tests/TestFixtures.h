@@ -22,6 +22,7 @@
 #include "../TaskScheduler.h"
 #include "../Utilities.h"
 #include "../SceneLoader.h"
+#include "../TextureLoader.h"
 
 // Convenience alias
 static CommonResources& CR() { return CommonResources::GetInstance(); }
@@ -95,3 +96,12 @@ struct SceneScope
             return;                                                             \
         }                                                                       \
     } while (0)
+
+// Returns the absolute path to a file inside src/Tests/ReferenceImages/.
+// Uses SDL_GetBasePath() to locate the executable directory, then walks up
+// to find the source tree.  Falls back to a path relative to the CWD.
+std::filesystem::path ReferenceImagePath(const char* filename);
+
+// Helper: create a minimal GPU texture from raw RGBA8 pixel data (CPU-only path).
+// Returns a valid nvrhi::TextureHandle or nullptr on failure.
+nvrhi::TextureHandle CreateTestTexture2D(uint32_t width, uint32_t height, nvrhi::Format format, const void* initialData, size_t rowPitch, const char* debugName = "TestTexture");
