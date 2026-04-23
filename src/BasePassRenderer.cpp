@@ -58,9 +58,6 @@ struct ScopedBasePassPipelineQuery
 static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi::TextureHandle inputTexture, nvrhi::TextureHandle outputTexture, uint32_t samplerIdx)
 {
     PROFILE_FUNCTION();
-
-    
-
     PROFILE_GPU_SCOPED("DownsampleTextureToPow2", commandList);
 
     srrhi::ResizeToNextLowestPowerOfTwoConstants consts;
@@ -94,8 +91,6 @@ static void DownsampleTextureToPow2(nvrhi::CommandListHandle commandList, nvrhi:
 static void GenerateHZBMips(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph, nvrhi::BufferHandle spdAtomicCounter)
 {
     PROFILE_FUNCTION();
-
-    
 
     if (!g_Renderer.m_EnableOcclusionCulling || g_Renderer.m_FreezeCullingCamera)
     {
@@ -185,8 +180,6 @@ protected:
     {
         PROFILE_FUNCTION();
 
-        
-
         char marker[256]{};
         sprintf(marker, "Occlusion Culling Phase %d - %s", args.m_CullingPhase + 1, args.m_BucketName);
         PROFILE_GPU_SCOPED(marker, commandList);
@@ -231,7 +224,7 @@ protected:
         srrhi::GPUCullingInputs inputs;
         inputs.SetCullingCB(cullCB);
         inputs.SetInstanceData(g_Renderer.m_Scene.m_InstanceDataBuffer);
-        inputs.SetHZB(handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureWhite);
+        inputs.SetHZB(handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureBlack);
         inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
         inputs.SetVisibleArgs(handles.visibleIndirect);
         inputs.SetVisibleCount(handles.visibleCount);
@@ -255,7 +248,7 @@ protected:
             params.dispatchParams = { .x = dispatchX, .y = 1, .z = 1 };
             g_Renderer.AddComputePass(params);
         }
-        else
+        else if (handles.occludedIndirect)
         {
             Renderer::RenderPassParams params;
             params.commandList = commandList;
@@ -283,8 +276,6 @@ protected:
     {
         PROFILE_FUNCTION();
 
-        
-        
         nvrhi::BufferHandle visibleIndirect = handles.visibleIndirect;
         nvrhi::BufferHandle meshletIndirect = handles.meshletIndirect;
         nvrhi::BufferHandle meshletJob = handles.meshletJob;
@@ -392,7 +383,7 @@ protected:
         inputs.SetMeshletTriangles(g_Renderer.m_Scene.m_MeshletTrianglesBuffer);
         inputs.SetMeshletJobs(meshletJob ? meshletJob : CommonResources::GetInstance().DummySRVStructuredBuffer);
         inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
-        inputs.SetHZB(handles.hzb);
+        inputs.SetHZB(handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureBlack);
         inputs.SetSceneAS(g_Renderer.m_Scene.m_TLAS);
         inputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
         inputs.SetOpaqueColor(opaqueColor);
@@ -514,8 +505,6 @@ class OpaqueRenderer : public BasePassRendererBase
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        
-
         BasePassResources& res = m_BasePassResources;
         res.DeclareResources(renderGraph, GetName());
 

@@ -9,25 +9,18 @@ class RenderGraph;
 // Resource Handles (opaque indices)
 // ============================================================================
 
-struct RGTextureHandle
+struct RGResourceHandleBase
 {
     uint32_t m_Index = UINT32_MAX;
     
     bool IsValid() const { return m_Index != UINT32_MAX; }
     void Invalidate() { m_Index = UINT32_MAX; }
-    bool operator==(const RGTextureHandle& other) const { return m_Index == other.m_Index; }
-    bool operator!=(const RGTextureHandle& other) const { return m_Index != other.m_Index; }
+    bool operator==(const RGResourceHandleBase& other) const { return m_Index == other.m_Index; }
+    bool operator!=(const RGResourceHandleBase& other) const { return m_Index != other.m_Index; }
 };
 
-struct RGBufferHandle
-{
-    uint32_t m_Index = UINT32_MAX;
-    
-    bool IsValid() const { return m_Index != UINT32_MAX; }
-    void Invalidate() { m_Index = UINT32_MAX; }
-    bool operator==(const RGBufferHandle& other) const { return m_Index == other.m_Index; }
-    bool operator!=(const RGBufferHandle& other) const { return m_Index != other.m_Index; }
-};
+struct RGTextureHandle : public RGResourceHandleBase {};
+struct RGBufferHandle : public RGResourceHandleBase {};
 
 // ============================================================================
 // Resource Descriptors
@@ -269,6 +262,6 @@ private:
     bool m_AliasingEnabled = true;
     bool m_IsCompiled = false;
     uint16_t m_CurrentPassIndex = 0;
-    uint64_t m_FrameIndex = 0;
+    bool m_bForceInvalidateAllResources = false;
 };
 

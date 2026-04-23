@@ -4,8 +4,6 @@
 
 void BasePassResources::Initialize()
 {
-    
-
     // Create pipeline statistics queries for double buffering
     m_PipelineQueries[0] = g_Renderer.m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
     m_PipelineQueries[1] = g_Renderer.m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
@@ -13,8 +11,6 @@ void BasePassResources::Initialize()
 
 void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rendererName)
 {
-    
-
     uint32_t numPrimitives = (uint32_t)g_Renderer.m_Scene.m_InstanceData.size();
     numPrimitives = std::max(numPrimitives, 1u); // avoid zero-sized buffers
 

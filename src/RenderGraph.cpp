@@ -79,6 +79,18 @@ void RenderGraph::Shutdown()
     m_Textures.clear();
     m_Buffers.clear();
     m_Heaps.clear();
+    m_PassNames.clear();
+    m_PassAccesses.clear();
+    m_PerPassAliasBarriers.clear();
+    m_PendingPassAccess = {};
+    m_PendingDeclaredTextures.clear();
+    m_PendingDeclaredBuffers.clear();
+    m_Stats = {};
+    m_IsInsideSetup = false;
+    m_IsCompiled = false;
+    m_CurrentPassIndex = 0;
+    t_ActivePassIndex = 0;
+    m_bForceInvalidateAllResources = true;
 }
 
 void RenderGraph::Reset()
@@ -89,7 +101,6 @@ void RenderGraph::Reset()
     
     const uint32_t kMaxTransientResourceLifetimeFrames = 3;
 
-    m_FrameIndex++;
     m_CurrentPassIndex = 0;
     m_IsCompiled = false;
     m_Stats = Stats{};
@@ -107,7 +118,7 @@ void RenderGraph::Reset()
         texture.m_DeclarationPass = 0;
 
         // Cleanup physical resources not used for > 3 frames
-        if (texture.m_PhysicalTexture && (m_FrameIndex - texture.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
+        if (texture.m_PhysicalTexture && (g_Renderer.m_FrameNumber - texture.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
             //SDL_Log("[RenderGraph] Freeing texture '%s' due to inactivity", texture.m_Desc.m_NvrhiDesc.debugName.c_str());
             if (texture.m_IsPhysicalOwner)
@@ -129,7 +140,7 @@ void RenderGraph::Reset()
         buffer.m_PhysicalLastPass = 0;
         buffer.m_DeclarationPass = 0;
 
-        if (buffer.m_PhysicalBuffer && (m_FrameIndex - buffer.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
+        if (buffer.m_PhysicalBuffer && (g_Renderer.m_FrameNumber - buffer.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
             //SDL_Log("[RenderGraph] Freeing buffer '%s' due to inactivity", buffer.m_Desc.m_NvrhiDesc.debugName.c_str());
             if (buffer.m_IsPhysicalOwner)
@@ -146,7 +157,7 @@ void RenderGraph::Reset()
     // Heaps are kept in the vector for index stability
     for (HeapEntry& heapEntry : m_Heaps)
     {
-        if (heapEntry.m_Heap && (m_FrameIndex - heapEntry.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
+        if (heapEntry.m_Heap && (g_Renderer.m_FrameNumber - heapEntry.m_LastFrameUsed > kMaxTransientResourceLifetimeFrames))
         {
             //SDL_Log("[RenderGraph] Freeing heap slot %u due to inactivity", heapEntry.m_HeapIdx);
             heapEntry.m_Heap = nullptr;
@@ -190,7 +201,6 @@ void RenderGraph::BeginPass(const char* name)
 
 void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
 {
-    
     const int readIndex = g_Renderer.m_FrameNumber % 2;
     const int writeIndex = (g_Renderer.m_FrameNumber + 1) % 2;
 
@@ -279,12 +289,17 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
 {
     SDL_assert(m_IsInsideSetup && "DeclareTexture must be called during Setup phase");
 
+    if (m_bForceInvalidateAllResources)
+    {
+        outputHandle.Invalidate();
+    }
+
     size_t hash = desc.ComputeHash();
 
     if (outputHandle.IsValid() && outputHandle.m_Index < m_Textures.size())
     {
         TransientTexture& texture = m_Textures[outputHandle.m_Index];
-        
+
         SDL_assert(!texture.m_IsDeclaredThisFrame && "Texture already declared this frame! Only one pass should declare a resource.");
 
         bool isNewlyAllocated = false;
@@ -300,7 +315,7 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
         texture.m_Hash = hash;
         texture.m_IsDeclaredThisFrame = true;
         texture.m_IsPersistent = false;
-        texture.m_LastFrameUsed = m_FrameIndex;
+        texture.m_LastFrameUsed = g_Renderer.m_FrameNumber;
         
         m_PendingDeclaredTextures.push_back(outputHandle.m_Index);
         WriteTexture(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
@@ -312,12 +327,12 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
     {
         if (!m_Textures[i].m_IsDeclaredThisFrame
             && m_Textures[i].m_Hash == hash
-            && (m_FrameIndex - m_Textures[i].m_LastFrameUsed > 1))
+            && (g_Renderer.m_FrameNumber - m_Textures[i].m_LastFrameUsed > 1))
         {
             m_Textures[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Textures[i].m_IsDeclaredThisFrame = true;
             m_Textures[i].m_IsPersistent = false;
-            m_Textures[i].m_LastFrameUsed = m_FrameIndex;
+            m_Textures[i].m_LastFrameUsed = g_Renderer.m_FrameNumber;
             
             m_PendingDeclaredTextures.push_back(i);
             outputHandle = { i };
@@ -334,7 +349,7 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
     texture.m_Hash = hash;
     texture.m_IsDeclaredThisFrame = true;
     texture.m_IsPersistent = false;
-    texture.m_LastFrameUsed = m_FrameIndex;
+    texture.m_LastFrameUsed = g_Renderer.m_FrameNumber;
     
     m_Textures.push_back(texture);
     m_PendingDeclaredTextures.push_back(handle.m_Index);
@@ -347,6 +362,11 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
 bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle)
 {
     SDL_assert(m_IsInsideSetup && "DeclareBuffer must be called during Setup phase");
+
+    if (m_bForceInvalidateAllResources)
+    {
+        outputHandle.Invalidate();
+    }
 
     size_t hash = desc.ComputeHash();
 
@@ -369,7 +389,7 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
         buffer.m_Hash = hash;
         buffer.m_IsDeclaredThisFrame = true;
         buffer.m_IsPersistent = false;
-        buffer.m_LastFrameUsed = m_FrameIndex;
+        buffer.m_LastFrameUsed = g_Renderer.m_FrameNumber;
 
         m_PendingDeclaredBuffers.push_back(outputHandle.m_Index);
         WriteBuffer(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
@@ -380,16 +400,16 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
     {
         if (!m_Buffers[i].m_IsDeclaredThisFrame
             && m_Buffers[i].m_Hash == hash
-            && (m_FrameIndex - m_Buffers[i].m_LastFrameUsed > 1))
+            && (g_Renderer.m_FrameNumber - m_Buffers[i].m_LastFrameUsed > 1))
         {
             m_Buffers[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Buffers[i].m_IsDeclaredThisFrame = true;
             m_Buffers[i].m_IsPersistent = false;
-            m_Buffers[i].m_LastFrameUsed = m_FrameIndex;
+            m_Buffers[i].m_LastFrameUsed = g_Renderer.m_FrameNumber;
 
             m_PendingDeclaredBuffers.push_back(i);
             outputHandle = { i };
-            WriteBuffer(outputHandle); // Implicitly mark as written in the declari;ng pass, since they start with undefined contents
+            WriteBuffer(outputHandle); // Implicitly mark as written in the declaring pass, since they start with undefined contents
             return true;
         }
     }
@@ -402,7 +422,7 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
     buffer.m_Hash = hash;
     buffer.m_IsDeclaredThisFrame = true;
     buffer.m_IsPersistent = false;
-    buffer.m_LastFrameUsed = m_FrameIndex;
+    buffer.m_LastFrameUsed = g_Renderer.m_FrameNumber;
     
     m_Buffers.push_back(buffer);
     m_PendingDeclaredBuffers.push_back(handle.m_Index);
@@ -596,8 +616,8 @@ void RenderGraph::Compile()
 
         if (buf.m_DeclarationPass > firstAccessPass)
         {
-            SDL_Log("[RenderGraph] ERROR: Buffer '%s' (index %u) accessed in pass %u but only declared in pass %u", 
-                buf.m_Desc.m_NvrhiDesc.debugName.c_str(), i, firstAccessPass, buf.m_DeclarationPass);
+            SDL_Log("[RenderGraph] ERROR: Buffer '%s' accessed in pass '%s' but only declared in pass '%s'", 
+                buf.m_Desc.m_NvrhiDesc.debugName.c_str(), m_PassNames.at(firstAccessPass), m_PassNames.at(buf.m_DeclarationPass));
             SDL_assert(false && "Resource accessed before it was declared");
         }
     }
@@ -733,6 +753,7 @@ void RenderGraph::Compile()
 void RenderGraph::PostRender()
 {
     m_IsCompiled = false;
+    m_bForceInvalidateAllResources = false;
 }
 
 // ============================================================================
@@ -790,7 +811,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
         {
             m_Heaps[i].m_Heap = heap;
             m_Heaps[i].m_Size = size;
-            m_Heaps[i].m_LastFrameUsed = m_FrameIndex;
+            m_Heaps[i].m_LastFrameUsed = g_Renderer.m_FrameNumber;
             m_Heaps[i].m_HeapIdx = i;
             
             HeapBlock block;
@@ -807,7 +828,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
     HeapEntry entry;
     entry.m_Heap = heap;
     entry.m_Size = size;
-    entry.m_LastFrameUsed = m_FrameIndex;
+    entry.m_LastFrameUsed = g_Renderer.m_FrameNumber;
     entry.m_HeapIdx = static_cast<uint32_t>(m_Heaps.size());
     
     HeapBlock block;
@@ -818,7 +839,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
     
     m_Heaps.push_back(entry);
     
-    SDL_Log("[RenderGraph] Allocated new heap of size %.2f MB", size / (1024.0 * 1024.0));
+    //SDL_Log("[RenderGraph] Allocated new heap of size %.2f MB", size / (1024.0 * 1024.0));
     
     return heap;
 }
@@ -877,7 +898,7 @@ void RenderGraph::SubAllocateResource(RenderGraphInternal::TransientResourceBase
                         heapEntry.m_Blocks.insert(heapEntry.m_Blocks.begin() + i + 1, suffix);
                     }
 
-                    heapEntry.m_LastFrameUsed = m_FrameIndex;
+                    heapEntry.m_LastFrameUsed = g_Renderer.m_FrameNumber;
                     return;
                 }
             }
@@ -958,7 +979,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
             HeapEntry& heapEntry = m_Heaps[resource->m_HeapIndex];
             SDL_assert(heapEntry.m_Heap == resource->m_Heap);
 
-            heapEntry.m_LastFrameUsed = m_FrameIndex;
+            heapEntry.m_LastFrameUsed = g_Renderer.m_FrameNumber;
             resource->m_PhysicalLastPass = resource->m_Lifetime.m_LastPass;
 
             if (bIsBuffer) m_Stats.m_NumAllocatedBuffers++;
@@ -1176,30 +1197,18 @@ nvrhi::TextureHandle RenderGraph::GetTextureRaw(RGTextureHandle handle) const
 {
     if (!handle.IsValid() || handle.m_Index >= m_Textures.size())
     {
-        SDL_assert(false && "Invalid texture handle");
         return nullptr;
     }
-    const TransientTexture& texture = m_Textures[handle.m_Index];
-
-    SDL_assert(texture.m_PhysicalTexture);
-    SDL_assert(texture.m_IsAllocated && "Texture not allocated");
-    
-    return texture.m_PhysicalTexture;
+    return m_Textures[handle.m_Index].m_PhysicalTexture;
 }
 
 nvrhi::BufferHandle RenderGraph::GetBufferRaw(RGBufferHandle handle) const
 {
     if (!handle.IsValid() || handle.m_Index >= m_Buffers.size())
     {
-        SDL_assert(false && "Invalid buffer handle");
         return nullptr;
     }
-    const TransientBuffer& buffer = m_Buffers[handle.m_Index];
-
-    SDL_assert(buffer.m_PhysicalBuffer);
-    SDL_assert(buffer.m_IsAllocated && "Buffer not allocated");
-
-    return buffer.m_PhysicalBuffer;
+    return m_Buffers[handle.m_Index].m_PhysicalBuffer;
 }
 
 RGBufferDesc RenderGraph::GetSPDAtomicCounterDesc(const char* debugName)

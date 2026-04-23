@@ -120,7 +120,7 @@ TEST_SUITE("Graphics_RHI")
         // No-op: just open and close
         cmd->close();
 
-        DEV()->executeCommandList(cmd);
+        g_Renderer.ExecutePendingCommandLists();
         DEV()->waitForIdle();
 
         CHECK(true); // Reached here without crash/assert

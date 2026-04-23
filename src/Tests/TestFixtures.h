@@ -154,6 +154,8 @@ uint32_t ReadbackTexelRGBA8(nvrhi::TextureHandle tex, uint32_t x, uint32_t y);
 // What the fixture guarantees:
 //   - Any previously loaded scene is shut down (GPU idle + Shutdown()).
 //   - g_Renderer.m_Scene is in a clean, empty state.
+//   - g_Renderer.m_RenderGraph is cleared before and after each test so no
+//     transient or persistent RG resources leak across doctest cases.
 //   - Exactly one directional light exists in the scene (via
 //     Scene::EnsureDefaultDirectionalLight) so renderers that read
 //     m_Lights.back() do not crash on an empty light list.

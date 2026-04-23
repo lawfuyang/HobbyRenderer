@@ -1847,7 +1847,7 @@ TEST_SUITE("Rendering_CommandList")
         // Return it by executing (open/close/execute)
         cmd->open();
         cmd->close();
-        DEV()->executeCommandList(cmd);
+        g_Renderer.ExecutePendingCommandLists();
         DEV()->waitForIdle();
     }
 
@@ -1868,8 +1868,7 @@ TEST_SUITE("Rendering_CommandList")
             cmds.push_back(cmd);
         }
 
-        for (auto& cmd : cmds)
-            DEV()->executeCommandList(cmd);
+        g_Renderer.ExecutePendingCommandLists();
 
         DEV()->waitForIdle();
     }

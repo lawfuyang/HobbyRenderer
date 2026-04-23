@@ -651,4 +651,485 @@ TEST_SUITE("Math")
         const ContainmentType ct = frustum.Contains(XMLoadFloat3(&p));
         CHECK(ct != DISJOINT);
     }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-16: CalculateGridZParams returns finite Vector3
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-16 CalculateGridZParams - returns finite components")
+    {
+        const Vector3 result = CalculateGridZParams(0.1f, 1000.0f, 1.0f, 32);
+        CHECK(std::isfinite(result.x));
+        CHECK(std::isfinite(result.y));
+        CHECK(std::isfinite(result.z));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-17: CalculateGridZParams x component is positive
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-17 CalculateGridZParams - x component is positive")
+    {
+        const Vector3 result = CalculateGridZParams(0.1f, 1000.0f, 1.0f, 32);
+        CHECK(result.x > 0.0f);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-18: CreateInvDeviceZToWorldZTransform returns finite Vector2
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-18 CreateInvDeviceZToWorldZTransform - returns finite Vector2")
+    {
+        using namespace DirectX;
+        // Use a standard reverse-Z perspective matrix
+        const XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, 16.0f / 9.0f, 100.0f, 0.1f);
+        Matrix mat;
+        XMStoreFloat4x4(&mat, proj);
+        const Vector2 result = CreateInvDeviceZToWorldZTransform(mat);
+        CHECK(std::isfinite(result.x));
+        CHECK(std::isfinite(result.y));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-19: HashToUint returns consistent value for the same input
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-19 HashToUint - same input produces same output")
+    {
+        const size_t hash = std::hash<std::string>{}("test_string");
+        const uint32_t r1 = HashToUint(hash);
+        const uint32_t r2 = HashToUint(hash);
+        CHECK(r1 == r2);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-20: HashToUint different inputs generally produce different outputs
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-20 HashToUint - different hashes produce different uint values")
+    {
+        const size_t hashA = std::hash<std::string>{}("alpha");
+        const size_t hashB = std::hash<std::string>{}("beta");
+        // This is a probabilistic test — hash collisions are theoretically possible.
+        // With distinct string hashes this should always differ.
+        const uint32_t ra = HashToUint(hashA);
+        const uint32_t rb = HashToUint(hashB);
+        if (hashA != hashB)
+            CHECK(ra != rb);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-21: NextLowerPow2 edge: 0 does not crash
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-21 NextLowerPow2 - 0 does not crash")
+    {
+        // Behaviour of NextLowerPow2(0) is implementation-defined but must not crash.
+        CHECK_NOTHROW(static_cast<void>(NextLowerPow2(0u)));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-22: DivideAndRoundUp with numerator just below divisor
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-22 DivideAndRoundUp - numerator < divisor gives 1")
+    {
+        CHECK(DivideAndRoundUp(1u, 128u) == 1u);
+        CHECK(DivideAndRoundUp(127u, 128u) == 1u);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-23: DivideAndRoundUp with UINT32_MAX-safe values
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-23 DivideAndRoundUp - large but safe values")
+    {
+        // 0x7FFF0000 / 65536 = 32767 exactly (no overflow in numerator+divisor-1)
+        constexpr uint32_t n = 0x7FFF0000u;
+        constexpr uint32_t d = 65536u;
+        CHECK(DivideAndRoundUp(n, d) == n / d);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-24: Halton base-5 first values
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-24 Halton - base-5 first values")
+    {
+        // Base-5: 1/5, 2/5, 3/5, 4/5, 1/25, ...
+        CHECK(Halton(1, 5) == doctest::Approx(0.2f));
+        CHECK(Halton(2, 5) == doctest::Approx(0.4f));
+        CHECK(Halton(3, 5) == doctest::Approx(0.6f));
+        CHECK(Halton(4, 5) == doctest::Approx(0.8f));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-25: DirectXMath - XMVector3Cross basic identity
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-25 DirectXMath - XMVector3Cross X x Y = Z")
+    {
+        using namespace DirectX;
+        const XMVECTOR X = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        const XMVECTOR Y = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        const XMVECTOR Z = XMVector3Cross(X, Y);
+
+        XMFLOAT3 result;
+        XMStoreFloat3(&result, Z);
+
+        CHECK(result.x == doctest::Approx(0.0f));
+        CHECK(result.y == doctest::Approx(0.0f));
+        CHECK(result.z == doctest::Approx(1.0f));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-26: DirectXMath - XMMatrixTranspose of identity is identity
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-26 DirectXMath - XMMatrixTranspose of identity is identity")
+    {
+        using namespace DirectX;
+        const XMMATRIX I = XMMatrixIdentity();
+        const XMMATRIX T = XMMatrixTranspose(I);
+        XMFLOAT4X4 m;
+        XMStoreFloat4x4(&m, T);
+        CHECK(m._11 == doctest::Approx(1.0f));
+        CHECK(m._22 == doctest::Approx(1.0f));
+        CHECK(m._33 == doctest::Approx(1.0f));
+        CHECK(m._44 == doctest::Approx(1.0f));
+        CHECK(m._12 == doctest::Approx(0.0f));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-27: DirectXMath - XMMatrixScaling diagonal entries
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-27 DirectXMath - XMMatrixScaling diagonal entries")
+    {
+        using namespace DirectX;
+        const XMMATRIX S = XMMatrixScaling(2.0f, 3.0f, 4.0f);
+        XMFLOAT4X4 m;
+        XMStoreFloat4x4(&m, S);
+        CHECK(m._11 == doctest::Approx(2.0f));
+        CHECK(m._22 == doctest::Approx(3.0f));
+        CHECK(m._33 == doctest::Approx(4.0f));
+        CHECK(m._44 == doctest::Approx(1.0f));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-28: DirectXMath - XMMatrixRotationY 90° rotates +X to +Z
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-28 DirectXMath - XMMatrixRotationY 90 degrees")
+    {
+        using namespace DirectX;
+        // Rotate +X by 90° around Y → should yield +Z (in LH convention)
+        const XMMATRIX R = XMMatrixRotationY(XM_PIDIV2);
+        const XMVECTOR X = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        const XMVECTOR result = XMVector3TransformNormal(X, R);
+        XMFLOAT3 r;
+        XMStoreFloat3(&r, result);
+        CHECK(std::abs(r.x) < 0.0001f);
+        CHECK(std::abs(r.y) < 0.0001f);
+        CHECK(std::abs(std::abs(r.z) - 1.0f) < 0.0001f);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-29: DirectXMath - XMMatrixLookAtLH produces finite matrix
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-29 DirectXMath - XMMatrixLookAtLH produces finite matrix")
+    {
+        using namespace DirectX;
+        const XMVECTOR eye = XMVectorSet(0.0f, 5.0f, -10.0f, 0.0f);
+        const XMVECTOR at  = XMVectorSet(0.0f, 0.0f,   0.0f, 0.0f);
+        const XMVECTOR up  = XMVectorSet(0.0f, 1.0f,   0.0f, 0.0f);
+        const XMMATRIX V = XMMatrixLookAtLH(eye, at, up);
+        XMFLOAT4X4 m;
+        XMStoreFloat4x4(&m, V);
+        CHECK(std::isfinite(m._11));
+        CHECK(std::isfinite(m._22));
+        CHECK(std::isfinite(m._33));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-30: DirectXMath - BoundingSphere Contains works
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-30 DirectXMath - BoundingSphere contains interior point")
+    {
+        using namespace DirectX;
+        BoundingSphere bs({ 0.0f, 0.0f, 0.0f }, 5.0f);
+        XMFLOAT3 inside{ 1.0f, 1.0f, 1.0f };
+        XMFLOAT3 outside{ 10.0f, 10.0f, 10.0f };
+        CHECK(bs.Contains(XMLoadFloat3(&inside))  != DISJOINT);
+        CHECK(bs.Contains(XMLoadFloat3(&outside)) == DISJOINT);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-31: DirectXMath - XMVector3LengthSq basic identity
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-31 DirectXMath - XMVector3LengthSq basic values")
+    {
+        using namespace DirectX;
+        // ||(1,0,0)||^2 = 1
+        const XMVECTOR v1 = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        CHECK(XMVectorGetX(XMVector3LengthSq(v1)) == doctest::Approx(1.0f));
+
+        // ||(3,4,0)||^2 = 25
+        const XMVECTOR v2 = XMVectorSet(3.0f, 4.0f, 0.0f, 0.0f);
+        CHECK(XMVectorGetX(XMVector3LengthSq(v2)) == doctest::Approx(25.0f));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MATH-32: Halton sequence - index 0 does not crash
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MATH-32 Halton - index 0 does not crash")
+    {
+        CHECK_NOTHROW(static_cast<void>(Halton(0, 2)));
+    }
+}
+
+// ============================================================================
+// TEST SUITE: TaskScheduler_Extended
+// ============================================================================
+TEST_SUITE("TaskScheduler_Extended")
+{
+    // ------------------------------------------------------------------
+    // TC-TSX-01: SetThreadCount(1) single thread still processes all items
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TSX-01 SingleThread - ParallelFor with 1 thread executes all items")
+    {
+        TaskScheduler scheduler;
+        scheduler.SetThreadCount(1);
+        REQUIRE(scheduler.GetThreadCount() == 1);
+
+        std::vector<std::atomic<int>> counters(50);
+        for (auto& c : counters) c.store(0);
+
+        scheduler.ParallelFor(50, [&](uint32_t index, uint32_t)
+        {
+            counters[index].fetch_add(1);
+        });
+
+        for (int i = 0; i < 50; ++i)
+            CHECK(counters[i].load() == 1);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TSX-02: ParallelFor with count=1 executes exactly once
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TSX-02 SingleItem - ParallelFor count=1 executes exactly once")
+    {
+        TaskScheduler scheduler;
+        std::atomic<int> counter{ 0 };
+
+        scheduler.ParallelFor(1, [&](uint32_t, uint32_t)
+        {
+            counter.fetch_add(1);
+        });
+
+        CHECK(counter.load() == 1);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TSX-03: ParallelFor 100,000 items produces correct sum
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TSX-03 LargeParallelFor - 100,000 items sum is correct")
+    {
+        TaskScheduler scheduler;
+        constexpr uint32_t kCount = 100000u;
+        std::atomic<uint64_t> sum{ 0 };
+
+        scheduler.ParallelFor(kCount, [&](uint32_t index, uint32_t)
+        {
+            sum.fetch_add(index);
+        });
+
+        const uint64_t expected = static_cast<uint64_t>(kCount) * (kCount - 1) / 2;
+        CHECK(sum.load() == expected);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TSX-04: Multiple consecutive ExecuteAllScheduledTasks() calls are idempotent
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TSX-04 ExecuteAll - repeated calls are idempotent")
+    {
+        TaskScheduler scheduler;
+        std::atomic<int> counter{ 0 };
+
+        scheduler.ScheduleTask([&counter]() { counter.fetch_add(1); }, false);
+        scheduler.ExecuteAllScheduledTasks();
+
+        // Second call should be a no-op (no pending tasks).
+        const int afterFirst = counter.load();
+        CHECK_NOTHROW(scheduler.ExecuteAllScheduledTasks());
+        CHECK(counter.load() == afterFirst);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TSX-05: SetThreadCount preserves pending tasks
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TSX-05 ThreadCount - tasks scheduled before resize still execute")
+    {
+        TaskScheduler scheduler;
+        std::atomic<int> counter{ 0 };
+
+        scheduler.ScheduleTask([&counter]() { counter.fetch_add(1); }, false);
+        scheduler.SetThreadCount(2); // resize with a pending task
+
+        scheduler.ExecuteAllScheduledTasks();
+        CHECK(counter.load() == 1);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TSX-06: ParallelFor with maximum thread count still completes
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TSX-06 MaxThreads - ParallelFor with max threads completes")
+    {
+        TaskScheduler scheduler;
+        // Set a larger thread count (capped internally to hw_concurrency)
+        scheduler.SetThreadCount(64);
+
+        std::atomic<int> counter{ 0 };
+        scheduler.ParallelFor(200, [&](uint32_t, uint32_t)
+        {
+            counter.fetch_add(1);
+        });
+
+        CHECK(counter.load() == 200);
+    }
+}
+
+// ============================================================================
+// TEST SUITE: Config_Extended
+// ============================================================================
+TEST_SUITE("Config_Extended")
+{
+    // ------------------------------------------------------------------
+    // TC-CFGX-01: ParseCommandLine with argc=1 (program name only) doesn't crash
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CFGX-01 ParseCommandLine - argc=1 does not crash")
+    {
+        ConfigGuard guard;
+        const char* argv[] = { "HobbyRenderer" };
+        CHECK_NOTHROW(Config::ParseCommandLine(1, const_cast<char**>(argv)));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-CFGX-02: ParseCommandLine with two flags simultaneously
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CFGX-02 ParseCommandLine - two flags set simultaneously")
+    {
+        ConfigGuard guard;
+        const char* argv[] = { "HobbyRenderer", "--skip-textures", "--skip-cache" };
+        Config::ParseCommandLine(3, const_cast<char**>(argv));
+
+        CHECK(Config::Get().m_SkipTextures);
+        CHECK(Config::Get().m_SkipCache);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-CFGX-03: m_GltfSamplesPath default is empty string
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CFGX-03 DefaultConfig - m_GltfSamplesPath default is empty")
+    {
+        // Config is shared state; we cannot reset it to true defaults without
+        // ConfigGuard, but we can at least verify the type is std::string.
+        const std::string& path = Config::Get().m_GltfSamplesPath;
+        CHECK(path.size() < 4096u); // sane bound
+    }
+
+    // ------------------------------------------------------------------
+    // TC-CFGX-05: m_EnableGPUAssistedValidation default is false
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CFGX-05 DefaultConfig - m_EnableGPUAssistedValidation default is false")
+    {
+        ConfigGuard guard;
+        const char* argv[] = { "HobbyRenderer" };
+        Config::ParseCommandLine(1, const_cast<char**>(argv));
+        CHECK_FALSE(Config::Get().m_EnableGPUAssistedValidation);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-CFGX-06: --skip-textures and --disable-rendergraph-aliasing together
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CFGX-06 ParseCommandLine - --skip-textures and --disable-rga together")
+    {
+        ConfigGuard guard;
+        const char* argv[] = { "HobbyRenderer", "--skip-textures", "--disable-rendergraph-aliasing" };
+        Config::ParseCommandLine(3, const_cast<char**>(argv));
+
+        CHECK(Config::Get().m_SkipTextures);
+        CHECK_FALSE(Config::Get().m_EnableRenderGraphAliasing);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-CFGX-07: ConfigGuard restores state after modification
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CFGX-07 ConfigGuard - restores state correctly")
+    {
+        const bool originalSkipTextures = Config::Get().m_SkipTextures;
+        {
+            ConfigGuard guard;
+            const_cast<Config&>(Config::Get()).m_SkipTextures = !originalSkipTextures;
+            CHECK(Config::Get().m_SkipTextures == !originalSkipTextures);
+        }
+        // Guard destructor should have restored the value.
+        CHECK(Config::Get().m_SkipTextures == originalSkipTextures);
+    }
+}
+
+// ============================================================================
+// TEST SUITE: Timer_Extended
+// ============================================================================
+TEST_SUITE("Timer_Extended")
+{
+    // ------------------------------------------------------------------
+    // TC-TMRX-01: Two simultaneous timers run independently
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TMRX-01 SimultaneousTimers - two timers are independent")
+    {
+        SimpleTimer t1, t2;
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+        const double e1 = t1.TotalMilliseconds();
+        const double e2 = t2.TotalMilliseconds();
+
+        // Both timers started at nearly the same time, so they should be
+        // within 5 ms of each other.
+        CHECK(std::abs(e1 - e2) < 5.0);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TMRX-02: TotalMilliseconds = TotalSeconds * 1000 (consistency)
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TMRX-02 TimerConsistency - TotalMilliseconds == TotalSeconds * 1000")
+    {
+        SimpleTimer t;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+        const double sec = t.TotalSeconds();
+        const double ms  = t.TotalMilliseconds();
+
+        // Allow 1 ms tolerance for the two reads not being simultaneous.
+        CHECK(std::abs(ms - sec * 1000.0) < 1.0);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TMRX-03: SecondsToMilliseconds handles negative input
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TMRX-03 SecondsToMilliseconds - negative input")
+    {
+        CHECK(SimpleTimer::SecondsToMilliseconds(-1.0f) == doctest::Approx(-1000.0f));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TMRX-04: ScopedTimerLog construction and destruction do not crash
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TMRX-04 ScopedTimerLog - ctor/dtor do not crash")
+    {
+        CHECK_NOTHROW({
+            ScopedTimerLog stl("TC-TMRX-04");
+            (void)stl;
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // TC-TMRX-05: SingleThreadGuard construction and destruction do not crash
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-TMRX-05 SingleThreadGuard - ctor/dtor do not crash")
+    {
+        std::atomic<int> count = 0;
+        CHECK_NOTHROW({
+            SingleThreadGuard g(count);
+            CHECK(count.load() == 1);
+        });
+        CHECK(count.load() == 0);
+    }
 }

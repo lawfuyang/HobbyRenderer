@@ -6,6 +6,7 @@
 #include "shaders/srrhi/cpp/HDR.h"
 
 extern RGTextureHandle g_RG_TAAOutput;
+extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_ExposureTexture;
 
 static constexpr float kMinLogLuminance = -10.0f;
@@ -23,8 +24,6 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        
-        
         // Luminance Histogram
         if (g_Renderer.m_EnableAutoExposure)
         {
@@ -63,23 +62,37 @@ public:
             m_ReadbackInitialized = true;
         }
         
-        renderGraph.ReadTexture(g_RG_TAAOutput);
+        if (g_Renderer.m_Mode == RenderingMode::ReferencePathTracer)
+        {
+            renderGraph.ReadTexture(g_RG_HDRColor);
+        }
+        else
+        {
+            renderGraph.ReadTexture(g_RG_TAAOutput);
+        }
+
         renderGraph.WriteTexture(g_RG_ExposureTexture);
-        
+
         return true;
     }
 
     
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        
-
         PROFILE_GPU_SCOPED("HDR Post-Processing", commandList);
 
         nvrhi::BufferHandle luminanceHistogram = g_Renderer.m_EnableAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
         nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(m_RG_ExposureBuffer, RGResourceAccessMode::Write);
 
-        nvrhi::TextureHandle sceneColor = renderGraph.GetTexture(g_RG_TAAOutput, RGResourceAccessMode::Read);
+        nvrhi::TextureHandle HDRInput;
+        if (g_Renderer.m_Mode == RenderingMode::ReferencePathTracer)
+        {
+            HDRInput = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
+        }
+        else
+        {
+            HDRInput = renderGraph.GetTexture(g_RG_TAAOutput, RGResourceAccessMode::Read);
+        }
 
         // 1. Histogram Pass
         if (g_Renderer.m_EnableAutoExposure)
@@ -95,7 +108,7 @@ public:
             inputs.m_HistogramConstants.SetMinLogLuminance(kMinLogLuminance);
             inputs.m_HistogramConstants.SetMaxLogLuminance(kMaxLogLuminance);
 
-            inputs.SetHDRColor(sceneColor);
+            inputs.SetHDRColor(HDRInput);
             inputs.SetHistogram(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVStructuredBuffer);
 
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
@@ -186,7 +199,7 @@ public:
             inputs.m_TonemapConstants.SetWidth(g_Renderer.m_RHI->m_SwapchainExtent.x);
             inputs.m_TonemapConstants.SetHeight(g_Renderer.m_RHI->m_SwapchainExtent.y);
 
-            inputs.SetHDRColorInput(sceneColor);
+            inputs.SetHDRColorInput(HDRInput);
             inputs.SetExposureInput(exposureBuffer);
 
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);

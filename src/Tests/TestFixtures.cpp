@@ -22,6 +22,11 @@ SceneScope::SceneScope(const char* modelRelPath, bool skipCache)
     if (path.empty() || !std::filesystem::exists(path))
         return;
 
+    // LoadScene() appends into the existing Scene, so drop any previous scene first.
+    if (DEV())
+        DEV()->waitForIdle();
+    g_Renderer.m_Scene.Shutdown();
+
     // Temporarily override Config scene path and cache flag
     Config& cfg = const_cast<Config&>(Config::Get());
     const std::string prevPath = cfg.m_ScenePath;
@@ -97,8 +102,7 @@ nvrhi::TextureHandle CreateTestTexture2D(
         cmd->open();
         cmd->writeTexture(tex, 0, 0, initialData, rowPitch);
         cmd->close();
-        device->executeCommandList(cmd);
-        device->waitForIdle();
+        g_Renderer.ExecutePendingCommandLists();
     }
 
     return tex;
@@ -122,6 +126,7 @@ MinimalSceneFixture::MinimalSceneFixture()
     if (DEV())
         DEV()->waitForIdle();
     g_Renderer.m_Scene.Shutdown();
+    g_Renderer.m_RenderGraph.Shutdown();
 
     // Minimal valid glTF 2.0: a single triangle with 3 POSITION vertices.
     // All buffer data is embedded as a base64 data URI so no file I/O is needed.
@@ -175,6 +180,7 @@ MinimalSceneFixture::~MinimalSceneFixture()
     if (DEV())
         DEV()->waitForIdle();
     g_Renderer.m_Scene.Shutdown();
+    g_Renderer.m_RenderGraph.Shutdown();
 }
 
 bool RunOneFrame()
@@ -215,7 +221,6 @@ float ReadbackTexelFloat(nvrhi::TextureHandle tex, uint32_t x, uint32_t y)
     stagingDesc.mipLevels = 1;
     stagingDesc.isRenderTarget = false;
     stagingDesc.isUAV = false;
-    stagingDesc.isShaderResource = false;
     stagingDesc.initialState = nvrhi::ResourceStates::Common;
     stagingDesc.keepInitialState = false;
     stagingDesc.debugName = "ReadbackStaging";
@@ -245,7 +250,7 @@ float ReadbackTexelFloat(nvrhi::TextureHandle tex, uint32_t x, uint32_t y)
 
     cmd->copyTexture(staging, dstSlice, tex, srcSlice);
     cmd->close();
-    device->executeCommandList(cmd);
+    g_Renderer.ExecutePendingCommandLists();
     device->waitForIdle();
 
     // Map and read
@@ -292,7 +297,6 @@ uint32_t ReadbackTexelRGBA8(nvrhi::TextureHandle tex, uint32_t x, uint32_t y)
     stagingDesc.mipLevels = 1;
     stagingDesc.isRenderTarget = false;
     stagingDesc.isUAV = false;
-    stagingDesc.isShaderResource = false;
     stagingDesc.initialState = nvrhi::ResourceStates::Common;
     stagingDesc.keepInitialState = false;
     stagingDesc.debugName = "ReadbackStagingRGBA8";
@@ -316,7 +320,7 @@ uint32_t ReadbackTexelRGBA8(nvrhi::TextureHandle tex, uint32_t x, uint32_t y)
 
     cmd->copyTexture(staging, dstSlice, tex, srcSlice);
     cmd->close();
-    device->executeCommandList(cmd);
+    g_Renderer.ExecutePendingCommandLists();
     device->waitForIdle();
 
     size_t rowPitch = 0;

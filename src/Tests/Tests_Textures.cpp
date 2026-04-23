@@ -934,8 +934,7 @@ TEST_SUITE("Textures_GPUCreation")
             cmd->open();
             UploadTexture(cmd, tex, desc, data->GetData(), data->GetSize());
             cmd->close();
-            DEV()->executeCommandList(cmd);
-            DEV()->waitForIdle();
+            g_Renderer.ExecutePendingCommandLists();
         }
 
         // Register in bindless heap.

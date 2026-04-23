@@ -2384,7 +2384,7 @@ bool SceneLoader::LoadGLTFSceneFromMemory(Scene& scene, const char* jsonData, si
 	cgltf_result res = cgltf_parse(&options, jsonData, jsonSize, &data);
 	if (res != cgltf_result_success || !data)
 	{
-		SDL_LOG_ASSERT_FAIL("glTF memory parse failed", "[Scene] Failed to parse glTF from memory (result: %s)", cgltf_result_tostring(res));
+		SDL_Log("[Scene] Failed to parse glTF from memory (result: %s)", cgltf_result_tostring(res));
 		return false;
 	}
 
