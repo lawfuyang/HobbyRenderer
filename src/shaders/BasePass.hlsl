@@ -340,9 +340,9 @@ GBufferOut GBuffer_PSMain(VSOut input)
     float metallic = mat.m_RoughnessMetallic.y;
     if (hasORM)
     {
-        // ORM texture layout: R = roughness, G = metallic
-        roughness = ormSample.x;
-        metallic = ormSample.y;
+        // ORM texture layout: G = roughness, B = metallic
+        roughness = ormSample.g;
+        metallic = ormSample.b;
     }
 
     // Prevent perfectly smooth surfaces to avoid artifacts
