@@ -609,20 +609,28 @@ TEST_SUITE("Scene_AnimationUpdate")
     }
 
     // ------------------------------------------------------------------
-    // TC-AUPD-16: CesiumMilkTruck has no animations (sanity baseline for
-    //             a non-animated scene)
+    // ------------------------------------------------------------------
+    // TC-AUPD-16: BoxTextured has no animations (sanity baseline for
+    //             a truly non-animated scene).
+    //
+    // NOTE: CesiumMilkTruck was previously used here but it *does* have
+    //       a "Wheels" rotation animation, making it unsuitable as a
+    //       static-scene baseline.  BoxTextured is a plain textured box
+    //       with no animation data.
     // ------------------------------------------------------------------
     TEST_CASE("TC-AUPD-16 AnimationUpdate - CesiumMilkTruck has no animated nodes")
     {
-        SKIP_IF_NO_SAMPLES("CesiumMilkTruck/glTF/CesiumMilkTruck.gltf");
-        SceneScope scope("CesiumMilkTruck/glTF/CesiumMilkTruck.gltf");
+        SKIP_IF_NO_SAMPLES("BoxTextured/glTF/BoxTextured.gltf");
+        SceneScope scope("BoxTextured/glTF/BoxTextured.gltf");
         REQUIRE(scope.loaded);
 
-        // Milk truck is a static scene.  All m_IsAnimated flags should be false.
+        // BoxTextured is a static scene — no m_IsAnimated flags should be set.
         bool anyAnimated = false;
         for (const auto& node : g_Renderer.m_Scene.m_Nodes)
             if (node.m_IsAnimated) anyAnimated = true;
 
+        INFO("m_Animations.size() = " << g_Renderer.m_Scene.m_Animations.size());
+        INFO("m_Nodes.size() = " << g_Renderer.m_Scene.m_Nodes.size());
         CHECK(!anyAnimated);
     }
 
@@ -712,5 +720,133 @@ TEST_SUITE("Scene_AnimationBuckets")
 
         CHECK(meshNodeCount > 0);
         CHECK(!g_Renderer.m_Scene.m_InstanceData.empty());
+    }
+}
+
+// ============================================================================
+// TEST SUITE: Scene_AnimationDisabledGuard
+// Tests that Scene::Update() is a no-op when m_EnableAnimations is false,
+// verifying the defence-in-depth guard added to Scene::Update() itself.
+// ============================================================================
+TEST_SUITE("Scene_AnimationDisabledGuard")
+{
+    // ------------------------------------------------------------------
+    // TC-ADIS-01: Update() with animations disabled does NOT advance time
+    //             (same as TC-AUPD-05 but uses a fresh, separate test
+    //             name for better isolation and future-proofing)
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ADIS-01 AnimationDisabledGuard - Update does not advance time when disabled")
+    {
+        SKIP_IF_NO_SAMPLES("AnimatedCube/glTF/AnimatedCube.gltf");
+        SceneScope scope("AnimatedCube/glTF/AnimatedCube.gltf");
+        REQUIRE(scope.loaded);
+        REQUIRE(!g_Renderer.m_Scene.m_Animations.empty());
+
+        g_Renderer.m_Scene.m_Animations[0].m_CurrentTime = 0.25f;
+        const float timeBefore = g_Renderer.m_Scene.m_Animations[0].m_CurrentTime;
+
+        const bool prevAnim = g_Renderer.m_EnableAnimations;
+        g_Renderer.m_EnableAnimations = false;
+        g_Renderer.m_Scene.Update(1.0f);
+        g_Renderer.m_EnableAnimations = prevAnim;
+
+        INFO("timeBefore=" << timeBefore
+            << " timeAfter=" << g_Renderer.m_Scene.m_Animations[0].m_CurrentTime);
+        CHECK(g_Renderer.m_Scene.m_Animations[0].m_CurrentTime == doctest::Approx(timeBefore));
+    }
+
+    // ------------------------------------------------------------------
+    // TC-ADIS-02: Update() with animations disabled does NOT dirty
+    //             any node transforms (no transform recomputation)
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ADIS-02 AnimationDisabledGuard - Update does not dirty nodes when disabled")
+    {
+        SKIP_IF_NO_SAMPLES("AnimatedCube/glTF/AnimatedCube.gltf");
+        SceneScope scope("AnimatedCube/glTF/AnimatedCube.gltf");
+        REQUIRE(scope.loaded);
+
+        // Manually clear all dirty flags.
+        for (auto& node : g_Renderer.m_Scene.m_Nodes)
+            node.m_IsDirty = false;
+
+        const bool prevAnim = g_Renderer.m_EnableAnimations;
+        g_Renderer.m_EnableAnimations = false;
+        g_Renderer.m_Scene.Update(1.0f);
+        g_Renderer.m_EnableAnimations = prevAnim;
+
+        for (int i = 0; i < (int)g_Renderer.m_Scene.m_Nodes.size(); ++i)
+        {
+            INFO("Node " << i << " (" << g_Renderer.m_Scene.m_Nodes[i].m_Name << ") dirty");
+            CHECK(!g_Renderer.m_Scene.m_Nodes[i].m_IsDirty);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // TC-ADIS-03: Update() still updates prev-world transforms even when
+    //             animations are disabled (required for motion-vector correctness)
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ADIS-03 AnimationDisabledGuard - prev-world copies happen even when disabled")
+    {
+        SKIP_IF_NO_SAMPLES("AnimatedCube/glTF/AnimatedCube.gltf");
+        SceneScope scope("AnimatedCube/glTF/AnimatedCube.gltf");
+        REQUIRE(scope.loaded);
+        REQUIRE(!g_Renderer.m_Scene.m_InstanceData.empty());
+
+        // Write a sentinel into m_World so we can verify it was copied to m_PrevWorld.
+        srrhi::PerInstanceData& inst = g_Renderer.m_Scene.m_InstanceData[0];
+        inst.m_World._11 = 42.0f;
+        inst.m_PrevWorld._11 = 0.0f;
+
+        const bool prevAnim = g_Renderer.m_EnableAnimations;
+        g_Renderer.m_EnableAnimations = false;
+        g_Renderer.m_Scene.Update(0.5f);
+        g_Renderer.m_EnableAnimations = prevAnim;
+
+        INFO("m_PrevWorld._11 = " << inst.m_PrevWorld._11);
+        CHECK(inst.m_PrevWorld._11 == doctest::Approx(42.0f));
+    }
+}
+
+// ============================================================================
+// TEST SUITE: Scene_CesiumMilkTruck
+// Positive tests documenting that CesiumMilkTruck DOES contain animations.
+// (Previously TC-AUPD-16 wrongly assumed it was static.)
+// ============================================================================
+TEST_SUITE("Scene_CesiumMilkTruck")
+{
+    // ------------------------------------------------------------------
+    // TC-CMT-01: CesiumMilkTruck has a "Wheels" animation
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CMT-01 CesiumMilkTruck - scene has at least one animation")
+    {
+        SKIP_IF_NO_SAMPLES("CesiumMilkTruck/glTF/CesiumMilkTruck.gltf");
+        SceneScope scope("CesiumMilkTruck/glTF/CesiumMilkTruck.gltf");
+        REQUIRE(scope.loaded);
+
+        INFO("m_Animations.size() = " << g_Renderer.m_Scene.m_Animations.size());
+        CHECK(!g_Renderer.m_Scene.m_Animations.empty());
+    }
+
+    // ------------------------------------------------------------------
+    // TC-CMT-02: CesiumMilkTruck has animated wheel nodes
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-CMT-02 CesiumMilkTruck - wheel nodes are animated")
+    {
+        SKIP_IF_NO_SAMPLES("CesiumMilkTruck/glTF/CesiumMilkTruck.gltf");
+        SceneScope scope("CesiumMilkTruck/glTF/CesiumMilkTruck.gltf");
+        REQUIRE(scope.loaded);
+
+        bool foundAnimated = false;
+        for (const auto& node : g_Renderer.m_Scene.m_Nodes)
+        {
+            if (node.m_IsAnimated)
+            {
+                foundAnimated = true;
+                break;
+            }
+        }
+
+        INFO("m_Nodes.size() = " << g_Renderer.m_Scene.m_Nodes.size());
+        CHECK(foundAnimated);
     }
 }

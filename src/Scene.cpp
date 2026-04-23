@@ -257,12 +257,18 @@ void Scene::FinalizeLoadedScene()
             {
                 if (ni >= 0 && ni < (int)m_Nodes.size())
                     m_Nodes[ni].m_IsAnimated = true;
+                else
+                    SDL_Log("[Scene] FinalizeLoadedScene: animation '%s' has out-of-range node index %d (node count=%d)",
+                        anim.m_Name.c_str(), ni, (int)m_Nodes.size());
             }
             // Material targets (EmissiveIntensity)
             for (int mi : chan.m_MaterialIndices)
             {
                 if (mi >= 0 && mi < (int)m_Materials.size())
                     m_DynamicMaterialIndices.push_back(mi);
+                else
+                    SDL_Log("[Scene] FinalizeLoadedScene: animation '%s' has out-of-range material index %d (material count=%d)",
+                        anim.m_Name.c_str(), mi, (int)m_Materials.size());
             }
         }
     }
@@ -431,11 +437,17 @@ void Scene::Update(float deltaTime)
 {
 	PROFILE_FUNCTION();
 
-	// Save current worlds as previous worlds for all instances
+	// Save current worlds as previous worlds for all instances (always, for motion vectors).
 	for (srrhi::PerInstanceData& inst : m_InstanceData)
 	{
 		inst.m_PrevWorld = inst.m_World;
 	}
+
+	// Respect the global animations toggle.  The Renderer already gates this call,
+	// but Scene::Update is also called directly from tests and tools, so the guard
+	// lives here as well to ensure consistent behaviour.
+	if (!g_Renderer.m_EnableAnimations)
+		return;
 
 	if (m_Animations.empty()) return;
 
@@ -520,6 +532,7 @@ void Scene::Update(float deltaTime)
 	// Update only dynamic nodes in topological order
 	for (int idx : m_DynamicNodeIndices)
 	{
+		SDL_assert(idx >= 0 && idx < (int)m_Nodes.size() && "m_DynamicNodeIndices contains out-of-range index");
 		Node& node = m_Nodes[idx];
 		bool parentDirty = (node.m_Parent != -1 && m_Nodes[node.m_Parent].m_IsDirty);
 
