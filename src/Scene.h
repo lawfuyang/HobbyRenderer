@@ -1,7 +1,7 @@
 ﻿#pragma once
 
-
 #include "Camera.h"
+#include "PendingInstanceUpdate.h"
 
 #include "shaders/srrhi/cpp/Common.h"
 #include "shaders/srrhi/cpp/Mesh.h"
@@ -237,6 +237,40 @@ public:
     std::vector<nvrhi::rt::InstanceDesc> m_RTInstanceDescs;
 
     DirectX::BoundingSphere m_SceneBoundingSphere;
+
+    // ── Async streaming ───────────────────────────────────────────────────────
+    // Number of elements currently valid in the vertex / index GPU buffers.
+    // Buffer capacity is read from buf->getDesc().byteSize when needed.
+    // New mesh data is appended at these offsets; buffers are grown (GPU-copy
+    // + re-create) only when capacity is exhausted, like std::vector.
+    uint32_t m_VertexBufferUsed = 0;
+    uint32_t m_IndexBufferUsed  = 0;
+
+    // Pending commands produced by background load threads; drained every frame
+    // by ApplyPendingUpdates() on the main thread.
+    std::vector<TextureUpdateCommand> m_PendingTextureUpdates;
+    std::mutex                       m_PendingTextureMutex;
+    std::vector<MeshUpdateCommand>    m_PendingMeshUpdates;
+    std::mutex                       m_PendingMeshMutex;
+
+    // Scratch list populated during LoadScene; drained at the end of LoadScene
+    // to enqueue one AsyncMeshQueue task per scene primitive.  Not thread-safe
+    // — only touched on the main thread before any background tasks are live.
+    struct PendingAsyncMeshInfo
+    {
+        std::string glTFPath;
+        int         sceneMeshIdx;
+        int         scenePrimIdx;
+        int         glTFMeshIdx;
+        int         glTFPrimIdx;
+        int         materialOffset;
+        int         textureOffset;
+    };
+    std::vector<PendingAsyncMeshInfo> m_PendingAsyncMeshInfos;
+
+    // Apply all queued texture and mesh updates. Must be called from the main
+    // (render) thread only since it performs GPU resource creation / upload.
+    void ApplyPendingUpdates();
 
     // Load the scene from the path configured in `Config::Get().m_ScenePath`.
     // Only mesh vertex/index data and node hierarchy are loaded for now.

@@ -381,6 +381,9 @@ void Renderer::Initialize()
         return;
     }
 
+    m_AsyncTextureQueue.Start("AsyncTextureQueue");
+    m_AsyncMeshQueue.Start("AsyncMeshQueue");
+
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
@@ -665,6 +668,9 @@ void Renderer::Run()
 void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
+
+    m_AsyncMeshQueue.Stop("AsyncMeshQueue");
+    m_AsyncTextureQueue.Stop("AsyncTextureQueue");
 
     MicroProfileShutdown();
 

@@ -34,7 +34,7 @@ public:
     static void ProcessCameras(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets);
     static void ProcessLights(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets);
     static void ProcessAnimations(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets);
-    static void ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<srrhi::VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets);
+    static void ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<srrhi::VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets, const std::string& gltfFilePath);
     static void ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets);
 
     // Texture and GPU buffer functions
@@ -43,14 +43,19 @@ public:
     static void CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices);
     static void CreateAndUploadLightBuffer(Scene& scene);
 
+    // Decompress any meshopt-compressed buffer views in a parsed cgltf_data.
+    // Public so AsyncMeshQueue can call it from background threads.
+    static cgltf_result decompressMeshopt(cgltf_data* data);
+    static const char* cgltf_result_tostring(cgltf_result result);
+
 private:
     // Shared post-parse pipeline used by both LoadGLTFScene and LoadGLTFSceneFromMemory.
     // Takes ownership of `data` (always calls cgltf_free before returning).
-    static bool ProcessParsedGLTF(cgltf_data* data, Scene& scene, const std::string& bufferBasePath, const std::filesystem::path& sceneDir, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices, bool ensureDirectionalLight);
+    // gltfFilePath: the actual .glb/.gltf file path for async mesh loading;
+    //               pass an empty string for in-memory / test invocations.
+    static bool ProcessParsedGLTF(cgltf_data* data, Scene& scene, const std::string& bufferBasePath, const std::filesystem::path& sceneDir, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices, bool ensureDirectionalLight, const std::string& gltfFilePath);
 
     // Utility functions
     static void SetTextureAndSampler(const cgltf_texture* tex, int& textureIndex, const cgltf_data* data, int textureOffset);
     static void ComputeWorldTransforms(Scene& scene, int nodeIndex, const Matrix& parent);
-    static cgltf_result decompressMeshopt(cgltf_data* data);
-    static const char* cgltf_result_tostring(cgltf_result result);
 };

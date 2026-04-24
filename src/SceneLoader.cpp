@@ -1305,67 +1305,30 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 		return;
 	}
 
-	//SCOPED_TIMER("[Scene] LoadTextures");
+	AsyncTextureQueue& q = g_Renderer.m_AsyncTextureQueue;
 
-	const uint32_t threadCount = g_Renderer.m_TaskScheduler->GetThreadCount() + 1;
-	std::vector<nvrhi::CommandListHandle> threadCommandLists(threadCount);
-	for (uint32_t i = 0; i < threadCount; ++i)
-	{
-		threadCommandLists[i] = g_Renderer.AcquireCommandList();
-		threadCommandLists[i]->open();
-	}
-
-	g_Renderer.m_TaskScheduler->ParallelFor(static_cast<uint32_t>(scene.m_Textures.size()), [&](uint32_t i, uint32_t threadIndex)
+	for (uint32_t i = 0; i < (uint32_t)scene.m_Textures.size(); ++i)
 	{
 		Scene::Texture& tex = scene.m_Textures[i];
 		if (tex.m_Uri.empty())
 		{
-			SDL_LOG_ASSERT_FAIL("Texture URI missing", "[Scene] Texture %u has no URI, skipping (embedded images not yet supported)", i);
+			SDL_Log("[Scene] Texture %u has no URI, skipping (embedded images not yet supported)", i);
+			continue;
 		}
 
 		std::string decodedUri = tex.m_Uri;
 		cgltf_decode_uri(decodedUri.data());
 		decodedUri = decodedUri.c_str();
 
-		std::filesystem::path fullPath = sceneDir / decodedUri;
+		std::string fullPath = (sceneDir / decodedUri).string();
 
-		if (!std::filesystem::exists(fullPath))
+		q.EnqueueLoad(fullPath, i, tex.m_Sampler, [&scene](TextureUpdateCommand cmd)
 		{
-			SDL_LOG_ASSERT_FAIL("Texture file not found", "[Scene] Texture file not found: %s", fullPath.string().c_str());
-		}
-
-		SDL_Log("[Scene] Loading texture: %s", fullPath.string().c_str());
-
-		nvrhi::TextureDesc desc;
-		std::unique_ptr<ITextureDataReader> imgData;
-		if (!LoadTexture(fullPath.string(), desc, imgData))
-		{
-			SDL_LOG_ASSERT_FAIL("Texture load failed", "[Scene] Failed to load texture: %s", fullPath.string().c_str());
-		}
-
-		desc.debugName = fullPath.string();
-		
-		tex.m_Handle = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(desc);
-
-		nvrhi::CommandListHandle& cmd = threadCommandLists[threadIndex];
-		UploadTexture(cmd, tex.m_Handle, desc, imgData->GetData(), imgData->GetSize());
-	});
-
-	for (uint32_t i = 0; i < threadCount; ++i)
-	{
-		threadCommandLists[i]->close();
+			std::lock_guard<std::mutex> lk(scene.m_PendingTextureMutex);
+			scene.m_PendingTextureUpdates.push_back(std::move(cmd));
+		});
 	}
-
-	for (size_t ti = 0; ti < scene.m_Textures.size(); ++ti)
-	{
-		SDL_assert(scene.m_Textures[ti].m_Handle);
-
-		scene.m_Textures[ti].m_BindlessIndex = g_Renderer.RegisterTexture(scene.m_Textures[ti].m_Handle);
-		if (scene.m_Textures[ti].m_BindlessIndex == UINT32_MAX)
-		{
-			SDL_LOG_ASSERT_FAIL("Bindless texture registration failed", "[Scene] Bindless texture registration failed for %s", scene.m_Textures[ti].m_Uri.c_str());
-		}
-	}
+	// Returns immediately — textures stream in via ApplyPendingUpdates() each frame.
 }
 
 srrhi::MaterialConstants MaterialConstantsFromMaterial(const Scene::Material& mat, const std::vector<Scene::Texture>& textures)
@@ -1583,9 +1546,59 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const 
 	}
 }
 
-void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<srrhi::VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets)
+void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<srrhi::VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets, const std::string& gltfFilePath)
 {
 	//SCOPED_TIMER("[Scene] Meshes");
+
+	// ── Async / placeholder mode ──────────────────────────────────────────────
+	// When a real file path is provided the scene uses the default cube (MeshData
+	// slot 0) as a stand-in for every primitive.  Real geometry is loaded on a
+	// background thread via AsyncMeshQueue and arrives through ApplyPendingUpdates().
+	if (!gltfFilePath.empty())
+	{
+		// Cube vertex count — safe fallback to 24 if the scene isn't pre-populated.
+		const uint32_t cubeVertexCount =
+			(!scene.m_Meshes.empty() && !scene.m_Meshes[0].m_Primitives.empty())
+				? scene.m_Meshes[0].m_Primitives[0].m_VertexCount
+				: 24u;
+
+		for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
+		{
+			Scene::Mesh mesh;
+			mesh.m_Center = Vector3{ 0.0f, 0.0f, 0.0f };
+			mesh.m_Radius = 0.866f; // placeholder until async data arrives
+
+			for (cgltf_size pi = 0; pi < data->meshes[mi].primitives_count; ++pi)
+			{
+				const cgltf_primitive& cgltfPrim = data->meshes[mi].primitives[pi];
+
+				Scene::Primitive prim;
+				prim.m_VertexOffset  = 0;
+				prim.m_VertexCount   = cubeVertexCount;
+				prim.m_MeshDataIndex = 0; // cube placeholder
+				prim.m_MaterialIndex = cgltfPrim.material
+					? static_cast<int>(cgltf_material_index(data, cgltfPrim.material)) + offsets.materialOffset
+					: -1;
+
+				Scene::PendingAsyncMeshInfo task;
+				task.glTFPath       = gltfFilePath;
+				task.sceneMeshIdx   = offsets.meshOffset + (int)mi;
+				task.scenePrimIdx   = (int)pi;
+				task.glTFMeshIdx    = (int)mi;
+				task.glTFPrimIdx    = (int)pi;
+				task.materialOffset = offsets.materialOffset;
+				task.textureOffset  = offsets.textureOffset;
+				scene.m_PendingAsyncMeshInfos.push_back(std::move(task));
+
+				mesh.m_Primitives.push_back(std::move(prim));
+			}
+
+			scene.m_Meshes.push_back(std::move(mesh));
+		}
+		return;
+	}
+
+	// ── Synchronous path (in-memory / test invocations) ──────────────────────
 
 	struct PrimitiveResult
 	{
@@ -2127,6 +2140,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrh
 		desc.keepInitialState = true;
 		desc.debugName = "Scene_VertexBufferQuantized";
 		scene.m_VertexBufferQuantized = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
+		scene.m_VertexBufferUsed = (uint32_t)allVerticesQuantized.size();
 
 		cmd->writeBuffer(scene.m_VertexBufferQuantized, allVerticesQuantized.data(), vqbytes, 0);
 	}
@@ -2143,6 +2157,7 @@ void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrh
 	desc.debugName = "Scene_IndexBuffer";
 	desc.isAccelStructBuildInput = true;
 	scene.m_IndexBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
+	scene.m_IndexBufferUsed = (uint32_t)allIndices.size();
 
 	if (!allIndices.empty())
 	{
@@ -2307,7 +2322,8 @@ bool SceneLoader::ProcessParsedGLTF(
 	const std::filesystem::path& sceneDir,
 	std::vector<srrhi::VertexQuantized>& allVerticesQuantized,
 	std::vector<uint32_t>& allIndices,
-	bool ensureDirectionalLight)
+	bool ensureDirectionalLight,
+	const std::string& gltfFilePath)
 {
 	cgltf_options options{};
 
@@ -2349,7 +2365,7 @@ bool SceneLoader::ProcessParsedGLTF(
 	ProcessCameras(data, scene, offsets);
 	ProcessLights(data, scene, offsets);
 	ProcessAnimations(data, scene, offsets);
-	ProcessMeshes(data, scene, allVerticesQuantized, allIndices, offsets);
+	ProcessMeshes(data, scene, allVerticesQuantized, allIndices, offsets, gltfFilePath);
 
 	if (ensureDirectionalLight)
 		scene.EnsureDefaultDirectionalLight();
@@ -2374,7 +2390,7 @@ bool SceneLoader::LoadGLTFScene(Scene& scene, const std::string& scenePath, std:
 	const std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
 	// only ensure a directional light if not loading from a JSON scene, as the JSON scene
 	// may already have one baked in and we don't want to add another on top of it
-	return ProcessParsedGLTF(data, scene, scenePath, sceneDir, allVerticesQuantized, allIndices, !bFromJSONScene);
+	return ProcessParsedGLTF(data, scene, scenePath, sceneDir, allVerticesQuantized, allIndices, !bFromJSONScene, scenePath);
 }
 
 bool SceneLoader::LoadGLTFSceneFromMemory(Scene& scene, const char* jsonData, size_t jsonSize, const std::filesystem::path& sceneDir, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices)
@@ -2391,5 +2407,5 @@ bool SceneLoader::LoadGLTFSceneFromMemory(Scene& scene, const char* jsonData, si
 	// Pass an empty base path — embedded data URIs (data:...) are resolved by cgltf
 	// without needing a file path.  External file references will fail gracefully.
 	const std::string basePath = sceneDir.empty() ? "" : (sceneDir.string() + "/");
-	return ProcessParsedGLTF(data, scene, basePath, sceneDir, allVerticesQuantized, allIndices, /*ensureDirectionalLight=*/true);
+	return ProcessParsedGLTF(data, scene, basePath, sceneDir, allVerticesQuantized, allIndices, /*ensureDirectionalLight=*/true, /*gltfFilePath=*/"");
 }

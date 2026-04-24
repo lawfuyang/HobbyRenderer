@@ -1,12 +1,13 @@
 ﻿#pragma once
 
-
-#include "GraphicRHI.h"
-#include "Scene.h"
+#include "AsyncMeshQueue.h"
+#include "AsyncTextureQueue.h"
 #include "Camera.h"
+#include "GraphicRHI.h"
 #include "RenderGraph.h"
-#include "TaskScheduler.h"
+#include "Scene.h"
 #include "srrhi.h"
+#include "TaskScheduler.h"
 
 #include "shaders/ShaderIDs.h"
 
@@ -294,6 +295,10 @@ struct Renderer
 
     // GPU Timing
     nvrhi::TimerQueryHandle m_GPUQueries[2];
+
+    // Background loading queues for async streaming of textures and meshes.
+    AsyncTextureQueue m_AsyncTextureQueue;
+    AsyncMeshQueue    m_AsyncMeshQueue;
 
     // Private methods
     void HashPipelineCommonState(size_t& h, const nvrhi::RenderState&, const nvrhi::FramebufferInfoEx&, const nvrhi::BindingLayoutVector&);

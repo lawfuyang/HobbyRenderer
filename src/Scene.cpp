@@ -2,8 +2,9 @@
 #include "SceneLoader.h"
 #include "Config.h"
 #include "Renderer.h"
-#include "CommonResources.h"
 #include "Utilities.h"
+#include "ProceduralDefaultCube.h"
+#include "TextureLoader.h"
 
 void Scene::LoadScene()
 {
@@ -17,11 +18,40 @@ void Scene::LoadScene()
 	const std::filesystem::path sceneFilePath(scenePath);
 	const std::filesystem::path sceneDir = sceneFilePath.parent_path();
 
-	
 	std::vector<srrhi::VertexQuantized> allVerticesQuantized;
 	std::vector<uint32_t> allIndices;
 
 	//SCOPED_TIMER("[Scene] LoadScene Total");
+
+	// Pre-populate mesh[0] / meshData[0] with the default cube so that all
+	// subsequently loaded geometry receives correct global offsets and the
+	// scene always has at least one valid mesh visible during async streaming.
+	{
+		ProceduralCubeData cubeData = GenerateDefaultCube();
+
+		Scene::Primitive cubePrim;
+		cubePrim.m_VertexOffset  = 0;
+		cubePrim.m_VertexCount   = (uint32_t)cubeData.m_Vertices.size();
+		cubePrim.m_MaterialIndex = -1;
+		cubePrim.m_MeshDataIndex = 0;
+
+		Scene::Mesh cubeMesh;
+		cubeMesh.m_Primitives.push_back(cubePrim);
+		cubeMesh.m_Center = Vector3{ 0.0f, 0.0f, 0.0f };
+		cubeMesh.m_Radius = 0.866f; // sqrt(3)/2 for unit cube half-diagonal
+		m_Meshes.push_back(std::move(cubeMesh));
+
+		// Adjust cube MeshData so index/meshlet offsets reflect global buffer positions.
+		srrhi::MeshData cubemd = cubeData.m_MeshData;
+		// IndexOffsets[0] is already 0; MeshletOffsets[0] is already 0.
+		m_MeshData.push_back(cubemd);
+		m_Meshlets.insert(m_Meshlets.end(), cubeData.m_Meshlets.begin(), cubeData.m_Meshlets.end());
+		m_MeshletVertices.insert(m_MeshletVertices.end(), cubeData.m_MeshletVertices.begin(), cubeData.m_MeshletVertices.end());
+		m_MeshletTriangles.insert(m_MeshletTriangles.end(), cubeData.m_MeshletTriangles.begin(), cubeData.m_MeshletTriangles.end());
+
+		allVerticesQuantized = std::move(cubeData.m_Vertices);
+		allIndices            = std::move(cubeData.m_Indices);
+	}
 
 	const std::string filename = sceneFilePath.filename().string();
 	const bool bIsSceneJson = filename.size() >= 11 && filename.substr(filename.size() - 11) == ".scene.json";
@@ -50,6 +80,27 @@ void Scene::LoadScene()
 	SceneLoader::CreateAndUploadLightBuffer(*this);
 	BuildAccelerationStructures();
 
+	// Enqueue one async mesh load per scene primitive that was deferred by ProcessMeshes.
+	// Each job re-parses the glTF on a background thread, processes the specific primitive,
+	// and pushes a MeshUpdateCommand to m_PendingMeshUpdates for ApplyPendingUpdates().
+	for (PendingAsyncMeshInfo& task : m_PendingAsyncMeshInfos)
+	{
+		std::pair<int, int> ap{ task.sceneMeshIdx, task.scenePrimIdx };
+		g_Renderer.m_AsyncMeshQueue.EnqueueLoad(
+			task.glTFPath,
+			{ ap },
+			task.glTFMeshIdx,
+			task.glTFPrimIdx,
+			task.materialOffset,
+			task.textureOffset,
+			[this](MeshUpdateCommand cmd)
+			{
+				std::lock_guard<std::mutex> lk(m_PendingMeshMutex);
+				m_PendingMeshUpdates.push_back(std::move(cmd));
+			});
+	}
+	m_PendingAsyncMeshInfos.clear();
+
 	if (!m_Cameras.empty())
 	{
 		const Scene::Camera& firstCam = m_Cameras[0];
@@ -69,14 +120,16 @@ void Scene::BuildAccelerationStructures()
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build
     std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
 
-	// 1. Build one BLAS per LOD level per primitive
+	// 1. Build one BLAS per LOD level per primitive.
+	//    Primitives that already have a BLAS (e.g. previously built) are skipped;
+	//    their handle is still registered in meshDataToPrimitive for the TLAS step.
 	uint64_t totalBLASMemoryBytes = 0;
 	for (Mesh& mesh : m_Meshes)
 	{
 		for (Primitive& primitive : mesh.m_Primitives)
 		{
-			SDL_assert(primitive.m_BLAS.empty());
 			meshDataToPrimitive[primitive.m_MeshDataIndex] = &primitive;
+			if (!primitive.m_BLAS.empty()) continue; // BLAS already built
 
 			const srrhi::MeshData& meshData = m_MeshData[primitive.m_MeshDataIndex];
 			const uint32_t lodCount = meshData.m_LODCount;
@@ -124,7 +177,7 @@ void Scene::BuildAccelerationStructures()
     tlasDesc.isTopLevel = true;
     m_TLAS = device->createAccelStruct(tlasDesc);
 
-	SDL_assert(m_RTInstanceDescs.empty());
+	m_RTInstanceDescs.clear();
 	for (uint32_t instanceID = 0; instanceID < m_InstanceData.size(); ++instanceID)
     {
 		const srrhi::PerInstanceData& instData = m_InstanceData[instanceID];
@@ -404,6 +457,9 @@ void Scene::Update(float deltaTime)
 {
 	PROFILE_FUNCTION();
 
+	// Apply any texture / mesh updates that arrived from background threads.
+	ApplyPendingUpdates();
+
 	// Save current worlds as previous worlds for all instances (always, for motion vectors).
 	for (srrhi::PerInstanceData& inst : m_InstanceData)
 	{
@@ -556,6 +612,247 @@ void Scene::Update(float deltaTime)
 	for (int idx : m_DynamicNodeIndices)
 	{
 		m_Nodes[idx].m_IsDirty = false;
+	}
+}
+
+// Appends newData (newDataBytes bytes) to a GPU buffer at usedBytes offset.
+// If the buffer has no room left (capacity determined from buf->getDesc().byteSize),
+// a new buffer is created with at least double the capacity, the existing valid
+// data is copied on the GPU, and newData is written at the end.
+// Returns the buffer to use — may be a new handle if the buffer was grown.
+static nvrhi::BufferHandle AppendToGpuBuffer(
+    nvrhi::ICommandList*  cmd,
+    nvrhi::IDevice*       device,
+    nvrhi::BufferHandle   existing,
+    uint64_t              usedBytes,
+    const void*           newData,
+    uint64_t              newDataBytes,
+    const nvrhi::BufferDesc& templateDesc)
+{
+    const uint64_t capacityBytes = existing ? existing->getDesc().byteSize : 0;
+    if (usedBytes + newDataBytes <= capacityBytes)
+    {
+        cmd->writeBuffer(existing, newData, newDataBytes, usedBytes);
+        return existing;
+    }
+
+    // Grow: at least double, or exactly what is needed — whichever is larger.
+    const uint64_t newCapacity = std::max(capacityBytes * 2, usedBytes + newDataBytes);
+    nvrhi::BufferDesc newDesc  = templateDesc;
+    newDesc.byteSize           = (uint32_t)newCapacity;
+
+    nvrhi::BufferHandle newBuf = device->createBuffer(newDesc);
+    if (usedBytes > 0)
+        cmd->copyBuffer(newBuf, 0, existing, 0, usedBytes);
+    cmd->writeBuffer(newBuf, newData, newDataBytes, usedBytes);
+    return newBuf;
+}
+
+void Scene::ApplyPendingUpdates()
+{
+	// ── Texture updates ────────────────────────────────────────────────────────
+	{
+		std::vector<TextureUpdateCommand> local;
+		{
+			std::lock_guard<std::mutex> lk(m_PendingTextureMutex);
+			local.swap(m_PendingTextureUpdates);
+		}
+
+		bool bAnyTextureUpdated = false;
+		for (TextureUpdateCommand& cmd : local)
+		{
+			if (cmd.m_bCancelled || !cmd.m_Data) continue;
+			if (cmd.m_TextureIndex >= (uint32_t)m_Textures.size()) continue;
+
+			Scene::Texture& tex = m_Textures[cmd.m_TextureIndex];
+
+			tex.m_Handle = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(cmd.m_Desc);
+			if (!tex.m_Handle) continue;
+
+			nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
+			ScopedCommandList scopedCmd{ cl, "AsyncTextureUpload" };
+			UploadTexture(scopedCmd, tex.m_Handle, cmd.m_Desc, cmd.m_Data->GetData(), cmd.m_Data->GetSize());
+
+			tex.m_BindlessIndex = g_Renderer.RegisterTexture(tex.m_Handle);
+			bAnyTextureUpdated  = true;
+		}
+
+		if (bAnyTextureUpdated)
+		{
+			// Re-resolve all material texture indices and re-upload material constants.
+			for (Material& mat : m_Materials)
+			{
+				if (mat.m_BaseColorTexture != -1)
+					mat.m_AlbedoTextureIndex = m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
+				if (mat.m_NormalTexture != -1)
+					mat.m_NormalTextureIndex = m_Textures[mat.m_NormalTexture].m_BindlessIndex;
+				if (mat.m_MetallicRoughnessTexture != -1)
+					mat.m_RoughnessMetallicTextureIndex = m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
+				if (mat.m_EmissiveTexture != -1)
+					mat.m_EmissiveTextureIndex = m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
+			}
+			m_MaterialDirtyRange = { 0, (uint32_t)m_Materials.size() };
+			SceneLoader::UpdateMaterialsAndCreateConstants(*this);
+		}
+	}
+
+	// ── Mesh updates ───────────────────────────────────────────────────────────
+	{
+		std::vector<MeshUpdateCommand> local;
+		{
+			std::lock_guard<std::mutex> lk(m_PendingMeshMutex);
+			local.swap(m_PendingMeshUpdates);
+		}
+
+		bool bAnyMeshUpdated = false;
+
+		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+		// Template descs for the two large geometry buffers (matches CreateAndUploadGpuBuffers).
+		nvrhi::BufferDesc vbDesc{};
+		vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
+		vbDesc.isVertexBuffer        = true;
+		vbDesc.isAccelStructBuildInput = true;
+		vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
+		vbDesc.keepInitialState      = true;
+		vbDesc.debugName             = "Scene_VertexBufferQuantized";
+
+		nvrhi::BufferDesc ibDesc{};
+		ibDesc.structStride          = sizeof(uint32_t);
+		ibDesc.isIndexBuffer         = true;
+		ibDesc.isAccelStructBuildInput = true;
+		ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
+		ibDesc.keepInitialState      = true;
+		ibDesc.debugName             = "Scene_IndexBuffer";
+
+		// All vertex/index appends go into a single command list.
+		nvrhi::CommandListHandle geomCL = g_Renderer.AcquireCommandList();
+		ScopedCommandList geomCmd{ geomCL, "AsyncMeshAppend" };
+
+		for (MeshUpdateCommand& meshCmd : local)
+		{
+			if (meshCmd.m_bCancelled || meshCmd.m_Vertices.empty()) continue;
+
+			// Global offsets — derived from current buffer usage and CPU array sizes.
+			const uint32_t globalVertexOffset   = m_VertexBufferUsed;
+			const uint32_t globalIndexOffset    = m_IndexBufferUsed;
+			const uint32_t globalMeshletOffset  = (uint32_t)m_Meshlets.size();
+			const uint32_t globalMVOffset       = (uint32_t)m_MeshletVertices.size();
+			const uint32_t globalMTOffset       = (uint32_t)m_MeshletTriangles.size();
+			const uint32_t globalMeshDataOffset = (uint32_t)m_MeshData.size();
+
+			// Patch local offsets to global.
+			srrhi::MeshData md = meshCmd.m_MeshData;
+			for (uint32_t lod = 0; lod < md.m_LODCount; ++lod)
+			{
+				md.m_IndexOffsets[lod]   += globalIndexOffset;
+				md.m_MeshletOffsets[lod] += globalMeshletOffset;
+			}
+			for (uint32_t& idx : meshCmd.m_Indices)   idx += globalVertexOffset;
+			for (uint32_t& v   : meshCmd.m_MeshletVertices) v += globalVertexOffset;
+			for (srrhi::Meshlet& m : meshCmd.m_Meshlets)
+			{
+				m.m_VertexOffset   += globalMVOffset;
+				m.m_TriangleOffset += globalMTOffset;
+			}
+
+			// Append vertex/index data directly to the GPU buffers.
+			// AppendToGpuBuffer grows (GPU copy + re-create) only if capacity is exhausted.
+			m_VertexBufferQuantized = AppendToGpuBuffer(geomCmd, device, m_VertexBufferQuantized,
+				(uint64_t)globalVertexOffset * sizeof(srrhi::VertexQuantized),
+				meshCmd.m_Vertices.data(), (uint64_t)meshCmd.m_Vertices.size() * sizeof(srrhi::VertexQuantized),
+				vbDesc);
+			m_VertexBufferUsed += (uint32_t)meshCmd.m_Vertices.size();
+
+			m_IndexBuffer = AppendToGpuBuffer(geomCmd, device, m_IndexBuffer,
+				(uint64_t)globalIndexOffset * sizeof(uint32_t),
+				meshCmd.m_Indices.data(), (uint64_t)meshCmd.m_Indices.size() * sizeof(uint32_t),
+				ibDesc);
+			m_IndexBufferUsed += (uint32_t)meshCmd.m_Indices.size();
+
+			// Append CPU metadata arrays (small; always kept on CPU).
+			m_MeshData.push_back(md);
+			m_Meshlets.insert(m_Meshlets.end(), meshCmd.m_Meshlets.begin(), meshCmd.m_Meshlets.end());
+			m_MeshletVertices.insert(m_MeshletVertices.end(), meshCmd.m_MeshletVertices.begin(), meshCmd.m_MeshletVertices.end());
+			m_MeshletTriangles.insert(m_MeshletTriangles.end(), meshCmd.m_MeshletTriangles.begin(), meshCmd.m_MeshletTriangles.end());
+
+			// Patch affected scene primitives and the corresponding m_InstanceData entries.
+			for (const std::pair<int, int>& ap : meshCmd.m_AffectedPrimitives)
+			{
+				if (ap.first  < 0 || ap.first  >= (int)m_Meshes.size()) continue;
+				Scene::Mesh& mesh = m_Meshes[ap.first];
+				if (ap.second < 0 || ap.second >= (int)mesh.m_Primitives.size()) continue;
+				Scene::Primitive& prim = mesh.m_Primitives[ap.second];
+
+				prim.m_VertexOffset  = globalVertexOffset;
+				prim.m_VertexCount   = (uint32_t)meshCmd.m_Vertices.size();
+				prim.m_MeshDataIndex = globalMeshDataOffset;
+				prim.m_BLAS.clear(); // invalidated — rebuilt below
+
+				// Mirror the new MeshDataIndex into every PerInstanceData entry
+				// that corresponds to (sceneMeshIdx=ap.first, scenePrimIdx=ap.second).
+				// FinalizeLoadedScene fills node.m_InstanceIndices in primitive order,
+				// so m_InstanceIndices[ap.second] is the instance for this primitive.
+				for (Scene::Node& node : m_Nodes)
+				{
+					if (node.m_MeshIndex != ap.first) continue;
+					if (ap.second >= (int)node.m_InstanceIndices.size()) continue;
+					const uint32_t instIdx = node.m_InstanceIndices[ap.second];
+					if (instIdx < (uint32_t)m_InstanceData.size())
+						m_InstanceData[instIdx].m_MeshDataIndex = globalMeshDataOffset;
+				}
+			}
+
+			bAnyMeshUpdated = true;
+		}
+		// geomCmd closes here, flushing all vertex/index writes/copies.
+
+		if (bAnyMeshUpdated)
+		{
+			// Re-create the small metadata GPU buffers from their CPU arrays.
+			{
+				nvrhi::CommandListHandle metaCL = g_Renderer.AcquireCommandList();
+				ScopedCommandList metaCmd{ metaCL, "AsyncMeshMetadataUpload" };
+
+				nvrhi::BufferDesc desc{};
+				desc.initialState    = nvrhi::ResourceStates::ShaderResource;
+				desc.keepInitialState = true;
+
+				desc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
+				desc.structStride = sizeof(srrhi::MeshData);
+				desc.debugName   = "Scene_MeshDataBuffer";
+				m_MeshDataBuffer = device->createBuffer(desc);
+				metaCmd->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), desc.byteSize);
+
+				desc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
+				desc.structStride = sizeof(srrhi::Meshlet);
+				desc.debugName   = "Scene_MeshletBuffer";
+				m_MeshletBuffer  = device->createBuffer(desc);
+				metaCmd->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), desc.byteSize);
+
+				desc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
+				desc.structStride = sizeof(uint32_t);
+				desc.debugName   = "Scene_MeshletVerticesBuffer";
+				m_MeshletVerticesBuffer = device->createBuffer(desc);
+				metaCmd->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), desc.byteSize);
+
+				desc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
+				desc.structStride = sizeof(uint32_t);
+				desc.debugName   = "Scene_MeshletTrianglesBuffer";
+				m_MeshletTrianglesBuffer = device->createBuffer(desc);
+				metaCmd->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), desc.byteSize);
+
+				// Re-upload instance data so the GPU sees the updated m_MeshDataIndex values.
+				if (m_InstanceDataBuffer && !m_InstanceData.empty())
+					metaCmd->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
+						m_InstanceData.size() * sizeof(srrhi::PerInstanceData), 0);
+			}
+
+			// Build BLASes for newly patched primitives and rebuild the TLAS/address buffer.
+			// BuildAccelerationStructures is safe to call again: it skips primitives whose
+			// m_BLAS is already non-empty, and clears/rebuilds m_RTInstanceDescs.
+			BuildAccelerationStructures();
+		}
 	}
 }
 
