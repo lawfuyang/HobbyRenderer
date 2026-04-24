@@ -23,56 +23,23 @@ void Scene::LoadScene()
 
 	//SCOPED_TIMER("[Scene] LoadScene Total");
 
-	bool loadedFromCache = false;
 	const std::string filename = sceneFilePath.filename().string();
 	const bool bIsSceneJson = filename.size() >= 11 && filename.substr(filename.size() - 11) == ".scene.json";
 
-	if (!Config::Get().m_SkipCache)
+	bool success = false;
+	if (bIsSceneJson)
 	{
-		const std::filesystem::path cachePath = sceneFilePath.parent_path() / (sceneFilePath.stem().string() + "_cooked.bin");
-		if (std::filesystem::exists(cachePath))
-		{
-			const std::filesystem::file_time_type sceneTime = std::filesystem::last_write_time(sceneFilePath);
-			const std::filesystem::file_time_type cacheTime = std::filesystem::last_write_time(cachePath);
-			if (cacheTime > sceneTime)
-			{
-				SDL_Log("[Scene] Loading from binary cache: %s", cachePath.string().c_str());
-				if (LoadFromCache(cachePath.string(), allIndices, allVerticesQuantized))
-				{
-					loadedFromCache = true;
-				}
-				else
-				{
-					SDL_Log("[Scene] Cache load failed, falling back to scene loading");
-				}
-			}
-		}
+		success = SceneLoader::LoadJSONScene(*this, scenePath, allVerticesQuantized, allIndices);
+	}
+	else
+	{
+		const bool bFromJSONScene = false;
+		success = SceneLoader::LoadGLTFScene(*this, scenePath, allVerticesQuantized, allIndices, bFromJSONScene);
 	}
 
-	if (!loadedFromCache)
+	if (!success)
 	{
-		bool success = false;
-		if (bIsSceneJson)
-		{
-			success = SceneLoader::LoadJSONScene(*this, scenePath, allVerticesQuantized, allIndices);
-		}
-		else
-		{
-			const bool bFromJSONScene = false;
-			success = SceneLoader::LoadGLTFScene(*this, scenePath, allVerticesQuantized, allIndices, bFromJSONScene);
-		}
-
-		if (!success)
-		{
-			SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene: %s", scenePath.c_str());
-		}
-
-		if (!Config::Get().m_SkipCache)
-		{
-			const std::filesystem::path cachePath = sceneFilePath.parent_path() / (sceneFilePath.stem().string() + "_cooked.bin");
-			SDL_Log("[Scene] Saving binary cache: %s", cachePath.string().c_str());
-			SaveToCache(cachePath.string(), allIndices, allVerticesQuantized);
-		}
+		SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene: %s", scenePath.c_str());
 	}
 
 	FinalizeLoadedScene();

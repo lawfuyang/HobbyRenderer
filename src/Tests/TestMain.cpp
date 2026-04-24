@@ -235,7 +235,7 @@ int RunTests(int argc, char* argv[])
     // Parse command-line arguments so Config fields (e.g. m_GltfSamplesPath)
     // are populated before any test suite runs.
     // We call ParseCommandLine here (before InitializeForTests) so that
-    // --gltf-samples, --skip-cache, etc. are honoured by Phase 3+ tests.
+    // --gltf-samples etc. are honoured by Phase 3+ tests.
     Config::ParseCommandLine(argc, argv);
 
     // Renderer singleton — must outlive the entire test run.

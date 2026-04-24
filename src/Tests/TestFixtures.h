@@ -73,7 +73,7 @@ struct SceneScope
 {
     bool loaded = false;
 
-    explicit SceneScope(const char* modelRelPath, bool skipCache = true);
+    explicit SceneScope(const char* modelRelPath);
     ~SceneScope();
 
     // Non-copyable

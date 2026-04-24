@@ -16,7 +16,7 @@ bool SampleModelExists(const char* relPath)
     return std::filesystem::exists(path);
 }
 
-SceneScope::SceneScope(const char* modelRelPath, bool skipCache)
+SceneScope::SceneScope(const char* modelRelPath)
 {
     const std::string path = GltfSampleModel(modelRelPath);
     if (path.empty() || !std::filesystem::exists(path))
@@ -27,13 +27,11 @@ SceneScope::SceneScope(const char* modelRelPath, bool skipCache)
         DEV()->waitForIdle();
     g_Renderer.m_Scene.Shutdown();
 
-    // Temporarily override Config scene path and cache flag
+    // Temporarily override Config scene path
     Config& cfg = const_cast<Config&>(Config::Get());
     const std::string prevPath = cfg.m_ScenePath;
-    const bool        prevSkip = cfg.m_SkipCache;
 
     cfg.m_ScenePath = path;
-    cfg.m_SkipCache = skipCache; // avoid polluting the sample-assets dir with .bin files
 
     g_Renderer.m_Scene.LoadScene();
     loaded = !g_Renderer.m_Scene.m_Meshes.empty() ||
@@ -41,7 +39,6 @@ SceneScope::SceneScope(const char* modelRelPath, bool skipCache)
 
     // Restore config
     cfg.m_ScenePath = prevPath;
-    cfg.m_SkipCache = prevSkip;
 }
 
 SceneScope::~SceneScope()

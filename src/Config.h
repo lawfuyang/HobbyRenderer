@@ -13,8 +13,6 @@ struct Config
     std::string m_GltfSamplesPath = "";
     // Skip loading textures from scene
     bool m_SkipTextures = false;
-    // Skip loading/saving scene cache
-    bool m_SkipCache = false;
 
     bool ExecutePerPass = false;
     bool ExecutePerPassAndWait = false;

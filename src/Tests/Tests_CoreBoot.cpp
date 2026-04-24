@@ -195,14 +195,6 @@ TEST_SUITE("Config")
     }
 
     // ------------------------------------------------------------------
-    // TC-CFG-04: Default skip-cache is false
-    // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-04 Default config - skip-cache is false")
-    {
-        CHECK_FALSE(Config::Get().m_SkipCache);
-    }
-
-    // ------------------------------------------------------------------
     // TC-CFG-05: Default render-graph aliasing is enabled
     // ------------------------------------------------------------------
     TEST_CASE("TC-CFG-05 Default config - render graph aliasing enabled")
@@ -234,19 +226,6 @@ TEST_SUITE("Config")
         Config::ParseCommandLine(2, const_cast<char**>(argv));
 
         CHECK(Config::Get().m_SkipTextures);
-    }
-
-    // ------------------------------------------------------------------
-    // TC-CFG-08: ParseCommandLine sets --skip-cache
-    // ------------------------------------------------------------------
-    TEST_CASE("TC-CFG-08 ParseCommandLine - --skip-cache sets flag")
-    {
-        ConfigGuard guard;
-
-        const char* argv[] = { "HobbyRenderer", "--skip-cache" };
-        Config::ParseCommandLine(2, const_cast<char**>(argv));
-
-        CHECK(Config::Get().m_SkipCache);
     }
 
     // ------------------------------------------------------------------
@@ -1004,14 +983,13 @@ TEST_SUITE("Config_Extended")
     // ------------------------------------------------------------------
     // TC-CFGX-02: ParseCommandLine with two flags simultaneously
     // ------------------------------------------------------------------
-    TEST_CASE("TC-CFGX-02 ParseCommandLine - two flags set simultaneously")
+    TEST_CASE("TC-CFGX-02 ParseCommandLine - --skip-textures sets flag")
     {
         ConfigGuard guard;
-        const char* argv[] = { "HobbyRenderer", "--skip-textures", "--skip-cache" };
-        Config::ParseCommandLine(3, const_cast<char**>(argv));
+        const char* argv[] = { "HobbyRenderer", "--skip-textures" };
+        Config::ParseCommandLine(2, const_cast<char**>(argv));
 
         CHECK(Config::Get().m_SkipTextures);
-        CHECK(Config::Get().m_SkipCache);
     }
 
     // ------------------------------------------------------------------

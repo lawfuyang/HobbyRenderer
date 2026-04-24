@@ -324,10 +324,6 @@ public:
 
     float GetSceneBoundingRadius() const { return m_SceneBoundingSphere.Radius; }
 
-    // Binary Scene Cache
-    bool LoadFromCache(const std::string& cachePath, std::vector<uint32_t>& allIndices, std::vector<srrhi::VertexQuantized>& allVerticesQuantized);
-    void SaveToCache(const std::string& cachePath, const std::vector<uint32_t>& allIndices, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized);
-
     void UpdateNodeBoundingSphere(int nodeIndex);
 
     // Ensures the scene always has at least one directional light at the back of m_Lights.

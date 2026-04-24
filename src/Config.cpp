@@ -36,11 +36,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_SkipTextures = true;
             SDL_Log("[Config] Skipping GLTF texture loading via command line");
         }
-        else if (std::strcmp(arg, "--skip-cache") == 0)
-        {
-            s_Instance.m_SkipCache = true;
-            SDL_Log("[Config] Skipping scene cache via command line");
-        }
         else if (std::strcmp(arg, "--gltf-samples") == 0)
         {
             if (i + 1 < argc)
@@ -144,7 +139,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --disable-rendergraph-aliasing   Disable render graph aliasing");
             SDL_Log("  --scene <path>                   Load the specified scene file");
             SDL_Log("  --skip-textures                  Skip loading textures from scene");
-            SDL_Log("  --skip-cache                     Skip loading/saving scene cache");
             SDL_Log("  --gltf-samples <path>            Path to KhronosGroup/glTF-Sample-Assets repo root (for tests)");
             SDL_Log("  --irradiance <path>              Path to irradiance cubemap texture (DDS)");
             SDL_Log("  --radiance <path>                Path to radiance cubemap texture (DDS)");
