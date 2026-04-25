@@ -710,3 +710,395 @@ TEST_SUITE("Scene_DefaultLight")
         CHECK(g_Renderer.m_Scene.GetSunIntensity() == doctest::Approx(g_Renderer.m_Scene.m_Lights.at(0).m_Intensity));
     }
 }
+
+// ============================================================================
+// TEST SUITE: Scene_AsyncBoundingVolume
+//
+// Verifies that ApplyPendingUpdates() correctly propagates the bounding
+// sphere computed from async-loaded vertex data all the way through
+//   Scene::Mesh -> Scene::Node -> srrhi::PerInstanceData
+// so GPU frustum and occlusion culling use the correct sphere.
+// ============================================================================
+TEST_SUITE("Scene_AsyncBoundingVolume")
+{
+    // ------------------------------------------------------------------
+    // TC-ABV-01: m_bBoundsValid is true for all meshes after sync load
+    // (sanity-check that the sync path marks the flag correctly)
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ABV-01 AsyncBV - m_bBoundsValid true after sync in-memory load")
+    {
+        REQUIRE(DEV() != nullptr);
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+
+        std::vector<srrhi::VertexQuantized> verts;
+        std::vector<uint32_t> indices;
+        g_Renderer.m_Scene.InitializeDefaultCube(0, 0);
+        g_Renderer.ExecutePendingCommandLists();
+
+        const bool ok = SceneLoader::LoadGLTFSceneFromMemory(
+            g_Renderer.m_Scene,
+            k_AdvMinimalGltf, sizeof(k_AdvMinimalGltf) - 1,
+            {}, verts, indices);
+        REQUIRE(ok);
+
+        // Every mesh must have a valid bounding sphere after a synchronous load.
+        for (int i = 0; i < (int)g_Renderer.m_Scene.m_Meshes.size(); ++i)
+        {
+            INFO("Mesh " << i);
+            CHECK(g_Renderer.m_Scene.m_Meshes[i].m_bBoundsValid);
+            CHECK(g_Renderer.m_Scene.m_Meshes[i].m_Radius >= 0.0f);
+        }
+
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+    }
+
+    // ------------------------------------------------------------------
+    // TC-ABV-02: Instance BVs match node BVs after scene load
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ABV-02 AsyncBV - instance center/radius matches node center/radius after load")
+    {
+        REQUIRE(DEV() != nullptr);
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+
+        std::vector<srrhi::VertexQuantized> verts;
+        std::vector<uint32_t> indices;
+        g_Renderer.m_Scene.InitializeDefaultCube(0, 0);
+        g_Renderer.ExecutePendingCommandLists();
+
+        const bool ok = SceneLoader::LoadGLTFSceneFromMemory(
+            g_Renderer.m_Scene,
+            k_AdvMinimalGltf, sizeof(k_AdvMinimalGltf) - 1,
+            {}, verts, indices);
+        REQUIRE(ok);
+
+        Scene& scene = g_Renderer.m_Scene;
+        for (int ni = 0; ni < (int)scene.m_Nodes.size(); ++ni)
+        {
+            const Scene::Node& node = scene.m_Nodes[ni];
+            for (uint32_t instIdx : node.m_InstanceIndices)
+            {
+                INFO("Node " << ni << " instance " << instIdx);
+                REQUIRE(instIdx < (uint32_t)scene.m_InstanceData.size());
+                const srrhi::PerInstanceData& inst = scene.m_InstanceData[instIdx];
+                CHECK(inst.m_Center.x == doctest::Approx(node.m_Center.x).epsilon(1e-4f));
+                CHECK(inst.m_Center.y == doctest::Approx(node.m_Center.y).epsilon(1e-4f));
+                CHECK(inst.m_Center.z == doctest::Approx(node.m_Center.z).epsilon(1e-4f));
+                CHECK(inst.m_Radius   == doctest::Approx(node.m_Radius).epsilon(1e-4f));
+            }
+        }
+
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+    }
+
+    // ------------------------------------------------------------------
+    // TC-ABV-03: ApplyPendingUpdates updates mesh BV from injected command
+    // Simulates the async-load case: a MeshUpdateCommand with vertices at
+    // a known position is injected and ApplyPendingUpdates is called.
+    // The resulting mesh.m_Center/m_Radius must reflect the vertex data.
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ABV-03 AsyncBV - ApplyPendingUpdates updates mesh BV from vertex data")
+    {
+        REQUIRE(DEV() != nullptr);
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+
+        // Set up a minimal scene with a default cube so the GPU buffers exist.
+        g_Renderer.m_Scene.InitializeDefaultCube(64, 64);
+        g_Renderer.ExecutePendingCommandLists();
+
+        // Add a placeholder mesh (index 1) and a node pointing to it, mimicking
+        // the async loading path in ProcessMeshes.
+        {
+            Scene::Primitive prim;
+            prim.m_VertexOffset  = 0;
+            prim.m_VertexCount   = 0;  // no geometry yet
+            prim.m_MeshDataIndex = 0;  // placeholder: cube mesh data
+            prim.m_MaterialIndex = -1;
+
+            Scene::Mesh placeholder;
+            placeholder.m_Primitives.push_back(prim);
+            placeholder.m_Center      = Vector3{ 0.0f, 0.0f, 0.0f };
+            placeholder.m_Radius      = 0.866f;  // placeholder value
+            placeholder.m_bBoundsValid = false;  // not yet computed from real geometry
+            g_Renderer.m_Scene.m_Meshes.push_back(std::move(placeholder));
+        }
+        const int testMeshIdx = 1;  // index of the mesh we just added
+
+        // Add a directional light so EnsureDefaultDirectionalLight + FinalizeLoadedScene don't crash.
+        g_Renderer.m_Scene.EnsureDefaultDirectionalLight();
+
+        // Add a node pointing at our placeholder mesh.  Identity world transform.
+        {
+            Scene::Node node;
+            node.m_MeshIndex = testMeshIdx;
+            DirectX::XMStoreFloat4x4(&node.m_WorldTransform, DirectX::XMMatrixIdentity());
+            DirectX::XMStoreFloat4x4(&node.m_LocalTransform, DirectX::XMMatrixIdentity());
+            g_Renderer.m_Scene.m_Nodes.push_back(std::move(node));
+        }
+
+        // Finalize so m_InstanceData gets an entry for our node.
+        g_Renderer.m_Scene.FinalizeLoadedScene();
+        REQUIRE(!g_Renderer.m_Scene.m_InstanceData.empty());
+
+        // Record the instance that belongs to our test mesh node.
+        const Scene::Node& testNode = g_Renderer.m_Scene.m_Nodes.back();
+        REQUIRE(!testNode.m_InstanceIndices.empty());
+        const uint32_t testInstIdx = testNode.m_InstanceIndices[0];
+
+        // Verify it starts with the placeholder sphere.
+        CHECK(g_Renderer.m_Scene.m_Meshes[testMeshIdx].m_Radius == doctest::Approx(0.866f).epsilon(1e-4f));
+        CHECK(!g_Renderer.m_Scene.m_Meshes[testMeshIdx].m_bBoundsValid);
+
+        // Build a MeshUpdateCommand with vertices that form a triangle at a
+        // known position (all vertices offset by +10 on X).
+        MeshUpdateCommand cmd;
+        cmd.m_LoadID = 99;
+        {
+            auto makeVert = [](float x, float y, float z) {
+                srrhi::VertexQuantized v{};
+                v.m_Pos = { x, y, z };
+                return v;
+            };
+            cmd.m_Vertices = { makeVert(10.0f, 0.0f, 0.0f),
+                               makeVert(11.0f, 0.0f, 0.0f),
+                               makeVert(10.0f, 1.0f, 0.0f) };
+            cmd.m_Indices  = { 0, 1, 2 };
+            // Simulate bg-thread sphere computation.
+            Sphere s03;
+            Sphere::CreateFromPoints(s03, cmd.m_Vertices.size(), &cmd.m_Vertices[0].m_Pos, sizeof(srrhi::VertexQuantized));
+            cmd.m_LocalSphereCenter = Vector3(s03.Center.x, s03.Center.y, s03.Center.z);
+            cmd.m_LocalSphereRadius = s03.Radius;
+        }
+        cmd.m_MeshData.m_LODCount         = 1;
+        cmd.m_MeshData.m_IndexOffsets[0]  = 0;
+        cmd.m_MeshData.m_IndexCounts[0]   = 3;
+        cmd.m_MeshData.m_MeshletOffsets[0] = 0;
+        cmd.m_MeshData.m_MeshletCounts[0]  = 0;
+        cmd.m_AffectedPrimitives = { { testMeshIdx, 0 } };
+
+        // Inject via the thread-safe pending queue and call ApplyPendingUpdates.
+        {
+            std::lock_guard<std::mutex> lk(g_Renderer.m_Scene.m_PendingMeshMutex);
+            g_Renderer.m_Scene.m_PendingMeshUpdates.push_back(std::move(cmd));
+        }
+        g_Renderer.m_Scene.ApplyPendingUpdates();
+        g_Renderer.ExecutePendingCommandLists();
+
+        const Scene::Mesh& updatedMesh = g_Renderer.m_Scene.m_Meshes[testMeshIdx];
+
+        // BV must now be valid and not the original placeholder.
+        CHECK(updatedMesh.m_bBoundsValid);
+        CHECK(updatedMesh.m_Radius > 0.0f);
+        CHECK(updatedMesh.m_Radius != doctest::Approx(0.866f).epsilon(1e-4f));
+
+        // The sphere center must be in the x=[10,11] range (all vertices have x in [10,11]).
+        CHECK(updatedMesh.m_Center.x >= 10.0f - 1e-3f);
+        CHECK(updatedMesh.m_Center.x <= 11.0f + 1e-3f);
+
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+    }
+
+    // ------------------------------------------------------------------
+    // TC-ABV-04: ApplyPendingUpdates propagates BV to instance data
+    // After the async update, m_InstanceData[i].m_Center/m_Radius must
+    // equal the node's world-space transformed mesh sphere (identity
+    // world = local sphere passes through unchanged).
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ABV-04 AsyncBV - ApplyPendingUpdates propagates BV to instance data")
+    {
+        REQUIRE(DEV() != nullptr);
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+
+        g_Renderer.m_Scene.InitializeDefaultCube(64, 64);
+        g_Renderer.ExecutePendingCommandLists();
+
+        // Same minimal setup as TC-ABV-03.
+        {
+            Scene::Primitive prim;
+            prim.m_VertexOffset  = 0;
+            prim.m_VertexCount   = 0;
+            prim.m_MeshDataIndex = 0;
+            prim.m_MaterialIndex = -1;
+
+            Scene::Mesh placeholder;
+            placeholder.m_Primitives.push_back(prim);
+            placeholder.m_Center      = Vector3{ 0.0f, 0.0f, 0.0f };
+            placeholder.m_Radius      = 0.866f;
+            placeholder.m_bBoundsValid = false;
+            g_Renderer.m_Scene.m_Meshes.push_back(std::move(placeholder));
+        }
+        const int testMeshIdx = 1;
+
+        g_Renderer.m_Scene.EnsureDefaultDirectionalLight();
+
+        {
+            Scene::Node node;
+            node.m_MeshIndex = testMeshIdx;
+            // Place the node at (5, 0, 0) so the world-space center should shift.
+            DirectX::XMStoreFloat4x4(&node.m_WorldTransform,
+                DirectX::XMMatrixTranslation(5.0f, 0.0f, 0.0f));
+            DirectX::XMStoreFloat4x4(&node.m_LocalTransform,
+                DirectX::XMMatrixTranslation(5.0f, 0.0f, 0.0f));
+            node.m_Translation = Vector3{ 5.0f, 0.0f, 0.0f };
+            node.m_Scale       = Vector3{ 1.0f, 1.0f, 1.0f };
+            node.m_Rotation    = Quaternion{ 0.0f, 0.0f, 0.0f, 1.0f };
+            g_Renderer.m_Scene.m_Nodes.push_back(std::move(node));
+        }
+
+        g_Renderer.m_Scene.FinalizeLoadedScene();
+
+        const Scene::Node& testNode = g_Renderer.m_Scene.m_Nodes.back();
+        REQUIRE(!testNode.m_InstanceIndices.empty());
+        const uint32_t testInstIdx = testNode.m_InstanceIndices[0];
+
+        // Inject a command: vertices at local origin (0,0,0) with radius ~0.5.
+        MeshUpdateCommand cmd;
+        cmd.m_LoadID = 100;
+        {
+            auto makeVert = [](float x, float y, float z) {
+                srrhi::VertexQuantized v{};
+                v.m_Pos = { x, y, z };
+                return v;
+            };
+            cmd.m_Vertices = { makeVert(-0.5f, 0.0f, 0.0f),
+                               makeVert( 0.5f, 0.0f, 0.0f),
+                               makeVert( 0.0f, 0.5f, 0.0f) };
+            cmd.m_Indices  = { 0, 1, 2 };
+            // Simulate bg-thread sphere computation.
+            Sphere s04;
+            Sphere::CreateFromPoints(s04, cmd.m_Vertices.size(), &cmd.m_Vertices[0].m_Pos, sizeof(srrhi::VertexQuantized));
+            cmd.m_LocalSphereCenter = Vector3(s04.Center.x, s04.Center.y, s04.Center.z);
+            cmd.m_LocalSphereRadius = s04.Radius;
+        }
+        cmd.m_MeshData.m_LODCount         = 1;
+        cmd.m_MeshData.m_IndexOffsets[0]  = 0;
+        cmd.m_MeshData.m_IndexCounts[0]   = 3;
+        cmd.m_MeshData.m_MeshletOffsets[0] = 0;
+        cmd.m_MeshData.m_MeshletCounts[0]  = 0;
+        cmd.m_AffectedPrimitives = { { testMeshIdx, 0 } };
+
+        {
+            std::lock_guard<std::mutex> lk(g_Renderer.m_Scene.m_PendingMeshMutex);
+            g_Renderer.m_Scene.m_PendingMeshUpdates.push_back(std::move(cmd));
+        }
+        g_Renderer.m_Scene.ApplyPendingUpdates();
+        g_Renderer.ExecutePendingCommandLists();
+
+        const Scene::Mesh& updatedMesh = g_Renderer.m_Scene.m_Meshes[testMeshIdx];
+        REQUIRE(updatedMesh.m_bBoundsValid);
+
+        // The updated node's world-space BV must match the instance data.
+        // (Node was updated inside ApplyPendingUpdates via UpdateNodeBoundingSphere.)
+        const Scene::Node& updatedNode  = g_Renderer.m_Scene.m_Nodes.back();
+        const srrhi::PerInstanceData& inst = g_Renderer.m_Scene.m_InstanceData[testInstIdx];
+
+        CHECK(inst.m_Radius   == doctest::Approx(updatedNode.m_Radius).epsilon(1e-4f));
+        CHECK(inst.m_Center.x == doctest::Approx(updatedNode.m_Center.x).epsilon(1e-3f));
+        CHECK(inst.m_Center.y == doctest::Approx(updatedNode.m_Center.y).epsilon(1e-3f));
+        CHECK(inst.m_Center.z == doctest::Approx(updatedNode.m_Center.z).epsilon(1e-3f));
+
+        // The world-space center must be offset by the node translation (5, 0, 0).
+        // Local mesh center is near origin, so world center must be near (5, 0, 0).
+        CHECK(inst.m_Center.x == doctest::Approx(5.0f + updatedMesh.m_Center.x).epsilon(1e-3f));
+
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+    }
+
+    // ------------------------------------------------------------------
+    // TC-ABV-05: Placeholder sphere (m_bBoundsValid=false) is never used
+    //            for GPU culling — instance radius must not equal 0.866f
+    //            after ApplyPendingUpdates with real geometry.
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-ABV-05 AsyncBV - placeholder sphere replaced after async update")
+    {
+        REQUIRE(DEV() != nullptr);
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+
+        g_Renderer.m_Scene.InitializeDefaultCube(64, 64);
+        g_Renderer.ExecutePendingCommandLists();
+        g_Renderer.m_Scene.EnsureDefaultDirectionalLight();
+
+        // Add a placeholder mesh and node.
+        {
+            Scene::Primitive prim;
+            prim.m_VertexOffset  = 0;
+            prim.m_VertexCount   = 0;
+            prim.m_MeshDataIndex = 0;
+            prim.m_MaterialIndex = -1;
+
+            Scene::Mesh placeholder;
+            placeholder.m_Primitives.push_back(prim);
+            placeholder.m_Center      = Vector3{ 0.0f, 0.0f, 0.0f };
+            placeholder.m_Radius      = 0.866f;
+            placeholder.m_bBoundsValid = false;
+            g_Renderer.m_Scene.m_Meshes.push_back(std::move(placeholder));
+        }
+        const int testMeshIdx = 1;
+
+        {
+            Scene::Node node;
+            node.m_MeshIndex = testMeshIdx;
+            DirectX::XMStoreFloat4x4(&node.m_WorldTransform, DirectX::XMMatrixIdentity());
+            DirectX::XMStoreFloat4x4(&node.m_LocalTransform, DirectX::XMMatrixIdentity());
+            g_Renderer.m_Scene.m_Nodes.push_back(std::move(node));
+        }
+        g_Renderer.m_Scene.FinalizeLoadedScene();
+
+        const Scene::Node& testNode  = g_Renderer.m_Scene.m_Nodes.back();
+        REQUIRE(!testNode.m_InstanceIndices.empty());
+        const uint32_t testInstIdx = testNode.m_InstanceIndices[0];
+
+        // Before update: instance sphere is the placeholder.
+        CHECK(g_Renderer.m_Scene.m_InstanceData[testInstIdx].m_Radius == doctest::Approx(0.866f).epsilon(1e-4f));
+
+        // Send a command with geometry whose radius is clearly different.
+        MeshUpdateCommand cmd;
+        cmd.m_LoadID = 101;
+        {
+            auto makeVert = [](float x, float y, float z) {
+                srrhi::VertexQuantized v{};
+                v.m_Pos = { x, y, z };
+                return v;
+            };
+            // Wide triangle — radius will be ~7 units, definitely not 0.866.
+            cmd.m_Vertices = { makeVert(-7.0f, 0.0f, 0.0f),
+                               makeVert( 7.0f, 0.0f, 0.0f),
+                               makeVert( 0.0f, 7.0f, 0.0f) };
+            cmd.m_Indices  = { 0, 1, 2 };
+            // Simulate bg-thread sphere computation.
+            Sphere s05;
+            Sphere::CreateFromPoints(s05, cmd.m_Vertices.size(), &cmd.m_Vertices[0].m_Pos, sizeof(srrhi::VertexQuantized));
+            cmd.m_LocalSphereCenter = Vector3(s05.Center.x, s05.Center.y, s05.Center.z);
+            cmd.m_LocalSphereRadius = s05.Radius;
+        }
+        cmd.m_MeshData.m_LODCount          = 1;
+        cmd.m_MeshData.m_IndexOffsets[0]   = 0;
+        cmd.m_MeshData.m_IndexCounts[0]    = 3;
+        cmd.m_MeshData.m_MeshletOffsets[0] = 0;
+        cmd.m_MeshData.m_MeshletCounts[0]  = 0;
+        cmd.m_AffectedPrimitives = { { testMeshIdx, 0 } };
+
+        {
+            std::lock_guard<std::mutex> lk(g_Renderer.m_Scene.m_PendingMeshMutex);
+            g_Renderer.m_Scene.m_PendingMeshUpdates.push_back(std::move(cmd));
+        }
+        g_Renderer.m_Scene.ApplyPendingUpdates();
+        g_Renderer.ExecutePendingCommandLists();
+
+        // After update: instance sphere must no longer be the placeholder 0.866f.
+        const float newRadius = g_Renderer.m_Scene.m_InstanceData[testInstIdx].m_Radius;
+        CHECK(newRadius != doctest::Approx(0.866f).epsilon(0.1f));
+        CHECK(newRadius > 1.0f);  // wide triangle should have a radius well above 1
+
+        DEV()->waitForIdle();
+        g_Renderer.m_Scene.Shutdown();
+    }
+}

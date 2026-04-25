@@ -1,10 +1,246 @@
-﻿#include "Scene.h"
+﻿#include "pch.h"
+#include "Scene.h"
 #include "SceneLoader.h"
 #include "Config.h"
 #include "Renderer.h"
 #include "Utilities.h"
 #include "ProceduralDefaultCube.h"
 #include "TextureLoader.h"
+
+// Appends newData (newDataBytes bytes) to a GPU buffer at usedBytes offset.
+// If the buffer has no room left (capacity determined from buf->getDesc().byteSize),
+// a new buffer is created with at least double the capacity, the existing valid
+// data is copied on the GPU, and newData is written at the end.
+// Returns the buffer to use — may be a new handle if the buffer was grown.
+static nvrhi::BufferHandle AppendToGpuBuffer(
+    nvrhi::ICommandList*  cmd,
+    nvrhi::IDevice*       device,
+    nvrhi::BufferHandle   existing,
+    uint64_t              usedBytes,
+    const void*           newData,
+    uint64_t              newDataBytes,
+    const nvrhi::BufferDesc& templateDesc)
+{
+    const uint64_t capacityBytes = existing ? existing->getDesc().byteSize : 0;
+    if (usedBytes + newDataBytes <= capacityBytes)
+    {
+        cmd->writeBuffer(existing, newData, newDataBytes, usedBytes);
+        return existing;
+    }
+
+    // Grow: at least double, or exactly what is needed — whichever is larger.
+    const uint64_t newCapacity = std::max(capacityBytes * 2, usedBytes + newDataBytes);
+    nvrhi::BufferDesc newDesc  = templateDesc;
+    newDesc.byteSize           = (uint32_t)newCapacity;
+
+    nvrhi::BufferHandle newBuf = device->createBuffer(newDesc);
+    if (usedBytes > 0)
+        cmd->copyBuffer(newBuf, 0, existing, 0, usedBytes);
+    cmd->writeBuffer(newBuf, newData, newDataBytes, usedBytes);
+    return newBuf;
+}
+
+void Scene::InitializeDefaultCube(uint32_t vertexCapacity, uint32_t indexCapacity)
+{
+	SDL_assert(m_Meshes.empty() && "InitializeDefaultCube must be called on an empty scene");
+
+	ProceduralCubeData cubeData = GenerateDefaultCube();
+
+	Scene::Primitive cubePrim;
+	cubePrim.m_VertexOffset  = 0;
+	cubePrim.m_VertexCount   = (uint32_t)cubeData.m_Vertices.size();
+	cubePrim.m_MaterialIndex = -1;
+	cubePrim.m_MeshDataIndex = 0;
+
+	Scene::Mesh cubeMesh;
+	cubeMesh.m_Primitives.push_back(cubePrim);
+	cubeMesh.m_Center = Vector3{ 0.0f, 0.0f, 0.0f };
+	cubeMesh.m_Radius = 0.866f;
+	cubeMesh.m_bBoundsValid = true;
+	m_Meshes.push_back(std::move(cubeMesh));
+
+	m_MeshData.push_back(cubeData.m_MeshData);
+	m_Meshlets.insert(m_Meshlets.end(), cubeData.m_Meshlets.begin(), cubeData.m_Meshlets.end());
+	m_MeshletVertices.insert(m_MeshletVertices.end(), cubeData.m_MeshletVertices.begin(), cubeData.m_MeshletVertices.end());
+	m_MeshletTriangles.insert(m_MeshletTriangles.end(), cubeData.m_MeshletTriangles.begin(), cubeData.m_MeshletTriangles.end());
+
+	// Preallocate GPU geometry buffers sized for the whole scene (plus the cube itself).
+	// All subsequent async mesh appends grow into this capacity without reallocation.
+	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+	const uint32_t totalVerts   = std::max(vertexCapacity, (uint32_t)cubeData.m_Vertices.size());
+	const uint32_t totalIndices = std::max(indexCapacity,  (uint32_t)cubeData.m_Indices.size());
+
+	nvrhi::BufferDesc vbDesc{};
+	vbDesc.byteSize              = totalVerts * sizeof(srrhi::VertexQuantized);
+	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
+	vbDesc.isVertexBuffer        = true;
+	vbDesc.isAccelStructBuildInput = true;
+	vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
+	vbDesc.keepInitialState      = true;
+	vbDesc.debugName             = "Scene_VertexBufferQuantized";
+	m_VertexBufferQuantized      = device->createBuffer(vbDesc);
+
+	nvrhi::BufferDesc ibDesc{};
+	ibDesc.byteSize              = std::max<uint32_t>(totalIndices, 1u) * sizeof(uint32_t);
+	ibDesc.structStride          = sizeof(uint32_t);
+	ibDesc.isIndexBuffer         = true;
+	ibDesc.isAccelStructBuildInput = true;
+	ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
+	ibDesc.keepInitialState      = true;
+	ibDesc.debugName             = "Scene_IndexBuffer";
+	m_IndexBuffer                = device->createBuffer(ibDesc);
+
+	// Upload cube vertices/indices into the pre-allocated buffers.
+	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
+	ScopedCommandList scopedCmd{ cmd, "InitializeDefaultCube" };
+	cmd->writeBuffer(m_VertexBufferQuantized, cubeData.m_Vertices.data(),
+	                 cubeData.m_Vertices.size() * sizeof(srrhi::VertexQuantized), 0);
+	cmd->writeBuffer(m_IndexBuffer, cubeData.m_Indices.data(),
+	                 cubeData.m_Indices.size() * sizeof(uint32_t), 0);
+
+	m_VertexBufferUsed = (uint32_t)cubeData.m_Vertices.size();
+	m_IndexBufferUsed  = (uint32_t)cubeData.m_Indices.size();
+
+	// MeshData / meshlet metadata buffers — sized just for the cube; grown on demand by ApplyPendingUpdates.
+	nvrhi::BufferDesc metaDesc{};
+	metaDesc.initialState    = nvrhi::ResourceStates::ShaderResource;
+	metaDesc.keepInitialState = true;
+
+	metaDesc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
+	metaDesc.structStride = sizeof(srrhi::MeshData);
+	metaDesc.debugName   = "Scene_MeshDataBuffer";
+	m_MeshDataBuffer     = device->createBuffer(metaDesc);
+	cmd->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), metaDesc.byteSize);
+
+	metaDesc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
+	metaDesc.structStride = sizeof(srrhi::Meshlet);
+	metaDesc.debugName   = "Scene_MeshletBuffer";
+	m_MeshletBuffer      = device->createBuffer(metaDesc);
+	cmd->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), metaDesc.byteSize);
+
+	metaDesc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
+	metaDesc.structStride = sizeof(uint32_t);
+	metaDesc.debugName   = "Scene_MeshletVerticesBuffer";
+	m_MeshletVerticesBuffer = device->createBuffer(metaDesc);
+	cmd->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), metaDesc.byteSize);
+
+	metaDesc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
+	metaDesc.structStride = sizeof(uint32_t);
+	metaDesc.debugName   = "Scene_MeshletTrianglesBuffer";
+	m_MeshletTrianglesBuffer = device->createBuffer(metaDesc);
+	cmd->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), metaDesc.byteSize);
+}
+
+void Scene::UploadGeometryBuffers(const std::vector<srrhi::VertexQuantized>& vertices,
+                                  const std::vector<uint32_t>& indices)
+{
+	// Used by the synchronous (test / in-memory) load path.  Assumes GPU buffers were
+	// already created by InitializeDefaultCube; appends the provided geometry.
+	SDL_assert(m_VertexBufferQuantized && m_IndexBuffer && "UploadGeometryBuffers: GPU buffers not initialized");
+
+	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+	nvrhi::BufferDesc vbDesc{};
+	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
+	vbDesc.isVertexBuffer        = true;
+	vbDesc.isAccelStructBuildInput = true;
+	vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
+	vbDesc.keepInitialState      = true;
+	vbDesc.debugName             = "Scene_VertexBufferQuantized";
+
+	nvrhi::BufferDesc ibDesc{};
+	ibDesc.structStride          = sizeof(uint32_t);
+	ibDesc.isIndexBuffer         = true;
+	ibDesc.isAccelStructBuildInput = true;
+	ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
+	ibDesc.keepInitialState      = true;
+	ibDesc.debugName             = "Scene_IndexBuffer";
+
+	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
+	ScopedCommandList scopedCmd{ cmd, "UploadGeometryBuffers" };
+
+	if (!vertices.empty())
+	{
+		m_VertexBufferQuantized = AppendToGpuBuffer(cmd, device, m_VertexBufferQuantized,
+		    (uint64_t)m_VertexBufferUsed * sizeof(srrhi::VertexQuantized),
+		    vertices.data(), vertices.size() * sizeof(srrhi::VertexQuantized), vbDesc);
+		m_VertexBufferUsed += (uint32_t)vertices.size();
+	}
+
+	if (!indices.empty())
+	{
+		m_IndexBuffer = AppendToGpuBuffer(cmd, device, m_IndexBuffer,
+		    (uint64_t)m_IndexBufferUsed * sizeof(uint32_t),
+		    indices.data(), indices.size() * sizeof(uint32_t), ibDesc);
+		m_IndexBufferUsed += (uint32_t)indices.size();
+	}
+
+	// Re-upload all CPU metadata arrays (mesh data, meshlets, etc.) and instance data.
+	nvrhi::BufferDesc metaDesc{};
+	metaDesc.initialState    = nvrhi::ResourceStates::ShaderResource;
+	metaDesc.keepInitialState = true;
+
+	if (!m_MeshData.empty())
+	{
+		metaDesc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
+		metaDesc.structStride = sizeof(srrhi::MeshData);
+		metaDesc.debugName   = "Scene_MeshDataBuffer";
+		m_MeshDataBuffer     = device->createBuffer(metaDesc);
+		cmd->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), metaDesc.byteSize);
+	}
+
+	if (!m_Meshlets.empty())
+	{
+		metaDesc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
+		metaDesc.structStride = sizeof(srrhi::Meshlet);
+		metaDesc.debugName   = "Scene_MeshletBuffer";
+		m_MeshletBuffer      = device->createBuffer(metaDesc);
+		cmd->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), metaDesc.byteSize);
+	}
+
+	if (!m_MeshletVertices.empty())
+	{
+		metaDesc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
+		metaDesc.structStride = sizeof(uint32_t);
+		metaDesc.debugName   = "Scene_MeshletVerticesBuffer";
+		m_MeshletVerticesBuffer = device->createBuffer(metaDesc);
+		cmd->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), metaDesc.byteSize);
+	}
+
+	if (!m_MeshletTriangles.empty())
+	{
+		metaDesc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
+		metaDesc.structStride = sizeof(uint32_t);
+		metaDesc.debugName   = "Scene_MeshletTrianglesBuffer";
+		m_MeshletTrianglesBuffer = device->createBuffer(metaDesc);
+		cmd->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), metaDesc.byteSize);
+	}
+
+	// Instance data buffer
+	nvrhi::BufferDesc instDesc{};
+	instDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(srrhi::PerInstanceData), m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
+	instDesc.structStride = sizeof(srrhi::PerInstanceData);
+	instDesc.canHaveUAVs  = true;
+	instDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+	instDesc.keepInitialState = true;
+	instDesc.debugName    = "Scene_InstanceDataBuffer";
+	m_InstanceDataBuffer  = device->createBuffer(instDesc);
+
+	// Per-instance LOD index buffer
+	nvrhi::BufferDesc lodDesc{};
+	lodDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(uint32_t), m_InstanceData.size() * sizeof(uint32_t));
+	lodDesc.structStride = sizeof(uint32_t);
+	lodDesc.canHaveUAVs  = true;
+	lodDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+	lodDesc.keepInitialState = true;
+	lodDesc.debugName    = "Scene_InstanceLODBuffer";
+	m_InstanceLODBuffer  = device->createBuffer(lodDesc);
+
+	if (!m_InstanceData.empty())
+		cmd->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
+		                 m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
+}
 
 void Scene::LoadScene()
 {
@@ -18,40 +254,11 @@ void Scene::LoadScene()
 	const std::filesystem::path sceneFilePath(scenePath);
 	const std::filesystem::path sceneDir = sceneFilePath.parent_path();
 
+	// Geometry vertex/index data is no longer accumulated on the main thread;
+	// all primitives are loaded asynchronously via AsyncMeshQueue.
+	// These vectors remain empty for the async path (gltfFilePath != "").
 	std::vector<srrhi::VertexQuantized> allVerticesQuantized;
 	std::vector<uint32_t> allIndices;
-
-	//SCOPED_TIMER("[Scene] LoadScene Total");
-
-	// Pre-populate mesh[0] / meshData[0] with the default cube so that all
-	// subsequently loaded geometry receives correct global offsets and the
-	// scene always has at least one valid mesh visible during async streaming.
-	{
-		ProceduralCubeData cubeData = GenerateDefaultCube();
-
-		Scene::Primitive cubePrim;
-		cubePrim.m_VertexOffset  = 0;
-		cubePrim.m_VertexCount   = (uint32_t)cubeData.m_Vertices.size();
-		cubePrim.m_MaterialIndex = -1;
-		cubePrim.m_MeshDataIndex = 0;
-
-		Scene::Mesh cubeMesh;
-		cubeMesh.m_Primitives.push_back(cubePrim);
-		cubeMesh.m_Center = Vector3{ 0.0f, 0.0f, 0.0f };
-		cubeMesh.m_Radius = 0.866f; // sqrt(3)/2 for unit cube half-diagonal
-		m_Meshes.push_back(std::move(cubeMesh));
-
-		// Adjust cube MeshData so index/meshlet offsets reflect global buffer positions.
-		srrhi::MeshData cubemd = cubeData.m_MeshData;
-		// IndexOffsets[0] is already 0; MeshletOffsets[0] is already 0.
-		m_MeshData.push_back(cubemd);
-		m_Meshlets.insert(m_Meshlets.end(), cubeData.m_Meshlets.begin(), cubeData.m_Meshlets.end());
-		m_MeshletVertices.insert(m_MeshletVertices.end(), cubeData.m_MeshletVertices.begin(), cubeData.m_MeshletVertices.end());
-		m_MeshletTriangles.insert(m_MeshletTriangles.end(), cubeData.m_MeshletTriangles.begin(), cubeData.m_MeshletTriangles.end());
-
-		allVerticesQuantized = std::move(cubeData.m_Vertices);
-		allIndices            = std::move(cubeData.m_Indices);
-	}
 
 	const std::string filename = sceneFilePath.filename().string();
 	const bool bIsSceneJson = filename.size() >= 11 && filename.substr(filename.size() - 11) == ".scene.json";
@@ -75,31 +282,43 @@ void Scene::LoadScene()
 	FinalizeLoadedScene();
 
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir);
-	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
-	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
-	BuildAccelerationStructures();
 
-	// Enqueue one async mesh load per scene primitive that was deferred by ProcessMeshes.
-	// Each job re-parses the glTF on a background thread, processes the specific primitive,
-	// and pushes a MeshUpdateCommand to m_PendingMeshUpdates for ApplyPendingUpdates().
-	for (PendingAsyncMeshInfo& task : m_PendingAsyncMeshInfos)
 	{
-		std::pair<int, int> ap{ task.sceneMeshIdx, task.scenePrimIdx };
-		g_Renderer.m_AsyncMeshQueue.EnqueueLoad(
-			task.glTFPath,
-			{ ap },
-			task.glTFMeshIdx,
-			task.glTFPrimIdx,
-			task.materialOffset,
-			task.textureOffset,
-			[this](MeshUpdateCommand cmd)
-			{
-				std::lock_guard<std::mutex> lk(m_PendingMeshMutex);
-				m_PendingMeshUpdates.push_back(std::move(cmd));
-			});
+		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
+		ScopedCommandList scopedCmd{ cmd, "Scene_BuildInitialBLAS" };
+		SceneLoader::UpdateMaterialsAndCreateConstants(*this, cmd);
+		BuildAccelerationStructures(cmd);
 	}
-	m_PendingAsyncMeshInfos.clear();
+
+	// Instance data buffer — sized from FinalizeLoadedScene instance count.
+	{
+		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
+		ScopedCommandList scopedCmd{ cmd, "Scene_InstanceBuffers" };
+
+		nvrhi::BufferDesc instDesc{};
+		instDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(srrhi::PerInstanceData), m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
+		instDesc.structStride = sizeof(srrhi::PerInstanceData);
+		instDesc.canHaveUAVs  = true;
+		instDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		instDesc.keepInitialState = true;
+		instDesc.debugName    = "Scene_InstanceDataBuffer";
+		m_InstanceDataBuffer  = device->createBuffer(instDesc);
+
+		nvrhi::BufferDesc lodDesc{};
+		lodDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(uint32_t), m_InstanceData.size() * sizeof(uint32_t));
+		lodDesc.structStride = sizeof(uint32_t);
+		lodDesc.canHaveUAVs  = true;
+		lodDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+		lodDesc.keepInitialState = true;
+		lodDesc.debugName    = "Scene_InstanceLODBuffer";
+		m_InstanceLODBuffer  = device->createBuffer(lodDesc);
+
+		if (!m_InstanceData.empty())
+			cmd->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
+			                 m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
+	}
 
 	if (!m_Cameras.empty())
 	{
@@ -109,13 +328,11 @@ void Scene::LoadScene()
 	}
 }
 
-void Scene::BuildAccelerationStructures()
+void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
 {
 	//SCOPED_TIMER("[Scene] Build Accel Structs");
 
     nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
-	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-	ScopedCommandList scopedCmd{ cmd, "Build Scene Accel Structs" };
 
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build
     std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
@@ -160,7 +377,7 @@ void Scene::BuildAccelerationStructures()
 				blasDesc.buildFlags = nvrhi::rt::AccelStructBuildFlags::PreferFastTrace;
 
 				primitive.m_BLAS[lod] = device->createAccelStruct(blasDesc);
-				nvrhi::utils::BuildBottomLevelAccelStruct(scopedCmd, primitive.m_BLAS[lod], blasDesc);
+				nvrhi::utils::BuildBottomLevelAccelStruct(cmdList, primitive.m_BLAS[lod], blasDesc);
 
 				// Accumulate memory for logging (Req 7)
 				totalBLASMemoryBytes += device->getAccelStructMemoryRequirements(primitive.m_BLAS[lod]).size;
@@ -219,9 +436,9 @@ void Scene::BuildAccelerationStructures()
         m_RTInstanceDescBuffer = device->createBuffer(rtInstDesc);
 
         // Initial upload
-        scopedCmd->writeBuffer(m_RTInstanceDescBuffer, m_RTInstanceDescs.data(), rtInstDesc.byteSize);
+        cmdList->writeBuffer(m_RTInstanceDescBuffer, m_RTInstanceDescs.data(), rtInstDesc.byteSize);
 
-        scopedCmd->buildTopLevelAccelStructFromBuffer(m_TLAS, m_RTInstanceDescBuffer, 0, (uint32_t)m_RTInstanceDescs.size());
+        cmdList->buildTopLevelAccelStructFromBuffer(m_TLAS, m_RTInstanceDescBuffer, 0, (uint32_t)m_RTInstanceDescs.size());
     }
 
     // 3. Build the flat BLAS address buffer: blasAddresses[instanceIndex * srrhi::CommonConsts::MAX_LOD_COUNT + lodIndex]
@@ -255,7 +472,7 @@ void Scene::BuildAccelerationStructures()
 
         if (totalEntries > 0)
         {
-            scopedCmd->writeBuffer(m_BLASAddressBuffer, blasAddresses.data(), blasAddrDesc.byteSize);
+            cmdList->writeBuffer(m_BLASAddressBuffer, blasAddresses.data(), blasAddrDesc.byteSize);
         }
     }
 }
@@ -615,244 +832,250 @@ void Scene::Update(float deltaTime)
 	}
 }
 
-// Appends newData (newDataBytes bytes) to a GPU buffer at usedBytes offset.
-// If the buffer has no room left (capacity determined from buf->getDesc().byteSize),
-// a new buffer is created with at least double the capacity, the existing valid
-// data is copied on the GPU, and newData is written at the end.
-// Returns the buffer to use — may be a new handle if the buffer was grown.
-static nvrhi::BufferHandle AppendToGpuBuffer(
-    nvrhi::ICommandList*  cmd,
-    nvrhi::IDevice*       device,
-    nvrhi::BufferHandle   existing,
-    uint64_t              usedBytes,
-    const void*           newData,
-    uint64_t              newDataBytes,
-    const nvrhi::BufferDesc& templateDesc)
-{
-    const uint64_t capacityBytes = existing ? existing->getDesc().byteSize : 0;
-    if (usedBytes + newDataBytes <= capacityBytes)
-    {
-        cmd->writeBuffer(existing, newData, newDataBytes, usedBytes);
-        return existing;
-    }
-
-    // Grow: at least double, or exactly what is needed — whichever is larger.
-    const uint64_t newCapacity = std::max(capacityBytes * 2, usedBytes + newDataBytes);
-    nvrhi::BufferDesc newDesc  = templateDesc;
-    newDesc.byteSize           = (uint32_t)newCapacity;
-
-    nvrhi::BufferHandle newBuf = device->createBuffer(newDesc);
-    if (usedBytes > 0)
-        cmd->copyBuffer(newBuf, 0, existing, 0, usedBytes);
-    cmd->writeBuffer(newBuf, newData, newDataBytes, usedBytes);
-    return newBuf;
-}
-
 void Scene::ApplyPendingUpdates()
 {
-	// ── Texture updates ────────────────────────────────────────────────────────
+	// ── Drain pending queues ────────────────────────────────────────────────
+	std::vector<TextureUpdateCommand> localTextures;
+	std::vector<MeshUpdateCommand>    localMeshes;
 	{
-		std::vector<TextureUpdateCommand> local;
+		std::lock_guard<std::mutex> lk(m_PendingTextureMutex);
+		localTextures.swap(m_PendingTextureUpdates);
+	}
+	{
+		std::lock_guard<std::mutex> lk(m_PendingMeshMutex);
+		localMeshes.swap(m_PendingMeshUpdates);
+	}
+
+	if (localTextures.empty() && localMeshes.empty())
+		return;
+
+	SimpleTimer timer;
+	if (!localMeshes.empty())
+	{
+		SDL_Log("[Scene] Applying %zu pending mesh updates", localMeshes.size());
+	}
+	if (!localTextures.empty())
+	{
+		SDL_Log("[Scene] Applying %zu pending texture updates", localTextures.size());
+	}
+
+	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+	// One command list for all texture uploads + geometry appends + metadata writes.
+	nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
+	ScopedCommandList scopedCmd{ cl, "ApplyPendingUpdates" };
+
+	// ── Texture updates ────────────────────────────────────────────────────────
+	bool bAnyTextureUpdated = false;
+	for (TextureUpdateCommand& cmd : localTextures)
+	{
+		if (cmd.m_bCancelled || !cmd.m_Data) continue;
+		if (cmd.m_TextureIndex >= (uint32_t)m_Textures.size()) continue;
+
+		Scene::Texture& tex = m_Textures[cmd.m_TextureIndex];
+
+		tex.m_Handle = device->createTexture(cmd.m_Desc);
+		if (!tex.m_Handle) continue;
+
+		UploadTexture(cl, tex.m_Handle, cmd.m_Desc, cmd.m_Data->GetData(), cmd.m_Data->GetSize());
+
+		tex.m_BindlessIndex = g_Renderer.RegisterTexture(tex.m_Handle);
+		bAnyTextureUpdated  = true;
+	}
+
+	if (bAnyTextureUpdated)
+	{
+		// Re-resolve all material texture indices and re-upload material constants.
+		for (Material& mat : m_Materials)
 		{
-			std::lock_guard<std::mutex> lk(m_PendingTextureMutex);
-			local.swap(m_PendingTextureUpdates);
+			if (mat.m_BaseColorTexture != -1)
+				mat.m_AlbedoTextureIndex = m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
+			if (mat.m_NormalTexture != -1)
+				mat.m_NormalTextureIndex = m_Textures[mat.m_NormalTexture].m_BindlessIndex;
+			if (mat.m_MetallicRoughnessTexture != -1)
+				mat.m_RoughnessMetallicTextureIndex = m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
+			if (mat.m_EmissiveTexture != -1)
+				mat.m_EmissiveTextureIndex = m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
 		}
-
-		bool bAnyTextureUpdated = false;
-		for (TextureUpdateCommand& cmd : local)
-		{
-			if (cmd.m_bCancelled || !cmd.m_Data) continue;
-			if (cmd.m_TextureIndex >= (uint32_t)m_Textures.size()) continue;
-
-			Scene::Texture& tex = m_Textures[cmd.m_TextureIndex];
-
-			tex.m_Handle = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(cmd.m_Desc);
-			if (!tex.m_Handle) continue;
-
-			nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
-			ScopedCommandList scopedCmd{ cl, "AsyncTextureUpload" };
-			UploadTexture(scopedCmd, tex.m_Handle, cmd.m_Desc, cmd.m_Data->GetData(), cmd.m_Data->GetSize());
-
-			tex.m_BindlessIndex = g_Renderer.RegisterTexture(tex.m_Handle);
-			bAnyTextureUpdated  = true;
-		}
-
-		if (bAnyTextureUpdated)
-		{
-			// Re-resolve all material texture indices and re-upload material constants.
-			for (Material& mat : m_Materials)
-			{
-				if (mat.m_BaseColorTexture != -1)
-					mat.m_AlbedoTextureIndex = m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
-				if (mat.m_NormalTexture != -1)
-					mat.m_NormalTextureIndex = m_Textures[mat.m_NormalTexture].m_BindlessIndex;
-				if (mat.m_MetallicRoughnessTexture != -1)
-					mat.m_RoughnessMetallicTextureIndex = m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
-				if (mat.m_EmissiveTexture != -1)
-					mat.m_EmissiveTextureIndex = m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
-			}
-			m_MaterialDirtyRange = { 0, (uint32_t)m_Materials.size() };
-			SceneLoader::UpdateMaterialsAndCreateConstants(*this);
-		}
+		m_MaterialDirtyRange = { 0, (uint32_t)m_Materials.size() - 1 };
+		SceneLoader::UpdateMaterialsAndCreateConstants(*this, cl);
 	}
 
 	// ── Mesh updates ───────────────────────────────────────────────────────────
+	nvrhi::BufferDesc vbDesc{};
+	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
+	vbDesc.isVertexBuffer        = true;
+	vbDesc.isAccelStructBuildInput = true;
+	vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
+	vbDesc.keepInitialState      = true;
+	vbDesc.debugName             = "Scene_VertexBufferQuantized";
+
+	nvrhi::BufferDesc ibDesc{};
+	ibDesc.structStride          = sizeof(uint32_t);
+	ibDesc.isIndexBuffer         = true;
+	ibDesc.isAccelStructBuildInput = true;
+	ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
+	ibDesc.keepInitialState      = true;
+	ibDesc.debugName             = "Scene_IndexBuffer";
+
+	bool bAnyMeshUpdated = false;
+	for (MeshUpdateCommand& meshCmd : localMeshes)
 	{
-		std::vector<MeshUpdateCommand> local;
+		if (meshCmd.m_bCancelled || meshCmd.m_Vertices.empty()) continue;
+
+		const uint32_t globalVertexOffset   = m_VertexBufferUsed;
+		const uint32_t globalIndexOffset    = m_IndexBufferUsed;
+		const uint32_t globalMeshletOffset  = (uint32_t)m_Meshlets.size();
+		const uint32_t globalMVOffset       = (uint32_t)m_MeshletVertices.size();
+		const uint32_t globalMTOffset       = (uint32_t)m_MeshletTriangles.size();
+		const uint32_t globalMeshDataOffset = (uint32_t)m_MeshData.size();
+
+		srrhi::MeshData md = meshCmd.m_MeshData;
+		for (uint32_t lod = 0; lod < md.m_LODCount; ++lod)
 		{
-			std::lock_guard<std::mutex> lk(m_PendingMeshMutex);
-			local.swap(m_PendingMeshUpdates);
+			md.m_IndexOffsets[lod]   += globalIndexOffset;
+			md.m_MeshletOffsets[lod] += globalMeshletOffset;
+		}
+		for (uint32_t& idx : meshCmd.m_Indices)        idx += globalVertexOffset;
+		for (uint32_t& v   : meshCmd.m_MeshletVertices) v   += globalVertexOffset;
+		for (srrhi::Meshlet& m : meshCmd.m_Meshlets)
+		{
+			m.m_VertexOffset   += globalMVOffset;
+			m.m_TriangleOffset += globalMTOffset;
 		}
 
-		bool bAnyMeshUpdated = false;
+		m_VertexBufferQuantized = AppendToGpuBuffer(cl, device, m_VertexBufferQuantized,
+			(uint64_t)globalVertexOffset * sizeof(srrhi::VertexQuantized),
+			meshCmd.m_Vertices.data(), (uint64_t)meshCmd.m_Vertices.size() * sizeof(srrhi::VertexQuantized),
+			vbDesc);
+		m_VertexBufferUsed += (uint32_t)meshCmd.m_Vertices.size();
 
-		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+		m_IndexBuffer = AppendToGpuBuffer(cl, device, m_IndexBuffer,
+			(uint64_t)globalIndexOffset * sizeof(uint32_t),
+			meshCmd.m_Indices.data(), (uint64_t)meshCmd.m_Indices.size() * sizeof(uint32_t),
+			ibDesc);
+		m_IndexBufferUsed += (uint32_t)meshCmd.m_Indices.size();
 
-		// Template descs for the two large geometry buffers (matches CreateAndUploadGpuBuffers).
-		nvrhi::BufferDesc vbDesc{};
-		vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
-		vbDesc.isVertexBuffer        = true;
-		vbDesc.isAccelStructBuildInput = true;
-		vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
-		vbDesc.keepInitialState      = true;
-		vbDesc.debugName             = "Scene_VertexBufferQuantized";
+		m_MeshData.push_back(md);
+		m_Meshlets.insert(m_Meshlets.end(), meshCmd.m_Meshlets.begin(), meshCmd.m_Meshlets.end());
+		m_MeshletVertices.insert(m_MeshletVertices.end(), meshCmd.m_MeshletVertices.begin(), meshCmd.m_MeshletVertices.end());
+		m_MeshletTriangles.insert(m_MeshletTriangles.end(), meshCmd.m_MeshletTriangles.begin(), meshCmd.m_MeshletTriangles.end());
 
-		nvrhi::BufferDesc ibDesc{};
-		ibDesc.structStride          = sizeof(uint32_t);
-		ibDesc.isIndexBuffer         = true;
-		ibDesc.isAccelStructBuildInput = true;
-		ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
-		ibDesc.keepInitialState      = true;
-		ibDesc.debugName             = "Scene_IndexBuffer";
+		const bool bHasSphere = meshCmd.m_LocalSphereRadius >= 0.0f;
+		SDL_assert(bHasSphere && "MeshUpdateCommand missing pre-computed sphere; "
+			"ProcessSinglePrimitiveFromMapped must set m_LocalSphereCenter/m_LocalSphereRadius");
 
-		// All vertex/index appends go into a single command list.
-		nvrhi::CommandListHandle geomCL = g_Renderer.AcquireCommandList();
-		ScopedCommandList geomCmd{ geomCL, "AsyncMeshAppend" };
-
-		for (MeshUpdateCommand& meshCmd : local)
+		for (const std::pair<int, int>& ap : meshCmd.m_AffectedPrimitives)
 		{
-			if (meshCmd.m_bCancelled || meshCmd.m_Vertices.empty()) continue;
+			if (ap.first  < 0 || ap.first  >= (int)m_Meshes.size()) continue;
+			Scene::Mesh& mesh = m_Meshes[ap.first];
+			if (ap.second < 0 || ap.second >= (int)mesh.m_Primitives.size()) continue;
+			Scene::Primitive& prim = mesh.m_Primitives[ap.second];
 
-			// Global offsets — derived from current buffer usage and CPU array sizes.
-			const uint32_t globalVertexOffset   = m_VertexBufferUsed;
-			const uint32_t globalIndexOffset    = m_IndexBufferUsed;
-			const uint32_t globalMeshletOffset  = (uint32_t)m_Meshlets.size();
-			const uint32_t globalMVOffset       = (uint32_t)m_MeshletVertices.size();
-			const uint32_t globalMTOffset       = (uint32_t)m_MeshletTriangles.size();
-			const uint32_t globalMeshDataOffset = (uint32_t)m_MeshData.size();
+			prim.m_VertexOffset  = globalVertexOffset;
+			prim.m_VertexCount   = (uint32_t)meshCmd.m_Vertices.size();
+			prim.m_MeshDataIndex = globalMeshDataOffset;
+			prim.m_BLAS.clear();
 
-			// Patch local offsets to global.
-			srrhi::MeshData md = meshCmd.m_MeshData;
-			for (uint32_t lod = 0; lod < md.m_LODCount; ++lod)
+			// Update mesh-level local BV using the sphere pre-computed on the background thread.
+			if (bHasSphere)
 			{
-				md.m_IndexOffsets[lod]   += globalIndexOffset;
-				md.m_MeshletOffsets[lod] += globalMeshletOffset;
-			}
-			for (uint32_t& idx : meshCmd.m_Indices)   idx += globalVertexOffset;
-			for (uint32_t& v   : meshCmd.m_MeshletVertices) v += globalVertexOffset;
-			for (srrhi::Meshlet& m : meshCmd.m_Meshlets)
-			{
-				m.m_VertexOffset   += globalMVOffset;
-				m.m_TriangleOffset += globalMTOffset;
-			}
-
-			// Append vertex/index data directly to the GPU buffers.
-			// AppendToGpuBuffer grows (GPU copy + re-create) only if capacity is exhausted.
-			m_VertexBufferQuantized = AppendToGpuBuffer(geomCmd, device, m_VertexBufferQuantized,
-				(uint64_t)globalVertexOffset * sizeof(srrhi::VertexQuantized),
-				meshCmd.m_Vertices.data(), (uint64_t)meshCmd.m_Vertices.size() * sizeof(srrhi::VertexQuantized),
-				vbDesc);
-			m_VertexBufferUsed += (uint32_t)meshCmd.m_Vertices.size();
-
-			m_IndexBuffer = AppendToGpuBuffer(geomCmd, device, m_IndexBuffer,
-				(uint64_t)globalIndexOffset * sizeof(uint32_t),
-				meshCmd.m_Indices.data(), (uint64_t)meshCmd.m_Indices.size() * sizeof(uint32_t),
-				ibDesc);
-			m_IndexBufferUsed += (uint32_t)meshCmd.m_Indices.size();
-
-			// Append CPU metadata arrays (small; always kept on CPU).
-			m_MeshData.push_back(md);
-			m_Meshlets.insert(m_Meshlets.end(), meshCmd.m_Meshlets.begin(), meshCmd.m_Meshlets.end());
-			m_MeshletVertices.insert(m_MeshletVertices.end(), meshCmd.m_MeshletVertices.begin(), meshCmd.m_MeshletVertices.end());
-			m_MeshletTriangles.insert(m_MeshletTriangles.end(), meshCmd.m_MeshletTriangles.begin(), meshCmd.m_MeshletTriangles.end());
-
-			// Patch affected scene primitives and the corresponding m_InstanceData entries.
-			for (const std::pair<int, int>& ap : meshCmd.m_AffectedPrimitives)
-			{
-				if (ap.first  < 0 || ap.first  >= (int)m_Meshes.size()) continue;
-				Scene::Mesh& mesh = m_Meshes[ap.first];
-				if (ap.second < 0 || ap.second >= (int)mesh.m_Primitives.size()) continue;
-				Scene::Primitive& prim = mesh.m_Primitives[ap.second];
-
-				prim.m_VertexOffset  = globalVertexOffset;
-				prim.m_VertexCount   = (uint32_t)meshCmd.m_Vertices.size();
-				prim.m_MeshDataIndex = globalMeshDataOffset;
-				prim.m_BLAS.clear(); // invalidated — rebuilt below
-
-				// Mirror the new MeshDataIndex into every PerInstanceData entry
-				// that corresponds to (sceneMeshIdx=ap.first, scenePrimIdx=ap.second).
-				// FinalizeLoadedScene fills node.m_InstanceIndices in primitive order,
-				// so m_InstanceIndices[ap.second] is the instance for this primitive.
-				for (Scene::Node& node : m_Nodes)
+				const Sphere primSphere(meshCmd.m_LocalSphereCenter, meshCmd.m_LocalSphereRadius);
+				if (!mesh.m_bBoundsValid)
 				{
-					if (node.m_MeshIndex != ap.first) continue;
-					if (ap.second >= (int)node.m_InstanceIndices.size()) continue;
+					mesh.m_Center       = meshCmd.m_LocalSphereCenter;
+					mesh.m_Radius       = meshCmd.m_LocalSphereRadius;
+					mesh.m_bBoundsValid = true;
+				}
+				else
+				{
+					Sphere merged;
+					Sphere::CreateMerged(merged, Sphere(mesh.m_Center, mesh.m_Radius), primSphere);
+					mesh.m_Center = Vector3(merged.Center.x, merged.Center.y, merged.Center.z);
+					mesh.m_Radius = merged.Radius;
+				}
+				SDL_Log("[Scene] Async BV mesh[%d] prim[%d]: center=(%.3f, %.3f, %.3f) radius=%.4f",
+					ap.first, ap.second,
+					mesh.m_Center.x, mesh.m_Center.y, mesh.m_Center.z, mesh.m_Radius);
+			}
+
+			// Single node scan: patch m_MeshDataIndex and propagate updated BV.
+			for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
+			{
+				Scene::Node& node = m_Nodes[ni];
+				if (node.m_MeshIndex != ap.first) continue;
+
+				if (ap.second < (int)node.m_InstanceIndices.size())
+				{
 					const uint32_t instIdx = node.m_InstanceIndices[ap.second];
 					if (instIdx < (uint32_t)m_InstanceData.size())
 						m_InstanceData[instIdx].m_MeshDataIndex = globalMeshDataOffset;
 				}
+
+				if (bHasSphere)
+				{
+					UpdateNodeBoundingSphere(ni);
+					for (uint32_t instIdx : node.m_InstanceIndices)
+					{
+						if (instIdx >= (uint32_t)m_InstanceData.size()) continue;
+						m_InstanceData[instIdx].m_Center = node.m_Center;
+						m_InstanceData[instIdx].m_Radius = node.m_Radius;
+						m_InstanceDirtyRange.first  = std::min(m_InstanceDirtyRange.first,  instIdx);
+						m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
+					}
+				}
 			}
-
-			bAnyMeshUpdated = true;
 		}
-		// geomCmd closes here, flushing all vertex/index writes/copies.
 
-		if (bAnyMeshUpdated)
-		{
-			// Re-create the small metadata GPU buffers from their CPU arrays.
-			{
-				nvrhi::CommandListHandle metaCL = g_Renderer.AcquireCommandList();
-				ScopedCommandList metaCmd{ metaCL, "AsyncMeshMetadataUpload" };
+		bAnyMeshUpdated = true;
+	}
 
-				nvrhi::BufferDesc desc{};
-				desc.initialState    = nvrhi::ResourceStates::ShaderResource;
-				desc.keepInitialState = true;
+	if (bAnyMeshUpdated)
+	{
+		// Re-create small metadata GPU buffers from their CPU arrays (same CL).
+		nvrhi::BufferDesc desc{};
+		desc.initialState    = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
 
-				desc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
-				desc.structStride = sizeof(srrhi::MeshData);
-				desc.debugName   = "Scene_MeshDataBuffer";
-				m_MeshDataBuffer = device->createBuffer(desc);
-				metaCmd->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), desc.byteSize);
+		desc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
+		desc.structStride = sizeof(srrhi::MeshData);
+		desc.debugName   = "Scene_MeshDataBuffer";
+		m_MeshDataBuffer = device->createBuffer(desc);
+		cl->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), desc.byteSize);
 
-				desc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
-				desc.structStride = sizeof(srrhi::Meshlet);
-				desc.debugName   = "Scene_MeshletBuffer";
-				m_MeshletBuffer  = device->createBuffer(desc);
-				metaCmd->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), desc.byteSize);
+		desc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
+		desc.structStride = sizeof(srrhi::Meshlet);
+		desc.debugName   = "Scene_MeshletBuffer";
+		m_MeshletBuffer  = device->createBuffer(desc);
+		cl->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), desc.byteSize);
 
-				desc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
-				desc.structStride = sizeof(uint32_t);
-				desc.debugName   = "Scene_MeshletVerticesBuffer";
-				m_MeshletVerticesBuffer = device->createBuffer(desc);
-				metaCmd->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), desc.byteSize);
+		desc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
+		desc.structStride = sizeof(uint32_t);
+		desc.debugName   = "Scene_MeshletVerticesBuffer";
+		m_MeshletVerticesBuffer = device->createBuffer(desc);
+		cl->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), desc.byteSize);
 
-				desc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
-				desc.structStride = sizeof(uint32_t);
-				desc.debugName   = "Scene_MeshletTrianglesBuffer";
-				m_MeshletTrianglesBuffer = device->createBuffer(desc);
-				metaCmd->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), desc.byteSize);
+		desc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
+		desc.structStride = sizeof(uint32_t);
+		desc.debugName   = "Scene_MeshletTrianglesBuffer";
+		m_MeshletTrianglesBuffer = device->createBuffer(desc);
+		cl->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), desc.byteSize);
 
-				// Re-upload instance data so the GPU sees the updated m_MeshDataIndex values.
-				if (m_InstanceDataBuffer && !m_InstanceData.empty())
-					metaCmd->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
-						m_InstanceData.size() * sizeof(srrhi::PerInstanceData), 0);
-			}
+		if (m_InstanceDataBuffer && !m_InstanceData.empty())
+			cl->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
+				m_InstanceData.size() * sizeof(srrhi::PerInstanceData), 0);
+	}
+	// scopedCmd closes here (flushes all writes / copies above).
 
-			// Build BLASes for newly patched primitives and rebuild the TLAS/address buffer.
-			// BuildAccelerationStructures is safe to call again: it skips primitives whose
-			// m_BLAS is already non-empty, and clears/rebuilds m_RTInstanceDescs.
-			BuildAccelerationStructures();
-		}
+	if (bAnyMeshUpdated)
+	{
+		// BVH build uses its own command list (may need different queue requirements).
+		BuildAccelerationStructures(cl);
+	}
+
+	if (!localMeshes.empty() || !localTextures.empty())
+	{
+		SDL_Log("[Scene] Finished applying pending updates in %.2f ms", timer.TotalMilliseconds());
 	}
 }
 
@@ -901,6 +1124,7 @@ void Scene::UpdateNodeBoundingSphere(int nodeIndex)
     if (node.m_MeshIndex >= 0 && node.m_MeshIndex < (int)m_Meshes.size())
     {
         const Mesh& mesh = m_Meshes[node.m_MeshIndex];
+        SDL_assert(mesh.m_Radius >= 0.0f && "Mesh has negative bounding radius; data is corrupt");
         const DirectX::BoundingSphere localSphere(mesh.m_Center, mesh.m_Radius);
         DirectX::BoundingSphere worldSphere;
         localSphere.Transform(worldSphere, DirectX::XMLoadFloat4x4(&node.m_WorldTransform));

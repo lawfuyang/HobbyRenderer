@@ -40,7 +40,7 @@ TEST_SUITE("Textures_DDSLoading")
         }
 
         nvrhi::TextureDesc desc{};
-        std::unique_ptr<ITextureDataReader> data;
+        std::unique_ptr<MemoryMappedDataReader> data;
         const bool ok = LoadTexture(ddsPath.string(), desc, data);
 
         CHECK(ok);
@@ -60,7 +60,7 @@ TEST_SUITE("Textures_DDSLoading")
         }
 
         nvrhi::TextureDesc desc{};
-        std::unique_ptr<ITextureDataReader> data;
+        std::unique_ptr<MemoryMappedDataReader> data;
         LoadTexture(ddsPath.string(), desc, data);
 
         REQUIRE(data != nullptr);
@@ -81,7 +81,7 @@ TEST_SUITE("Textures_DDSLoading")
         }
 
         nvrhi::TextureDesc desc{};
-        std::unique_ptr<ITextureDataReader> data;
+        std::unique_ptr<MemoryMappedDataReader> data;
         LoadTexture(ddsPath.string(), desc, data);
 
         REQUIRE(data != nullptr);
@@ -106,7 +106,7 @@ TEST_SUITE("Textures_DDSLoading")
             }
 
             nvrhi::TextureDesc desc{};
-            std::unique_ptr<ITextureDataReader> data;
+            std::unique_ptr<MemoryMappedDataReader> data;
             const bool ok = LoadTexture(p.string(), desc, data);
 
             INFO("File: " << f);
@@ -133,7 +133,7 @@ TEST_SUITE("Textures_DDSLoading")
         }
 
         nvrhi::TextureDesc desc{};
-        std::unique_ptr<ITextureDataReader> data;
+        std::unique_ptr<MemoryMappedDataReader> data;
         LoadTexture(ddsPath.string(), desc, data);
 
         REQUIRE(data != nullptr);
@@ -154,7 +154,7 @@ TEST_SUITE("Textures_DDSLoading")
         }
 
         nvrhi::TextureDesc descA{}, descB{};
-        std::unique_ptr<ITextureDataReader> dataA, dataB;
+        std::unique_ptr<MemoryMappedDataReader> dataA, dataB;
 
         LoadTexture(ddsPath.string(), descA, dataA);
         LoadDDSTexture(ddsPath.string(), descB, dataB);
@@ -291,7 +291,7 @@ TEST_SUITE("Textures_STBILoading")
         }
 
         nvrhi::TextureDesc desc{};
-        std::unique_ptr<ITextureDataReader> data;
+        std::unique_ptr<MemoryMappedDataReader> data;
         LoadSTBITexture(pngPath, desc, data);
 
         REQUIRE(data != nullptr);
@@ -915,7 +915,7 @@ TEST_SUITE("Textures_GPUCreation")
         }
 
         nvrhi::TextureDesc desc{};
-        std::unique_ptr<ITextureDataReader> data;
+        std::unique_ptr<MemoryMappedDataReader> data;
         LoadTexture(ddsPath.string(), desc, data);
         REQUIRE(data != nullptr);
 

@@ -364,6 +364,8 @@ void Renderer::Initialize()
     MicroProfileSetEnableAllGroups(true);
     MicroProfileSetForceMetaCounters(true);
 
+    PROFILE_FUNCTION();
+
     m_TaskScheduler = std::make_unique<TaskScheduler>();
 
     InitSDL();
@@ -383,6 +385,18 @@ void Renderer::Initialize()
 
     m_AsyncTextureQueue.Start("AsyncTextureQueue");
     m_AsyncMeshQueue.Start("AsyncMeshQueue");
+
+    // Estimate scene geometry size to preallocate GPU buffers conservatively
+    // (quick parse — no binary data loaded), then initialise the default cube
+    // as mesh[0] and create the preallocated vertex/index buffers.
+    {
+        uint32_t estimatedVerts   = 0;
+        uint32_t estimatedIndices = 0;
+        SceneLoader::EstimateGeometrySize(Config::Get().m_ScenePath, estimatedVerts, estimatedIndices);
+        // 2× vertex budget (optimiser may remap) + 3× index budget (LOD levels: ~1+0.6+0.36+…≈2.5×)
+        m_Scene.InitializeDefaultCube(estimatedVerts * 2u, estimatedIndices * 3u);
+        ExecutePendingCommandLists();
+    }
 
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
@@ -436,6 +450,10 @@ void Renderer::InitializeForTests()
 
     if (!InitializeGPUStack(m_Window))
         return;
+
+    // Tests manage their own scenes; initialise with minimal buffers (just the default cube).
+    m_Scene.InitializeDefaultCube(0, 0);
+    ExecutePendingCommandLists();
 
     SDL_Log("[Tests] InitializeForTests complete — RHI + CommonResources ready");
 }
@@ -1623,11 +1641,16 @@ ScopedGpuProfile::ScopedGpuProfile(std::string_view name, const nvrhi::CommandLi
 {
 }
 
+thread_local bool tl_bScopedCommandListActive = false;
+
 ScopedCommandList::ScopedCommandList(const nvrhi::CommandListHandle& commandList, std::string_view markerName)
     : m_CommandList(commandList)
     , m_MarkerName(markerName)
     , m_HasMarker(!m_MarkerName.empty())
 {
+    SDL_assert(!tl_bScopedCommandListActive && "Nested ScopedCommandList is not allowed");
+    tl_bScopedCommandListActive = true;
+
     m_CommandList->open();
 
     if (m_HasMarker)
@@ -1657,6 +1680,8 @@ ScopedCommandList::~ScopedCommandList()
         m_CommandList->endMarker();
     }
     m_CommandList->close();
+
+    tl_bScopedCommandListActive = false;
 }
 
 // Forward declaration — defined in Tests/TestMain.cpp.

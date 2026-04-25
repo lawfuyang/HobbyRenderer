@@ -75,11 +75,11 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     // Create or resize vertex buffer
     if (!m_VertexBuffer || m_VertexBufferSize < vertex_size)
     {
-        if (m_VertexBufferSize < vertex_size)
-        {
-            SDL_Log("[ImGui] Vertex buffer size increased from %u to %zu bytes",
-                    m_VertexBufferSize, vertex_size);
-        }
+        // if (m_VertexBufferSize < vertex_size)
+        // {
+        //     SDL_Log("[ImGui] Vertex buffer size increased from %u to %zu bytes",
+        //             m_VertexBufferSize, vertex_size);
+        // }
 
         m_VertexBuffer = nullptr;
 
@@ -96,11 +96,11 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     // Create or resize index buffer
     if (!m_IndexBuffer || m_IndexBufferSize < index_size)
     {
-        if (m_IndexBufferSize < index_size)
-        {
-            SDL_Log("[ImGui] Index buffer size increased from %u to %zu bytes",
-                    m_IndexBufferSize, index_size);
-        }
+        // if (m_IndexBufferSize < index_size)
+        // {
+        //     SDL_Log("[ImGui] Index buffer size increased from %u to %zu bytes",
+        //             m_IndexBufferSize, index_size);
+        // }
 
         m_IndexBuffer = nullptr;
 

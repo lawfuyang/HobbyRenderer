@@ -12,6 +12,13 @@
 
 #include "meshoptimizer.h"
 
+#define ENABLE_GLTF_SCOPED_TIMERS 0
+#if ENABLE_GLTF_SCOPED_TIMERS   
+    #define GLTF_SCOPED_TIMER(name) SCOPED_TIMER("GLTF TIMER: " name)
+#else
+    #define GLTF_SCOPED_TIMER(name)
+#endif
+
 // ─── glTF KHR_materials_volume helpers ───────────────────────────────────────
 // Converts glTF attenuationColor + attenuationDistance to absorption coefficient sigmaA.
 // KHR_materials_volume convention:
@@ -153,7 +160,7 @@ static bool json_strcmp(const JsonContext& ctx, int tokenIdx, const char* str)
 static nvrhi::TextureHandle LoadAndRegisterEnvMap(const std::string& path, uint32_t index, const char* name)
 {
 	nvrhi::TextureDesc desc;
-	std::unique_ptr<ITextureDataReader> imgData;
+	std::unique_ptr<MemoryMappedDataReader> imgData;
 	if (!LoadTexture(path, desc, imgData))
 	{
 		SDL_LOG_ASSERT_FAIL("Failed to load environment map", "[SceneLoader] Failed to load environment map: %s", path.c_str());
@@ -174,7 +181,7 @@ static nvrhi::TextureHandle LoadAndRegisterEnvMap(const std::string& path, uint3
 
 bool SceneLoader::LoadJSONScene(Scene& scene, const std::string& scenePath, std::vector<srrhi::VertexQuantized>& allVerticesQuantized, std::vector<uint32_t>& allIndices)
 {
-	//SCOPED_TIMER("[Scene] LoadJSONScene");
+	GLTF_SCOPED_TIMER("[Scene] LoadJSONScene");
 
 	SDL_Log("[Scene] Starting to load JSON scene: %s", scenePath.c_str());
 
@@ -701,7 +708,7 @@ static void ParseJSONAnimations(Scene& scene, const JsonContext& ctx, const jsmn
 {
 	if (tokens[animationsTokenIdx].type != JSMN_ARRAY) return;
 
-	//SCOPED_TIMER("[Scene] ParseJSONAnimations");
+	GLTF_SCOPED_TIMER("[Scene] ParseJSONAnimations");
 
 	const int numAnims = tokens[animationsTokenIdx].size;
 	SDL_Log("[Scene] Parsing %d JSON animations", numAnims);
@@ -1156,7 +1163,7 @@ void SceneLoader::SetTextureAndSampler(const cgltf_texture* tex, int& textureInd
 
 void SceneLoader::ProcessMaterialsAndImages(const cgltf_data* data, Scene& scene, const std::filesystem::path& sceneDir, const SceneOffsets& offsets)
 {
-	//SCOPED_TIMER("[Scene] Materials+Images");
+	GLTF_SCOPED_TIMER("[Scene] Materials+Images");
 
 	// Materials
 	for (cgltf_size i = 0; i < data->materials_count; ++i)
@@ -1363,9 +1370,9 @@ srrhi::MaterialConstants MaterialConstantsFromMaterial(const Scene::Material& ma
 	return mc;
 }
 
-void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene)
+void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, nvrhi::CommandListHandle cmdList)
 {
-	//SCOPED_TIMER("[Scene] MaterialConstants");
+	GLTF_SCOPED_TIMER("[Scene] MaterialConstants");
 
 	for (Scene::Material& mat : scene.m_Materials)
 	{
@@ -1396,15 +1403,13 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene)
 
 	if (!materialConstants.empty())
 	{
-		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-		ScopedCommandList scopedCmd{ cmd, "Upload MaterialConstants" };
-		scopedCmd->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(srrhi::MaterialConstants));
+		cmdList->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(srrhi::MaterialConstants));
 	}
 }
 
 void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	//SCOPED_TIMER("[Scene] Cameras");
+	GLTF_SCOPED_TIMER("[Scene] Cameras");
 	for (cgltf_size i = 0; i < data->cameras_count; ++i)
 	{
 		const cgltf_camera& cgCam = data->cameras[i];
@@ -1431,7 +1436,7 @@ void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const Sce
 
 void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	//SCOPED_TIMER("[Scene] Lights");
+	GLTF_SCOPED_TIMER("[Scene] Lights");
 
 	for (cgltf_size i = 0; i < data->lights_count; ++i)
 	{
@@ -1473,7 +1478,7 @@ void SceneLoader::ProcessLights(const cgltf_data* data, Scene& scene, const Scen
 
 void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	//SCOPED_TIMER("[Scene] Animations");
+	GLTF_SCOPED_TIMER("[Scene] Animations");
 	for (cgltf_size i = 0; i < data->animations_count; ++i)
 	{
 		const cgltf_animation& cgAnim = data->animations[i];
@@ -1548,7 +1553,7 @@ void SceneLoader::ProcessAnimations(const cgltf_data* data, Scene& scene, const 
 
 void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vector<srrhi::VertexQuantized>& outVerticesQuantized, std::vector<uint32_t>& outIndices, const SceneOffsets& offsets, const std::string& gltfFilePath)
 {
-	//SCOPED_TIMER("[Scene] Meshes");
+	GLTF_SCOPED_TIMER("[Scene] Meshes");
 
 	// ── Async / placeholder mode ──────────────────────────────────────────────
 	// When a real file path is provided the scene uses the default cube (MeshData
@@ -1561,6 +1566,57 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 			(!scene.m_Meshes.empty() && !scene.m_Meshes[0].m_Primitives.empty())
 				? scene.m_Meshes[0].m_Primitives[0].m_VertexCount
 				: 24u;
+
+		// ── Resolve binary data file path and buffer offset ─────────────────
+		// Fast path: use MemoryMappedDataReader to access only the bytes we need.
+		// Fallback (binFilePath empty): AsyncMeshQueue re-parses the full glTF.
+		std::string binFilePath;
+		uint64_t    binDataOffset = 0;
+
+		if (data->buffers_count > 0)
+		{
+			const cgltf_buffer& buf = data->buffers[0];
+			if (buf.uri == nullptr)
+			{
+				// GLB: binary data is embedded; binFilePath is the .glb itself.
+				// Compute the byte offset of the BIN chunk's data region.
+				// GLB layout: header(12) + JSON chunk header(8) + JSON data + BIN chunk header(8) + BIN data.
+				// Bytes 12-15 of the file hold the JSON chunk data length.
+				binFilePath = gltfFilePath;
+				FILE* f = fopen(gltfFilePath.c_str(), "rb");
+				if (f)
+				{
+					uint32_t jsonChunkLen = 0;
+					fseek(f, 12, SEEK_SET);
+					fread(&jsonChunkLen, sizeof(uint32_t), 1, f);
+					fclose(f);
+					const uint32_t jsonPadded = (jsonChunkLen + 3u) & ~3u;
+					binDataOffset = static_cast<uint64_t>(20 + jsonPadded + 8);
+				}
+			}
+			else if (strncmp(buf.uri, "data:", 5) != 0)
+			{
+				// External .bin file.
+				binFilePath   = (std::filesystem::path(gltfFilePath).parent_path() / buf.uri).string();
+				binDataOffset = 0;
+			}
+			// else: embedded data URI — cannot use mmap; leave binFilePath empty (fallback).
+		}
+
+		// Helper to fill PrimAccessorInfo from a cgltf_accessor.
+		auto ExtractAccessorInfo = [](const cgltf_accessor* acc) -> PrimAccessorInfo
+		{
+			if (!acc || !acc->buffer_view) return {};
+			PrimAccessorInfo info;
+			info.present       = true;
+			info.byteOffset    = static_cast<uint64_t>(acc->buffer_view->offset + acc->offset);
+			info.count         = static_cast<uint32_t>(acc->count);
+			info.byteStride    = static_cast<uint32_t>(acc->buffer_view->stride);
+			info.componentType = static_cast<int>(acc->component_type);
+			info.numComponents = static_cast<int>(cgltf_num_components(acc->type));
+			info.normalized    = acc->normalized != 0;
+			return info;
+		};
 
 		for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
 		{
@@ -1580,15 +1636,41 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 					? static_cast<int>(cgltf_material_index(data, cgltfPrim.material)) + offsets.materialOffset
 					: -1;
 
-				Scene::PendingAsyncMeshInfo task;
-				task.glTFPath       = gltfFilePath;
+				PendingAsyncMeshInfo task;
+				task.gltfPath       = gltfFilePath;
+				task.binFilePath    = binFilePath;
+				task.binDataOffset  = binDataOffset;
 				task.sceneMeshIdx   = offsets.meshOffset + (int)mi;
 				task.scenePrimIdx   = (int)pi;
 				task.glTFMeshIdx    = (int)mi;
 				task.glTFPrimIdx    = (int)pi;
 				task.materialOffset = offsets.materialOffset;
 				task.textureOffset  = offsets.textureOffset;
-				scene.m_PendingAsyncMeshInfos.push_back(std::move(task));
+
+				// Extract per-accessor binary metadata for the fast mmap path.
+				for (cgltf_size ai = 0; ai < cgltfPrim.attributes_count; ++ai)
+				{
+					const cgltf_attribute& attr = cgltfPrim.attributes[ai];
+					switch (attr.type)
+					{
+					case cgltf_attribute_type_position: task.posAccessor  = ExtractAccessorInfo(attr.data); break;
+					case cgltf_attribute_type_normal:   task.normAccessor  = ExtractAccessorInfo(attr.data); break;
+					case cgltf_attribute_type_texcoord: task.uvAccessor    = ExtractAccessorInfo(attr.data); break;
+					case cgltf_attribute_type_tangent:  task.tangAccessor  = ExtractAccessorInfo(attr.data); break;
+					default: break;
+					}
+				}
+				SDL_assert(task.posAccessor.present && "Position attribute is required");
+
+				task.indexAccessor = ExtractAccessorInfo(cgltfPrim.indices);
+
+				g_Renderer.m_AsyncMeshQueue.EnqueueLoad(
+					std::move(task),
+					[](MeshUpdateCommand cmd)
+					{
+						std::lock_guard<std::mutex> lk(g_Renderer.m_Scene.m_PendingMeshMutex);
+						g_Renderer.m_Scene.m_PendingMeshUpdates.push_back(std::move(cmd));
+					});
 
 				mesh.m_Primitives.push_back(std::move(prim));
 			}
@@ -1994,6 +2076,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		}
 		mesh.m_Center = (Vector3)s.Center;
 		mesh.m_Radius = s.Radius;
+		mesh.m_bBoundsValid = true;
 
 		//SDL_Log("[Scene] Mesh %u [%s]: %zu primitives", mi, meshRes.name.c_str(), meshRes.primitives.size());
 		scene.m_Meshes.push_back(std::move(mesh));
@@ -2011,7 +2094,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 
 void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)
 {
-	//SCOPED_TIMER("[Scene] Nodes+Hierarchy");
+	GLTF_SCOPED_TIMER("[Scene] Nodes+Hierarchy");
 	std::unordered_map<cgltf_size, int> nodeMap;
 	for (cgltf_size ni = 0; ni < data->nodes_count; ++ni)
 	{
@@ -2118,141 +2201,6 @@ void SceneLoader::ProcessNodesAndHierarchy(const cgltf_data* data, Scene& scene,
 	{
 		scene.UpdateNodeBoundingSphere(static_cast<int>(ni) + offsets.nodeOffset);
 	}
-}
-
-void SceneLoader::CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices)
-{
-	//SCOPED_TIMER("[Scene] GPU Upload");
-
-	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-	ScopedCommandList scopedCmd{ cmd, "Upload Scene Buffers" };
-
-	// Create quantized vertex buffer
-	if (!allVerticesQuantized.empty())
-	{
-		size_t vqbytes = allVerticesQuantized.size() * sizeof(srrhi::VertexQuantized);
-		nvrhi::BufferDesc desc{};
-		desc.byteSize = (uint32_t)vqbytes;
-		desc.structStride = sizeof(srrhi::VertexQuantized);
-		desc.isVertexBuffer = true;
-		desc.isAccelStructBuildInput = true;
-		desc.initialState = nvrhi::ResourceStates::ShaderResource;
-		desc.keepInitialState = true;
-		desc.debugName = "Scene_VertexBufferQuantized";
-		scene.m_VertexBufferQuantized = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-		scene.m_VertexBufferUsed = (uint32_t)allVerticesQuantized.size();
-
-		cmd->writeBuffer(scene.m_VertexBufferQuantized, allVerticesQuantized.data(), vqbytes, 0);
-	}
-
-	// Create index buffer
-
-	size_t ibytes = std::max<size_t>(sizeof(uint32_t), allIndices.size() * sizeof(uint32_t));
-	nvrhi::BufferDesc desc{};
-	desc.byteSize = (uint32_t)ibytes;
-	desc.structStride = sizeof(uint32_t);
-	desc.isIndexBuffer = true;
-	desc.initialState = nvrhi::ResourceStates::IndexBuffer;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_IndexBuffer";
-	desc.isAccelStructBuildInput = true;
-	scene.m_IndexBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-	scene.m_IndexBufferUsed = (uint32_t)allIndices.size();
-
-	if (!allIndices.empty())
-	{
-		cmd->writeBuffer(scene.m_IndexBuffer, allIndices.data(), ibytes, 0);
-	}
-
-	// Create mesh data buffer
-	desc.byteSize = std::max<size_t>(sizeof(srrhi::MeshData), scene.m_MeshData.size() * sizeof(srrhi::MeshData));
-	desc.structStride = sizeof(srrhi::MeshData);
-	desc.initialState = nvrhi::ResourceStates::ShaderResource;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_MeshDataBuffer";
-	scene.m_MeshDataBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-
-	if (!scene.m_MeshData.empty())
-	{
-		cmd->writeBuffer(scene.m_MeshDataBuffer, scene.m_MeshData.data(), scene.m_MeshData.size() * sizeof(srrhi::MeshData), 0);
-	}
-
-	// Create meshlet buffers
-	desc.byteSize = std::max<size_t>(sizeof(srrhi::Meshlet), scene.m_Meshlets.size() * sizeof(srrhi::Meshlet));
-	desc.structStride = sizeof(srrhi::Meshlet);
-	desc.initialState = nvrhi::ResourceStates::ShaderResource;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_MeshletBuffer";
-	scene.m_MeshletBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-
-	if (!scene.m_Meshlets.empty())
-	{
-		cmd->writeBuffer(scene.m_MeshletBuffer, scene.m_Meshlets.data(), scene.m_Meshlets.size() * sizeof(srrhi::Meshlet), 0);
-	}
-
-	desc.byteSize = (uint32_t)std::max<size_t>(sizeof(uint32_t), scene.m_MeshletVertices.size() * sizeof(uint32_t));
-	desc.structStride = sizeof(uint32_t);
-	desc.initialState = nvrhi::ResourceStates::ShaderResource;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_MeshletVerticesBuffer";
-	scene.m_MeshletVerticesBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-
-	if (!scene.m_MeshletVertices.empty())
-	{
-		cmd->writeBuffer(scene.m_MeshletVerticesBuffer, scene.m_MeshletVertices.data(), scene.m_MeshletVertices.size() * sizeof(uint32_t), 0);
-	}
-
-	desc.byteSize = (uint32_t)std::max<size_t>(sizeof(uint32_t), scene.m_MeshletTriangles.size() * sizeof(uint32_t));
-	desc.structStride = sizeof(uint32_t);
-	desc.initialState = nvrhi::ResourceStates::ShaderResource;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_MeshletTrianglesBuffer";
-	scene.m_MeshletTrianglesBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-
-	if (!scene.m_MeshletTriangles.empty())
-	{
-		cmd->writeBuffer(scene.m_MeshletTrianglesBuffer, scene.m_MeshletTriangles.data(), scene.m_MeshletTriangles.size() * sizeof(uint32_t), 0);
-	}
-
-	// Create instance data buffer
-	desc.byteSize = (uint32_t)std::max<size_t>(sizeof(srrhi::PerInstanceData), scene.m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
-	desc.structStride = sizeof(srrhi::PerInstanceData);
-	desc.canHaveUAVs = true; // TLASPatch_CS writes m_LODIndex each frame
-	desc.initialState = nvrhi::ResourceStates::ShaderResource;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_InstanceDataBuffer";
-	scene.m_InstanceDataBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-
-	// Create per-instance LOD index buffer: instanceLOD[instanceIndex] = lodIndex.
-	// Written each frame by the GPU culling passes; read by TLASRenderer to patch BLAS addresses.
-	desc.byteSize = (uint32_t)std::max<size_t>(sizeof(uint32_t), scene.m_InstanceData.size() * sizeof(uint32_t));
-	desc.structStride = sizeof(uint32_t);
-	desc.canHaveUAVs = true;
-	desc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-	desc.keepInitialState = true;
-	desc.debugName = "Scene_InstanceLODBuffer";
-	scene.m_InstanceLODBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
-
-	// Upload instance data
-	if (scene.m_InstanceDataBuffer && !scene.m_InstanceData.empty())
-		cmd->writeBuffer(scene.m_InstanceDataBuffer, scene.m_InstanceData.data(), scene.m_InstanceData.size() * sizeof(srrhi::PerInstanceData), 0);
-
-	// print buffers memory stats
-	// SDL_Log("[Scene] GPU Buffers Uploaded:\n"
-	// 	"  Vertex Buffer (Quant): %.2f MB (%zu vertices)\n"
-	// 	"  Index Buffer:          %.2f MB (%zu indices)\n"
-	// 	"  Mesh Data Buffer:      %.2f MB (%zu mesh data entries)\n"
-	// 	"  Meshlet Buffer:        %.2f MB (%zu meshlets)\n"
-	// 	"  Meshlet Vertices Buf:  %.2f MB (%zu meshlet vertices)\n"
-	// 	"  Meshlet Triangles Buf: %.2f MB (%zu meshlet triangles)\n"
-	// 	"  Instance Data Buffer:  %.2f MB (%zu instances)",
-	// 	(allVerticesQuantized.size() * sizeof(srrhi::VertexQuantized)) / (1024.0f * 1024.0f), allVerticesQuantized.size(),
-	// 	(allIndices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), allIndices.size(),
-	// 	(scene.m_MeshData.size() * sizeof(srrhi::MeshData)) / (1024.0f * 1024.0f), scene.m_MeshData.size(),
-	// 	(scene.m_Meshlets.size() * sizeof(srrhi::Meshlet)) / (1024.0f * 1024.0f), scene.m_Meshlets.size(),
-	// 	(scene.m_MeshletVertices.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletVertices.size(),
-	// 	(scene.m_MeshletTriangles.size() * sizeof(uint32_t)) / (1024.0f * 1024.0f), scene.m_MeshletTriangles.size(),
-	// 	(scene.m_InstanceData.size() * sizeof(srrhi::PerInstanceData)) / (1024.0f * 1024.0f), scene.m_InstanceData.size());
 }
 
 void SceneLoader::CreateAndUploadLightBuffer(Scene& scene)
@@ -2408,4 +2356,41 @@ bool SceneLoader::LoadGLTFSceneFromMemory(Scene& scene, const char* jsonData, si
 	// without needing a file path.  External file references will fail gracefully.
 	const std::string basePath = sceneDir.empty() ? "" : (sceneDir.string() + "/");
 	return ProcessParsedGLTF(data, scene, basePath, sceneDir, allVerticesQuantized, allIndices, /*ensureDirectionalLight=*/true, /*gltfFilePath=*/"");
+}
+
+void SceneLoader::EstimateGeometrySize(const std::string& scenePath, uint32_t& outVertexCount, uint32_t& outIndexCount)
+{
+	outVertexCount = 0;
+	outIndexCount  = 0;
+
+	if (scenePath.empty()) return;
+
+	cgltf_options options{};
+	cgltf_data*   data = nullptr;
+
+	// Parse only — no cgltf_load_buffers, so accessor counts are available without binary I/O.
+	const cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
+	if (res != cgltf_result_success || !data) return;
+
+	for (cgltf_size mi = 0; mi < data->meshes_count; ++mi)
+	{
+		for (cgltf_size pi = 0; pi < data->meshes[mi].primitives_count; ++pi)
+		{
+			const cgltf_primitive& prim = data->meshes[mi].primitives[pi];
+
+			for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai)
+			{
+				if (prim.attributes[ai].type == cgltf_attribute_type_position && prim.attributes[ai].data)
+				{
+					outVertexCount += static_cast<uint32_t>(prim.attributes[ai].data->count);
+					break;
+				}
+			}
+
+			if (prim.indices)
+				outIndexCount += static_cast<uint32_t>(prim.indices->count);
+		}
+	}
+
+	cgltf_free(data);
 }

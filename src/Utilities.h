@@ -111,3 +111,45 @@ struct SingleThreadGuard
 };
 
 #define SINGLE_THREAD_GUARD() static std::atomic<int> _stg_count = 0; SingleThreadGuard _stg{ _stg_count }
+
+// ─── MemoryMappedDataReader ──────────────────────────────────────────────────
+// Maps a file read-only using the OS virtual memory system (MapViewOfFile on
+// Windows). Only the pages that are actually accessed are loaded from disk,
+// so callers pay only for what they touch — ideal for reading a small slice
+// out of a large binary file.
+//
+// An alternative owned-data constructor lets callers wrap heap-allocated
+// buffers (e.g. stbi-decoded pixels) through the same interface.
+class MemoryMappedDataReader
+{
+public:
+    // Maps filePath read-only.  Check IsValid() before use.
+    explicit MemoryMappedDataReader(std::string_view filePath);
+
+    // Takes ownership of externally-allocated data.
+    // deleter(ptr) is called in the destructor to release the allocation.
+    MemoryMappedDataReader(void* data, size_t size, void (*deleter)(void*) = nullptr);
+
+    ~MemoryMappedDataReader();
+
+    MemoryMappedDataReader(const MemoryMappedDataReader&) = delete;
+    MemoryMappedDataReader& operator=(const MemoryMappedDataReader&) = delete;
+
+    bool        IsValid()  const { return m_Data != nullptr; }
+    // Returns a pointer at the current offset (see SetOffset).
+    const void* GetData()  const { return static_cast<const uint8_t*>(m_Data) + m_Offset; }
+    // Returns the number of bytes from the current offset to the end of the mapping.
+    size_t      GetSize()  const { return m_Size - m_Offset; }
+    // Skip the first `offset` bytes of the mapped region (e.g. to skip a header).
+    void        SetOffset(size_t offset) { m_Offset = offset; }
+
+private:
+    void*  m_Data    = nullptr;
+    size_t m_Size    = 0;
+    size_t m_Offset  = 0;
+    void (*m_Deleter)(void*) = nullptr; // non-null for owned-data mode
+#ifdef _WIN32
+    HANDLE m_File    = INVALID_HANDLE_VALUE;
+    HANDLE m_Mapping = nullptr;
+#endif
+};

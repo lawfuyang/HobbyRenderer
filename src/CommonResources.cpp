@@ -2,6 +2,7 @@
 #include "CommonResources.h"
 #include "Renderer.h"
 #include "TextureLoader.h"
+#include "Utilities.h"
 #include "Config.h"
 
 void CommonResources::Initialize()
@@ -313,7 +314,7 @@ void CommonResources::Initialize()
         auto LoadAndUpload = [&](const std::string& configPath, const char* debugName, nvrhi::TextureHandle& outTexture, bool expectCube = false)
         {
             nvrhi::TextureDesc desc;
-            std::unique_ptr<ITextureDataReader> data;
+            std::unique_ptr<MemoryMappedDataReader> data;
             std::filesystem::path path(configPath);
             if (path.is_relative() && basePath)
             {

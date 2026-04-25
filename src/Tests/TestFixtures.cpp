@@ -33,6 +33,10 @@ SceneScope::SceneScope(const char* modelRelPath)
 
     cfg.m_ScenePath = path;
 
+    // Re-create the default cube and preallocate geometry buffers after Shutdown cleared them.
+    g_Renderer.m_Scene.InitializeDefaultCube(0, 0);
+    g_Renderer.ExecutePendingCommandLists();
+
     g_Renderer.m_Scene.LoadScene();
     loaded = !g_Renderer.m_Scene.m_Meshes.empty() ||
         !g_Renderer.m_Scene.m_Nodes.empty();
@@ -162,10 +166,15 @@ MinimalSceneFixture::MinimalSceneFixture()
 
     g_Renderer.m_Scene.FinalizeLoadedScene();
     SceneLoader::LoadTexturesFromImages(g_Renderer.m_Scene, {});
-    SceneLoader::UpdateMaterialsAndCreateConstants(g_Renderer.m_Scene);
-    SceneLoader::CreateAndUploadGpuBuffers(g_Renderer.m_Scene, vertices, indices);
+    
+    g_Renderer.m_Scene.UploadGeometryBuffers(vertices, indices);
     SceneLoader::CreateAndUploadLightBuffer(g_Renderer.m_Scene);
-    g_Renderer.m_Scene.BuildAccelerationStructures();
+    {
+        nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
+        ScopedCommandList scopedCmd{ cmd, "Scene_BuildInitialBLAS" };
+        SceneLoader::UpdateMaterialsAndCreateConstants(g_Renderer.m_Scene, cmd);
+        g_Renderer.m_Scene.BuildAccelerationStructures(cmd);
+    }
 
     for (const auto& r : g_Renderer.m_Renderers)
         if (r) r->PostSceneLoad();

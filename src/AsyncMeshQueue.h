@@ -16,21 +16,10 @@ class AsyncMeshQueue : public AsyncQueueBase
 public:
     using OnLoadedCallback = std::function<void(MeshUpdateCommand)>;
 
-    // Enqueue a glTF file to be loaded and processed asynchronously.
-    // gltfPath:           absolute path to the .glb / .gltf file.
-    // affectedPrimitives: list of (meshIndex, primitiveIndex) pairs in the
-    //                     Scene that should be updated once data is ready.
-    // glTFMeshIdx:        index of the mesh within the glTF file to process.
-    // glTFPrimIdx:        index of the primitive within that mesh to process.
-    // materialOffset:     scene-global material offset for this model.
-    // textureOffset:      scene-global texture offset for this model.
-    PendingLoadID EnqueueLoad(std::string gltfPath,
-                               std::vector<std::pair<int, int>> affectedPrimitives,
-                               int glTFMeshIdx,
-                               int glTFPrimIdx,
-                               int materialOffset,
-                               int textureOffset,
-                               OnLoadedCallback callback);
+    // Enqueue a single glTF primitive to be loaded and processed asynchronously.
+    // The info struct carries either a fast mmap path (binFilePath + accessor offsets)
+    // or a fallback gltfPath for full re-parse when mmap is not possible.
+    PendingLoadID EnqueueLoad(PendingAsyncMeshInfo info, OnLoadedCallback callback);
 
     // Request cancellation of a pending load (same semantics as AsyncTextureQueue).
     void CancelLoad(PendingLoadID id);

@@ -1,4 +1,69 @@
+#include "pch.h"
 #include "Utilities.h"
+
+// ─── MemoryMappedDataReader ──────────────────────────────────────────────────
+
+MemoryMappedDataReader::MemoryMappedDataReader(std::string_view filePath)
+{
+#ifdef _WIN32
+    m_File = CreateFileA(std::string(filePath).c_str(), GENERIC_READ, FILE_SHARE_READ,
+                         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (m_File == INVALID_HANDLE_VALUE)
+    {
+        SDL_Log("[MemoryMappedDataReader] CreateFileA failed for %.*s (Error: %lu)",
+                (int)filePath.size(), filePath.data(), GetLastError());
+        return;
+    }
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(m_File, &size))
+    {
+        SDL_Log("[MemoryMappedDataReader] GetFileSizeEx failed for %.*s (Error: %lu)",
+                (int)filePath.size(), filePath.data(), GetLastError());
+        return;
+    }
+    m_Size = static_cast<size_t>(size.QuadPart);
+    if (m_Size == 0) return;
+
+    m_Mapping = CreateFileMappingA(m_File, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (m_Mapping == NULL)
+    {
+        SDL_Log("[MemoryMappedDataReader] CreateFileMappingA failed for %.*s (Error: %lu)",
+                (int)filePath.size(), filePath.data(), GetLastError());
+        return;
+    }
+
+    m_Data = MapViewOfFile(m_Mapping, FILE_MAP_READ, 0, 0, 0);
+    if (m_Data == NULL)
+    {
+        SDL_Log("[MemoryMappedDataReader] MapViewOfFile failed for %.*s (Error: %lu)",
+                (int)filePath.size(), filePath.data(), GetLastError());
+    }
+#endif
+}
+
+MemoryMappedDataReader::MemoryMappedDataReader(void* data, size_t size, void (*deleter)(void*))
+    : m_Data(data), m_Size(size), m_Deleter(deleter)
+{
+}
+
+MemoryMappedDataReader::~MemoryMappedDataReader()
+{
+    if (m_Deleter)
+    {
+        if (m_Data) m_Deleter(m_Data);
+    }
+    else
+    {
+#ifdef _WIN32
+        if (m_Data)    UnmapViewOfFile(m_Data);
+        if (m_Mapping) CloseHandle(m_Mapping);
+        if (m_File != INVALID_HANDLE_VALUE) CloseHandle(m_File);
+#endif
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 float Halton(uint32_t index, uint32_t base)
 {

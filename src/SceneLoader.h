@@ -39,9 +39,13 @@ public:
 
     // Texture and GPU buffer functions
     static void LoadTexturesFromImages(Scene& scene, const std::filesystem::path& sceneDir);
-    static void UpdateMaterialsAndCreateConstants(Scene& scene);
-    static void CreateAndUploadGpuBuffers(Scene& scene, const std::vector<srrhi::VertexQuantized>& allVerticesQuantized, const std::vector<uint32_t>& allIndices);
+    static void UpdateMaterialsAndCreateConstants(Scene& scene, nvrhi::CommandListHandle cmdList);
     static void CreateAndUploadLightBuffer(Scene& scene);
+
+    // Parse the scene file (no binary data loaded) and return conservative vertex/index
+    // counts for all primitives.  Used by Renderer::Initialize to preallocate GPU buffers.
+    static void EstimateGeometrySize(const std::string& scenePath,
+                                     uint32_t& outVertexCount, uint32_t& outIndexCount);
 
     // Decompress any meshopt-compressed buffer views in a parsed cgltf_data.
     // Public so AsyncMeshQueue can call it from background threads.

@@ -1,75 +1,120 @@
 #include "pch.h"
 #include "AsyncMeshQueue.h"
 #include "SceneLoader.h"
+#include "Utilities.h"
 #include "meshoptimizer.h"
 #include "cgltf.h"
 
-// Processes a single cgltf_primitive into vertex-quantized + LOD + meshlet data.
-// All offsets in the output are zero-based (local to this primitive).
-// Returns false if the primitive has no position accessor.
-static bool ProcessSinglePrimitive(const cgltf_primitive& prim, MeshUpdateCommand& cmd)
+// ── Helpers for the mmap fast path ──────────────────────────────────────────
+
+static size_t ComponentByteSize(int componentType)
 {
-    const cgltf_accessor* posAcc  = nullptr;
-    const cgltf_accessor* normAcc = nullptr;
-    const cgltf_accessor* uvAcc   = nullptr;
-    const cgltf_accessor* tangAcc = nullptr;
-
-    for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai)
+    switch (componentType)
     {
-        const cgltf_attribute& attr = prim.attributes[ai];
-        if      (attr.type == cgltf_attribute_type_position)  posAcc  = attr.data;
-        else if (attr.type == cgltf_attribute_type_normal)     normAcc = attr.data;
-        else if (attr.type == cgltf_attribute_type_texcoord)   uvAcc   = attr.data;
-        else if (attr.type == cgltf_attribute_type_tangent)    tangAcc = attr.data;
+    case 1: case 2: return 1;  // BYTE, UBYTE
+    case 3: case 4: return 2;  // SHORT, USHORT
+    case 5: case 6: return 4;  // UINT, FLOAT
+    default:        return 1;
     }
+}
 
-    if (!posAcc) return false;
+// Read up to maxComponents floats from element elemIdx of the given accessor.
+// bufData points to the start of the binary buffer (after binDataOffset has been applied).
+static void ReadAccessorFloat(const uint8_t* bufData, const PrimAccessorInfo& acc,
+                               size_t elemIdx, float* out, int maxComponents)
+{
+    const size_t compSize = ComponentByteSize(acc.componentType);
+    const size_t elemSize = (size_t)acc.numComponents * compSize;
+    const size_t stride   = acc.byteStride != 0 ? (size_t)acc.byteStride : elemSize;
+    const uint8_t* ptr    = bufData + acc.byteOffset + elemIdx * stride;
 
-    const cgltf_size vertCount = posAcc->count;
+    const int n = std::min(acc.numComponents, maxComponents);
+    for (int c = 0; c < n; ++c)
+    {
+        const uint8_t* cp = ptr + c * compSize;
+        switch (acc.componentType)
+        {
+        case 1: out[c] = acc.normalized ? std::max(*reinterpret_cast<const int8_t*>(cp) / 127.0f, -1.0f)
+                                        : (float)*reinterpret_cast<const int8_t*>(cp); break;
+        case 2: out[c] = acc.normalized ? *cp / 255.0f : (float)*cp; break;
+        case 3: out[c] = acc.normalized ? std::max(*reinterpret_cast<const int16_t*>(cp) / 32767.0f, -1.0f)
+                                        : (float)*reinterpret_cast<const int16_t*>(cp); break;
+        case 4: out[c] = acc.normalized ? *reinterpret_cast<const uint16_t*>(cp) / 65535.0f
+                                        : (float)*reinterpret_cast<const uint16_t*>(cp); break;
+        case 5: out[c] = (float)*reinterpret_cast<const uint32_t*>(cp); break;
+        case 6: out[c] = *reinterpret_cast<const float*>(cp); break;
+        default: out[c] = 0.0f; break;
+        }
+    }
+    for (int c = n; c < maxComponents; ++c) out[c] = 0.0f;
+}
+
+static uint32_t ReadIndex(const uint8_t* bufData, const PrimAccessorInfo& acc, size_t elemIdx)
+{
+    const size_t stride = acc.byteStride != 0 ? (size_t)acc.byteStride : ComponentByteSize(acc.componentType);
+    const uint8_t* ptr  = bufData + acc.byteOffset + elemIdx * stride;
+    switch (acc.componentType)
+    {
+    case 4: return *reinterpret_cast<const uint16_t*>(ptr);  // USHORT
+    case 5: return *reinterpret_cast<const uint32_t*>(ptr);  // UINT
+    default: return *ptr;                                      // UBYTE
+    }
+}
+
+// Same as ProcessSinglePrimitive but reads vertex/index data from a raw memory buffer
+// using the accessor metadata stored in PendingAsyncMeshInfo.
+static void ProcessSinglePrimitiveFromMapped(const uint8_t* bufData, const PendingAsyncMeshInfo& info,
+                                              MeshUpdateCommand& cmd)
+{
+    SDL_assert(info.posAccessor.present && "Mmap fast path requires position accessor to be present");
+
+    const uint32_t vertCount = info.posAccessor.count;
     std::vector<srrhi::Vertex> rawVertices(vertCount);
 
-    for (cgltf_size v = 0; v < vertCount; ++v)
+    for (uint32_t v = 0; v < vertCount; ++v)
     {
         srrhi::Vertex vx{};
-        float pos[4] = {};
-        cgltf_accessor_read_float(posAcc, v, pos, cgltf_num_components(posAcc->type));
-        vx.m_Pos = { pos[0], pos[1], -pos[2] }; // RH -> LH: negate Z
 
-        float nrm[4] = {};
-        if (normAcc)
-            cgltf_accessor_read_float(normAcc, v, nrm, cgltf_num_components(normAcc->type));
+        float pos[4] = {};
+        ReadAccessorFloat(bufData, info.posAccessor, v, pos, 3);
+        vx.m_Pos = { pos[0], pos[1], -pos[2] };  // RH -> LH: negate Z
+
+        float nrm[3] = {};
+        if (info.normAccessor.present)
+            ReadAccessorFloat(bufData, info.normAccessor, v, nrm, 3);
         vx.m_Normal = { nrm[0], nrm[1], -nrm[2] };
 
-        float uv[4] = {};
-        if (uvAcc)
-            cgltf_accessor_read_float(uvAcc, v, uv, cgltf_num_components(uvAcc->type));
+        float uv[2] = {};
+        if (info.uvAccessor.present)
+            ReadAccessorFloat(bufData, info.uvAccessor, v, uv, 2);
         vx.m_Uv = { uv[0], uv[1] };
 
-        float tang[4] = { 0,0,0,1 };
-        if (tangAcc)
-            cgltf_accessor_read_float(tangAcc, v, tang, cgltf_num_components(tangAcc->type));
-        vx.m_Tangent = { tang[0], tang[1], -tang[2], -tang[3] }; // RH -> LH
+        float tang[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        if (info.tangAccessor.present)
+            ReadAccessorFloat(bufData, info.tangAccessor, v, tang, 4);
+        vx.m_Tangent = { tang[0], tang[1], -tang[2], -tang[3] };  // RH -> LH
 
         rawVertices[v] = vx;
     }
 
     std::vector<uint32_t> rawIndices;
-    if (prim.indices)
+    if (info.indexAccessor.present)
     {
-        rawIndices.resize(prim.indices->count);
-        for (cgltf_size k = 0; k < prim.indices->count; ++k)
-            rawIndices[k] = (uint32_t)cgltf_accessor_read_index(prim.indices, k);
-        for (cgltf_size k = 0; k + 2 < prim.indices->count; k += 3)
-            std::swap(rawIndices[k + 1], rawIndices[k + 2]); // restore CCW winding after Z-negate
+        rawIndices.resize(info.indexAccessor.count);
+        for (size_t k = 0; k < info.indexAccessor.count; ++k)
+            rawIndices[k] = ReadIndex(bufData, info.indexAccessor, k);
+        for (size_t k = 0; k + 2 < info.indexAccessor.count; k += 3)
+            std::swap(rawIndices[k + 1], rawIndices[k + 2]);  // restore CCW winding after Z-negate
     }
     else
     {
         rawIndices.resize(vertCount);
-        for (uint32_t k = 0; k < (uint32_t)vertCount; ++k) rawIndices[k] = k;
-        for (uint32_t k = 0; k + 2 < (uint32_t)vertCount; k += 3)
+        for (uint32_t k = 0; k < vertCount; ++k) rawIndices[k] = k;
+        for (uint32_t k = 0; k + 2 < vertCount; k += 3)
             std::swap(rawIndices[k + 1], rawIndices[k + 2]);
     }
 
+    // ── Vertex remapping + optimisation ────────────────────────────────────
     std::vector<uint32_t> remap(rawIndices.size());
     size_t uniqueVerts = meshopt_generateVertexRemap(remap.data(), rawIndices.data(), rawIndices.size(),
                                                       rawVertices.data(), rawVertices.size(), sizeof(srrhi::Vertex));
@@ -81,21 +126,18 @@ static bool ProcessSinglePrimitive(const cgltf_primitive& prim, MeshUpdateComman
     meshopt_optimizeVertexCache(localIdx.data(), localIdx.data(), localIdx.size(), uniqueVerts);
     meshopt_optimizeVertexFetch(optVerts.data(), localIdx.data(), localIdx.size(), optVerts.data(), uniqueVerts, sizeof(srrhi::Vertex));
 
-    // Quantize vertices
+    // Quantize
     cmd.m_Vertices.reserve(uniqueVerts);
     for (const srrhi::Vertex& v : optVerts)
     {
         srrhi::VertexQuantized vq{};
         vq.m_Pos = v.m_Pos;
-
         vq.m_Normal  = (uint32_t)(meshopt_quantizeSnorm(v.m_Normal.x, 10) + 511)
                      | ((uint32_t)(meshopt_quantizeSnorm(v.m_Normal.y, 10) + 511) << 10)
                      | ((uint32_t)(meshopt_quantizeSnorm(v.m_Normal.z, 10) + 511) << 20);
         vq.m_Normal |= (v.m_Tangent.w >= 0.0f ? 0u : 1u) << 30;
-
         vq.m_Uv = (uint32_t)meshopt_quantizeHalf(v.m_Uv.x)
                 | ((uint32_t)meshopt_quantizeHalf(v.m_Uv.y) << 16);
-
         float tx = v.m_Tangent.x, ty = v.m_Tangent.y, tz = v.m_Tangent.z;
         float tsum = fabsf(tx) + fabsf(ty) + fabsf(tz);
         if (tsum > 1e-6f)
@@ -108,15 +150,26 @@ static bool ProcessSinglePrimitive(const cgltf_primitive& prim, MeshUpdateComman
         cmd.m_Vertices.push_back(vq);
     }
 
-    // LOD generation + meshlet building
-    const size_t maxVerts     = srrhi::CommonConsts::kMaxMeshletVertices;
-    const size_t maxTriangles = srrhi::CommonConsts::kMaxMeshletTriangles;
-    const float  coneWeight   = 0.25f;
+    // Compute local bounding sphere from quantized vertex positions on the background
+    // thread so ApplyPendingUpdates can use it directly without re-scanning vertices.
+    {
+        Sphere primSphere;
+        Sphere::CreateFromPoints(primSphere,
+            cmd.m_Vertices.size(),
+            &cmd.m_Vertices[0].m_Pos, sizeof(srrhi::VertexQuantized));
+        cmd.m_LocalSphereCenter = Vector3(primSphere.Center.x, primSphere.Center.y, primSphere.Center.z);
+        cmd.m_LocalSphereRadius = primSphere.Radius;
+    }
+
+    // ── LOD generation + meshlet building (identical to ProcessSinglePrimitive) ──
+    const size_t   maxVerts     = srrhi::CommonConsts::kMaxMeshletVertices;
+    const size_t   maxTriangles = srrhi::CommonConsts::kMaxMeshletTriangles;
+    const float    coneWeight   = 0.25f;
     const uint32_t kIndexLimitForLOD = 1024;
-    const float kMaxError      = 1e-1f;
-    const float kMinReduction  = 0.85f;
-    const float attribute_weights[3] = { 1.0f, 1.0f, 1.0f };
-    const float simplifyScale = meshopt_simplifyScale(&optVerts[0].m_Pos.x, uniqueVerts, sizeof(srrhi::Vertex));
+    const float    kMaxError         = 1e-1f;
+    const float    kMinReduction     = 0.85f;
+    const float    attribute_weights[3] = { 1.0f, 1.0f, 1.0f };
+    const float    simplifyScale = meshopt_simplifyScale(&optVerts[0].m_Pos.x, uniqueVerts, sizeof(srrhi::Vertex));
     const uint32_t baseIndexCount = (uint32_t)localIdx.size();
 
     std::vector<uint32_t> currentLodIndices = localIdx;
@@ -152,7 +205,7 @@ static bool ProcessSinglePrimitive(const cgltf_primitive& prim, MeshUpdateComman
             if (newCount < kIndexLimitForLOD) break;
 
             accumulatedError = std::max(accumulatedError * 1.5f, lodError);
-            lodError = accumulatedError;
+            lodError         = accumulatedError;
             currentLodIndices = lodIndices;
             meshopt_optimizeVertexCache(lodIndices.data(), lodIndices.data(), lodIndices.size(), uniqueVerts);
         }
@@ -176,7 +229,7 @@ static bool ProcessSinglePrimitive(const cgltf_primitive& prim, MeshUpdateComman
 
         cmd.m_MeshData.m_MeshletOffsets[lod] = (uint32_t)cmd.m_Meshlets.size();
         cmd.m_MeshData.m_MeshletCounts[lod]  = (uint32_t)meshletCount;
-        cmd.m_MeshData.m_LODCount = lod + 1;
+        cmd.m_MeshData.m_LODCount            = lod + 1;
 
         for (size_t i = 0; i < meshletCount; ++i)
         {
@@ -219,28 +272,17 @@ static bool ProcessSinglePrimitive(const cgltf_primitive& prim, MeshUpdateComman
             cmd.m_Meshlets.push_back(gpuMeshlet);
         }
     }
-
-    return true;
 }
 
-PendingLoadID AsyncMeshQueue::EnqueueLoad(std::string gltfPath,
-                                           std::vector<std::pair<int, int>> affectedPrimitives,
-                                           int glTFMeshIdx,
-                                           int glTFPrimIdx,
-                                           int /*materialOffset*/,
-                                           int /*textureOffset*/,
-                                           OnLoadedCallback callback)
+PendingLoadID AsyncMeshQueue::EnqueueLoad(PendingAsyncMeshInfo info, OnLoadedCallback callback)
 {
     PendingLoadID id = m_NextID.fetch_add(1, std::memory_order_relaxed);
 
-    EnqueueTask([this, id, path = std::move(gltfPath),
-                 affected = std::move(affectedPrimitives),
-                 glTFMeshIdx, glTFPrimIdx,
-                 cb = std::move(callback)]() mutable
+    EnqueueTask([this, id, info = std::move(info), cb = std::move(callback)]() mutable
     {
         MeshUpdateCommand cmd;
         cmd.m_LoadID             = id;
-        cmd.m_AffectedPrimitives = std::move(affected);
+        cmd.m_AffectedPrimitives = { { info.sceneMeshIdx, info.scenePrimIdx } };
 
         {
             std::lock_guard<std::mutex> lk(m_CancelMutex);
@@ -253,55 +295,16 @@ PendingLoadID AsyncMeshQueue::EnqueueLoad(std::string gltfPath,
             }
         }
 
-        // Parse the glTF file
-        cgltf_options options{};
-        cgltf_data*   data = nullptr;
-        cgltf_result  result = cgltf_parse_file(&options, path.c_str(), &data);
-
-        if (result != cgltf_result_success)
+        // ── Fast path: mmap the binary buffer and read accessor data directly ──
+        if (!info.binFilePath.empty() && info.posAccessor.present)
         {
-            SDL_Log("[AsyncMeshQueue] Failed to parse '%s': %s", path.c_str(),
-                    SceneLoader::cgltf_result_tostring(result));
-            cmd.m_bCancelled = true;
-            cb(std::move(cmd));
-            return;
-        }
-
-        result = cgltf_load_buffers(&options, data, path.c_str());
-        if (result != cgltf_result_success)
-        {
-            SDL_Log("[AsyncMeshQueue] Failed to load buffers '%s'", path.c_str());
-            cgltf_free(data);
-            cmd.m_bCancelled = true;
-            cb(std::move(cmd));
-            return;
-        }
-
-        result = SceneLoader::decompressMeshopt(data);
-        if (result != cgltf_result_success)
-        {
-            SDL_Log("[AsyncMeshQueue] meshopt decompression failed '%s'", path.c_str());
-            cgltf_free(data);
-            cmd.m_bCancelled = true;
-            cb(std::move(cmd));
-            return;
-        }
-
-        // Process the specific primitive identified by glTFMeshIdx / glTFPrimIdx.
-        bool bProcessed = false;
-        if (glTFMeshIdx >= 0 && glTFMeshIdx < (int)data->meshes_count)
-        {
-            cgltf_mesh& gltfMesh = data->meshes[glTFMeshIdx];
-            if (glTFPrimIdx >= 0 && glTFPrimIdx < (int)gltfMesh.primitives_count)
-                bProcessed = ProcessSinglePrimitive(gltfMesh.primitives[glTFPrimIdx], cmd);
-        }
-
-        cgltf_free(data);
-
-        if (!bProcessed)
-        {
-            SDL_Log("[AsyncMeshQueue] No processable primitive in '%s'", path.c_str());
-            cmd.m_bCancelled = true;
+            MemoryMappedDataReader mapped(info.binFilePath);
+            if (mapped.IsValid())
+            {
+                mapped.SetOffset(static_cast<size_t>(info.binDataOffset));
+                const uint8_t* bufData = static_cast<const uint8_t*>(mapped.GetData());
+                ProcessSinglePrimitiveFromMapped(bufData, info, cmd);
+            }
         }
 
         cb(std::move(cmd));

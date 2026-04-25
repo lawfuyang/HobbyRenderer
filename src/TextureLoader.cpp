@@ -1,90 +1,10 @@
 #include "TextureLoader.h"
+#include "Utilities.h"
 
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
 #define STB_IMAGE_IMPLEMENTATION
 #include "../external/stb_image.h"
-
-class MemoryMappedDataReader : public ITextureDataReader
-{
-public:
-    MemoryMappedDataReader(std::string_view filePath)
-    {
-#ifdef _WIN32
-        m_File = CreateFileA(std::string(filePath).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (m_File == INVALID_HANDLE_VALUE)
-        {
-            SDL_Log("[TextureLoader] CreateFileA failed for %*.s (Error: %lu)", (int)filePath.size(), filePath.data(), GetLastError());
-            return;
-        }
-
-        LARGE_INTEGER size;
-        if (!GetFileSizeEx(m_File, &size))
-        {
-            SDL_Log("[TextureLoader] GetFileSizeEx failed for %*.s (Error: %lu)", (int)filePath.size(), filePath.data(), GetLastError());
-            return;
-        }
-        m_Size = static_cast<size_t>(size.QuadPart);
-
-        if (m_Size == 0) return;
-
-        m_Mapping = CreateFileMappingA(m_File, NULL, PAGE_READONLY, 0, 0, NULL);
-        if (m_Mapping == NULL)
-        {
-            SDL_Log("[TextureLoader] CreateFileMappingA failed for %*.s (Error: %lu)", (int)filePath.size(), filePath.data(), GetLastError());
-            return;
-        }
-
-        m_Data = MapViewOfFile(m_Mapping, FILE_MAP_READ, 0, 0, 0);
-        if (m_Data == NULL)
-        {
-            SDL_Log("[TextureLoader] MapViewOfFile failed for %*.s (Error: %lu)", (int)filePath.size(), filePath.data(), GetLastError());
-        }
-#endif
-    }
-
-    ~MemoryMappedDataReader() override
-    {
-#ifdef _WIN32
-        if (m_Data) UnmapViewOfFile(m_Data);
-        if (m_Mapping) CloseHandle(m_Mapping);
-        if (m_File != INVALID_HANDLE_VALUE) CloseHandle(m_File);
-#endif
-    }
-
-    const void* GetData() const override { return static_cast<const uint8_t*>(m_Data) + m_Offset; }
-    size_t GetSize() const override { return m_Size - m_Offset; }
-
-    bool IsValid() const { return m_Data != nullptr; }
-
-    void SetOffset(size_t offset) { m_Offset = offset; }
-
-private:
-    void* m_Data = nullptr;
-    size_t m_Size = 0;
-    size_t m_Offset = 0;
-#ifdef _WIN32
-    HANDLE m_File = INVALID_HANDLE_VALUE;
-    HANDLE m_Mapping = NULL;
-#endif
-};
-
-class StbiDataReader : public ITextureDataReader
-{
-public:
-    StbiDataReader(unsigned char* data, size_t size) : m_Data(data), m_Size(size) {}
-    ~StbiDataReader() override
-    {
-        if (m_Data) stbi_image_free(m_Data);
-    }
-
-    const void* GetData() const override { return m_Data; }
-    size_t GetSize() const override { return m_Size; }
-
-private:
-    unsigned char* m_Data = nullptr;
-    size_t m_Size = 0;
-};
 
 const uint32_t DDS_MAGIC = 0x20534444; // 'DDS '
 const uint32_t DDS_FOURCC_DX10 = 0x30315844; // 'DX10'
@@ -240,7 +160,7 @@ static nvrhi::TextureDimension GetDimensionFromDDS(bool hasDX10, const DDS_HEADE
     return nvrhi::TextureDimension::Texture2D;
 }
 
-void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::unique_ptr<ITextureDataReader>& data)
+void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::unique_ptr<MemoryMappedDataReader>& data)
 {
     std::unique_ptr<MemoryMappedDataReader> mappedData = std::make_unique<MemoryMappedDataReader>(filePath);
     if (!mappedData->IsValid())
@@ -302,13 +222,23 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
     data = std::move(mappedData);
 }
 
-void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::unique_ptr<ITextureDataReader>& data)
+void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::unique_ptr<MemoryMappedDataReader>& data)
 {
+    // Map the raw file so stbi_load_from_memory can decode it without a second copy.
+    MemoryMappedDataReader mapped(filePath);
+    if (!mapped.IsValid())
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to map image file", "STBI: cannot map %s", std::string(filePath).c_str());
+        return;
+    }
+
     int width, height, channels;
-    unsigned char* img = stbi_load(std::string(filePath).c_str(), &width, &height, &channels, 4);
+    unsigned char* img = stbi_load_from_memory(
+        static_cast<const stbi_uc*>(mapped.GetData()), static_cast<int>(mapped.GetSize()),
+        &width, &height, &channels, 4);
     if (!img)
     {
-        SDL_LOG_ASSERT_FAIL("Failed to load image", "STBI failed to load %s", std::string(filePath).c_str());
+        SDL_LOG_ASSERT_FAIL("Failed to decode image", "STBI failed to decode %s", std::string(filePath).c_str());
         return;
     }
 
@@ -322,11 +252,11 @@ void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::u
     desc.initialState = nvrhi::ResourceStates::ShaderResource;
     desc.keepInitialState = true;
 
-    size_t dataSize = static_cast<size_t>(width * height * 4);
-    data = std::make_unique<StbiDataReader>(img, dataSize);
+    const size_t dataSize = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    data = std::make_unique<MemoryMappedDataReader>(img, dataSize, [](void* p){ stbi_image_free(p); });
 }
 
-bool LoadTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::unique_ptr<ITextureDataReader>& data)
+bool LoadTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::unique_ptr<MemoryMappedDataReader>& data)
 {
     std::filesystem::path path(filePath);
     std::string extension = path.extension().string();

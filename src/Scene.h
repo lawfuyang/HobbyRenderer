@@ -27,6 +27,9 @@ public:
         // local sphere
         Vector3 m_Center{};
         float m_Radius{};
+        // true once a real bounding sphere has been computed from geometry data.
+        // false for async-loaded meshes whose data has not yet arrived.
+        bool m_bBoundsValid = false;
     };
 
     struct Node
@@ -253,24 +256,21 @@ public:
     std::vector<MeshUpdateCommand>    m_PendingMeshUpdates;
     std::mutex                       m_PendingMeshMutex;
 
-    // Scratch list populated during LoadScene; drained at the end of LoadScene
-    // to enqueue one AsyncMeshQueue task per scene primitive.  Not thread-safe
-    // — only touched on the main thread before any background tasks are live.
-    struct PendingAsyncMeshInfo
-    {
-        std::string glTFPath;
-        int         sceneMeshIdx;
-        int         scenePrimIdx;
-        int         glTFMeshIdx;
-        int         glTFPrimIdx;
-        int         materialOffset;
-        int         textureOffset;
-    };
-    std::vector<PendingAsyncMeshInfo> m_PendingAsyncMeshInfos;
-
     // Apply all queued texture and mesh updates. Must be called from the main
     // (render) thread only since it performs GPU resource creation / upload.
     void ApplyPendingUpdates();
+
+    // Called from Renderer::Initialize (and InitializeForTests) before LoadScene.
+    // Inserts the default cube as mesh[0] / meshData[0] and creates GPU geometry
+    // buffers with the specified pre-allocated capacity (elements, not bytes).
+    // vertexCapacity / indexCapacity should be conservative upper bounds for the
+    // scene that will be loaded next, to avoid buffer reallocation during streaming.
+    void InitializeDefaultCube(uint32_t vertexCapacity, uint32_t indexCapacity);
+
+    // Uploads pre-processed vertex/index/mesh data directly to GPU buffers.
+    // Used by the synchronous (in-memory / test) load path after LoadGLTFSceneFromMemory.
+    void UploadGeometryBuffers(const std::vector<srrhi::VertexQuantized>& vertices,
+                               const std::vector<uint32_t>& indices);
 
     // Load the scene from the path configured in `Config::Get().m_ScenePath`.
     // Only mesh vertex/index data and node hierarchy are loaded for now.
@@ -280,7 +280,7 @@ public:
     // Called after loading from glTF or Cache.
     void FinalizeLoadedScene();
 
-    void BuildAccelerationStructures();
+    void BuildAccelerationStructures(nvrhi::CommandListHandle cmdList);
 
     // Per-frame update for animations
     void Update(float deltaTime);
