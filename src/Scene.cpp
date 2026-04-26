@@ -565,7 +565,13 @@ void Scene::FinalizeLoadedScene()
 
     // 2. Bucketize and fill instance data
     m_InstanceData.clear();
-    struct InstInfo { srrhi::PerInstanceData data; int nodeIdx; };
+	for (Node& node : m_Nodes)
+	{
+		node.m_InstanceIndices.clear();
+		node.m_PrimitiveToInstanceIndex.clear();
+	}
+
+	struct InstInfo { srrhi::PerInstanceData data; int nodeIdx; uint32_t primitiveIdx; };
     std::vector<InstInfo> opaqueStatic, opaqueDynamic;
     std::vector<InstInfo> maskedStatic, maskedDynamic;
     std::vector<InstInfo> transparentStatic, transparentDynamic;
@@ -575,8 +581,9 @@ void Scene::FinalizeLoadedScene()
         const Node& node = m_Nodes[ni];
         if (node.m_MeshIndex < 0) continue;
         const Mesh& mesh = m_Meshes[node.m_MeshIndex];
-        for (const Primitive& prim : mesh.m_Primitives)
+		for (uint32_t primIdx = 0; primIdx < (uint32_t)mesh.m_Primitives.size(); ++primIdx)
         {
+			const Primitive& prim = mesh.m_Primitives[primIdx];
             srrhi::PerInstanceData inst{};
 			const bool bUsesPlaceholderCube = (prim.m_MeshDataIndex == 0);
 			inst.m_World = BuildInstanceWorldTransform(node.m_WorldTransform, bUsesPlaceholderCube);
@@ -590,16 +597,16 @@ void Scene::FinalizeLoadedScene()
             bool isDynamic = node.m_IsDynamic;
 
             if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) {
-                if (isDynamic) opaqueDynamic.push_back({ inst, ni });
-                else opaqueStatic.push_back({ inst, ni });
+				if (isDynamic) opaqueDynamic.push_back({ inst, ni, primIdx });
+				else opaqueStatic.push_back({ inst, ni, primIdx });
             }
             else if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK) {
-                if (isDynamic) maskedDynamic.push_back({ inst, ni });
-                else maskedStatic.push_back({ inst, ni });
+				if (isDynamic) maskedDynamic.push_back({ inst, ni, primIdx });
+				else maskedStatic.push_back({ inst, ni, primIdx });
             }
             else {
-                if (isDynamic) transparentDynamic.push_back({ inst, ni });
-                else transparentStatic.push_back({ inst, ni });
+				if (isDynamic) transparentDynamic.push_back({ inst, ni, primIdx });
+				else transparentStatic.push_back({ inst, ni, primIdx });
             }
         }
     }
@@ -612,7 +619,12 @@ void Scene::FinalizeLoadedScene()
     {
         for (const InstInfo& info : infos)
         {
-            m_Nodes[info.nodeIdx].m_InstanceIndices.push_back((uint32_t)m_InstanceData.size());
+			const uint32_t instanceIdx = (uint32_t)m_InstanceData.size();
+			Node& node = m_Nodes[info.nodeIdx];
+			node.m_InstanceIndices.push_back(instanceIdx);
+			if (info.primitiveIdx >= node.m_PrimitiveToInstanceIndex.size())
+				node.m_PrimitiveToInstanceIndex.resize(info.primitiveIdx + 1, UINT32_MAX);
+			node.m_PrimitiveToInstanceIndex[info.primitiveIdx] = instanceIdx;
             m_InstanceData.push_back(info.data);
         }
     };
@@ -912,7 +924,17 @@ void Scene::ApplyPendingUpdates()
 
 		UploadTexture(cl, tex.m_Handle, localTexture.m_Desc, localTexture.m_Data->GetData(), localTexture.m_Data->GetSize());
 
-		tex.m_BindlessIndex = g_Renderer.RegisterTexture(tex.m_Handle);
+		if (tex.m_BindlessIndex == UINT32_MAX)
+		{
+			const uint32_t reservedIndex = g_Renderer.RegisterTexture(tex.m_Handle);
+			SDL_assert(reservedIndex != UINT32_MAX && "Failed to register async texture in bindless table");
+			tex.m_BindlessIndex = reservedIndex;
+		}
+		else
+		{
+			const bool bUpdated = g_Renderer.RegisterTextureAtIndex(tex.m_BindlessIndex, tex.m_Handle);
+			SDL_assert(bUpdated && "Failed to update async texture in reserved bindless slot");
+		}
 	
 		// Re-resolve all material texture indices and re-upload material constants.
 		// TODO: this is inefficient for just one texture update; we should track which materials reference the updated texture and only update those.  For now we expect few texture updates, so this is simpler.
@@ -1035,10 +1057,10 @@ void Scene::ApplyPendingUpdates()
 				Scene::Node& node = m_Nodes[ni];
 				if (node.m_MeshIndex != ap.first) continue;
 
-				if (ap.second < (int)node.m_InstanceIndices.size())
+				if (ap.second >= 0 && ap.second < (int)node.m_PrimitiveToInstanceIndex.size())
 				{
-					const uint32_t instIdx = node.m_InstanceIndices[ap.second];
-					if (instIdx < (uint32_t)m_InstanceData.size())
+					const uint32_t instIdx = node.m_PrimitiveToInstanceIndex[ap.second];
+					if (instIdx != UINT32_MAX && instIdx < (uint32_t)m_InstanceData.size())
 					{
 						const bool bWasPlaceholderCube = (m_InstanceData[instIdx].m_MeshDataIndex == 0);
 						m_InstanceData[instIdx].m_MeshDataIndex = globalMeshDataOffset;

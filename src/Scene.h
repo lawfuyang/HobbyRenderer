@@ -56,6 +56,9 @@ public:
 
         // Indices into m_InstanceData for all instances using this node
         std::vector<uint32_t> m_InstanceIndices;
+        // Direct mapping from mesh primitive index -> instance index in m_InstanceData.
+        // Needed because m_InstanceIndices is appended in bucket order, not primitive order.
+        std::vector<uint32_t> m_PrimitiveToInstanceIndex;
     };
 
     struct AnimationSampler

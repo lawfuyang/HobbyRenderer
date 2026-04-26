@@ -1312,6 +1312,19 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 	for (uint32_t i = 0; i < (uint32_t)scene.m_Textures.size(); ++i)
 	{
 		Scene::Texture& tex = scene.m_Textures[i];
+		if (tex.m_BindlessIndex == UINT32_MAX)
+		{
+			// Reserve a stable bindless slot up-front so material constants always
+			// point to a deterministic index while async uploads stream in.
+			const uint32_t reservedIndex = g_Renderer.RegisterTexture(CommonResources::GetInstance().DefaultTextureBlack);
+			if (reservedIndex == UINT32_MAX)
+			{
+				SDL_LOG_ASSERT_FAIL("Failed to reserve bindless index", "[Scene] Failed to reserve bindless slot for texture %u", i);
+				continue;
+			}
+			tex.m_BindlessIndex = reservedIndex;
+		}
+
 		if (tex.m_Uri.empty())
 		{
 			SDL_Log("[Scene] Texture %u has no URI, skipping (embedded images not yet supported)", i);
