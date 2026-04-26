@@ -1638,10 +1638,6 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 				task.binDataOffset  = binDataOffset;
 				task.sceneMeshIdx   = offsets.meshOffset + (int)mi;
 				task.scenePrimIdx   = (int)pi;
-				task.glTFMeshIdx    = (int)mi;
-				task.glTFPrimIdx    = (int)pi;
-				task.materialOffset = offsets.materialOffset;
-				task.textureOffset  = offsets.textureOffset;
 
 				// Extract per-accessor binary metadata for the fast mmap path.
 				for (cgltf_size ai = 0; ai < cgltfPrim.attributes_count; ++ai)

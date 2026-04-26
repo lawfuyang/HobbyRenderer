@@ -51,10 +51,6 @@ struct PendingAsyncMeshInfo
 
     int sceneMeshIdx   = 0;
     int scenePrimIdx   = 0;
-    int glTFMeshIdx    = 0;
-    int glTFPrimIdx    = 0;
-    int materialOffset = 0;
-    int textureOffset  = 0;
 
     PrimAccessorInfo posAccessor;
     PrimAccessorInfo normAccessor;
