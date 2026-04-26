@@ -1050,6 +1050,7 @@ TEST_SUITE("Scene_AsyncBoundingVolume")
             DirectX::XMStoreFloat4x4(&node.m_LocalTransform, DirectX::XMMatrixIdentity());
             g_Renderer.m_Scene.m_Nodes.push_back(std::move(node));
         }
+        g_Renderer.m_Scene.UpdateNodeBoundingSphere((int)g_Renderer.m_Scene.m_Nodes.size() - 1);
         g_Renderer.m_Scene.FinalizeLoadedScene();
 
         const Scene::Node& testNode  = g_Renderer.m_Scene.m_Nodes.back();

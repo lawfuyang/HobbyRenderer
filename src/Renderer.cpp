@@ -451,6 +451,9 @@ void Renderer::InitializeForTests()
     if (!InitializeGPUStack(m_Window))
         return;
 
+    m_AsyncTextureQueue.Start("AsyncTextureQueue");
+    m_AsyncMeshQueue.Start("AsyncMeshQueue");
+
     // Tests manage their own scenes; initialise with minimal buffers (just the default cube).
     m_Scene.InitializeDefaultCube(0, 0);
     ExecutePendingCommandLists();
@@ -622,6 +625,7 @@ void Renderer::Run()
         m_Scene.m_ViewPrev = m_Scene.m_View;
         m_Scene.m_Camera.FillPlanarViewConstants(m_Scene.m_View, (float)windowW, (float)windowH);
 
+        // must disable restir renderer while async mesh loads are pending to avoid GPU synchronization stalls
         {
             const uint32_t pendingMeshLoads = m_AsyncMeshQueue.GetPendingCount();
             if (pendingMeshLoads > 0)

@@ -156,9 +156,35 @@ void Scene::UploadGeometryBuffers(const std::vector<srrhi::VertexQuantized>& ver
 {
 	// Used by the synchronous (test / in-memory) load path.  Assumes GPU buffers were
 	// already created by InitializeDefaultCube; appends the provided geometry.
-	SDL_assert(m_VertexBufferQuantized && m_IndexBuffer && "UploadGeometryBuffers: GPU buffers not initialized");
+	if (!m_VertexBufferQuantized || !m_IndexBuffer)
+	{
+		SDL_Log("[Scene] UploadGeometryBuffers precondition failed: GPU buffers are null "
+			"(vb=%p ib=%p meshData=%zu meshes=%zu usedVerts=%u usedIdx=%u)",
+			(void*)m_VertexBufferQuantized.Get(),
+			(void*)m_IndexBuffer.Get(),
+			m_MeshData.size(),
+			m_Meshes.size(),
+			m_VertexBufferUsed,
+			m_IndexBufferUsed);
+	}
+	SDL_assert(m_VertexBufferQuantized && m_IndexBuffer &&
+		"UploadGeometryBuffers: GPU buffers not initialized. Call InitializeDefaultCube() first.");
+	SDL_assert(!m_MeshData.empty() &&
+		"UploadGeometryBuffers: mesh metadata is empty. InitializeDefaultCube() must run first.");
 
 	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+	SDL_assert(device && "UploadGeometryBuffers: NVRHI device is null");
+
+	const uint64_t vbCapacityElems = m_VertexBufferQuantized
+		? (uint64_t)m_VertexBufferQuantized->getDesc().byteSize / sizeof(srrhi::VertexQuantized)
+		: 0;
+	const uint64_t ibCapacityElems = m_IndexBuffer
+		? (uint64_t)m_IndexBuffer->getDesc().byteSize / sizeof(uint32_t)
+		: 0;
+	SDL_assert((uint64_t)m_VertexBufferUsed <= vbCapacityElems &&
+		"UploadGeometryBuffers: m_VertexBufferUsed exceeds vertex buffer capacity");
+	SDL_assert((uint64_t)m_IndexBufferUsed <= ibCapacityElems &&
+		"UploadGeometryBuffers: m_IndexBufferUsed exceeds index buffer capacity");
 
 	nvrhi::BufferDesc vbDesc{};
 	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
@@ -580,10 +606,13 @@ void Scene::FinalizeLoadedScene()
     {
         const Node& node = m_Nodes[ni];
         if (node.m_MeshIndex < 0) continue;
+		SDL_assert(node.m_MeshIndex < (int)m_Meshes.size() && "FinalizeLoadedScene: node mesh index out of range");
         const Mesh& mesh = m_Meshes[node.m_MeshIndex];
 		for (uint32_t primIdx = 0; primIdx < (uint32_t)mesh.m_Primitives.size(); ++primIdx)
         {
 			const Primitive& prim = mesh.m_Primitives[primIdx];
+			SDL_assert(prim.m_MaterialIndex >= -1 && prim.m_MaterialIndex < (int)m_Materials.size() &&
+				"FinalizeLoadedScene: primitive material index out of range");
             srrhi::PerInstanceData inst{};
 			const bool bUsesPlaceholderCube = (prim.m_MeshDataIndex == 0);
 			inst.m_World = BuildInstanceWorldTransform(node.m_WorldTransform, bUsesPlaceholderCube);

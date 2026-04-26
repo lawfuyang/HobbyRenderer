@@ -187,15 +187,31 @@ TEST_SUITE("Scene_MeshData")
 
         const auto& meshes    = g_Renderer.m_Scene.m_Meshes;
         const int   matCount  = (int)g_Renderer.m_Scene.m_Materials.size();
+        int noMaterialPrimitiveCount = 0;
         for (int mi = 0; mi < (int)meshes.size(); ++mi)
         {
             for (int pi = 0; pi < (int)meshes[mi].m_Primitives.size(); ++pi)
             {
-                const int matIdx = meshes[mi].m_Primitives[pi].m_MaterialIndex;
-                INFO("Mesh " << mi << " primitive " << pi << " materialIndex=" << matIdx);
-                CHECK((matIdx >= 0 && matIdx < matCount));
+                const Scene::Primitive& prim = meshes[mi].m_Primitives[pi];
+                const int matIdx = prim.m_MaterialIndex;
+                INFO("Mesh " << mi << " primitive " << pi
+                    << " materialIndex=" << matIdx
+                    << " meshDataIndex=" << prim.m_MeshDataIndex);
+
+                if (matIdx == -1)
+                {
+                    ++noMaterialPrimitiveCount;
+                    CHECK(prim.m_MeshDataIndex == 0u);
+                }
+                else
+                {
+                    CHECK((matIdx >= 0 && matIdx < matCount));
+                }
             }
         }
+
+        // The scene should contain at most one no-material primitive: the default cube placeholder.
+        CHECK(noMaterialPrimitiveCount <= 1);
     }
 
     // ------------------------------------------------------------------
@@ -1156,4 +1172,90 @@ TEST_SUITE("Scene_Shutdown")
             CHECK(g_Renderer.m_Scene.m_Meshes.size() > 0);
         }
     }
+}
+
+// ============================================================================
+// TEST SUITE: Scene_GeometryBufferInit
+// ============================================================================
+TEST_SUITE("Scene_GeometryBufferInit")
+{
+        // ------------------------------------------------------------------
+        // TC-SINIT-01: InitializeDefaultCube creates required geometry buffers
+        // ------------------------------------------------------------------
+        TEST_CASE("TC-SINIT-01 GeometryInit - InitializeDefaultCube creates GPU geometry buffers")
+        {
+                REQUIRE(DEV() != nullptr);
+                DEV()->waitForIdle();
+                Scene& scene = g_Renderer.m_Scene;
+                scene.Shutdown();
+
+                scene.InitializeDefaultCube(0, 0);
+                g_Renderer.ExecutePendingCommandLists();
+
+                CHECK(scene.m_VertexBufferQuantized != nullptr);
+                CHECK(scene.m_IndexBuffer != nullptr);
+                REQUIRE(!scene.m_Meshes.empty());
+                REQUIRE(!scene.m_Meshes[0].m_Primitives.empty());
+                CHECK(!scene.m_MeshData.empty());
+
+                DEV()->waitForIdle();
+                scene.Shutdown();
+        }
+
+        // ------------------------------------------------------------------
+        // TC-SINIT-02: Sync in-memory upload appends into initialized buffers
+        // ------------------------------------------------------------------
+        TEST_CASE("TC-SINIT-02 GeometryInit - UploadGeometryBuffers appends after InitializeDefaultCube")
+        {
+                REQUIRE(DEV() != nullptr);
+                DEV()->waitForIdle();
+                Scene& scene = g_Renderer.m_Scene;
+                scene.Shutdown();
+
+                scene.InitializeDefaultCube(0, 0);
+                g_Renderer.ExecutePendingCommandLists();
+
+                static constexpr const char kMinimalGltf[] = R"({
+    "asset": { "version": "2.0" },
+    "scene": 0,
+    "scenes": [ { "nodes": [ 0 ] } ],
+    "nodes": [ { "mesh": 0 } ],
+    "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0 } } ] } ],
+    "accessors": [ {
+        "bufferView": 0, "byteOffset": 0,
+        "componentType": 5126, "count": 3, "type": "VEC3",
+        "max": [ 1.0, 1.0, 0.0 ], "min": [ 0.0, 0.0, 0.0 ]
+    } ],
+    "bufferViews": [ {
+        "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962
+    } ],
+    "buffers": [ {
+        "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA",
+        "byteLength": 36
+    } ]
+})";
+
+                std::vector<srrhi::VertexQuantized> vertices;
+                std::vector<uint32_t> indices;
+                const bool ok = SceneLoader::LoadGLTFSceneFromMemory(
+                        scene,
+                        kMinimalGltf, sizeof(kMinimalGltf) - 1,
+                        {},
+                        vertices, indices);
+                REQUIRE(ok);
+                REQUIRE(!vertices.empty());
+
+                const uint32_t preUsedVerts = scene.m_VertexBufferUsed;
+                const uint32_t preUsedIdx = scene.m_IndexBufferUsed;
+
+                scene.UploadGeometryBuffers(vertices, indices);
+
+                CHECK(scene.m_VertexBufferQuantized != nullptr);
+                CHECK(scene.m_IndexBuffer != nullptr);
+                CHECK(scene.m_VertexBufferUsed == preUsedVerts + (uint32_t)vertices.size());
+                CHECK(scene.m_IndexBufferUsed == preUsedIdx + (uint32_t)indices.size());
+
+                DEV()->waitForIdle();
+                scene.Shutdown();
+        }
 }

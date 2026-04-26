@@ -165,7 +165,7 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
     std::unique_ptr<MemoryMappedDataReader> mappedData = std::make_unique<MemoryMappedDataReader>(filePath);
     if (!mappedData->IsValid())
     {
-        SDL_LOG_ASSERT_FAIL("Cannot map file", "Cannot map file: %s", std::string(filePath).c_str());
+        SDL_Log("Cannot map file", "Cannot map file: %s", std::string(filePath).c_str());
         return;
     }
 
@@ -174,21 +174,21 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
 
     if (size < sizeof(uint32_t) + sizeof(DDS_HEADER))
     {
-        SDL_LOG_ASSERT_FAIL("Invalid DDS file size", "Invalid DDS file size");
+        SDL_Log("Invalid DDS file size", "Invalid DDS file size");
         return;
     }
 
     uint32_t magic = *reinterpret_cast<const uint32_t*>(ptr);
     if (magic != DDS_MAGIC)
     {
-        SDL_LOG_ASSERT_FAIL("Not a DDS file", "Not a DDS file");
+        SDL_Log("Not a DDS file", "Not a DDS file");
         return;
     }
 
     const DDS_HEADER& header = *reinterpret_cast<const DDS_HEADER*>(ptr + sizeof(uint32_t));
     if (header.dwSize != sizeof(DDS_HEADER))
     {
-        SDL_LOG_ASSERT_FAIL("Invalid DDS header size", "Invalid DDS header size");
+        SDL_Log("Invalid DDS header size", "Invalid DDS header size");
         return;
     }
 
@@ -200,7 +200,7 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
     {
         if (size < offset + sizeof(DDS_HEADER_DXT10))
         {
-            SDL_LOG_ASSERT_FAIL("Invalid DDS file size (DX10)", "Invalid DDS file size (DX10)");
+            SDL_Log("Invalid DDS file size (DX10)", "Invalid DDS file size (DX10)");
             return;
         }
         dx10Header = *reinterpret_cast<const DDS_HEADER_DXT10*>(ptr + offset);
@@ -228,7 +228,7 @@ void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::u
     MemoryMappedDataReader mapped(filePath);
     if (!mapped.IsValid())
     {
-        SDL_LOG_ASSERT_FAIL("Failed to map image file", "STBI: cannot map %s", std::string(filePath).c_str());
+        SDL_Log("Failed to map image file", "STBI: cannot map %s", std::string(filePath).c_str());
         return;
     }
 
@@ -238,7 +238,7 @@ void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::u
         &width, &height, &channels, 4);
     if (!img)
     {
-        SDL_LOG_ASSERT_FAIL("Failed to decode image", "STBI failed to decode %s", std::string(filePath).c_str());
+        SDL_Log("Failed to decode image", "STBI failed to decode %s", std::string(filePath).c_str());
         return;
     }
 

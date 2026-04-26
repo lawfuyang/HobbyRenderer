@@ -38,6 +38,31 @@ SceneScope::SceneScope(const char* modelRelPath)
     g_Renderer.ExecutePendingCommandLists();
 
     g_Renderer.m_Scene.LoadScene();
+
+    // Scene file loads are async by default; drain both background queues and
+    // consume pending update commands so tests can safely assert on texture/mesh validity.
+    g_Renderer.m_AsyncTextureQueue.Flush();
+    g_Renderer.m_AsyncMeshQueue.Flush();
+
+    size_t pendingTextures = 1;
+    size_t pendingMeshes = 1;
+    while (pendingTextures > 0 || pendingMeshes > 0)
+    {
+        {
+            std::lock_guard<std::mutex> lk(g_Renderer.m_Scene.m_PendingTextureMutex);
+            pendingTextures = g_Renderer.m_Scene.m_PendingTextureUpdates.size();
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_Renderer.m_Scene.m_PendingMeshMutex);
+            pendingMeshes = g_Renderer.m_Scene.m_PendingMeshUpdates.size();
+        }
+
+        g_Renderer.m_Scene.ApplyPendingUpdates();
+        g_Renderer.ExecutePendingCommandLists();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
     loaded = !g_Renderer.m_Scene.m_Meshes.empty() ||
         !g_Renderer.m_Scene.m_Nodes.empty();
 
@@ -129,6 +154,10 @@ MinimalSceneFixture::MinimalSceneFixture()
     g_Renderer.m_Scene.Shutdown();
     g_Renderer.m_RenderGraph.Shutdown();
 
+    // Recreate default cube + GPU geometry buffers that the sync upload path appends into.
+    g_Renderer.m_Scene.InitializeDefaultCube(0, 0);
+    g_Renderer.ExecutePendingCommandLists();
+
     // Minimal valid glTF 2.0: a single triangle with 3 POSITION vertices.
     // All buffer data is embedded as a base64 data URI so no file I/O is needed.
     // The scene has no lights — SceneLoader::LoadGLTFSceneFromMemory will call
@@ -166,6 +195,11 @@ MinimalSceneFixture::MinimalSceneFixture()
 
     g_Renderer.m_Scene.FinalizeLoadedScene();
     SceneLoader::LoadTexturesFromImages(g_Renderer.m_Scene, {});
+
+    SDL_assert(g_Renderer.m_Scene.m_VertexBufferQuantized &&
+        "MinimalSceneFixture: vertex buffer missing before UploadGeometryBuffers");
+    SDL_assert(g_Renderer.m_Scene.m_IndexBuffer &&
+        "MinimalSceneFixture: index buffer missing before UploadGeometryBuffers");
     
     g_Renderer.m_Scene.UploadGeometryBuffers(vertices, indices);
     SceneLoader::CreateAndUploadLightBuffer(g_Renderer.m_Scene);
