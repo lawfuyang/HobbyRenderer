@@ -269,5 +269,15 @@ private:
     bool m_IsCompiled = false;
     uint16_t m_CurrentPassIndex = 0;
     bool m_bForceInvalidateAllResources = false;
-};
+    // After Shutdown(), we need to force-invalidate handles for TWO consecutive
+    // frames, not just one.  Frame 1 only invalidates handles that are actually
+    // declared in that frame's rendering mode (e.g. PT mode skips depth/GBuffers).
+    // Frame 2 must also invalidate those skipped handles before they can be
+    // re-declared in the new mode.  This counter is set to 2 by Shutdown() and
+    // decremented by Reset(); m_bForceInvalidateAllResources stays true while > 0.
+    uint32_t m_ForceInvalidateFramesRemaining = 0;
 
+public:
+    // Exposed for unit-test assertions only — do not use in production code.
+    uint32_t GetForceInvalidateFramesRemaining() const { return m_ForceInvalidateFramesRemaining; }
+};

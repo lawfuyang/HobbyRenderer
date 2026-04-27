@@ -249,6 +249,13 @@ bool RunOneFrame()
     return true;
 }
 
+bool RunNFrames(int n)
+    {
+        for (int i = 0; i < n; ++i)
+            if (!RunOneFrame()) return false;
+        return true;
+    }
+
 float ReadbackTexelFloat(nvrhi::TextureHandle tex, uint32_t x, uint32_t y)
 {
     if (!tex) return -1.0f;

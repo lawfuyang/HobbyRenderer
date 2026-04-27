@@ -76,6 +76,31 @@ nvrhi::MemoryRequirements RGBufferDesc::GetMemoryRequirements() const
 
 void RenderGraph::Shutdown()
 {
+    // Transient textures and buffers hold nvrhi GPU resource handles.  Dropping
+    // those handles while the GPU is still executing work that references them
+    // causes D3D12 ERROR 921 (OBJECT_DELETED_WHILE_STILL_IN_USE).  Always
+    // drain the GPU before releasing any physical resources.
+    //
+    // In normal engine operation the caller (Renderer::Shutdown, scene reload,
+    // etc.) is responsible for calling waitForIdle first.  We assert here so
+    // that any future caller that forgets gets an immediate, actionable failure
+    // rather than a silent GPU corruption or a deferred D3D12 validation error.
+    //
+    // We only do this when the RHI is fully initialised (m_RHI != nullptr and
+    // the device exists) so that Shutdown() is still safe to call during early
+    // startup or in unit-test teardown before the GPU stack is up.
+    if (g_Renderer.m_RHI && g_Renderer.m_RHI->m_NvrhiDevice)
+    {
+        // Assert that the GPU is already idle.  If this fires, the caller must
+        // add a waitForIdle() before calling Shutdown().
+        // We also call waitForIdle() defensively so that even in non-debug
+        // builds we don't corrupt GPU memory.
+        SDL_assert(!m_IsCompiled && "RenderGraph::Shutdown() called while a frame is still in-flight. "
+                   "Call waitForIdle() before Shutdown().");
+        g_Renderer.m_RHI->m_NvrhiDevice->waitForIdle();
+        g_Renderer.m_RHI->m_NvrhiDevice->runGarbageCollection();
+    }
+
     m_Textures.clear();
     m_Buffers.clear();
     m_Heaps.clear();
@@ -91,6 +116,10 @@ void RenderGraph::Shutdown()
     m_CurrentPassIndex = 0;
     t_ActivePassIndex = 0;
     m_bForceInvalidateAllResources = true;
+    // Keep the flag true for two full frames after Shutdown() so that handles
+    // skipped in frame 1 (e.g. depth/GBuffers in PT mode) are also invalidated
+    // when they are first declared again in frame 2.
+    m_ForceInvalidateFramesRemaining = 2;
 }
 
 void RenderGraph::Reset()
@@ -103,10 +132,19 @@ void RenderGraph::Reset()
 
     m_CurrentPassIndex = 0;
     m_IsCompiled = false;
+    m_IsInsideSetup = false; // safety: ensure setup state is clean at frame start
     m_Stats = Stats{};
     m_PassNames.clear();
     m_PassAccesses.clear();
     m_PerPassAliasBarriers.clear();
+    // Clear any pending state that may have been left over if a previous frame
+    // was interrupted (e.g. a renderer's Setup() threw or returned early after
+    // declaring resources).  BeginSetup() also clears these, but Reset() is the
+    // authoritative frame-start reset and must leave the graph in a fully clean
+    // state regardless of what happened last frame.
+    m_PendingPassAccess = {};
+    m_PendingDeclaredTextures.clear();
+    m_PendingDeclaredBuffers.clear();
 
     // Mark all resources as not declared this frame and reset lifetimes
     for (TransientTexture& texture : m_Textures)
@@ -263,12 +301,42 @@ void RenderGraph::EndSetup(bool bEnabled)
     SDL_assert(m_IsInsideSetup);
     if (!bEnabled)
     {
-        SDL_assert(m_PendingDeclaredTextures.empty());
-        SDL_assert(m_PendingDeclaredBuffers.empty());
+        // A renderer returned false from Setup() — it must not have declared any
+        // resources (declaring then returning false is a contract violation).
+        // If it did declare resources anyway, roll back m_IsDeclaredThisFrame so
+        // those slots are not poisoned for the rest of the frame.
+        if (!m_PendingDeclaredTextures.empty())
+        {
+            SDL_Log("[RenderGraph] WARNING: renderer returned false from Setup() but declared %zu texture(s). "
+                    "Rolling back m_IsDeclaredThisFrame on those slots.",
+                    m_PendingDeclaredTextures.size());
+            SDL_assert(false && "Renderer declared textures but returned false from Setup() — contract violation");
+            for (uint32_t idx : m_PendingDeclaredTextures)
+            {
+                if (idx < m_Textures.size())
+                    m_Textures[idx].m_IsDeclaredThisFrame = false;
+            }
+        }
+        if (!m_PendingDeclaredBuffers.empty())
+        {
+            SDL_Log("[RenderGraph] WARNING: renderer returned false from Setup() but declared %zu buffer(s). "
+                    "Rolling back m_IsDeclaredThisFrame on those slots.",
+                    m_PendingDeclaredBuffers.size());
+            SDL_assert(false && "Renderer declared buffers but returned false from Setup() — contract violation");
+            for (uint32_t idx : m_PendingDeclaredBuffers)
+            {
+                if (idx < m_Buffers.size())
+                    m_Buffers[idx].m_IsDeclaredThisFrame = false;
+            }
+        }
         SDL_assert(m_PendingPassAccess.m_ReadTextures.empty());
         SDL_assert(m_PendingPassAccess.m_WriteTextures.empty());
         SDL_assert(m_PendingPassAccess.m_ReadBuffers.empty());
         SDL_assert(m_PendingPassAccess.m_WriteBuffers.empty());
+        // Always clear pending state on disabled pass to keep the graph clean.
+        m_PendingDeclaredTextures.clear();
+        m_PendingDeclaredBuffers.clear();
+        m_PendingPassAccess = {};
     }
     m_IsInsideSetup = false;
 }
@@ -300,6 +368,19 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
     {
         TransientTexture& texture = m_Textures[outputHandle.m_Index];
 
+        if (texture.m_IsDeclaredThisFrame)
+        {
+            SDL_Log("[RenderGraph] DOUBLE-DECLARE: handle index=%u, existing name='%s', existing hash=%zu, "
+                    "new name='%s', new hash=%zu, frame=%u, lastFrameUsed=%llu, isPersistent=%d",
+                    outputHandle.m_Index,
+                    texture.m_Desc.m_NvrhiDesc.debugName.c_str(),
+                    texture.m_Hash,
+                    desc.m_NvrhiDesc.debugName.c_str(),
+                    hash,
+                    g_Renderer.m_FrameNumber,
+                    (unsigned long long)texture.m_LastFrameUsed,
+                    (int)texture.m_IsPersistent);
+        }
         SDL_assert(!texture.m_IsDeclaredThisFrame && "Texture already declared this frame! Only one pass should declare a resource.");
 
         bool isNewlyAllocated = false;
@@ -329,6 +410,12 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
             && m_Textures[i].m_Hash == hash
             && (g_Renderer.m_FrameNumber - m_Textures[i].m_LastFrameUsed > 1))
         {
+            SDL_Log("[RenderGraph] POOL-REUSE: slot %u (was '%s') reassigned to '%s' (frame=%u, lastUsed=%llu)",
+                    i,
+                    m_Textures[i].m_Desc.m_NvrhiDesc.debugName.c_str(),
+                    desc.m_NvrhiDesc.debugName.c_str(),
+                    g_Renderer.m_FrameNumber,
+                    (unsigned long long)m_Textures[i].m_LastFrameUsed);
             m_Textures[i].m_Desc = desc; // Ensure metadata like debugName is updated
             m_Textures[i].m_IsDeclaredThisFrame = true;
             m_Textures[i].m_IsPersistent = false;
@@ -753,7 +840,20 @@ void RenderGraph::Compile()
 void RenderGraph::PostRender()
 {
     m_IsCompiled = false;
-    m_bForceInvalidateAllResources = false;
+    // Decrement the post-Shutdown() invalidation countdown here (end of frame)
+    // so the flag stays true for the *entire* current frame's DeclareTexture
+    // calls.  Decrementing in Reset() would clear the flag one frame too early:
+    //   Shutdown() -> counter=2, flag=true
+    //   Frame 1 Reset()  -> flag still true  -> DeclareTexture invalidates PT handles
+    //   Frame 1 PostRender() -> counter 2->1, flag still true
+    //   Frame 2 Reset()  -> flag still true  -> DeclareTexture invalidates depth/GBuffer handles
+    //   Frame 2 PostRender() -> counter 1->0, flag=false
+    //   Frame 3+ -> normal operation
+    if (m_ForceInvalidateFramesRemaining > 0)
+    {
+        --m_ForceInvalidateFramesRemaining;
+        m_bForceInvalidateAllResources = (m_ForceInvalidateFramesRemaining > 0);
+    }
 }
 
 // ============================================================================
@@ -1199,7 +1299,14 @@ nvrhi::TextureHandle RenderGraph::GetTextureRaw(RGTextureHandle handle) const
     {
         return nullptr;
     }
-    return m_Textures[handle.m_Index].m_PhysicalTexture;
+    // Only return the physical texture if it was declared (active) this frame.
+    // Stale handles for resources not scheduled this frame must appear as nullptr.
+    const auto& tex = m_Textures[handle.m_Index];
+    if (!tex.m_IsDeclaredThisFrame)
+    {
+        return nullptr;
+    }
+    return tex.m_PhysicalTexture;
 }
 
 nvrhi::BufferHandle RenderGraph::GetBufferRaw(RGBufferHandle handle) const
@@ -1208,7 +1315,13 @@ nvrhi::BufferHandle RenderGraph::GetBufferRaw(RGBufferHandle handle) const
     {
         return nullptr;
     }
-    return m_Buffers[handle.m_Index].m_PhysicalBuffer;
+    // Same active-this-frame guard as GetTextureRaw
+    const auto& buf = m_Buffers[handle.m_Index];
+    if (!buf.m_IsDeclaredThisFrame)
+    {
+        return nullptr;
+    }
+    return buf.m_PhysicalBuffer;
 }
 
 uint16_t RenderGraph::GetPassIndex(const char* passName) const

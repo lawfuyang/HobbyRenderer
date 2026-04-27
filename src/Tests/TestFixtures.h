@@ -127,6 +127,9 @@ IRenderer* FindRendererByName(const char* name);
 // -----------------------------------------------------------------------
 bool RunOneFrame();
 
+// Run N full frames and return true if none threw.
+bool RunNFrames(int n);
+
 // -----------------------------------------------------------------------
 // ReadbackTexelFloat — reads a single texel from a GPU texture via a
 // staging texture.  Returns the R-channel value as a float.
@@ -169,4 +172,16 @@ struct MinimalSceneFixture
     // Non-copyable
     MinimalSceneFixture(const MinimalSceneFixture&) = delete;
     MinimalSceneFixture& operator=(const MinimalSceneFixture&) = delete;
+};
+
+// Switch rendering mode and restore on scope exit.
+struct RenderingModeGuard
+{
+    RenderingMode m_Saved;
+    explicit RenderingModeGuard(RenderingMode newMode)
+        : m_Saved(g_Renderer.m_Mode)
+    {
+        g_Renderer.m_Mode = newMode;
+    }
+    ~RenderingModeGuard() { g_Renderer.m_Mode = m_Saved; }
 };
