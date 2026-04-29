@@ -74,8 +74,6 @@ bool g_ReGIR_VisualizeRegirCells = false;
 
 void RTXDIIMGUISettings()
 {
-    
-
     ImGui::Indent();
 
     // ---- Resampling mode -------------------------------------------------------
@@ -529,8 +527,6 @@ public:
 
     void CreateRTXDIContext()
     {
-        
-
         const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
@@ -570,8 +566,6 @@ public:
 
     void Initialize() override
     {
-        
-
         // Initialize ReSTIR DI parameter structs to library defaults
         g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
         g_ReSTIRDI_TemporalResamplingParams= rtxdi::GetDefaultReSTIRDITemporalResamplingParams();
@@ -613,19 +607,11 @@ public:
         m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
 
-        // default settings: follow RTXDI sample
-        m_NRDRelaxSettings.diffuseMaxFastAccumulatedFrameNum = 1;
-        m_NRDRelaxSettings.specularMaxFastAccumulatedFrameNum = 1;
-        m_NRDRelaxSettings.diffusePhiLuminance = 1.0f;
-        m_NRDRelaxSettings.spatialVarianceEstimationHistoryThreshold = 1;
         m_NRDRelaxSettings.enableAntiFirefly = true;
-        m_NRDRelaxSettings.diffusePrepassBlurRadius = 30.0f;
-        m_NRDRelaxSettings.specularPrepassBlurRadius = 30.0f;
     }
 
     void PostSceneLoad() override
     {
-        
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         // ---- TLAS History (for temporal effects) -------------------
@@ -722,8 +708,6 @@ public:
     // ------------------------------------------------------------------
     bool Setup(RenderGraph& renderGraph) override
     {
-        
-
         // If the user turned RTXDI off, we want the DeferredRenderer to take
         // the classic path — don't participate in the render graph at all.
         if (!g_Renderer.m_EnableReSTIRDI)
