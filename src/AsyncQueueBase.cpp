@@ -6,18 +6,27 @@ const std::vector<AsyncQueueBase::RegistryEntry>& AsyncQueueBase::GetActiveQueue
     return ms_ActiveQueues;
 }
 
+AsyncQueueBase::AsyncQueueBase(uint32_t workerCount)
+    : m_WorkerCount(workerCount > 0 ? workerCount : 1)
+{
+}
+
 AsyncQueueBase::~AsyncQueueBase()
 {
     // Safety net: if the owner forgot to call Stop() before destruction,
-    // stop the thread here to avoid std::terminate on a joinable thread.
-    if (m_Thread.joinable())
+    // stop the workers here to avoid std::terminate on joinable threads.
+    bool anyJoinable = false;
+    for (std::thread& t : m_Workers)
+        if (t.joinable()) { anyJoinable = true; break; }
+
+    if (anyJoinable)
     {
         {
             std::lock_guard<std::mutex> lk(m_Mutex);
             m_bStopping = true;
         }
-        m_CV.notify_one();
-        m_Thread.join();
+        m_CV.notify_all();
+        JoinAll();
         m_bRunning = false;
 
         ms_ActiveQueues.erase(
@@ -37,14 +46,22 @@ void AsyncQueueBase::Start(const char* logTag)
         // Start() was called, and after a proper Stop() the count is already 0.
     }
     m_bRunning = true;
-    m_Thread   = std::thread(&AsyncQueueBase::ThreadFunc, this);
+    m_Workers.reserve(m_WorkerCount);
+    for (uint32_t i = 0; i < m_WorkerCount; ++i)
+        m_Workers.emplace_back(&AsyncQueueBase::ThreadFunc, this);
+
     ms_ActiveQueues.push_back({ logTag, this });
-    SDL_Log("[%s] Background thread started", logTag);
+    SDL_Log("[%s] Background thread pool started (%u worker%s)",
+            logTag, m_WorkerCount, m_WorkerCount == 1 ? "" : "s");
 }
 
 void AsyncQueueBase::Stop(const char* logTag)
 {
-    if (!m_Thread.joinable())
+    bool anyJoinable = false;
+    for (std::thread& t : m_Workers)
+        if (t.joinable()) { anyJoinable = true; break; }
+
+    if (!anyJoinable)
     {
         m_bRunning = false;
         return;
@@ -53,8 +70,8 @@ void AsyncQueueBase::Stop(const char* logTag)
         std::lock_guard<std::mutex> lk(m_Mutex);
         m_bStopping = true;
     }
-    m_CV.notify_one();
-    m_Thread.join();
+    m_CV.notify_all();
+    JoinAll();
     m_bRunning = false;
 
     ms_ActiveQueues.erase(
@@ -62,7 +79,14 @@ void AsyncQueueBase::Stop(const char* logTag)
             [this](const RegistryEntry& e) { return e.m_Queue == this; }),
         ms_ActiveQueues.end());
 
-    SDL_Log("[%s] Background thread stopped", logTag);
+    SDL_Log("[%s] Background thread pool stopped", logTag);
+}
+
+void AsyncQueueBase::JoinAll()
+{
+    for (std::thread& t : m_Workers)
+        if (t.joinable()) t.join();
+    m_Workers.clear();
 }
 
 uint32_t AsyncQueueBase::GetQueuedCount() const
