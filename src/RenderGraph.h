@@ -260,6 +260,22 @@ private:
     std::vector<RenderGraphInternal::TransientTexture> m_Textures;
     std::vector<RenderGraphInternal::TransientBuffer> m_Buffers;
     std::vector<const char*> m_PassNames;
+
+    // ── Deferred-release lists ────────────────────────────────────────────────
+    // GPU resources must not be freed while in-flight GPU work still references
+    // them (D3D12 ERROR #921: OBJECT_DELETED_WHILE_STILL_IN_USE).  Instead of
+    // dropping handles immediately (which decrements the refcount and may trigger
+    // a final-release), we move them here.  FlushDeferredReleases() calls
+    // waitForIdle() + runGarbageCollection() once (if the lists are non-empty)
+    // and then clears them, ensuring the GPU has finished before any destructor
+    // runs.  It is called at the top of Reset() so the flush happens at the
+    // start of the *next* frame, not mid-Compile() of the current one.
+    std::vector<nvrhi::TextureHandle> m_DeferredReleaseTextures;
+    std::vector<nvrhi::BufferHandle>  m_DeferredReleaseBuffers;
+
+    // Flush deferred releases: if either list is non-empty, wait for GPU idle,
+    // run garbage collection, then clear both lists.
+    void FlushDeferredReleases();
     
     // Setup state
     bool m_IsInsideSetup = false;

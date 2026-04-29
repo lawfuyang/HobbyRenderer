@@ -259,6 +259,8 @@ public:
     std::vector<MeshUpdateCommand>    m_PendingMeshUpdates;
     std::mutex                       m_PendingMeshMutex;
 
+    bool m_bVerboseLogging = false;
+
     // Apply all queued texture and mesh updates. Must be called from the main
     // (render) thread only since it performs GPU resource creation / upload.
     void ApplyPendingUpdates();

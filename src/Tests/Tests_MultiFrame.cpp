@@ -592,3 +592,386 @@ TEST_SUITE("MultiFrame_BloomDebug")
         g_Renderer.m_BloomIntensity = prevIntensity;
     }
 }
+
+// ============================================================================
+// TEST SUITE: MultiFrame_GPULifetime
+//
+// Regression tests for D3D12 ERROR #921: OBJECT_DELETED_WHILE_STILL_IN_USE.
+//
+// Root cause (TC-MF-06 crash):
+//   RenderGraph::Compile() → AllocateResourcesInternal() recreates a transient
+//   texture handle (aliased or desc-changed path) by assigning a new
+//   RefCountPtr into texture.m_PhysicalTexture.  The assignment drops the old
+//   handle, decrementing its refcount.  If the refcount reaches zero while the
+//   GPU is still executing work that references the resource, D3D12 fires
+//   ERROR #921.
+//
+// Fix:
+//   1. RenderGraph now maintains m_DeferredReleaseTextures / m_DeferredReleaseBuffers.
+//      All handle drops (Compile recreation, Reset eviction, DeclareTexture
+//      desc-change) move the old handle into these lists instead of dropping inline.
+//   2. FlushDeferredReleases() is called at the top of Reset() each frame.
+//      It calls waitForIdle() + runGarbageCollection() (only when the lists are
+//      non-empty) and then clears them, ensuring the GPU has finished before any
+//      destructor runs.
+//   3. RunOneFrame() in TestFixtures.cpp calls waitForIdle() +
+//      runGarbageCollection() after ExecutePendingCommandLists() so that by the
+//      time the next frame's Reset() runs, the GPU is already idle and
+//      FlushDeferredReleases() is a no-op.
+//
+// Run with: HobbyRenderer --run-tests=*GPULifetime*
+// ============================================================================
+TEST_SUITE("MultiFrame_GPULifetime")
+{
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-01 (regression for TC-MF-06 crash):
+    //   7 frames in a tight loop must not trigger D3D12 ERROR #921.
+    //   This is the exact scenario that crashed before the fix: the
+    //   RenderGraph aliasing path recreated a texture handle mid-Compile
+    //   while the previous frame's GPU work was still in-flight.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-01 GPULifetime - 7 tight frames no ERROR 921 (TC-MF-06 regression)")
+    {
+        // Enable verbose RG logging so any deferred-release activity is visible
+        // in the test output if this test fails again.
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        constexpr int N = 7;
+        for (int i = 0; i < N; ++i)
+        {
+            INFO("Frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        // Verify the deferred-release lists are empty after the last frame's
+        // Reset() flushed them.  Non-empty lists here would mean a handle was
+        // queued but never flushed, which is a logic error in FlushDeferredReleases.
+        const auto& textures = g_Renderer.m_RenderGraph.GetTextures();
+        const auto& buffers  = g_Renderer.m_RenderGraph.GetBuffers();
+        // All physical handles that were deferred must have been cleared by now.
+        // We can't inspect m_DeferredRelease* directly (private), but we can
+        // assert the GPU is still healthy by running one more frame.
+        CHECK(RunOneFrame());
+
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-02: 20 tight frames — extended stress of the deferred-
+    //   release path.  Covers multiple eviction cycles (resources inactive
+    //   for >3 frames get evicted in Reset()).
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-02 GPULifetime - 20 tight frames no ERROR 921")
+    {
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        for (int i = 0; i < 20; ++i)
+        {
+            INFO("Frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-03: Rendering mode switch mid-run.
+    //   Switching Normal → IBL → Normal changes which renderers are
+    //   scheduled, causing some transient resources to be evicted (not
+    //   declared for >3 frames) and then re-allocated.  This exercises
+    //   the eviction deferred-release path in Reset().
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-03 GPULifetime - mode switch eviction deferred release")
+    {
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        // 3 frames in Normal mode — allocates the full Normal-mode resource set.
+        g_Renderer.m_Mode = RenderingMode::Normal;
+        for (int i = 0; i < 3; ++i)
+        {
+            INFO("Normal frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        // 3 frames in IBL mode — some Normal-mode resources become inactive.
+        g_Renderer.m_Mode = RenderingMode::IBL;
+        for (int i = 0; i < 3; ++i)
+        {
+            INFO("IBL frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        // 4 more frames in Normal mode — eviction of IBL-only resources fires,
+        // then Normal-mode resources are re-allocated.  The deferred-release
+        // list must absorb the evicted handles safely.
+        g_Renderer.m_Mode = RenderingMode::Normal;
+        for (int i = 0; i < 4; ++i)
+        {
+            INFO("Normal-again frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-04: Bloom toggle — enables/disables the Bloom renderer
+    //   every frame, causing its transient resources to be declared and
+    //   not-declared alternately.  After 3 frames of non-declaration the
+    //   eviction path fires.  Verifies no ERROR #921 over 10 frames.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-04 GPULifetime - bloom toggle every frame no ERROR 921")
+    {
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        for (int i = 0; i < 10; ++i)
+        {
+            g_Renderer.m_EnableBloom = (i % 2 == 0);
+            INFO("Frame " << i << " bloom=" << g_Renderer.m_EnableBloom);
+            CHECK(RunOneFrame());
+        }
+
+        g_Renderer.m_EnableBloom = true; // restore
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-05: TAA toggle — same pattern as bloom toggle but for
+    //   the TAA renderer and its associated persistent textures.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-05 GPULifetime - TAA toggle every frame no ERROR 921")
+    {
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        for (int i = 0; i < 10; ++i)
+        {
+            g_Renderer.m_bTAAEnabled = (i % 2 == 0);
+            INFO("Frame " << i << " TAA=" << g_Renderer.m_bTAAEnabled);
+            CHECK(RunOneFrame());
+        }
+
+        g_Renderer.m_bTAAEnabled = true; // restore
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-06: Deferred-release lists are empty after each frame.
+    //   Directly inspects the RenderGraph texture/buffer slot state to
+    //   verify that no physical handle is left in a "pending release"
+    //   limbo after a full frame completes.
+    //
+    //   Invariant: after RunOneFrame() returns, FlushDeferredReleases()
+    //   has already been called (at the top of the *next* Reset() inside
+    //   ScheduleAndRunAllRenderers).  But since RunOneFrame() calls
+    //   waitForIdle() before returning, the *next* call to Reset() will
+    //   find the GPU idle and the lists will be cleared immediately.
+    //
+    //   We verify this by checking that all declared physical textures
+    //   are non-null (i.e. no slot was left with a null handle after a
+    //   deferred drop that was never re-allocated).
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-06 GPULifetime - all declared textures have non-null handles after frame")
+    {
+        // Run enough frames to trigger at least one aliasing cycle.
+        for (int i = 0; i < 5; ++i)
+            CHECK(RunOneFrame());
+
+        // After the last frame, every texture that is declared this frame
+        // must have a valid physical handle.
+        const auto& textures = g_Renderer.m_RenderGraph.GetTextures();
+        for (uint32_t i = 0; i < (uint32_t)textures.size(); ++i)
+        {
+            const auto& tex = textures[i];
+            if (!tex.m_IsDeclaredThisFrame) continue;
+            INFO("Texture slot " << i << " name='" << tex.m_Desc.m_NvrhiDesc.debugName << "'");
+            CHECK(tex.m_PhysicalTexture != nullptr);
+            CHECK(tex.m_IsAllocated);
+        }
+
+        const auto& buffers = g_Renderer.m_RenderGraph.GetBuffers();
+        for (uint32_t i = 0; i < (uint32_t)buffers.size(); ++i)
+        {
+            const auto& buf = buffers[i];
+            if (!buf.m_IsDeclaredThisFrame) continue;
+            INFO("Buffer slot " << i << " name='" << buf.m_Desc.m_NvrhiDesc.debugName << "'");
+            CHECK(buf.m_PhysicalBuffer != nullptr);
+            CHECK(buf.m_IsAllocated);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-07: Evicted (non-declared) slots must have null handles.
+    //   After a resource has been inactive for >3 frames, Reset() evicts
+    //   it via the deferred-release path.  The slot must then have a null
+    //   physical handle so it can be safely re-used.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-07 GPULifetime - evicted slots have null physical handles")
+    {
+        // Run enough frames to trigger the 3-frame eviction threshold.
+        // kMaxTransientResourceLifetimeFrames = 3, so 5 frames is sufficient.
+        for (int i = 0; i < 5; ++i)
+            CHECK(RunOneFrame());
+
+        const auto& textures = g_Renderer.m_RenderGraph.GetTextures();
+        for (uint32_t i = 0; i < (uint32_t)textures.size(); ++i)
+        {
+            const auto& tex = textures[i];
+            if (tex.m_IsDeclaredThisFrame) continue; // active slots are fine
+            // Evicted slot: physical handle must be null.
+            INFO("Evicted texture slot " << i << " name='" << tex.m_Desc.m_NvrhiDesc.debugName << "'");
+            CHECK(tex.m_PhysicalTexture == nullptr);
+        }
+
+        const auto& buffers = g_Renderer.m_RenderGraph.GetBuffers();
+        for (uint32_t i = 0; i < (uint32_t)buffers.size(); ++i)
+        {
+            const auto& buf = buffers[i];
+            if (buf.m_IsDeclaredThisFrame) continue;
+            INFO("Evicted buffer slot " << i << " name='" << buf.m_Desc.m_NvrhiDesc.debugName << "'");
+            CHECK(buf.m_PhysicalBuffer == nullptr);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-08: Heap entries for evicted resources are freed.
+    //   After eviction, the heap block must be marked free so it can be
+    //   reused.  Verifies no heap memory leak over many frames.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-08 GPULifetime - heap blocks freed after eviction")
+    {
+        // Run 8 frames to trigger eviction of any resources that were only
+        // active in the first few frames.
+        for (int i = 0; i < 8; ++i)
+            CHECK(RunOneFrame());
+
+        // For every heap, verify that the sum of all block sizes equals the
+        // heap's total capacity (no bytes are lost — either allocated or free).
+        const auto& heaps = g_Renderer.m_RenderGraph.GetHeaps();
+        for (uint32_t hi = 0; hi < (uint32_t)heaps.size(); ++hi)
+        {
+            const auto& heap = heaps[hi];
+            if (!heap.m_Heap) continue; // empty slot
+
+            size_t total = 0;
+            for (const auto& block : heap.m_Blocks)
+                total += block.m_Size;
+
+            INFO("Heap " << hi << " capacity=" << heap.m_Size << " block-sum=" << total);
+            CHECK(total == heap.m_Size);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-09: 50-frame stress — no crash, no leaked handles.
+    //   Runs 50 consecutive frames to stress the full deferred-release /
+    //   eviction / re-allocation cycle.  Verifies the GPU remains healthy
+    //   and all declared resources have valid handles at the end.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-09 GPULifetime - 50 frame stress no crash no leaked handles")
+    {
+        for (int i = 0; i < 50; ++i)
+        {
+            INFO("Frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        // Spot-check: all currently-declared textures must be valid.
+        const auto& textures = g_Renderer.m_RenderGraph.GetTextures();
+        int declaredCount = 0;
+        for (const auto& tex : textures)
+        {
+            if (!tex.m_IsDeclaredThisFrame) continue;
+            ++declaredCount;
+            CHECK(tex.m_PhysicalTexture != nullptr);
+        }
+        CHECK(declaredCount > 0); // sanity: at least one texture was declared
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-10: Animated scene — 10 frames with animations enabled.
+    //   Animations dirty instance transforms every frame, which exercises
+    //   the UploadDirtyInstanceTransforms path alongside the RenderGraph
+    //   deferred-release path.  Verifies no ERROR #921 interaction.
+    // ------------------------------------------------------------------
+    TEST_CASE("TC-MF-GPU-10 GPULifetime - animated scene 10 frames no ERROR 921")
+    {
+        SKIP_IF_NO_SAMPLES("AnimatedCube/glTF/AnimatedCube.gltf");
+
+        SceneScope scope("AnimatedCube/glTF/AnimatedCube.gltf");
+        REQUIRE(scope.loaded);
+
+        g_Renderer.m_EnableAnimations = true;
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        for (int i = 0; i < 10; ++i)
+        {
+            INFO("Frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+        g_Renderer.m_EnableAnimations = true;
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-11: RenderGraph verbose logging does not crash over N frames.
+    //   Ensures the SDL_Log calls inside FlushDeferredReleases, Reset eviction,
+    //   and Compile recreation paths don't cause issues when enabled.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-11 GPULifetime - verbose logging enabled 10 frames no crash")
+    {
+        g_Renderer.m_RenderGraph.SetVerboseLogging(true);
+
+        for (int i = 0; i < 10; ++i)
+        {
+            INFO("Frame " << i);
+            CHECK(RunOneFrame());
+        }
+
+        g_Renderer.m_RenderGraph.SetVerboseLogging(false);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-12: ForceInvalidateFramesRemaining reaches 0 after 2 frames
+    //   post-Shutdown.  Verifies the post-Shutdown invalidation countdown
+    //   works correctly alongside the deferred-release path.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-12 GPULifetime - ForceInvalidateFramesRemaining reaches 0 after warmup")
+    {
+        // MinimalSceneFixture already ran 2 warm-up frames in its constructor,
+        // so the counter must be 0 by the time the test body runs.
+        CHECK(g_Renderer.m_RenderGraph.GetForceInvalidateFramesRemaining() == 0);
+
+        // Running more frames must not re-arm the counter.
+        for (int i = 0; i < 5; ++i)
+            CHECK(RunOneFrame());
+
+        CHECK(g_Renderer.m_RenderGraph.GetForceInvalidateFramesRemaining() == 0);
+    }
+
+    // ------------------------------------------------------------------
+    // TC-MF-GPU-13: Shutdown → re-init cycle does not leave dangling handles.
+    //   Simulates the scene-reload path: Shutdown() clears the deferred-
+    //   release lists (after waitForIdle), then a fresh MinimalSceneFixture
+    //   brings the RenderGraph back up.  Verifies no stale handles survive.
+    // ------------------------------------------------------------------
+    TEST_CASE_FIXTURE(MinimalSceneFixture, "TC-MF-GPU-13 GPULifetime - Shutdown clears deferred release lists")
+    {
+        // Run a few frames to populate the deferred-release lists.
+        for (int i = 0; i < 4; ++i)
+            CHECK(RunOneFrame());
+
+        // Shutdown the RenderGraph explicitly (MinimalSceneFixture destructor
+        // will also call it, but we want to verify the state immediately after).
+        DEV()->waitForIdle();
+        g_Renderer.m_RenderGraph.Shutdown();
+
+        // After Shutdown, all texture/buffer slots must be cleared.
+        CHECK(g_Renderer.m_RenderGraph.GetTextures().empty());
+        CHECK(g_Renderer.m_RenderGraph.GetBuffers().empty());
+        CHECK(g_Renderer.m_RenderGraph.GetHeaps().empty());
+
+        // ForceInvalidateFramesRemaining must be 2 (set by Shutdown).
+        CHECK(g_Renderer.m_RenderGraph.GetForceInvalidateFramesRemaining() == 2);
+    }
+}

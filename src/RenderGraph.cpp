@@ -71,6 +71,48 @@ nvrhi::MemoryRequirements RGBufferDesc::GetMemoryRequirements() const
 }
 
 // ============================================================================
+// RenderGraph - Deferred Release
+// ============================================================================
+
+// FlushDeferredReleases — called at the top of Reset() to safely drop any GPU
+// resource handles that were queued for release during the previous frame.
+//
+// Background: dropping an nvrhi RefCountPtr whose refcount reaches zero triggers
+// ID3D12Resource::Release() immediately on the calling thread.  If the GPU is
+// still executing work that references that resource, D3D12 fires:
+//   ERROR #921: OBJECT_DELETED_WHILE_STILL_IN_USE
+//
+// The fix is to never drop handles inline (mid-Compile, mid-Reset eviction, or
+// mid-DeclareTexture desc-change).  Instead, move them into these lists and
+// flush once per frame at the top of Reset(), after the previous frame's GPU
+// work has been waited on by ExecutePendingCommandLists / waitForIdle.
+//
+// If the lists are non-empty we call waitForIdle() + runGarbageCollection()
+// defensively before clearing, so this function is safe even if the caller
+// forgot to wait.  In the normal path (RunOneFrame calls waitForIdle before
+// the next Reset) the wait is a no-op.
+void RenderGraph::FlushDeferredReleases()
+{
+    if (m_DeferredReleaseTextures.empty() && m_DeferredReleaseBuffers.empty())
+        return;
+
+    if (m_bVerboseLogging)
+        SDL_Log("[RenderGraph] FlushDeferredReleases: %zu texture(s), %zu buffer(s) pending",
+                m_DeferredReleaseTextures.size(), m_DeferredReleaseBuffers.size());
+
+    // Ensure the GPU has finished with these resources before we drop them.
+    if (g_Renderer.m_RHI && g_Renderer.m_RHI->m_NvrhiDevice)
+    {
+        g_Renderer.m_RHI->m_NvrhiDevice->waitForIdle();
+        g_Renderer.m_RHI->m_NvrhiDevice->runGarbageCollection();
+    }
+
+    // Now it is safe to drop the handles — refcounts reach zero here.
+    m_DeferredReleaseTextures.clear();
+    m_DeferredReleaseBuffers.clear();
+}
+
+// ============================================================================
 // RenderGraph - Resource Declaration
 // ============================================================================
 
@@ -106,6 +148,10 @@ void RenderGraph::Shutdown()
         g_Renderer.m_RHI->m_NvrhiDevice->runGarbageCollection();
     }
 
+    // Drop any deferred-release handles now that the GPU is idle.
+    m_DeferredReleaseTextures.clear();
+    m_DeferredReleaseBuffers.clear();
+
     m_Textures.clear();
     m_Buffers.clear();
     m_Heaps.clear();
@@ -130,7 +176,15 @@ void RenderGraph::Shutdown()
 void RenderGraph::Reset()
 {
     PROFILE_FUNCTION();
-    
+
+    // Flush any GPU resource handles that were queued for deferred release
+    // during the previous frame's Compile() or DeclareTexture/DeclareBuffer
+    // desc-change paths.  This must happen before we touch m_Textures /
+    // m_Buffers so that the waitForIdle() inside FlushDeferredReleases() runs
+    // while the previous frame's command lists are still the most-recently-
+    // submitted work.  After this call it is safe to null out physical handles.
+    FlushDeferredReleases();
+
     m_AliasingEnabled = Config::Get().m_EnableRenderGraphAliasing;
     
     const uint32_t kMaxTransientResourceLifetimeFrames = 3;
@@ -175,6 +229,10 @@ void RenderGraph::Reset()
             {
                 FreeBlock(texture.m_HeapIndex, texture.m_BlockOffset);
             }
+            // Defer the handle drop — FlushDeferredReleases() (called at the
+            // top of the *next* Reset()) will wait for GPU idle before the
+            // refcount reaches zero, preventing ERROR #921.
+            m_DeferredReleaseTextures.push_back(std::move(texture.m_PhysicalTexture));
             texture.m_PhysicalTexture = nullptr;
             texture.m_Heap = nullptr;
             texture.m_HeapIndex = UINT32_MAX;
@@ -205,6 +263,8 @@ void RenderGraph::Reset()
             {
                 FreeBlock(buffer.m_HeapIndex, buffer.m_BlockOffset);
             }
+            // Defer the handle drop — same reasoning as for textures above.
+            m_DeferredReleaseBuffers.push_back(std::move(buffer.m_PhysicalBuffer));
             buffer.m_PhysicalBuffer = nullptr;
             buffer.m_Heap = nullptr;
             buffer.m_HeapIndex = UINT32_MAX;
@@ -474,6 +534,10 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
             {
                 FreeBlock(texture.m_HeapIndex, texture.m_BlockOffset);
             }
+            // Defer the handle drop so the GPU finishes before the D3D12
+            // resource is released (prevents ERROR #921).
+            if (texture.m_PhysicalTexture)
+                m_DeferredReleaseTextures.push_back(std::move(texture.m_PhysicalTexture));
             texture.m_PhysicalTexture = nullptr;
             texture.m_IsAllocated     = false;
             texture.m_IsPhysicalOwner = false;
@@ -574,6 +638,9 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
             {
                 FreeBlock(buffer.m_HeapIndex, buffer.m_BlockOffset);
             }
+            // Defer the handle drop — same reasoning as for textures above.
+            if (buffer.m_PhysicalBuffer)
+                m_DeferredReleaseBuffers.push_back(std::move(buffer.m_PhysicalBuffer));
             buffer.m_PhysicalBuffer = nullptr;
             buffer.m_IsAllocated    = false;
             buffer.m_IsPhysicalOwner = false;
@@ -881,7 +948,26 @@ void RenderGraph::Compile()
                         (unsigned long long)offset);
 
             texture.m_Desc.m_NvrhiDesc.isVirtual = true;
+            // Defer the old handle before overwriting — the move-assign would
+            // otherwise drop the refcount inline, potentially triggering a
+            // final-release while the GPU is still in-flight (ERROR #921).
+            // INVARIANT: after this push_back, texture.m_PhysicalTexture must be
+            // null so the subsequent assignment cannot double-release.
+            if (texture.m_PhysicalTexture)
+            {
+                SDL_assert(texture.m_PhysicalTexture.Get() != nullptr &&
+                           "Compile: texture handle is non-null but Get() returns null — "
+                           "RefCountPtr is in an inconsistent state");
+                m_DeferredReleaseTextures.push_back(std::move(texture.m_PhysicalTexture));
+                // After std::move the source must be null.
+                SDL_assert(texture.m_PhysicalTexture == nullptr &&
+                           "Compile: std::move did not null the source texture handle — "
+                           "deferred-release invariant violated; old handle may be double-freed");
+            }
             texture.m_PhysicalTexture = device->createTexture(texture.m_Desc.m_NvrhiDesc);
+            SDL_assert(texture.m_PhysicalTexture != nullptr &&
+                       "Compile: device->createTexture returned null — "
+                       "out of GPU memory or invalid texture descriptor");
             device->bindTextureMemory(texture.m_PhysicalTexture, heap, offset);
             texture.m_Heap = heap;
             texture.m_Offset = offset;
@@ -932,7 +1018,22 @@ void RenderGraph::Compile()
                         (unsigned long long)offset);
 
             buffer.m_Desc.m_NvrhiDesc.isVirtual = true;
+            // Defer the old handle before overwriting — same reasoning as for
+            // textures above.
+            if (buffer.m_PhysicalBuffer)
+            {
+                SDL_assert(buffer.m_PhysicalBuffer.Get() != nullptr &&
+                           "Compile: buffer handle is non-null but Get() returns null — "
+                           "RefCountPtr is in an inconsistent state");
+                m_DeferredReleaseBuffers.push_back(std::move(buffer.m_PhysicalBuffer));
+                SDL_assert(buffer.m_PhysicalBuffer == nullptr &&
+                           "Compile: std::move did not null the source buffer handle — "
+                           "deferred-release invariant violated; old handle may be double-freed");
+            }
             buffer.m_PhysicalBuffer = device->createBuffer(buffer.m_Desc.m_NvrhiDesc);
+            SDL_assert(buffer.m_PhysicalBuffer != nullptr &&
+                       "Compile: device->createBuffer returned null — "
+                       "out of GPU memory or invalid buffer descriptor");
             device->bindBufferMemory(buffer.m_PhysicalBuffer, heap, offset);
             buffer.m_Heap = heap;
             buffer.m_Offset = offset;

@@ -454,6 +454,8 @@ void Renderer::InitializeForTests()
     m_AsyncTextureQueue.Start("AsyncTextureQueue");
     m_AsyncMeshQueue.Start("AsyncMeshQueue");
 
+    m_Scene.m_bVerboseLogging = true;
+
     // Tests manage their own scenes; initialise with minimal buffers (just the default cube).
     m_Scene.InitializeDefaultCube(0, 0);
     ExecutePendingCommandLists();

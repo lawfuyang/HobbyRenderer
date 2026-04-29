@@ -30,46 +30,6 @@ namespace
     // Tolerance for floating-point comparisons.
     static constexpr float kEps = 1e-4f;
 
-    // Returns true if |a - b| <= eps for every element of two 4x4 matrices.
-    bool MatrixNearEqual(const Matrix& a, const Matrix& b, float eps = kEps)
-    {
-        const float* pa = reinterpret_cast<const float*>(&a);
-        const float* pb = reinterpret_cast<const float*>(&b);
-        for (int i = 0; i < 16; ++i)
-            if (std::fabs(pa[i] - pb[i]) > eps)
-                return false;
-        return true;
-    }
-
-    // Returns the 4x4 identity matrix.
-    Matrix IdentityMatrix()
-    {
-        Matrix m{};
-        m._11 = m._22 = m._33 = m._44 = 1.0f;
-        return m;
-    }
-
-    // Multiply two Matrix values via DirectXMath.
-    Matrix MatMul(const Matrix& a, const Matrix& b)
-    {
-        using namespace DirectX;
-        XMMATRIX xa = XMLoadFloat4x4(&a);
-        XMMATRIX xb = XMLoadFloat4x4(&b);
-        Matrix out{};
-        XMStoreFloat4x4(&out, XMMatrixMultiply(xa, xb));
-        return out;
-    }
-
-    // Invert a Matrix via DirectXMath.
-    Matrix MatInv(const Matrix& m)
-    {
-        using namespace DirectX;
-        XMMATRIX xm = XMLoadFloat4x4(&m);
-        Matrix out{};
-        XMStoreFloat4x4(&out, XMMatrixInverse(nullptr, xm));
-        return out;
-    }
-
     // Build a Camera at a given position with given yaw/pitch by using
     // SetFromMatrix with a synthetic world transform.
     Camera MakeCameraAt(float x, float y, float z, float yaw = 0.0f, float pitch = 0.0f)

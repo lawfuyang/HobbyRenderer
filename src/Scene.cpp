@@ -726,6 +726,13 @@ static Vector4 EvaluateAnimSampler(const Scene::AnimationSampler& sampler, float
     float dt    = inputs[k1] - inputs[k0];
     float alpha = (dt > 0.0f) ? (t - inputs[k0]) / dt : 0.0f;
 
+    // Invariant: alpha must be in [0, 1] for a valid keyframe pair.
+    // A value outside this range indicates a bug in the keyframe search loop
+    // (e.g. unsorted inputs) or a floating-point precision issue.
+    SDL_assert(alpha >= -1e-4f && alpha <= 1.0f + 1e-4f &&
+               "EvaluateAnimSampler: alpha out of [0,1] range — sampler inputs may be unsorted or contain NaN");
+    alpha = std::max(0.0f, std::min(1.0f, alpha)); // clamp defensively
+
     using namespace DirectX;
     XMVECTOR v0 = XMLoadFloat4(&outputs[k0]);
     XMVECTOR v1 = XMLoadFloat4(&outputs[k1]);
@@ -782,21 +789,35 @@ void Scene::Update(float deltaTime)
 	if (!g_Renderer.m_EnableAnimations)
 		return;
 
-	if (m_Animations.empty()) return;
+	// NOTE: do NOT early-return here when m_Animations is empty.
+	// The dirty-node world-transform propagation loop below must always run
+	// when m_EnableAnimations is true, even if there are no animation channels
+	// to evaluate.  Manually-set TRS + m_IsDirty = true must propagate to
+	// m_WorldTransform regardless of whether any animations exist.
+	// (Previously `if (m_Animations.empty()) return;` was here, which silently
+	// swallowed all manual TRS mutations when the animation list was empty.)
 
-	for (Animation& anim : m_Animations)
-	{
-		anim.m_CurrentTime += deltaTime;
-		if (anim.m_Duration > 0)
-			anim.m_CurrentTime = fmodf(anim.m_CurrentTime, anim.m_Duration);
-	}
+    for (Animation& anim : m_Animations)
+    {
+        anim.m_CurrentTime += deltaTime;
+        if (anim.m_Duration > 0)
+            anim.m_CurrentTime = fmodf(anim.m_CurrentTime, anim.m_Duration);
 
-	// Reset dirty ranges before evaluating channels.
-	// NOTE: This reset only runs when animations are non-empty.  If the dirty
-	// range was set manually (e.g. by a scene mutation outside of Update()) and
-	// there are no animations, the range will NOT be reset here.  In that case
-	// the caller (Renderer::ScheduleAndRunAllRenderers) is responsible for
-	// resetting it after uploading the dirty instances.
+        // Invariant: CurrentTime must be in [0, duration) after the fmod wrap.
+        // A negative result or a value >= duration indicates a bug in the wrap
+        // logic (e.g. negative deltaTime, NaN duration, or floating-point overflow).
+        SDL_assert(anim.m_CurrentTime >= 0.0f &&
+                   "Scene::Update: animation CurrentTime went negative after fmod wrap — "
+                   "deltaTime may be negative or duration may be zero/NaN");
+        SDL_assert(anim.m_Duration <= 0.0f || anim.m_CurrentTime <= anim.m_Duration + 1e-4f &&
+                   "Scene::Update: animation CurrentTime exceeds duration after fmod wrap — "
+                   "possible floating-point precision issue or negative deltaTime");
+    }
+
+	// Reset dirty ranges before evaluating channels and propagating world transforms.
+	// This runs unconditionally whenever m_EnableAnimations is true, regardless of
+	// whether m_Animations is empty.  Manual TRS mutations (m_IsDirty = true) will
+	// re-populate the dirty ranges in the world-transform loop below.
 	m_InstanceDirtyRange = { UINT32_MAX, 0 };
 	m_MaterialDirtyRange = { UINT32_MAX, 0 };
 
@@ -853,18 +874,50 @@ void Scene::Update(float deltaTime)
 					Node& node = m_Nodes[nodeIdx];
 					node.m_IsDirty = true;
 
-					if (channel.m_Path == AnimationChannel::Path::Translation)
+				if (channel.m_Path == AnimationChannel::Path::Translation)
+				{
+					XMStoreFloat3(&node.m_Translation, XMLoadFloat4(&val));
+				}
+			else if (channel.m_Path == AnimationChannel::Path::Rotation)
+				{
+					using namespace DirectX;
+					// Guard against zero-length (degenerate) quaternions before normalizing.
+					// XMQuaternionNormalize of a zero vector produces NaN/Inf, which would
+					// corrupt the node's world transform and trigger the finite-transform assert.
+					// Root cause: malformed animation data (e.g. a zero-filled buffer) or a
+					// sampler that outputs [0,0,0,0].  Fall back to identity quaternion and log
+					// a warning so the issue is visible without crashing.
+					const float rawLen = std::sqrt(val.x * val.x + val.y * val.y +
+					                               val.z * val.z + val.w * val.w);
+					if (rawLen < 1e-6f)
 					{
-						XMStoreFloat3(&node.m_Translation, XMLoadFloat4(&val));
+						SDL_Log("[Scene] WARNING: animation '%s' channel targeting node %d produced a "
+						        "zero-length quaternion (len=%.2e) — falling back to identity. "
+						        "Check sampler output data for corrupt or zero-filled keyframes.",
+						        anim.m_Name.c_str(), nodeIdx, (double)rawLen);
+						// Identity quaternion: (0, 0, 0, 1)
+						node.m_Rotation = { 0.0f, 0.0f, 0.0f, 1.0f };
 					}
-					else if (channel.m_Path == AnimationChannel::Path::Rotation)
+					else
 					{
 						XMStoreFloat4(&node.m_Rotation, XMQuaternionNormalize(XMLoadFloat4(&val)));
 					}
-					else if (channel.m_Path == AnimationChannel::Path::Scale)
-					{
-						XMStoreFloat3(&node.m_Scale, XMLoadFloat4(&val));
-					}
+
+					// Invariant: rotation quaternion must be unit-length after normalization.
+					// This assert fires only if normalization itself produced a non-unit result,
+					// which should not happen for any non-zero input.
+					const float qLen = std::sqrt(node.m_Rotation.x * node.m_Rotation.x +
+					                              node.m_Rotation.y * node.m_Rotation.y +
+					                              node.m_Rotation.z * node.m_Rotation.z +
+					                              node.m_Rotation.w * node.m_Rotation.w);
+					SDL_assert(std::abs(qLen - 1.0f) < 1e-3f &&
+					           "Scene::Update: rotation quaternion is not unit-length after normalization — "
+					           "normalization of a non-zero quaternion should always produce a unit result");
+				}
+				else if (channel.m_Path == AnimationChannel::Path::Scale)
+				{
+					XMStoreFloat3(&node.m_Scale, XMLoadFloat4(&val));
+				}
 				};
 
 				// All node targets (glTF single or JSON multi-target)
@@ -885,13 +938,50 @@ void Scene::Update(float deltaTime)
 		{
 			using namespace DirectX;
 			
+			// Diagnostic: log which nodes are being processed (only when verbose logging is useful — gated on a compile-time flag to avoid log spam in production).
+			if (m_bVerboseLogging)
+				SDL_Log("[Scene::Update] Processing dirty node %d '%s': "
+						"isDirty=%d parentDirty=%d parent=%d "
+						"rot=(%.3f,%.3f,%.3f,%.3f) scale=(%.3f,%.3f,%.3f) trans=(%.3f,%.3f,%.3f)",
+						idx, node.m_Name.c_str(),
+						(int)node.m_IsDirty, (int)parentDirty, node.m_Parent,
+						node.m_Rotation.x, node.m_Rotation.y, node.m_Rotation.z, node.m_Rotation.w,
+						node.m_Scale.x, node.m_Scale.y, node.m_Scale.z,
+						node.m_Translation.x, node.m_Translation.y, node.m_Translation.z);
+					
+			// transform.  A zero scale produces a singular matrix and NaN world transforms.
+			SDL_assert(std::abs(node.m_Scale.x) > 1e-7f &&
+			           std::abs(node.m_Scale.y) > 1e-7f &&
+			           std::abs(node.m_Scale.z) > 1e-7f &&
+			           "Scene::Update: node scale is zero or near-zero — "
+			           "this produces a singular local transform and NaN world transforms");
+			// Invariant: rotation quaternion must be unit-length before composing.
+			// A non-unit quaternion produces a non-orthogonal rotation matrix.
+			const float preQLen = std::sqrt(node.m_Rotation.x * node.m_Rotation.x +
+			                                node.m_Rotation.y * node.m_Rotation.y +
+			                                node.m_Rotation.z * node.m_Rotation.z +
+			                                node.m_Rotation.w * node.m_Rotation.w);
+			SDL_assert(std::abs(preQLen - 1.0f) < 1e-3f &&
+			           "Scene::Update: node rotation quaternion is not unit-length before TRS composition — "
+			           "manually-set rotations must be normalized before calling Update()");
+			// Invariant: parent world transform must be finite before multiplying.
+			if (node.m_Parent >= 0)
+			{
+				const Matrix& pw = m_Nodes[node.m_Parent].m_WorldTransform;
+				SDL_assert(std::isfinite(pw._11) && std::isfinite(pw._22) &&
+				           std::isfinite(pw._33) && std::isfinite(pw._41) &&
+				           "Scene::Update: parent world transform contains NaN or Inf — "
+				           "parent must be processed before child in m_DynamicNodeIndices "
+				           "(topological order violated, or parent has a degenerate TRS)");
+			}
+			
 			// Update local transform from TRS
 			XMMATRIX localM = XMMatrixScalingFromVector(XMLoadFloat3(&node.m_Scale)) *
 				XMMatrixRotationQuaternion(XMLoadFloat4(&node.m_Rotation)) *
 				XMMatrixTranslationFromVector(XMLoadFloat3(&node.m_Translation));
 			XMStoreFloat4x4(&node.m_LocalTransform, localM);
 
-			// Update world transform
+		// Update world transform
 			XMMATRIX worldM;
 			if (node.m_Parent != -1) {
 				worldM = XMMatrixMultiply(localM, XMLoadFloat4x4(&m_Nodes[node.m_Parent].m_WorldTransform));
@@ -899,6 +989,18 @@ void Scene::Update(float deltaTime)
 				worldM = localM;
 			}
 			XMStoreFloat4x4(&node.m_WorldTransform, worldM);
+
+			// Invariant: world transform must be finite after TRS composition.
+			// NaN/Inf here indicates a degenerate TRS (e.g. zero-length quaternion,
+			// NaN scale, or a corrupt parent transform).
+			SDL_assert(std::isfinite(node.m_WorldTransform._11) &&
+			           std::isfinite(node.m_WorldTransform._22) &&
+			           std::isfinite(node.m_WorldTransform._33) &&
+			           std::isfinite(node.m_WorldTransform._41) &&
+			           std::isfinite(node.m_WorldTransform._42) &&
+			           std::isfinite(node.m_WorldTransform._43) &&
+			           "Scene::Update: node world transform contains NaN or Inf after TRS composition — "
+			           "check for zero-length quaternion, NaN scale, or corrupt parent transform");
 
 			node.m_IsDirty = true; // Pass dirty state to children
 
@@ -918,6 +1020,15 @@ void Scene::Update(float deltaTime)
 
 				// Update RT instance transform
 				const Matrix& world = m_InstanceData[instIdx].m_World;
+
+				// Invariant: RT transform must be finite.
+				// This fires if the world matrix contains NaN/Inf (e.g. from a degenerate
+				// animation sampler or a corrupt parent transform).
+				SDL_assert(std::isfinite(world._11) && std::isfinite(world._41) &&
+				           std::isfinite(world._42) && std::isfinite(world._43) &&
+				           "Scene::Update: RT instance world matrix contains NaN or Inf — "
+				           "check animation sampler outputs and parent transform chain");
+
 				nvrhi::rt::AffineTransform transform;
 				transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
 				transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;

@@ -36,40 +36,6 @@ extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_DepthTexture;
 
 // ============================================================================
-// Internal helpers
-// ============================================================================
-namespace
-{
-    // Clamp a float to [lo, hi]
-    inline float Clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-    // EV100 → linear exposure multiplier (photographic formula)
-    // exposure = 1 / (2^EV * 1.2)
-    inline float EV100ToExposure(float ev) { return 1.0f / (std::powf(2.0f, ev) * 1.2f); }
-
-    // Bloom mip count for a given base dimension
-    inline uint32_t BloomMipCount(uint32_t dim)
-    {
-        uint32_t count = 1;
-        while (dim > 1) { dim >>= 1; ++count; }
-        return count;
-    }
-
-    // Next power-of-two >= v
-    inline uint32_t NextPow2(uint32_t v)
-    {
-        if (v == 0) return 1;
-        --v;
-        v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
-        return v + 1;
-    }
-
-    // Returns true if v is a power of two
-    inline bool IsPow2(uint32_t v) { return v > 0 && (v & (v - 1)) == 0; }
-
-} // anonymous namespace
-
-// ============================================================================
 // TEST SUITE: TAA_RendererRegistration
 // ============================================================================
 TEST_SUITE("TAA_RendererRegistration")
@@ -1319,12 +1285,12 @@ TEST_SUITE("Bloom_Parameters")
 TEST_SUITE("Bloom_MipChain")
 {
     // ------------------------------------------------------------------
-    // TC-BLM-MIP-01: kBloomMipCount is 6 (matches BloomRenderer.cpp constant)
+    // TC-BLM-MIP-01: kComputeMipCount is 6 (matches BloomRenderer.cpp constant)
     // ------------------------------------------------------------------
-    TEST_CASE("TC-BLM-MIP-01 BloomMipChain - kBloomMipCount is 6")
+    TEST_CASE("TC-BLM-MIP-01 BloomMipChain - kComputeMipCount is 6")
     {
-        constexpr uint32_t kBloomMipCount = 6u;
-        CHECK(kBloomMipCount == 6u);
+        constexpr uint32_t kComputeMipCount = 6u;
+        CHECK(kComputeMipCount == 6u);
     }
 
     // ------------------------------------------------------------------
@@ -1430,7 +1396,7 @@ TEST_SUITE("Bloom_MipChain")
     // ------------------------------------------------------------------
     TEST_CASE("TC-BLM-MIP-07 BloomMipChain - mip count helper correct for 512")
     {
-        CHECK(BloomMipCount(512u) == 10u);
+        CHECK(ComputeMipCount(512u) == 10u);
     }
 
     // ------------------------------------------------------------------
@@ -1438,7 +1404,7 @@ TEST_SUITE("Bloom_MipChain")
     // ------------------------------------------------------------------
     TEST_CASE("TC-BLM-MIP-08 BloomMipChain - mip count helper correct for 1")
     {
-        CHECK(BloomMipCount(1u) == 1u);
+        CHECK(ComputeMipCount(1u) == 1u);
     }
 
     // ------------------------------------------------------------------
@@ -1446,17 +1412,17 @@ TEST_SUITE("Bloom_MipChain")
     // ------------------------------------------------------------------
     TEST_CASE("TC-BLM-MIP-09 BloomMipChain - mip count helper correct for 64")
     {
-        CHECK(BloomMipCount(64u) == 7u);
+        CHECK(ComputeMipCount(64u) == 7u);
     }
 
     // ------------------------------------------------------------------
     // TC-BLM-MIP-10: Upsample chain seeds from smallest downsample mip
-    //                (mip index kBloomMipCount-1 = 5)
+    //                (mip index kComputeMipCount-1 = 5)
     // ------------------------------------------------------------------
     TEST_CASE("TC-BLM-MIP-10 BloomMipChain - upsample seeds from mip index 5")
     {
-        constexpr uint32_t kBloomMipCount = 6u;
-        const uint32_t seedMip = kBloomMipCount - 1u;
+        constexpr uint32_t kComputeMipCount = 6u;
+        const uint32_t seedMip = kComputeMipCount - 1u;
         CHECK(seedMip == 5u);
     }
 }
@@ -1661,8 +1627,8 @@ TEST_SUITE("Bloom_Rendering")
         const uint32_t baseW = w / 2; // 32
         const uint32_t baseH = h / 2; // 32
 
-        constexpr uint32_t kBloomMipCount = 6u;
-        for (uint32_t i = 1; i < kBloomMipCount; ++i)
+        constexpr uint32_t kComputeMipCount = 6u;
+        for (uint32_t i = 1; i < kComputeMipCount; ++i)
         {
             const uint32_t mipW = baseW >> i;
             const uint32_t mipH = baseH >> i;

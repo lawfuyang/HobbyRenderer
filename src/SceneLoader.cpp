@@ -1413,6 +1413,16 @@ void SceneLoader::UpdateMaterialsAndCreateConstants(Scene& scene, nvrhi::Command
 	{
 		cmdList->writeBuffer(scene.m_MaterialConstantsBuffer, materialConstants.data(), materialConstants.size() * sizeof(srrhi::MaterialConstants));
 	}
+
+	// All material constants have just been written to the GPU buffer — the dirty
+	// range is now fully consumed.  Reset it to clean so callers (tests, scene load,
+	// async texture updates) don't see a stale dirty range after a full upload.
+	//
+	// Invariant: first > second means clean (same sentinel as UploadDirtyMaterialConstants).
+	scene.m_MaterialDirtyRange = { UINT32_MAX, 0 };
+
+	SDL_assert(scene.m_MaterialDirtyRange.first > scene.m_MaterialDirtyRange.second &&
+	           "UpdateMaterialsAndCreateConstants: failed to reset m_MaterialDirtyRange after full upload");
 }
 
 void SceneLoader::ProcessCameras(const cgltf_data* data, Scene& scene, const SceneOffsets& offsets)

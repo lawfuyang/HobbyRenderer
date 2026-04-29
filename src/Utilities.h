@@ -1,7 +1,5 @@
 #pragma once
 
-
-
 static constexpr uint32_t NextLowerPow2(uint32_t v)
 {
     v |= v >> 1;
@@ -10,19 +8,6 @@ static constexpr uint32_t NextLowerPow2(uint32_t v)
     v |= v >> 8;
     v |= v >> 16;
     return v - (v >> 1);
-}
-
-static constexpr size_t NextPow2(size_t v)
-{
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v |= v >> 32;
-    v++;
-    return v;
 }
 
 static constexpr uint32_t DivideAndRoundUp(uint32_t dividend, uint32_t divisor)
@@ -153,3 +138,99 @@ private:
     HANDLE m_Mapping = nullptr;
 #endif
 };
+
+// Returns true if the 4×4 matrix has no NaN or Inf entries.
+inline bool MatrixIsFinite(const Matrix& m)
+{
+    const float* p = reinterpret_cast<const float*>(&m);
+    for (int i = 0; i < 16; ++i)
+        if (!std::isfinite(p[i])) return false;
+    return true;
+}
+
+// Returns true if the 4×4 matrix diagonal is not all-zero.
+inline bool MatrixIsNonZero(const Matrix& m)
+{
+    return (m._11 != 0.0f || m._22 != 0.0f || m._33 != 0.0f || m._44 != 0.0f);
+}
+
+// Compute the length of a Vector3.
+inline float Vec3Length(const Vector3& v)
+{
+    return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+// Extract the 3×3 rotation part of a 4×4 matrix as a row vector (first row).
+inline Vector3 MatrixRow0(const Matrix& m)
+{
+    return Vector3{ m._11, m._12, m._13 };
+}
+
+// Returns true if |a - b| <= eps for every element of two 4x4 matrices.
+inline bool MatrixNearEqual(const Matrix& a, const Matrix& b, float eps = 1e-4f)
+{
+    const float* pa = reinterpret_cast<const float*>(&a);
+    const float* pb = reinterpret_cast<const float*>(&b);
+    for (int i = 0; i < 16; ++i)
+        if (std::fabs(pa[i] - pb[i]) > eps)
+            return false;
+    return true;
+}
+
+// Returns the 4x4 identity matrix.
+inline Matrix IdentityMatrix()
+{
+    Matrix m{};
+    m._11 = m._22 = m._33 = m._44 = 1.0f;
+    return m;
+}
+
+// Multiply two Matrix values via DirectXMath.
+inline Matrix MatMul(const Matrix& a, const Matrix& b)
+{
+    using namespace DirectX;
+    XMMATRIX xa = XMLoadFloat4x4(&a);
+    XMMATRIX xb = XMLoadFloat4x4(&b);
+    Matrix out{};
+    XMStoreFloat4x4(&out, XMMatrixMultiply(xa, xb));
+    return out;
+}
+
+// Invert a Matrix via DirectXMath.
+inline Matrix MatInv(const Matrix& m)
+{
+    using namespace DirectX;
+    XMMATRIX xm = XMLoadFloat4x4(&m);
+    Matrix out{};
+    XMStoreFloat4x4(&out, XMMatrixInverse(nullptr, xm));
+    return out;
+}
+
+inline float LengthSq(const Vector3& v)
+{
+    return v.x * v.x + v.y * v.y + v.z * v.z;
+}
+
+// EV100 → linear exposure multiplier (photographic formula)
+// exposure = 1 / (2^EV * 1.2)
+inline float EV100ToExposure(float ev) { return 1.0f / (std::powf(2.0f, ev) * 1.2f); }
+
+// Bloom mip count for a given base dimension
+inline uint32_t ComputeMipCount(uint32_t dim)
+{
+    uint32_t count = 1;
+    while (dim > 1) { dim >>= 1; ++count; }
+    return count;
+}
+
+// Next power-of-two >= v
+inline uint32_t NextPow2(uint32_t v)
+{
+    if (v == 0) return 1;
+    --v;
+    v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+    return v + 1;
+}
+
+// Returns true if v is a power of two
+inline bool IsPow2(uint32_t v) { return v > 0 && (v & (v - 1)) == 0; }

@@ -43,18 +43,6 @@
 #include "shaders/srrhi/cpp/GPULight.h"
 
 // ============================================================================
-// Internal helpers
-// ============================================================================
-namespace
-{
-    // Compute the squared length of a Vector3 (for unit-vector checks).
-    float LengthSq(const Vector3& v)
-    {
-        return v.x * v.x + v.y * v.y + v.z * v.z;
-    }
-} // anonymous namespace
-
-// ============================================================================
 // TEST SUITE: Lighting_RendererRegistration
 // ============================================================================
 TEST_SUITE("Lighting_RendererRegistration")

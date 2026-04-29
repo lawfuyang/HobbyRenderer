@@ -279,8 +279,29 @@ bool RunOneFrame()
 
     g_Renderer.ScheduleAndRunAllRenderers();
 
-    // Submit to GPU and wait for completion
+    // Submit to GPU and wait for completion.
+    // waitForIdle() is mandatory here — not just for correctness of readback
+    // tests, but to prevent D3D12 ERROR #921 (OBJECT_DELETED_WHILE_STILL_IN_USE).
+    //
+    // Root cause: RenderGraph::Compile() may recreate a transient texture handle
+    // (aliased or desc-changed path) by move-assigning a new RefCountPtr into
+    // texture.m_PhysicalTexture.  The move-assign drops the old handle, which
+    // decrements its refcount.  If that refcount reaches zero while the GPU is
+    // still executing work that references the resource, D3D12 fires ERROR #921.
+    //
+    // The deferred-release list in RenderGraph (FlushDeferredReleases, called at
+    // the top of Reset()) is the primary fix: it defers the actual drop until the
+    // GPU is known to be idle.  This waitForIdle() is the secondary guarantee:
+    // it ensures that by the time the *next* frame's Reset() runs, all in-flight
+    // GPU work from this frame has already completed, so FlushDeferredReleases()
+    // finds the GPU idle and its internal waitForIdle() is a no-op.
+    //
+    // Without this call, tight loops (e.g. TC-MF-06: 7 frames back-to-back)
+    // could submit frame N's commands and immediately start frame N+1's
+    // Compile(), triggering the recreation path while frame N is still running.
     g_Renderer.ExecutePendingCommandLists();
+    DEV()->waitForIdle();
+    DEV()->runGarbageCollection();
 
     g_Renderer.m_FrameTime = 16.6f; // assume 60 FPS for testing purposes
     ++g_Renderer.m_FrameNumber;
