@@ -13,6 +13,8 @@
 class AsyncTextureQueue : public AsyncQueueBase
 {
 public:
+    AsyncTextureQueue();
+
     using OnLoadedCallback = std::function<void(TextureUpdateCommand)>;
 
     // Enqueue a texture load.  Returns a PendingLoadID that can be passed to

@@ -14,9 +14,7 @@
 class AsyncMeshQueue : public AsyncQueueBase
 {
 public:
-    // 4 worker threads: mesh processing (quantization, LOD, meshlets) is
-    // CPU-heavy and embarrassingly parallel across primitives.
-    AsyncMeshQueue() : AsyncQueueBase(4) {}
+    AsyncMeshQueue();
 
     using OnLoadedCallback = std::function<void(MeshUpdateCommand)>;
 

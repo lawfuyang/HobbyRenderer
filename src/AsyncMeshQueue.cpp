@@ -277,6 +277,11 @@ static void ProcessSinglePrimitiveFromMapped(const uint8_t* bufData, const Pendi
     //     cmd.m_MeshData.m_LODCount, cmd.m_Vertices.size(), cmd.m_Indices.size(), cmd.m_Meshlets.size());
 }
 
+// 4 worker threads: mesh processing (quantization, LOD, meshlets) is
+// CPU-heavy and embarrassingly parallel across primitives.
+AsyncMeshQueue::AsyncMeshQueue()
+ : AsyncQueueBase(4) {}
+
 PendingLoadID AsyncMeshQueue::EnqueueLoad(PendingAsyncMeshInfo info, OnLoadedCallback callback)
 {
     PendingLoadID id = m_NextID.fetch_add(1, std::memory_order_relaxed);

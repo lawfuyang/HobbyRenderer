@@ -2,6 +2,11 @@
 #include "AsyncTextureQueue.h"
 #include "TextureLoader.h"
 
+AsyncTextureQueue::AsyncTextureQueue()
+    : AsyncQueueBase(2) // 2 worker threads: texture loading is IO-heavy and benefits from some parallelism, but too many may cause disk thrashing.
+{
+}
+
 PendingLoadID AsyncTextureQueue::EnqueueLoad(std::string filePath,
                                               uint32_t textureIndex,
                                               Scene::Texture::SamplerType /*sampler*/,
