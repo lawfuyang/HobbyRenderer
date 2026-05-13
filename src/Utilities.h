@@ -234,3 +234,8 @@ inline uint32_t NextPow2(uint32_t v)
 
 // Returns true if v is a power of two
 inline bool IsPow2(uint32_t v) { return v > 0 && (v & (v - 1)) == 0; }
+
+inline Vector3 GetTranslation(const Matrix& viewToWorld)
+{
+    return Vector3{ viewToWorld._41, viewToWorld._42, viewToWorld._43 };
+}
