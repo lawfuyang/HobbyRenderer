@@ -82,7 +82,7 @@ endfunction()
 # ============================================================================
 
 # SDL3 Configuration
-set(SDL3_VERSION "3.4.4")
+set(SDL3_VERSION "3.4.8")
 set(SDL3_URL "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-devel-${SDL3_VERSION}-VC.zip")
 download_library("SDL3" "${SDL3_VERSION}" "${SDL3_URL}" "SDL3-*")
 set(SDL3_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/SDL3")
