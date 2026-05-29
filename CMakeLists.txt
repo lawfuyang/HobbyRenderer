@@ -91,7 +91,7 @@ if(WIN32)
 endif()
 
 # Agility SDK Configuration
-set(AGILITY_SDK_VERSION "1.618.1")
+set(AGILITY_SDK_VERSION "1.619.3")
 set(AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${AGILITY_SDK_VERSION}")
 download_library("AgilitySDK" "${AGILITY_SDK_VERSION}" "${AGILITY_SDK_URL}" "AgilitySDK-*")
 set(AGILITY_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/AgilitySDK")
@@ -114,8 +114,8 @@ set(CGLTF_SRC_DIR "${CGLTF_INSTALL_DIR}/${CGLTF_SUBDIR}")
 # ----------------------------------------------------------------------------
 # DirectX Shader Compiler (DXC) - downloaded into external/dxc
 # ----------------------------------------------------------------------------
-set(DXC_VERSION "v1.10.2605.2")
-set(DXC_URL "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/dxc_preview_2026_04_22.zip")
+set(DXC_VERSION "v1.10.2605.24")
+set(DXC_URL "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/dxc_preview_2026_05_22.zip")
 download_library("dxc" "${DXC_VERSION}" "${DXC_URL}" "dxc_*")
 set(DXC_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/dxc")
 set(DXC_EXE "${DXC_INSTALL_DIR}/bin/x64/dxc.exe")
