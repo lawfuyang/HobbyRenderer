@@ -244,6 +244,16 @@ private:
         uint32_t m_ResourceIndex = UINT32_MAX;
     };
     std::vector<std::vector<AliasBarrierEntry>> m_PerPassAliasBarriers; // indexed by pass index
+
+    // Deferred release: when aliasing replaces a physical resource handle,
+    // we must not immediately destroy the old D3D12 object because the GPU
+    // may still have work in-flight from the previous frame referencing it.
+    // Old handles are moved here and released at the start of the next
+    // Compile(), which runs after the previous frame's ExecutePendingCommandLists
+    // has synced the GPU (via waitForIdle).
+    void FlushDeferredReleases();
+    std::vector<nvrhi::TextureHandle> m_DeferredReleaseTextures;
+    std::vector<nvrhi::BufferHandle>  m_DeferredReleaseBuffers;
     
 private:
     uint16_t GetActivePassIndex() const;
@@ -261,22 +271,6 @@ private:
     std::vector<RenderGraphInternal::TransientBuffer> m_Buffers;
     std::vector<const char*> m_PassNames;
 
-    // ── Deferred-release lists ────────────────────────────────────────────────
-    // GPU resources must not be freed while in-flight GPU work still references
-    // them (D3D12 ERROR #921: OBJECT_DELETED_WHILE_STILL_IN_USE).  Instead of
-    // dropping handles immediately (which decrements the refcount and may trigger
-    // a final-release), we move them here.  FlushDeferredReleases() calls
-    // waitForIdle() + runGarbageCollection() once (if the lists are non-empty)
-    // and then clears them, ensuring the GPU has finished before any destructor
-    // runs.  It is called at the top of Reset() so the flush happens at the
-    // start of the *next* frame, not mid-Compile() of the current one.
-    std::vector<nvrhi::TextureHandle> m_DeferredReleaseTextures;
-    std::vector<nvrhi::BufferHandle>  m_DeferredReleaseBuffers;
-
-    // Flush deferred releases: if either list is non-empty, wait for GPU idle,
-    // run garbage collection, then clear both lists.
-    void FlushDeferredReleases();
-    
     // Setup state
     bool m_IsInsideSetup = false;
     PassAccess m_PendingPassAccess;
