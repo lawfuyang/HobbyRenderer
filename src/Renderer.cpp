@@ -869,6 +869,8 @@ void Renderer::ScheduleAndRunAllRenderers()
     extern IRenderer* g_HDRRenderer;
     extern IRenderer* g_ImGuiRenderer;
     extern IRenderer* g_PathTracerRenderer;
+    extern IRenderer* g_SharcRenderer;
+    extern IRenderer* g_SharcDebugVisualizationRenderer;
 
     m_RenderGraph.BeginSetup();
 
@@ -885,9 +887,11 @@ void Renderer::ScheduleAndRunAllRenderers()
         m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
         m_RenderGraph.ScheduleRenderer(g_TLASRenderer);
         m_RenderGraph.ScheduleRenderer(g_RTXDIRenderer);
+        m_RenderGraph.ScheduleRenderer(g_SharcRenderer);
         m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
         m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
         m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);
+        m_RenderGraph.ScheduleRenderer(g_SharcDebugVisualizationRenderer);
         m_RenderGraph.ScheduleRenderer(g_TAARenderer);
         m_RenderGraph.ScheduleRenderer(g_BloomRenderer);
     }

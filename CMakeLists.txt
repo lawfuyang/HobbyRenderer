@@ -333,6 +333,7 @@ add_custom_target(build_shaders
             --include "${CMAKE_SOURCE_DIR}/external/rtxdi/Include"
             --include "${CMAKE_SOURCE_DIR}/external/nvrhi/include"
             --include "${CMAKE_SOURCE_DIR}/src/shaders/rtxdi/SharedShaderInclude"
+            --include "${CMAKE_SOURCE_DIR}/external/SHARC/include"
             --relaxedInclude "pch.h"
 
     # DXIL output for D3D12 for NRD

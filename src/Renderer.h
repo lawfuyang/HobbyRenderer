@@ -78,6 +78,34 @@ enum class RenderingMode : uint32_t
     ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER
 };
 
+// Indirect lighting technique selection (mutually exclusive)
+enum class IndirectLightingTechnique : uint32_t
+{
+    None    = 0,
+    RestirGI = 1,
+    SHARC   = 2,
+};
+
+// SHARC-specific configuration
+struct SharcConfig
+{
+    // Cache capacity: 2^22 entries (~160 MB total across all 3 buffers)
+    static constexpr uint32_t kCacheCapacity = (1u << 22);
+
+    // Maximum number of frames a cache entry survives without new samples
+    // before being evicted. Fixed at 100 frames per spec.
+    static constexpr uint32_t kStaleFrameNumMax = 100;
+
+    // Maximum number of frames used for temporal accumulation window
+    uint32_t m_AccumulationFrameNum = 64;
+
+    // Scene scale: controls voxel size distribution. Larger = coarser voxels.
+    float m_SceneScale = 50.0f;
+
+    // Show bounce-count heatmap debug overlay
+    bool m_ShowBounceHeatmap = false;
+};
+
 struct Renderer
 {
     SingletonFunctionsSimple(Renderer);
@@ -262,6 +290,12 @@ struct Renderer
     bool m_EnableReSTIRDI = true;
     bool m_EnableReSTIRDIRelaxDenoising = true;
     bool m_bRestoreReSTIRDIAfterAsyncMeshLoad = false;
+
+    // Indirect lighting technique (mutually exclusive: None / RestirGI / SHARC)
+    IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
+
+    // SHARC configuration
+    SharcConfig m_SharcConfig;
 
     // bloom
     float m_BloomKnee = 0.1f;

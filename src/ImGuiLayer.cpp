@@ -114,6 +114,35 @@ void ImGuiLayer::UpdateFrame()
                 RTXDIIMGUISettings();
             }
 
+            ImGui::Separator();
+
+            // ── Indirect Lighting Technique ─────────────────────────────────
+            if (ImGui::TreeNode("Indirect Lighting"))
+            {
+                int technique = static_cast<int>(g_Renderer.m_IndirectLightingTechnique);
+
+                ImGui::Text("Technique:");
+                ImGui::SameLine();
+                if (ImGui::RadioButton("None",     &technique, static_cast<int>(IndirectLightingTechnique::None)))
+                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::None;
+                ImGui::SameLine();
+                if (ImGui::RadioButton("ReSTIR GI", &technique, static_cast<int>(IndirectLightingTechnique::RestirGI)))
+                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
+                ImGui::SameLine();
+                if (ImGui::RadioButton("SHARC",    &technique, static_cast<int>(IndirectLightingTechnique::SHARC)))
+                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::SHARC;
+
+                if (g_Renderer.m_IndirectLightingTechnique == IndirectLightingTechnique::SHARC)
+                {
+                    ImGui::Separator();
+                    ImGui::Text("SHARC Settings:");
+                    extern void SharcIMGUISettings();
+                    SharcIMGUISettings();
+                }
+
+                ImGui::TreePop();
+            }
+
             ImGui::Checkbox("Enable Animations", &g_Renderer.m_EnableAnimations);
 
             ImGui::TreePop();

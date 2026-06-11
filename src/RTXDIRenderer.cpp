@@ -713,6 +713,12 @@ public:
         if (!g_Renderer.m_EnableReSTIRDI)
             return false;
 
+        // When SHARC is active, ReSTIR GI must be disabled — SHARC handles indirect
+        // lighting exclusively and the GI passes would produce incorrect output.
+        const bool bSharcActive = (g_Renderer.m_IndirectLightingTechnique == IndirectLightingTechnique::SHARC);
+        if (bSharcActive)
+            g_ReSTIRGI_Enabled = false;
+
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
@@ -1261,6 +1267,8 @@ public:
             // When RELAX denoising is active, DI ShadeSamples is the last NRD-packing pass
             // only when GI is disabled. When GI is enabled, GI FinalShading (isLastPass=true)
             // is the NRD-packing pass for the combined DI+GI signal.
+            // This also covers the SHARC case: GI is now disabled, so DI ShadeSamples
+            // must write the NRD-packed signal.
             restirDI.shadingParams.enableDenoiserInputPacking =
                 (g_Renderer.m_EnableReSTIRDIRelaxDenoising && !g_ReSTIRGI_Enabled) ? 1u : 0u;
 
