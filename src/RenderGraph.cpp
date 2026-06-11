@@ -89,7 +89,7 @@ nvrhi::MemoryRequirements RGBufferDesc::GetMemoryRequirements() const
 //
 // If the lists are non-empty we call waitForIdle() + runGarbageCollection()
 // defensively before clearing, so this function is safe even if the caller
-// forgot to wait.  In the normal path (RunOneFrame calls waitForIdle before
+// forgot to wait.  In the normal path (waitForIdle is called before
 // the next Reset) the wait is a no-op.
 void RenderGraph::FlushDeferredReleases()
 {
@@ -130,7 +130,7 @@ void RenderGraph::Shutdown()
     //
     // We only do this when the RHI is fully initialised (m_RHI != nullptr and
     // the device exists) so that Shutdown() is still safe to call during early
-    // startup or in unit-test teardown before the GPU stack is up.
+    // startup before the GPU stack is up.
     if (g_Renderer.m_RHI && g_Renderer.m_RHI->m_NvrhiDevice)
     {
         // If the graph is still compiled (PostRender() was not called), log a

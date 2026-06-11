@@ -171,7 +171,7 @@ public:
     nvrhi::TextureHandle GetTexture(RGTextureHandle handle, RGResourceAccessMode access) const;
     nvrhi::BufferHandle GetBuffer(RGBufferHandle handle, RGResourceAccessMode access) const;
 
-    // Raw retrieval without access validation (only for internal use by render loop or unit tests, not safe for general use)
+    // Raw retrieval without access validation (only for internal use by render loop, not safe for general use)
     nvrhi::TextureHandle GetTextureRaw(RGTextureHandle handle) const;
     nvrhi::BufferHandle GetBufferRaw(RGBufferHandle handle) const;
 
@@ -289,8 +289,7 @@ private:
     uint16_t m_CurrentPassIndex = 0;
     bool m_bForceInvalidateAllResources = false;
     // When true, informational SDL_Log messages (pool-reuse, aliasing, eviction,
-    // desc-change, etc.) are emitted.  Kept false in production to avoid log
-    // spam; set to true by unit tests so failures produce actionable output.
+    // desc-change, etc.) are emitted.  Kept false in production to avoid log spam.
     bool m_bVerboseLogging = false;
     // After Shutdown(), we need to force-invalidate handles for TWO consecutive
     // frames, not just one.  Frame 1 only invalidates handles that are actually
@@ -301,11 +300,10 @@ private:
     uint32_t m_ForceInvalidateFramesRemaining = 0;
 
 public:
-    // Exposed for unit-test assertions only — do not use in production code.
+    // Exposed for diagnostics only — do not use in production code.
     uint32_t GetForceInvalidateFramesRemaining() const { return m_ForceInvalidateFramesRemaining; }
 
     // Enable/disable verbose informational logging (pool-reuse, aliasing, eviction …).
-    // Call with true at the start of a test run; false restores production behaviour.
     void SetVerboseLogging(bool enabled) { m_bVerboseLogging = enabled; }
     bool IsVerboseLogging() const { return m_bVerboseLogging; }
 

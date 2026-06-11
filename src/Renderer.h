@@ -123,7 +123,6 @@ struct Renderer
 
     // Lifecycle
     void Initialize();
-    void InitializeForTests(); // Headless init for --run-tests: RHI + CommonResources, no scene/renderers
     void Run();
     void Shutdown();
     void ScheduleAndRunAllRenderers();
@@ -131,15 +130,13 @@ struct Renderer
     // Upload any dirty instance transforms to the GPU and reset the dirty range.
     // Must be called once per frame before ScheduleAndRunAllRenderers() so that
     // the TLAS rebuild sees up-to-date RT instance descriptors.  Called explicitly
-    // by both RenderFrame() (main loop) and RunOneFrame() (unit-test path).
+    // by RenderFrame() (main loop).
     void UploadDirtyInstanceTransforms();
 
     // Upload material constants for any materials whose dirty range is set
     // (m_MaterialDirtyRange.first <= second) and reset the range to clean.
     // Handles the case where m_Materials is empty or m_MaterialConstantsBuffer
-    // is null (no-op).  Called explicitly by both RenderFrame() (main loop) and
-    // RunOneFrame() (unit-test path) so animated-material uploads are exercised
-    // by tests.
+    // is null (no-op).  Called explicitly by RenderFrame() (main loop).
     void UploadDirtyMaterialConstants();
 
     // Command List Management
@@ -195,7 +192,7 @@ struct Renderer
     void GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, uint32_t reductionType);
     nvrhi::ShaderHandle GetShaderHandle(uint32_t shaderID) const;
 
-    // Shared GPU stack init used by both Initialize() and InitializeForTests().
+    // Shared GPU stack init used by Initialize().
     // Creates RHI device + swapchain against the given window, resolves asset
     // paths, initialises bindless heaps, loads shaders, and brings up
     // CommonResources.  Returns false on any fatal failure.

@@ -9,8 +9,6 @@ struct Config
     bool m_EnableGPUAssistedValidation = false;
     // Path to a scene to load (empty = none)
     std::string m_ScenePath = "";
-    // Path to the KhronosGroup/glTF-Sample-Assets repository root (for tests)
-    std::string m_GltfSamplesPath = "";
 
     bool ExecutePerPass = false;
     bool ExecutePerPassAndWait = false;

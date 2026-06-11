@@ -171,17 +171,6 @@ if(WIN32)
     file(CREATE_LINK "${FSR_SDK_FIDELITY_FX_DIR}" "${CMAKE_SOURCE_DIR}/src/FidelityFX" SYMBOLIC)
 endif()
 
-# ----------------------------------------------------------------------------
-# doctest
-# ----------------------------------------------------------------------------
-set(DOCTEST_VERSION "2.5.2")
-set(DOCTEST_URL "https://github.com/doctest/doctest/archive/refs/tags/v${DOCTEST_VERSION}.zip")
-download_library("doctest" "${DOCTEST_VERSION}" "${DOCTEST_URL}" "doctest-*")
-set(DOCTEST_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/doctest")
-set(DOCTEST_SUBDIR "doctest-${DOCTEST_VERSION}")
-set(DOCTEST_SRC_DIR "${DOCTEST_INSTALL_DIR}/${DOCTEST_SUBDIR}")
-file(CREATE_LINK "${DOCTEST_SRC_DIR}/doctest/doctest.h" "${CMAKE_SOURCE_DIR}/external/doctest.h" SYMBOLIC)
-
 set(SRRHI_BUILD_VALIDATION_TARGETS OFF)
 add_subdirectory(external/srrhi)
 file(CREATE_LINK "${CMAKE_SOURCE_DIR}/external/srrhi/srrhi.h" "${CMAKE_SOURCE_DIR}/src/srrhi.h" SYMBOLIC)

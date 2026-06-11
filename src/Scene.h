@@ -265,7 +265,7 @@ public:
     // (render) thread only since it performs GPU resource creation / upload.
     void ApplyPendingUpdates();
 
-    // Called from Renderer::Initialize (and InitializeForTests) before LoadScene.
+    // Called from Renderer::Initialize before LoadScene.
     // Inserts the default cube as mesh[0] / meshData[0] and creates GPU geometry
     // buffers with the specified pre-allocated capacity (elements, not bytes).
     // vertexCapacity / indexCapacity should be conservative upper bounds for the
@@ -273,7 +273,7 @@ public:
     void InitializeDefaultCube(uint32_t vertexCapacity, uint32_t indexCapacity);
 
     // Uploads pre-processed vertex/index/mesh data directly to GPU buffers.
-    // Used by the synchronous (in-memory / test) load path after LoadGLTFSceneFromMemory.
+    // Used by the synchronous (in-memory) load path after LoadGLTFSceneFromMemory.
     void UploadGeometryBuffers(const std::vector<srrhi::VertexQuantized>& vertices,
                                const std::vector<uint32_t>& indices);
 
@@ -368,6 +368,6 @@ public:
     // Ensures the scene always has at least one directional light at the back of m_Lights.
     // Sorts lights so directional lights come last, then adds a default directional light
     // (with a 45° pitch node) if none is present.  Safe to call on an empty scene.
-    // This is the common implementation shared by SceneLoader and test fixtures.
+    // This is the common implementation shared by SceneLoader.
     void EnsureDefaultDirectionalLight();
 };

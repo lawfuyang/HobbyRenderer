@@ -269,8 +269,8 @@ void Renderer::SaveBackBufferScreenshot()
 }
 
 // ----------------------------------------------------------------------------
-// InitializeGPUStack — shared helper called by both Initialize() and
-// InitializeForTests().  Assumes m_Window is already set.
+// InitializeGPUStack — shared helper called by Initialize().
+// Assumes m_Window is already set.
 //
 // Responsibilities:
 //   • Create + init the D3D12 RHI device
@@ -410,59 +410,6 @@ void Renderer::Initialize()
     ExecutePendingCommandLists();
 }
 
-void Renderer::InitializeForTests()
-{
-    // -----------------------------------------------------------------------
-    // Absolute-minimum headless initialization for --run-tests mode.
-    //
-    // What we DO init (required by Graphics_RHI and later suites):
-    //   • MicroProfile thread registration
-    //   • TaskScheduler (used by some renderers / utilities)
-    //   • A tiny hidden SDL window  (needed for DXGI swapchain creation)
-    //   • Full GPU stack via InitializeGPUStack()
-    //
-    // What we deliberately SKIP:
-    //   • ImGuiLayer (no UI in test mode)
-    //   • IRenderer instances (Phase 6+ tests will init them on demand)
-    //   • Scene loading (Phase 3+ tests handle this themselves)
-    // -----------------------------------------------------------------------
-    ScopedTimerLog initScope{"[Tests] InitializeForTests:"};
-
-    MicroProfileOnThreadCreate("TestMain");
-    MicroProfileSetEnableAllGroups(true);
-    MicroProfileSetForceMetaCounters(true);
-
-    m_TaskScheduler = std::make_unique<TaskScheduler>();
-
-    // Create a minimal hidden window so DXGI can create a swapchain.
-    // SDL_WINDOW_HIDDEN keeps it off-screen; 320×240 is the smallest
-    // size that satisfies DXGI's minimum swapchain requirements.
-    constexpr int kTestWindowW = 320;
-    constexpr int kTestWindowH = 240;
-    m_Window = SDL_CreateWindow("HobbyRenderer-Tests", kTestWindowW, kTestWindowH,
-                                SDL_WINDOW_HIDDEN);
-    if (!m_Window)
-    {
-        SDL_LOG_ASSERT_FAIL("SDL_CreateWindow failed for test window",
-                            "[Tests] SDL_CreateWindow failed: %s", SDL_GetError());
-        return;
-    }
-
-    if (!InitializeGPUStack(m_Window))
-        return;
-
-    m_AsyncTextureQueue.Start("AsyncTextureQueue");
-    m_AsyncMeshQueue.Start("AsyncMeshQueue");
-
-    m_Scene.m_bVerboseLogging = true;
-
-    // Tests manage their own scenes; initialise with minimal buffers (just the default cube).
-    m_Scene.InitializeDefaultCube(0, 0);
-    ExecutePendingCommandLists();
-
-    SDL_Log("[Tests] InitializeForTests complete — RHI + CommonResources ready");
-}
-
 void Renderer::Run()
 {
     ScopedTimerLog runScope{"[Timing] Run phase:"};
@@ -537,8 +484,6 @@ void Renderer::Run()
         }
 
         // Upload any dirty instance transforms before the renderers run.
-        // UploadDirtyInstanceTransforms() is also called by RunOneFrame() in the
-        // unit-test path, so the logic lives in one place.
         UploadDirtyInstanceTransforms();
 
         if (m_Scene.m_LightsDirty)
@@ -548,8 +493,6 @@ void Renderer::Run()
         }
 
         // Upload material constants for materials changed by emissive intensity animations.
-        // Logic lives in UploadDirtyMaterialConstants() so the unit-test path
-        // (RunOneFrame) exercises the same code as the main game loop.
         UploadDirtyMaterialConstants();
 
         // Update camera (camera retrieves frame time internally)
@@ -796,9 +739,8 @@ void Renderer::UploadDirtyInstanceTransforms()
 void Renderer::UploadDirtyMaterialConstants()
 {
     // Upload material constants for any materials whose dirty range is set and
-    // reset the range to clean.  This is called once per frame from both
-    // RenderFrame() (main loop) and RunOneFrame() (unit-test path) so that
-    // animated-material uploads are exercised identically in both paths.
+    // reset the range to clean.  This is called once per frame from
+    // RenderFrame() (main loop).
     //
     // Guard conditions (no-op if any fail):
     //   • m_MaterialConstantsBuffer must be non-null (scene loaded)
@@ -1795,47 +1737,8 @@ ScopedCommandList::~ScopedCommandList()
     tl_bScopedCommandListActive = false;
 }
 
-// Forward declaration — defined in Tests/TestMain.cpp.
-// Only referenced when --run-tests is present; the linker will find the definition
-// because TestMain.cpp is compiled into the same executable.
-int RunTests(int argc, char* argv[]);
-
-// Helper: returns true if any argv entry starts with "--run-tests"
-static bool HasRunTestsFlag(int argc, char* argv[])
-{
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::strncmp(argv[i], "--run-tests", 11) == 0)
-            return true;
-    }
-    return false;
-}
-
 int main(int argc, char* argv[])
 {
-    // -----------------------------------------------------------------------
-    // Test mode: skip renderer initialization entirely and run the test suite.
-    // Usage:
-    //   HobbyRenderer --run-tests              (run all tests)
-    //   HobbyRenderer --run-tests=*CoreBoot*   (filter by pattern)
-    //   HobbyRenderer --run-tests --verbose    (verbose output)
-    // -----------------------------------------------------------------------
-    if (HasRunTestsFlag(argc, argv))
-    {
-        // SDL must be initialized for SDL_Log / SDL_GetPerformanceCounter used
-        // by some tests (e.g. SimpleTimer).
-        if (!SDL_Init(SDL_INIT_VIDEO))
-        {
-            SDL_Log("[Tests] SDL_Init failed: %s", SDL_GetError());
-            return 1;
-        }
-
-        const int result = RunTests(argc, argv);
-
-        SDL_Quit();
-        return result;
-    }
-
     // -----------------------------------------------------------------------
     // Normal renderer mode
     // -----------------------------------------------------------------------
