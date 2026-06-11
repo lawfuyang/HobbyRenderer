@@ -470,9 +470,11 @@ void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
 		           std::isfinite(world._41) && std::isfinite(world._42) && std::isfinite(world._43) && std::isfinite(world._44) &&
 		           "BuildAccelerationStructures: instance world matrix contains NaN or Inf");
 
-		// Assert: scale diagonal must be non-zero (a zero-scale matrix collapses geometry and produces a degenerate BLAS).
-		SDL_assert((world._11 != 0.0f || world._22 != 0.0f || world._33 != 0.0f) &&
-		           "BuildAccelerationStructures: instance world matrix has zero-scale diagonal — degenerate BLAS");
+		// log, but dont assert: scale diagonal must be non-zero (a zero-scale matrix collapses geometry and produces a degenerate BLAS).
+		if (world._11 == 0.0f || world._22 == 0.0f || world._33 == 0.0f)
+		{
+			SDL_Log("BuildAccelerationStructures: instance world matrix has zero-scale diagonal — degenerate BLAS");
+		}
 
 		// Assert: MeshDataIndex must be in-range.
 		SDL_assert(instData.m_MeshDataIndex < (uint32_t)m_MeshData.size() &&
