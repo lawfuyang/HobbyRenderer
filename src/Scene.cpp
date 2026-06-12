@@ -1246,6 +1246,7 @@ void Scene::ApplyPendingUpdates()
 						if (bWasPlaceholderCube)
 						{
 							m_InstanceData[instIdx].m_World = BuildInstanceWorldTransform(node.m_WorldTransform, false);
+							m_InstanceData[instIdx].m_PrevWorld = m_InstanceData[instIdx].m_World;
 							m_InstanceDirtyRange.first  = std::min(m_InstanceDirtyRange.first,  instIdx);
 							m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
 						}
