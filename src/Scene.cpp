@@ -1,291 +1,9 @@
-﻿#include "pch.h"
-#include "Scene.h"
+﻿#include "Scene.h"
 #include "SceneLoader.h"
 #include "Config.h"
 #include "Renderer.h"
+#include "CommonResources.h"
 #include "Utilities.h"
-#include "ProceduralDefaultCube.h"
-#include "TextureLoader.h"
-
-// Appends newData (newDataBytes bytes) to a GPU buffer at usedBytes offset.
-// If the buffer has no room left (capacity determined from buf->getDesc().byteSize),
-// a new buffer is created with at least double the capacity, the existing valid
-// data is copied on the GPU, and newData is written at the end.
-// Returns the buffer to use — may be a new handle if the buffer was grown.
-static nvrhi::BufferHandle AppendToGpuBuffer(
-    nvrhi::ICommandList*  cmd,
-    nvrhi::IDevice*       device,
-    nvrhi::BufferHandle   existing,
-    uint64_t              usedBytes,
-    const void*           newData,
-    uint64_t              newDataBytes,
-    const nvrhi::BufferDesc& templateDesc)
-{
-    const uint64_t capacityBytes = existing ? existing->getDesc().byteSize : 0;
-    if (usedBytes + newDataBytes <= capacityBytes)
-    {
-        cmd->writeBuffer(existing, newData, newDataBytes, usedBytes);
-        return existing;
-    }
-
-    // Grow: at least double, or exactly what is needed — whichever is larger.
-    const uint64_t newCapacity = std::max(capacityBytes * 2, usedBytes + newDataBytes);
-    nvrhi::BufferDesc newDesc  = templateDesc;
-    newDesc.byteSize           = (uint32_t)newCapacity;
-
-    nvrhi::BufferHandle newBuf = device->createBuffer(newDesc);
-    if (usedBytes > 0)
-        cmd->copyBuffer(newBuf, 0, existing, 0, usedBytes);
-    cmd->writeBuffer(newBuf, newData, newDataBytes, usedBytes);
-    return newBuf;
-}
-
-// Placeholder cube instances intentionally ignore node scaling so temporary
-// stand-ins do not inherit extreme authored root scales.
-static Matrix BuildInstanceWorldTransform(const Matrix& nodeWorld, bool bUsesPlaceholderCube)
-{
-	if (!bUsesPlaceholderCube)
-		return nodeWorld;
-
-	DirectX::XMVECTOR scale;
-	DirectX::XMVECTOR rot;
-	DirectX::XMVECTOR trans;
-	DirectX::XMMatrixDecompose(&scale, &rot, &trans, DirectX::XMLoadFloat4x4(&nodeWorld));
-
-	Matrix out{};
-	const DirectX::XMMATRIX m = DirectX::XMMatrixRotationQuaternion(rot) *
-		DirectX::XMMatrixTranslationFromVector(trans);
-	DirectX::XMStoreFloat4x4(&out, m);
-	return out;
-}
-
-void Scene::InitializeDefaultCube(uint32_t vertexCapacity, uint32_t indexCapacity)
-{
-	SDL_assert(m_Meshes.empty() && "InitializeDefaultCube must be called on an empty scene");
-
-	ProceduralCubeData cubeData = GenerateDefaultCube();
-
-	Scene::Primitive cubePrim;
-	cubePrim.m_VertexOffset  = 0;
-	cubePrim.m_VertexCount   = (uint32_t)cubeData.m_Vertices.size();
-	cubePrim.m_MaterialIndex = -1;
-	cubePrim.m_MeshDataIndex = 0;
-
-	Scene::Mesh cubeMesh;
-	cubeMesh.m_Primitives.push_back(cubePrim);
-	cubeMesh.m_Center = Vector3{ 0.0f, 0.0f, 0.0f };
-	cubeMesh.m_Radius = 0.866f;
-	cubeMesh.m_bBoundsValid = true;
-	m_Meshes.push_back(std::move(cubeMesh));
-
-	m_MeshData.push_back(cubeData.m_MeshData);
-	m_Meshlets.insert(m_Meshlets.end(), cubeData.m_Meshlets.begin(), cubeData.m_Meshlets.end());
-	m_MeshletVertices.insert(m_MeshletVertices.end(), cubeData.m_MeshletVertices.begin(), cubeData.m_MeshletVertices.end());
-	m_MeshletTriangles.insert(m_MeshletTriangles.end(), cubeData.m_MeshletTriangles.begin(), cubeData.m_MeshletTriangles.end());
-
-	// Preallocate GPU geometry buffers sized for the whole scene (plus the cube itself).
-	// All subsequent async mesh appends grow into this capacity without reallocation.
-	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
-
-	const uint32_t totalVerts   = std::max(vertexCapacity, (uint32_t)cubeData.m_Vertices.size());
-	const uint32_t totalIndices = std::max(indexCapacity,  (uint32_t)cubeData.m_Indices.size());
-
-	nvrhi::BufferDesc vbDesc{};
-	vbDesc.byteSize              = totalVerts * sizeof(srrhi::VertexQuantized);
-	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
-	vbDesc.isVertexBuffer        = true;
-	vbDesc.isAccelStructBuildInput = true;
-	vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
-	vbDesc.keepInitialState      = true;
-	vbDesc.debugName             = "Scene_VertexBufferQuantized";
-	m_VertexBufferQuantized      = device->createBuffer(vbDesc);
-
-	nvrhi::BufferDesc ibDesc{};
-	ibDesc.byteSize              = std::max<uint32_t>(totalIndices, 1u) * sizeof(uint32_t);
-	ibDesc.structStride          = sizeof(uint32_t);
-	ibDesc.isIndexBuffer         = true;
-	ibDesc.isAccelStructBuildInput = true;
-	ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
-	ibDesc.keepInitialState      = true;
-	ibDesc.debugName             = "Scene_IndexBuffer";
-	m_IndexBuffer                = device->createBuffer(ibDesc);
-
-	// Upload cube vertices/indices into the pre-allocated buffers.
-	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-	ScopedCommandList scopedCmd{ cmd, "InitializeDefaultCube" };
-	cmd->writeBuffer(m_VertexBufferQuantized, cubeData.m_Vertices.data(),
-	                 cubeData.m_Vertices.size() * sizeof(srrhi::VertexQuantized), 0);
-	cmd->writeBuffer(m_IndexBuffer, cubeData.m_Indices.data(),
-	                 cubeData.m_Indices.size() * sizeof(uint32_t), 0);
-
-	m_VertexBufferUsed = (uint32_t)cubeData.m_Vertices.size();
-	m_IndexBufferUsed  = (uint32_t)cubeData.m_Indices.size();
-
-	// MeshData / meshlet metadata buffers — sized just for the cube; grown on demand by ApplyPendingUpdates.
-	nvrhi::BufferDesc metaDesc{};
-	metaDesc.initialState    = nvrhi::ResourceStates::ShaderResource;
-	metaDesc.keepInitialState = true;
-
-	metaDesc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
-	metaDesc.structStride = sizeof(srrhi::MeshData);
-	metaDesc.debugName   = "Scene_MeshDataBuffer";
-	m_MeshDataBuffer     = device->createBuffer(metaDesc);
-	cmd->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), metaDesc.byteSize);
-
-	metaDesc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
-	metaDesc.structStride = sizeof(srrhi::Meshlet);
-	metaDesc.debugName   = "Scene_MeshletBuffer";
-	m_MeshletBuffer      = device->createBuffer(metaDesc);
-	cmd->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), metaDesc.byteSize);
-
-	metaDesc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
-	metaDesc.structStride = sizeof(uint32_t);
-	metaDesc.debugName   = "Scene_MeshletVerticesBuffer";
-	m_MeshletVerticesBuffer = device->createBuffer(metaDesc);
-	cmd->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), metaDesc.byteSize);
-
-	metaDesc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
-	metaDesc.structStride = sizeof(uint32_t);
-	metaDesc.debugName   = "Scene_MeshletTrianglesBuffer";
-	m_MeshletTrianglesBuffer = device->createBuffer(metaDesc);
-	cmd->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), metaDesc.byteSize);
-}
-
-void Scene::UploadGeometryBuffers(const std::vector<srrhi::VertexQuantized>& vertices,
-                                  const std::vector<uint32_t>& indices)
-{
-	// Used by the synchronous (test / in-memory) load path.  Assumes GPU buffers were
-	// already created by InitializeDefaultCube; appends the provided geometry.
-	if (!m_VertexBufferQuantized || !m_IndexBuffer)
-	{
-		SDL_Log("[Scene] UploadGeometryBuffers precondition failed: GPU buffers are null "
-			"(vb=%p ib=%p meshData=%zu meshes=%zu usedVerts=%u usedIdx=%u)",
-			(void*)m_VertexBufferQuantized.Get(),
-			(void*)m_IndexBuffer.Get(),
-			m_MeshData.size(),
-			m_Meshes.size(),
-			m_VertexBufferUsed,
-			m_IndexBufferUsed);
-	}
-	SDL_assert(m_VertexBufferQuantized && m_IndexBuffer &&
-		"UploadGeometryBuffers: GPU buffers not initialized. Call InitializeDefaultCube() first.");
-	SDL_assert(!m_MeshData.empty() &&
-		"UploadGeometryBuffers: mesh metadata is empty. InitializeDefaultCube() must run first.");
-
-	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
-	SDL_assert(device && "UploadGeometryBuffers: NVRHI device is null");
-
-	const uint64_t vbCapacityElems = m_VertexBufferQuantized
-		? (uint64_t)m_VertexBufferQuantized->getDesc().byteSize / sizeof(srrhi::VertexQuantized)
-		: 0;
-	const uint64_t ibCapacityElems = m_IndexBuffer
-		? (uint64_t)m_IndexBuffer->getDesc().byteSize / sizeof(uint32_t)
-		: 0;
-	SDL_assert((uint64_t)m_VertexBufferUsed <= vbCapacityElems &&
-		"UploadGeometryBuffers: m_VertexBufferUsed exceeds vertex buffer capacity");
-	SDL_assert((uint64_t)m_IndexBufferUsed <= ibCapacityElems &&
-		"UploadGeometryBuffers: m_IndexBufferUsed exceeds index buffer capacity");
-
-	nvrhi::BufferDesc vbDesc{};
-	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
-	vbDesc.isVertexBuffer        = true;
-	vbDesc.isAccelStructBuildInput = true;
-	vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
-	vbDesc.keepInitialState      = true;
-	vbDesc.debugName             = "Scene_VertexBufferQuantized";
-
-	nvrhi::BufferDesc ibDesc{};
-	ibDesc.structStride          = sizeof(uint32_t);
-	ibDesc.isIndexBuffer         = true;
-	ibDesc.isAccelStructBuildInput = true;
-	ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
-	ibDesc.keepInitialState      = true;
-	ibDesc.debugName             = "Scene_IndexBuffer";
-
-	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-	ScopedCommandList scopedCmd{ cmd, "UploadGeometryBuffers" };
-
-	if (!vertices.empty())
-	{
-		m_VertexBufferQuantized = AppendToGpuBuffer(cmd, device, m_VertexBufferQuantized,
-		    (uint64_t)m_VertexBufferUsed * sizeof(srrhi::VertexQuantized),
-		    vertices.data(), vertices.size() * sizeof(srrhi::VertexQuantized), vbDesc);
-		m_VertexBufferUsed += (uint32_t)vertices.size();
-	}
-
-	if (!indices.empty())
-	{
-		m_IndexBuffer = AppendToGpuBuffer(cmd, device, m_IndexBuffer,
-		    (uint64_t)m_IndexBufferUsed * sizeof(uint32_t),
-		    indices.data(), indices.size() * sizeof(uint32_t), ibDesc);
-		m_IndexBufferUsed += (uint32_t)indices.size();
-	}
-
-	// Re-upload all CPU metadata arrays (mesh data, meshlets, etc.) and instance data.
-	nvrhi::BufferDesc metaDesc{};
-	metaDesc.initialState    = nvrhi::ResourceStates::ShaderResource;
-	metaDesc.keepInitialState = true;
-
-	if (!m_MeshData.empty())
-	{
-		metaDesc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
-		metaDesc.structStride = sizeof(srrhi::MeshData);
-		metaDesc.debugName   = "Scene_MeshDataBuffer";
-		m_MeshDataBuffer     = device->createBuffer(metaDesc);
-		cmd->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), metaDesc.byteSize);
-	}
-
-	if (!m_Meshlets.empty())
-	{
-		metaDesc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
-		metaDesc.structStride = sizeof(srrhi::Meshlet);
-		metaDesc.debugName   = "Scene_MeshletBuffer";
-		m_MeshletBuffer      = device->createBuffer(metaDesc);
-		cmd->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), metaDesc.byteSize);
-	}
-
-	if (!m_MeshletVertices.empty())
-	{
-		metaDesc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
-		metaDesc.structStride = sizeof(uint32_t);
-		metaDesc.debugName   = "Scene_MeshletVerticesBuffer";
-		m_MeshletVerticesBuffer = device->createBuffer(metaDesc);
-		cmd->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), metaDesc.byteSize);
-	}
-
-	if (!m_MeshletTriangles.empty())
-	{
-		metaDesc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
-		metaDesc.structStride = sizeof(uint32_t);
-		metaDesc.debugName   = "Scene_MeshletTrianglesBuffer";
-		m_MeshletTrianglesBuffer = device->createBuffer(metaDesc);
-		cmd->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), metaDesc.byteSize);
-	}
-
-	// Instance data buffer
-	nvrhi::BufferDesc instDesc{};
-	instDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(srrhi::PerInstanceData), m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
-	instDesc.structStride = sizeof(srrhi::PerInstanceData);
-	instDesc.canHaveUAVs  = true;
-	instDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-	instDesc.keepInitialState = true;
-	instDesc.debugName    = "Scene_InstanceDataBuffer";
-	m_InstanceDataBuffer  = device->createBuffer(instDesc);
-
-	// Per-instance LOD index buffer
-	nvrhi::BufferDesc lodDesc{};
-	lodDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(uint32_t), m_InstanceData.size() * sizeof(uint32_t));
-	lodDesc.structStride = sizeof(uint32_t);
-	lodDesc.canHaveUAVs  = true;
-	lodDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-	lodDesc.keepInitialState = true;
-	lodDesc.debugName    = "Scene_InstanceLODBuffer";
-	m_InstanceLODBuffer  = device->createBuffer(lodDesc);
-
-	if (!m_InstanceData.empty())
-		cmd->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
-		                 m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
-}
 
 void Scene::LoadScene()
 {
@@ -298,14 +16,12 @@ void Scene::LoadScene()
 
 	const std::filesystem::path sceneFilePath(scenePath);
 	const std::filesystem::path sceneDir = sceneFilePath.parent_path();
-	const uint32_t baseMeshCount = (uint32_t)m_Meshes.size();
-	const uint32_t baseMeshDataCount = (uint32_t)m_MeshData.size();
-	const uint32_t baseMeshletVerticesCount = (uint32_t)m_MeshletVertices.size();
 
-	// Runtime scene loading uses async placeholder meshes; these arrays remain
-	// empty in this path (background mesh updates append real geometry later).
+	
 	std::vector<srrhi::VertexQuantized> allVerticesQuantized;
 	std::vector<uint32_t> allIndices;
+
+	//SCOPED_TIMER("[Scene] LoadScene Total");
 
 	const std::string filename = sceneFilePath.filename().string();
 	const bool bIsSceneJson = filename.size() >= 11 && filename.substr(filename.size() - 11) == ".scene.json";
@@ -326,52 +42,13 @@ void Scene::LoadScene()
 		SDL_LOG_ASSERT_FAIL("Scene load failed", "[Scene] Failed to load scene: %s", scenePath.c_str());
 	}
 
-	(void)baseMeshCount;
-	(void)baseMeshDataCount;
-	(void)baseMeshletVerticesCount;
-	(void)allVerticesQuantized;
-	(void)allIndices;
-
 	FinalizeLoadedScene();
 
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir);
+	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
+	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
-
-	{
-		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-		ScopedCommandList scopedCmd{ cmd, "Scene_BuildInitialBLAS" };
-		SceneLoader::UpdateMaterialsAndCreateConstants(*this, cmd);
-		BuildAccelerationStructures(cmd);
-	}
-
-	// Instance data buffer — sized from FinalizeLoadedScene instance count.
-	{
-		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
-		nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
-		ScopedCommandList scopedCmd{ cmd, "Scene_InstanceBuffers" };
-
-		nvrhi::BufferDesc instDesc{};
-		instDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(srrhi::PerInstanceData), m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
-		instDesc.structStride = sizeof(srrhi::PerInstanceData);
-		instDesc.canHaveUAVs  = true;
-		instDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-		instDesc.keepInitialState = true;
-		instDesc.debugName    = "Scene_InstanceDataBuffer";
-		m_InstanceDataBuffer  = device->createBuffer(instDesc);
-
-		nvrhi::BufferDesc lodDesc{};
-		lodDesc.byteSize     = (uint32_t)std::max<size_t>(sizeof(uint32_t), m_InstanceData.size() * sizeof(uint32_t));
-		lodDesc.structStride = sizeof(uint32_t);
-		lodDesc.canHaveUAVs  = true;
-		lodDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-		lodDesc.keepInitialState = true;
-		lodDesc.debugName    = "Scene_InstanceLODBuffer";
-		m_InstanceLODBuffer  = device->createBuffer(lodDesc);
-
-		if (!m_InstanceData.empty())
-			cmd->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
-			                 m_InstanceData.size() * sizeof(srrhi::PerInstanceData));
-	}
+	BuildAccelerationStructures();
 
 	if (!m_Cameras.empty())
 	{
@@ -381,25 +58,25 @@ void Scene::LoadScene()
 	}
 }
 
-void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
+void Scene::BuildAccelerationStructures()
 {
 	//SCOPED_TIMER("[Scene] Build Accel Structs");
 
     nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
+	ScopedCommandList scopedCmd{ cmd, "Build Scene Accel Structs" };
 
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build
     std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
 
-	// 1. Build one BLAS per LOD level per primitive.
-	//    Primitives that already have a BLAS (e.g. previously built) are skipped;
-	//    their handle is still registered in meshDataToPrimitive for the TLAS step.
+	// 1. Build one BLAS per LOD level per primitive
 	uint64_t totalBLASMemoryBytes = 0;
 	for (Mesh& mesh : m_Meshes)
 	{
 		for (Primitive& primitive : mesh.m_Primitives)
 		{
+			SDL_assert(primitive.m_BLAS.empty());
 			meshDataToPrimitive[primitive.m_MeshDataIndex] = &primitive;
-			if (!primitive.m_BLAS.empty()) continue; // BLAS already built
 
 			const srrhi::MeshData& meshData = m_MeshData[primitive.m_MeshDataIndex];
 			const uint32_t lodCount = meshData.m_LODCount;
@@ -430,7 +107,7 @@ void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
 				blasDesc.buildFlags = nvrhi::rt::AccelStructBuildFlags::PreferFastTrace;
 
 				primitive.m_BLAS[lod] = device->createAccelStruct(blasDesc);
-				nvrhi::utils::BuildBottomLevelAccelStruct(cmdList, primitive.m_BLAS[lod], blasDesc);
+				nvrhi::utils::BuildBottomLevelAccelStruct(scopedCmd, primitive.m_BLAS[lod], blasDesc);
 
 				// Accumulate memory for logging (Req 7)
 				totalBLASMemoryBytes += device->getAccelStructMemoryRequirements(primitive.m_BLAS[lod]).size;
@@ -447,7 +124,7 @@ void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
     tlasDesc.isTopLevel = true;
     m_TLAS = device->createAccelStruct(tlasDesc);
 
-	m_RTInstanceDescs.clear();
+	SDL_assert(m_RTInstanceDescs.empty());
 	for (uint32_t instanceID = 0; instanceID < m_InstanceData.size(); ++instanceID)
     {
 		const srrhi::PerInstanceData& instData = m_InstanceData[instanceID];
@@ -456,34 +133,8 @@ void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
 
         nvrhi::rt::InstanceDesc& instanceDesc = m_RTInstanceDescs.emplace_back();
 
-		// Copy transform (transpose of row-vector matrix).
-		// DirectX row-vector convention: _ij = row i, col j.
-		// RT AffineTransform is row-major 3×4: [row0|row1|row2], translation in last column.
-		//   t[3]  = _41 = Tx,  t[7]  = _42 = Ty,  t[11] = _43 = Tz
-		// Note: glTF RH→LH conversion negates Z, so Tz = -glTF_Tz (this is intentional).
+		// Copy transform (transpose of row-vector matrix)
 		const Matrix& world = instData.m_World;
-
-		// Assert: world matrix must be finite (no NaN / Inf from broken animation or bad glTF data).
-		SDL_assert(std::isfinite(world._11) && std::isfinite(world._12) && std::isfinite(world._13) && std::isfinite(world._14) &&
-		           std::isfinite(world._21) && std::isfinite(world._22) && std::isfinite(world._23) && std::isfinite(world._24) &&
-		           std::isfinite(world._31) && std::isfinite(world._32) && std::isfinite(world._33) && std::isfinite(world._34) &&
-		           std::isfinite(world._41) && std::isfinite(world._42) && std::isfinite(world._43) && std::isfinite(world._44) &&
-		           "BuildAccelerationStructures: instance world matrix contains NaN or Inf");
-
-		// log, but dont assert: scale diagonal must be non-zero (a zero-scale matrix collapses geometry and produces a degenerate BLAS).
-		if (world._11 == 0.0f || world._22 == 0.0f || world._33 == 0.0f)
-		{
-			SDL_Log("BuildAccelerationStructures: instance world matrix has zero-scale diagonal — degenerate BLAS");
-		}
-
-		// Assert: MeshDataIndex must be in-range.
-		SDL_assert(instData.m_MeshDataIndex < (uint32_t)m_MeshData.size() &&
-		           "BuildAccelerationStructures: PerInstanceData.m_MeshDataIndex out of range");
-
-		// Assert: primitive must have at least one BLAS (LOD 0).
-		SDL_assert(!primitive->m_BLAS.empty() && primitive->m_BLAS[0] != nullptr &&
-		           "BuildAccelerationStructures: primitive has no LOD-0 BLAS — BuildAccelerationStructures must be called first");
-
 		nvrhi::rt::AffineTransform transform;
 		transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
 		transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;
@@ -515,9 +166,9 @@ void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
         m_RTInstanceDescBuffer = device->createBuffer(rtInstDesc);
 
         // Initial upload
-        cmdList->writeBuffer(m_RTInstanceDescBuffer, m_RTInstanceDescs.data(), rtInstDesc.byteSize);
+        scopedCmd->writeBuffer(m_RTInstanceDescBuffer, m_RTInstanceDescs.data(), rtInstDesc.byteSize);
 
-        cmdList->buildTopLevelAccelStructFromBuffer(m_TLAS, m_RTInstanceDescBuffer, 0, (uint32_t)m_RTInstanceDescs.size());
+        scopedCmd->buildTopLevelAccelStructFromBuffer(m_TLAS, m_RTInstanceDescBuffer, 0, (uint32_t)m_RTInstanceDescs.size());
     }
 
     // 3. Build the flat BLAS address buffer: blasAddresses[instanceIndex * srrhi::CommonConsts::MAX_LOD_COUNT + lodIndex]
@@ -551,7 +202,7 @@ void Scene::BuildAccelerationStructures(nvrhi::CommandListHandle cmdList)
 
         if (totalEntries > 0)
         {
-            cmdList->writeBuffer(m_BLASAddressBuffer, blasAddresses.data(), blasAddrDesc.byteSize);
+            scopedCmd->writeBuffer(m_BLASAddressBuffer, blasAddresses.data(), blasAddrDesc.byteSize);
         }
     }
 }
@@ -617,32 +268,21 @@ void Scene::FinalizeLoadedScene()
 
     // 2. Bucketize and fill instance data
     m_InstanceData.clear();
-	for (Node& node : m_Nodes)
-	{
-		node.m_InstanceIndices.clear();
-		node.m_PrimitiveToInstanceIndex.clear();
-	}
-
-	struct InstInfo { srrhi::PerInstanceData data; int nodeIdx; uint32_t primitiveIdx; };
+    struct InstInfo { srrhi::PerInstanceData data; int nodeIdx; };
     std::vector<InstInfo> opaqueStatic, opaqueDynamic;
     std::vector<InstInfo> maskedStatic, maskedDynamic;
     std::vector<InstInfo> transparentStatic, transparentDynamic;
 
-	for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
+    for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
     {
         const Node& node = m_Nodes[ni];
         if (node.m_MeshIndex < 0) continue;
-		SDL_assert(node.m_MeshIndex < (int)m_Meshes.size() && "FinalizeLoadedScene: node mesh index out of range");
         const Mesh& mesh = m_Meshes[node.m_MeshIndex];
-		for (uint32_t primIdx = 0; primIdx < (uint32_t)mesh.m_Primitives.size(); ++primIdx)
+        for (const Primitive& prim : mesh.m_Primitives)
         {
-			const Primitive& prim = mesh.m_Primitives[primIdx];
-			SDL_assert(prim.m_MaterialIndex >= -1 && prim.m_MaterialIndex < (int)m_Materials.size() &&
-				"FinalizeLoadedScene: primitive material index out of range");
             srrhi::PerInstanceData inst{};
-			const bool bUsesPlaceholderCube = (prim.m_MeshDataIndex == 0);
-			inst.m_World = BuildInstanceWorldTransform(node.m_WorldTransform, bUsesPlaceholderCube);
-			inst.m_PrevWorld = inst.m_World;
+            inst.m_World = node.m_WorldTransform;
+            inst.m_PrevWorld = node.m_WorldTransform;
             inst.m_MaterialIndex = prim.m_MaterialIndex;
             inst.m_MeshDataIndex = prim.m_MeshDataIndex;
             inst.m_Center = node.m_Center;
@@ -652,16 +292,16 @@ void Scene::FinalizeLoadedScene()
             bool isDynamic = node.m_IsDynamic;
 
             if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) {
-				if (isDynamic) opaqueDynamic.push_back({ inst, ni, primIdx });
-				else opaqueStatic.push_back({ inst, ni, primIdx });
+                if (isDynamic) opaqueDynamic.push_back({ inst, ni });
+                else opaqueStatic.push_back({ inst, ni });
             }
             else if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK) {
-				if (isDynamic) maskedDynamic.push_back({ inst, ni, primIdx });
-				else maskedStatic.push_back({ inst, ni, primIdx });
+                if (isDynamic) maskedDynamic.push_back({ inst, ni });
+                else maskedStatic.push_back({ inst, ni });
             }
             else {
-				if (isDynamic) transparentDynamic.push_back({ inst, ni, primIdx });
-				else transparentStatic.push_back({ inst, ni, primIdx });
+                if (isDynamic) transparentDynamic.push_back({ inst, ni });
+                else transparentStatic.push_back({ inst, ni });
             }
         }
     }
@@ -674,12 +314,7 @@ void Scene::FinalizeLoadedScene()
     {
         for (const InstInfo& info : infos)
         {
-			const uint32_t instanceIdx = (uint32_t)m_InstanceData.size();
-			Node& node = m_Nodes[info.nodeIdx];
-			node.m_InstanceIndices.push_back(instanceIdx);
-			if (info.primitiveIdx >= node.m_PrimitiveToInstanceIndex.size())
-				node.m_PrimitiveToInstanceIndex.resize(info.primitiveIdx + 1, UINT32_MAX);
-			node.m_PrimitiveToInstanceIndex[info.primitiveIdx] = instanceIdx;
+            m_Nodes[info.nodeIdx].m_InstanceIndices.push_back((uint32_t)m_InstanceData.size());
             m_InstanceData.push_back(info.data);
         }
     };
@@ -728,13 +363,6 @@ static Vector4 EvaluateAnimSampler(const Scene::AnimationSampler& sampler, float
     float dt    = inputs[k1] - inputs[k0];
     float alpha = (dt > 0.0f) ? (t - inputs[k0]) / dt : 0.0f;
 
-    // Invariant: alpha must be in [0, 1] for a valid keyframe pair.
-    // A value outside this range indicates a bug in the keyframe search loop
-    // (e.g. unsorted inputs) or a floating-point precision issue.
-    SDL_assert(alpha >= -1e-4f && alpha <= 1.0f + 1e-4f &&
-               "EvaluateAnimSampler: alpha out of [0,1] range — sampler inputs may be unsorted or contain NaN");
-    alpha = std::max(0.0f, std::min(1.0f, alpha)); // clamp defensively
-
     using namespace DirectX;
     XMVECTOR v0 = XMLoadFloat4(&outputs[k0]);
     XMVECTOR v1 = XMLoadFloat4(&outputs[k1]);
@@ -776,9 +404,6 @@ void Scene::Update(float deltaTime)
 {
 	PROFILE_FUNCTION();
 
-	// Apply any texture / mesh updates that arrived from background threads.
-	ApplyPendingUpdates();
-
 	// Save current worlds as previous worlds for all instances (always, for motion vectors).
 	for (srrhi::PerInstanceData& inst : m_InstanceData)
 	{
@@ -791,43 +416,17 @@ void Scene::Update(float deltaTime)
 	if (!g_Renderer.m_EnableAnimations)
 		return;
 
-	// NOTE: do NOT early-return here when m_Animations is empty.
-	// The dirty-node world-transform propagation loop below must always run
-	// when m_EnableAnimations is true, even if there are no animation channels
-	// to evaluate.  Manually-set TRS + m_IsDirty = true must propagate to
-	// m_WorldTransform regardless of whether any animations exist.
-	// (Previously `if (m_Animations.empty()) return;` was here, which silently
-	// swallowed all manual TRS mutations when the animation list was empty.)
+	if (m_Animations.empty()) return;
 
-    for (Animation& anim : m_Animations)
-    {
-        anim.m_CurrentTime += deltaTime;
-        if (anim.m_Duration > 0)
-            anim.m_CurrentTime = fmodf(anim.m_CurrentTime, anim.m_Duration);
+	for (Animation& anim : m_Animations)
+	{
+		anim.m_CurrentTime += deltaTime;
+		if (anim.m_Duration > 0)
+			anim.m_CurrentTime = fmodf(anim.m_CurrentTime, anim.m_Duration);
+	}
 
-        // Invariant: CurrentTime must be in [0, duration) after the fmod wrap.
-        // A negative result or a value >= duration indicates a bug in the wrap
-        // logic (e.g. negative deltaTime, NaN duration, or floating-point overflow).
-        SDL_assert(anim.m_CurrentTime >= 0.0f &&
-                   "Scene::Update: animation CurrentTime went negative after fmod wrap — "
-                   "deltaTime may be negative or duration may be zero/NaN");
-        SDL_assert(anim.m_Duration <= 0.0f || anim.m_CurrentTime <= anim.m_Duration + 1e-4f &&
-                   "Scene::Update: animation CurrentTime exceeds duration after fmod wrap — "
-                   "possible floating-point precision issue or negative deltaTime");
-    }
-
-	// Reset dirty ranges before evaluating channels and propagating world transforms.
-	// This runs unconditionally whenever m_EnableAnimations is true, regardless of
-	// whether m_Animations is empty.  Manual TRS mutations (m_IsDirty = true) will
-	// re-populate the dirty ranges in the world-transform loop below.
 	m_InstanceDirtyRange = { UINT32_MAX, 0 };
 	m_MaterialDirtyRange = { UINT32_MAX, 0 };
-
-	// Invariant: after resetting, the ranges must be clean.
-	SDL_assert(!AreInstanceTransformsDirty() &&
-		"m_InstanceDirtyRange reset failed — first/second sentinel values are inconsistent");
-	SDL_assert(!(m_MaterialDirtyRange.first <= m_MaterialDirtyRange.second) &&
-		"m_MaterialDirtyRange reset failed — first/second sentinel values are inconsistent");
 
 	for (const Animation& anim : m_Animations)
 	{
@@ -876,50 +475,18 @@ void Scene::Update(float deltaTime)
 					Node& node = m_Nodes[nodeIdx];
 					node.m_IsDirty = true;
 
-				if (channel.m_Path == AnimationChannel::Path::Translation)
-				{
-					XMStoreFloat3(&node.m_Translation, XMLoadFloat4(&val));
-				}
-			else if (channel.m_Path == AnimationChannel::Path::Rotation)
-				{
-					using namespace DirectX;
-					// Guard against zero-length (degenerate) quaternions before normalizing.
-					// XMQuaternionNormalize of a zero vector produces NaN/Inf, which would
-					// corrupt the node's world transform and trigger the finite-transform assert.
-					// Root cause: malformed animation data (e.g. a zero-filled buffer) or a
-					// sampler that outputs [0,0,0,0].  Fall back to identity quaternion and log
-					// a warning so the issue is visible without crashing.
-					const float rawLen = std::sqrt(val.x * val.x + val.y * val.y +
-					                               val.z * val.z + val.w * val.w);
-					if (rawLen < 1e-6f)
+					if (channel.m_Path == AnimationChannel::Path::Translation)
 					{
-						SDL_Log("[Scene] WARNING: animation '%s' channel targeting node %d produced a "
-						        "zero-length quaternion (len=%.2e) — falling back to identity. "
-						        "Check sampler output data for corrupt or zero-filled keyframes.",
-						        anim.m_Name.c_str(), nodeIdx, (double)rawLen);
-						// Identity quaternion: (0, 0, 0, 1)
-						node.m_Rotation = { 0.0f, 0.0f, 0.0f, 1.0f };
+						XMStoreFloat3(&node.m_Translation, XMLoadFloat4(&val));
 					}
-					else
+					else if (channel.m_Path == AnimationChannel::Path::Rotation)
 					{
 						XMStoreFloat4(&node.m_Rotation, XMQuaternionNormalize(XMLoadFloat4(&val)));
 					}
-
-					// Invariant: rotation quaternion must be unit-length after normalization.
-					// This assert fires only if normalization itself produced a non-unit result,
-					// which should not happen for any non-zero input.
-					const float qLen = std::sqrt(node.m_Rotation.x * node.m_Rotation.x +
-					                              node.m_Rotation.y * node.m_Rotation.y +
-					                              node.m_Rotation.z * node.m_Rotation.z +
-					                              node.m_Rotation.w * node.m_Rotation.w);
-					SDL_assert(std::abs(qLen - 1.0f) < 1e-3f &&
-					           "Scene::Update: rotation quaternion is not unit-length after normalization — "
-					           "normalization of a non-zero quaternion should always produce a unit result");
-				}
-				else if (channel.m_Path == AnimationChannel::Path::Scale)
-				{
-					XMStoreFloat3(&node.m_Scale, XMLoadFloat4(&val));
-				}
+					else if (channel.m_Path == AnimationChannel::Path::Scale)
+					{
+						XMStoreFloat3(&node.m_Scale, XMLoadFloat4(&val));
+					}
 				};
 
 				// All node targets (glTF single or JSON multi-target)
@@ -940,50 +507,13 @@ void Scene::Update(float deltaTime)
 		{
 			using namespace DirectX;
 			
-			// Diagnostic: log which nodes are being processed (only when verbose logging is useful — gated on a compile-time flag to avoid log spam in production).
-			if (m_bVerboseLogging)
-				SDL_Log("[Scene::Update] Processing dirty node %d '%s': "
-						"isDirty=%d parentDirty=%d parent=%d "
-						"rot=(%.3f,%.3f,%.3f,%.3f) scale=(%.3f,%.3f,%.3f) trans=(%.3f,%.3f,%.3f)",
-						idx, node.m_Name.c_str(),
-						(int)node.m_IsDirty, (int)parentDirty, node.m_Parent,
-						node.m_Rotation.x, node.m_Rotation.y, node.m_Rotation.z, node.m_Rotation.w,
-						node.m_Scale.x, node.m_Scale.y, node.m_Scale.z,
-						node.m_Translation.x, node.m_Translation.y, node.m_Translation.z);
-					
-			// transform.  A zero scale produces a singular matrix and NaN world transforms.
-			SDL_assert(std::abs(node.m_Scale.x) > 1e-7f &&
-			           std::abs(node.m_Scale.y) > 1e-7f &&
-			           std::abs(node.m_Scale.z) > 1e-7f &&
-			           "Scene::Update: node scale is zero or near-zero — "
-			           "this produces a singular local transform and NaN world transforms");
-			// Invariant: rotation quaternion must be unit-length before composing.
-			// A non-unit quaternion produces a non-orthogonal rotation matrix.
-			const float preQLen = std::sqrt(node.m_Rotation.x * node.m_Rotation.x +
-			                                node.m_Rotation.y * node.m_Rotation.y +
-			                                node.m_Rotation.z * node.m_Rotation.z +
-			                                node.m_Rotation.w * node.m_Rotation.w);
-			SDL_assert(std::abs(preQLen - 1.0f) < 1e-3f &&
-			           "Scene::Update: node rotation quaternion is not unit-length before TRS composition — "
-			           "manually-set rotations must be normalized before calling Update()");
-			// Invariant: parent world transform must be finite before multiplying.
-			if (node.m_Parent >= 0)
-			{
-				const Matrix& pw = m_Nodes[node.m_Parent].m_WorldTransform;
-				SDL_assert(std::isfinite(pw._11) && std::isfinite(pw._22) &&
-				           std::isfinite(pw._33) && std::isfinite(pw._41) &&
-				           "Scene::Update: parent world transform contains NaN or Inf — "
-				           "parent must be processed before child in m_DynamicNodeIndices "
-				           "(topological order violated, or parent has a degenerate TRS)");
-			}
-			
 			// Update local transform from TRS
 			XMMATRIX localM = XMMatrixScalingFromVector(XMLoadFloat3(&node.m_Scale)) *
 				XMMatrixRotationQuaternion(XMLoadFloat4(&node.m_Rotation)) *
 				XMMatrixTranslationFromVector(XMLoadFloat3(&node.m_Translation));
 			XMStoreFloat4x4(&node.m_LocalTransform, localM);
 
-		// Update world transform
+			// Update world transform
 			XMMATRIX worldM;
 			if (node.m_Parent != -1) {
 				worldM = XMMatrixMultiply(localM, XMLoadFloat4x4(&m_Nodes[node.m_Parent].m_WorldTransform));
@@ -991,18 +521,6 @@ void Scene::Update(float deltaTime)
 				worldM = localM;
 			}
 			XMStoreFloat4x4(&node.m_WorldTransform, worldM);
-
-			// Invariant: world transform must be finite after TRS composition.
-			// NaN/Inf here indicates a degenerate TRS (e.g. zero-length quaternion,
-			// NaN scale, or a corrupt parent transform).
-			SDL_assert(std::isfinite(node.m_WorldTransform._11) &&
-			           std::isfinite(node.m_WorldTransform._22) &&
-			           std::isfinite(node.m_WorldTransform._33) &&
-			           std::isfinite(node.m_WorldTransform._41) &&
-			           std::isfinite(node.m_WorldTransform._42) &&
-			           std::isfinite(node.m_WorldTransform._43) &&
-			           "Scene::Update: node world transform contains NaN or Inf after TRS composition — "
-			           "check for zero-length quaternion, NaN scale, or corrupt parent transform");
 
 			node.m_IsDirty = true; // Pass dirty state to children
 
@@ -1012,8 +530,7 @@ void Scene::Update(float deltaTime)
 			// Sync instances
 			for (uint32_t instIdx : node.m_InstanceIndices)
 			{
-				const bool bUsesPlaceholderCube = (m_InstanceData[instIdx].m_MeshDataIndex == 0);
-				m_InstanceData[instIdx].m_World = BuildInstanceWorldTransform(node.m_WorldTransform, bUsesPlaceholderCube);
+				m_InstanceData[instIdx].m_World = node.m_WorldTransform;
 				m_InstanceData[instIdx].m_Center = node.m_Center;
 				m_InstanceData[instIdx].m_Radius = node.m_Radius;
 
@@ -1021,16 +538,7 @@ void Scene::Update(float deltaTime)
 				m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
 
 				// Update RT instance transform
-				const Matrix& world = m_InstanceData[instIdx].m_World;
-
-				// Invariant: RT transform must be finite.
-				// This fires if the world matrix contains NaN/Inf (e.g. from a degenerate
-				// animation sampler or a corrupt parent transform).
-				SDL_assert(std::isfinite(world._11) && std::isfinite(world._41) &&
-				           std::isfinite(world._42) && std::isfinite(world._43) &&
-				           "Scene::Update: RT instance world matrix contains NaN or Inf — "
-				           "check animation sampler outputs and parent transform chain");
-
+				const Matrix& world = node.m_WorldTransform;
 				nvrhi::rt::AffineTransform transform;
 				transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
 				transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;
@@ -1051,291 +559,8 @@ void Scene::Update(float deltaTime)
 	}
 }
 
-void Scene::ApplyPendingUpdates()
-{
-	// ── Drain pending queues ────────────────────────────────────────────────
-	TextureUpdateCommand localTexture;
-	std::vector<MeshUpdateCommand>    localMeshes;
-	{
-		std::lock_guard<std::mutex> lk(m_PendingTextureMutex);
-		if (!m_PendingTextureUpdates.empty())
-		{
-			localTexture = std::move(m_PendingTextureUpdates[0]);
-			std::swap(m_PendingTextureUpdates[0], m_PendingTextureUpdates.back());
-			m_PendingTextureUpdates.pop_back();
-		}
-	}
-	{
-		std::lock_guard<std::mutex> lk(m_PendingMeshMutex);
-		if (!m_PendingMeshUpdates.empty())
-		{
-			static const uint32_t kMaxMeshUpdatesPerFrame = 100;
-
-			for (uint32_t i = 0; i < kMaxMeshUpdatesPerFrame && !m_PendingMeshUpdates.empty(); ++i)
-			{
-				localMeshes.push_back(std::move(m_PendingMeshUpdates[0]));
-				std::swap(m_PendingMeshUpdates[0], m_PendingMeshUpdates.back());
-				m_PendingMeshUpdates.pop_back();
-			}
-		}
-	}
-
-	if (!localTexture.m_Data && localMeshes.empty())
-		return;
-
-	nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
-
-	// One command list for all texture uploads + geometry appends + metadata writes.
-	nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
-	ScopedCommandList scopedCmd{ cl, "ApplyPendingUpdates" };
-
-	// ── Texture updates ────────────────────────────────────────────────────────
-	bool bDoTextureUpdate = !!localTexture.m_Data;
-	bDoTextureUpdate &= !localTexture.m_bCancelled;
-	bDoTextureUpdate &= (localTexture.m_TextureIndex < (uint32_t)m_Textures.size());
-	if (bDoTextureUpdate)
-	{
-		Scene::Texture& tex = m_Textures[localTexture.m_TextureIndex];
-
-		tex.m_Handle = device->createTexture(localTexture.m_Desc);
-		SDL_assert(tex.m_Handle && "Failed to create texture for update");
-
-		UploadTexture(cl, tex.m_Handle, localTexture.m_Desc, localTexture.m_Data->GetData(), localTexture.m_Data->GetSize());
-
-		if (tex.m_BindlessIndex == UINT32_MAX)
-		{
-			const uint32_t reservedIndex = g_Renderer.RegisterTexture(tex.m_Handle);
-			SDL_assert(reservedIndex != UINT32_MAX && "Failed to register async texture in bindless table");
-			tex.m_BindlessIndex = reservedIndex;
-		}
-		else
-		{
-			const bool bUpdated = g_Renderer.RegisterTextureAtIndex(tex.m_BindlessIndex, tex.m_Handle);
-			SDL_assert(bUpdated && "Failed to update async texture in reserved bindless slot");
-		}
-	
-		// Re-resolve all material texture indices and re-upload material constants.
-		// TODO: this is inefficient for just one texture update; we should track which materials reference the updated texture and only update those.  For now we expect few texture updates, so this is simpler.
-		for (Material& mat : m_Materials)
-		{
-			if (mat.m_BaseColorTexture != -1)
-				mat.m_AlbedoTextureIndex = m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
-			if (mat.m_NormalTexture != -1)
-				mat.m_NormalTextureIndex = m_Textures[mat.m_NormalTexture].m_BindlessIndex;
-			if (mat.m_MetallicRoughnessTexture != -1)
-				mat.m_RoughnessMetallicTextureIndex = m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
-			if (mat.m_EmissiveTexture != -1)
-				mat.m_EmissiveTextureIndex = m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
-		}
-		m_MaterialDirtyRange = { 0, (uint32_t)m_Materials.size() - 1 };
-		SceneLoader::UpdateMaterialsAndCreateConstants(*this, cl);
-	}
-
-	// ── Mesh updates ───────────────────────────────────────────────────────────
-	nvrhi::BufferDesc vbDesc{};
-	vbDesc.structStride          = sizeof(srrhi::VertexQuantized);
-	vbDesc.isVertexBuffer        = true;
-	vbDesc.isAccelStructBuildInput = true;
-	vbDesc.initialState          = nvrhi::ResourceStates::ShaderResource;
-	vbDesc.keepInitialState      = true;
-	vbDesc.debugName             = "Scene_VertexBufferQuantized";
-
-	nvrhi::BufferDesc ibDesc{};
-	ibDesc.structStride          = sizeof(uint32_t);
-	ibDesc.isIndexBuffer         = true;
-	ibDesc.isAccelStructBuildInput = true;
-	ibDesc.initialState          = nvrhi::ResourceStates::IndexBuffer;
-	ibDesc.keepInitialState      = true;
-	ibDesc.debugName             = "Scene_IndexBuffer";
-
-	bool bAnyMeshUpdated = false;
-	for (MeshUpdateCommand& meshCmd : localMeshes)
-	{
-		if (meshCmd.m_bCancelled || meshCmd.m_Vertices.empty()) continue;
-
-		const uint32_t globalVertexOffset   = m_VertexBufferUsed;
-		const uint32_t globalIndexOffset    = m_IndexBufferUsed;
-		const uint32_t globalMeshletOffset  = (uint32_t)m_Meshlets.size();
-		const uint32_t globalMVOffset       = (uint32_t)m_MeshletVertices.size();
-		const uint32_t globalMTOffset       = (uint32_t)m_MeshletTriangles.size();
-		const uint32_t globalMeshDataOffset = (uint32_t)m_MeshData.size();
-
-		srrhi::MeshData md = meshCmd.m_MeshData;
-		for (uint32_t lod = 0; lod < md.m_LODCount; ++lod)
-		{
-			md.m_IndexOffsets[lod]   += globalIndexOffset;
-			md.m_MeshletOffsets[lod] += globalMeshletOffset;
-		}
-		for (uint32_t& idx : meshCmd.m_Indices)        idx += globalVertexOffset;
-		for (uint32_t& v   : meshCmd.m_MeshletVertices) v   += globalVertexOffset;
-		for (srrhi::Meshlet& m : meshCmd.m_Meshlets)
-		{
-			m.m_VertexOffset   += globalMVOffset;
-			m.m_TriangleOffset += globalMTOffset;
-		}
-
-		m_VertexBufferQuantized = AppendToGpuBuffer(cl, device, m_VertexBufferQuantized,
-			(uint64_t)globalVertexOffset * sizeof(srrhi::VertexQuantized),
-			meshCmd.m_Vertices.data(), (uint64_t)meshCmd.m_Vertices.size() * sizeof(srrhi::VertexQuantized),
-			vbDesc);
-		m_VertexBufferUsed += (uint32_t)meshCmd.m_Vertices.size();
-
-		m_IndexBuffer = AppendToGpuBuffer(cl, device, m_IndexBuffer,
-			(uint64_t)globalIndexOffset * sizeof(uint32_t),
-			meshCmd.m_Indices.data(), (uint64_t)meshCmd.m_Indices.size() * sizeof(uint32_t),
-			ibDesc);
-		m_IndexBufferUsed += (uint32_t)meshCmd.m_Indices.size();
-
-		m_MeshData.push_back(md);
-		m_Meshlets.insert(m_Meshlets.end(), meshCmd.m_Meshlets.begin(), meshCmd.m_Meshlets.end());
-		m_MeshletVertices.insert(m_MeshletVertices.end(), meshCmd.m_MeshletVertices.begin(), meshCmd.m_MeshletVertices.end());
-		m_MeshletTriangles.insert(m_MeshletTriangles.end(), meshCmd.m_MeshletTriangles.begin(), meshCmd.m_MeshletTriangles.end());
-
-		const bool bHasSphere = meshCmd.m_LocalSphereRadius >= 0.0f;
-		SDL_assert(bHasSphere && "MeshUpdateCommand missing pre-computed sphere; "
-			"ProcessSinglePrimitiveFromMapped must set m_LocalSphereCenter/m_LocalSphereRadius");
-
-		for (const std::pair<int, int>& ap : meshCmd.m_AffectedPrimitives)
-		{
-			if (ap.first  < 0 || ap.first  >= (int)m_Meshes.size()) continue;
-			Scene::Mesh& mesh = m_Meshes[ap.first];
-			if (ap.second < 0 || ap.second >= (int)mesh.m_Primitives.size()) continue;
-			Scene::Primitive& prim = mesh.m_Primitives[ap.second];
-
-			prim.m_VertexOffset  = globalVertexOffset;
-			prim.m_VertexCount   = (uint32_t)meshCmd.m_Vertices.size();
-			prim.m_MeshDataIndex = globalMeshDataOffset;
-			prim.m_BLAS.clear();
-
-			// Update mesh-level local BV using the sphere pre-computed on the background thread.
-			if (bHasSphere)
-			{
-				const Sphere primSphere(meshCmd.m_LocalSphereCenter, meshCmd.m_LocalSphereRadius);
-				if (!mesh.m_bBoundsValid)
-				{
-					mesh.m_Center       = meshCmd.m_LocalSphereCenter;
-					mesh.m_Radius       = meshCmd.m_LocalSphereRadius;
-					mesh.m_bBoundsValid = true;
-				}
-				else
-				{
-					Sphere merged;
-					Sphere::CreateMerged(merged, Sphere(mesh.m_Center, mesh.m_Radius), primSphere);
-					mesh.m_Center = Vector3(merged.Center.x, merged.Center.y, merged.Center.z);
-					mesh.m_Radius = merged.Radius;
-				}
-				// SDL_Log("[Scene] Async BV mesh[%d] prim[%d]: center=(%.3f, %.3f, %.3f) radius=%.4f",
-				// 	ap.first, ap.second,
-				// 	mesh.m_Center.x, mesh.m_Center.y, mesh.m_Center.z, mesh.m_Radius);
-			}
-
-			// Single node scan: patch m_MeshDataIndex and propagate updated BV.
-			for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
-			{
-				Scene::Node& node = m_Nodes[ni];
-				if (node.m_MeshIndex != ap.first) continue;
-
-				if (ap.second >= 0 && ap.second < (int)node.m_PrimitiveToInstanceIndex.size())
-				{
-					const uint32_t instIdx = node.m_PrimitiveToInstanceIndex[ap.second];
-					if (instIdx != UINT32_MAX && instIdx < (uint32_t)m_InstanceData.size())
-					{
-						const bool bWasPlaceholderCube = (m_InstanceData[instIdx].m_MeshDataIndex == 0);
-						m_InstanceData[instIdx].m_MeshDataIndex = globalMeshDataOffset;
-
-						if (bWasPlaceholderCube)
-						{
-							m_InstanceData[instIdx].m_World = BuildInstanceWorldTransform(node.m_WorldTransform, false);
-							m_InstanceData[instIdx].m_PrevWorld = m_InstanceData[instIdx].m_World;
-							m_InstanceDirtyRange.first  = std::min(m_InstanceDirtyRange.first,  instIdx);
-							m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
-						}
-					}
-				}
-
-				if (bHasSphere)
-				{
-					UpdateNodeBoundingSphere(ni);
-					for (uint32_t instIdx : node.m_InstanceIndices)
-					{
-						if (instIdx >= (uint32_t)m_InstanceData.size()) continue;
-						m_InstanceData[instIdx].m_Center = node.m_Center;
-						m_InstanceData[instIdx].m_Radius = node.m_Radius;
-						m_InstanceDirtyRange.first  = std::min(m_InstanceDirtyRange.first,  instIdx);
-						m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
-					}
-				}
-			}
-		}
-
-		bAnyMeshUpdated = true;
-	}
-
-	if (bAnyMeshUpdated)
-	{
-		// Re-create small metadata GPU buffers from their CPU arrays (same CL).
-		nvrhi::BufferDesc desc{};
-		desc.initialState    = nvrhi::ResourceStates::ShaderResource;
-		desc.keepInitialState = true;
-
-		desc.byteSize    = (uint32_t)(m_MeshData.size() * sizeof(srrhi::MeshData));
-		desc.structStride = sizeof(srrhi::MeshData);
-		desc.debugName   = "Scene_MeshDataBuffer";
-		m_MeshDataBuffer = device->createBuffer(desc);
-		cl->writeBuffer(m_MeshDataBuffer, m_MeshData.data(), desc.byteSize);
-
-		desc.byteSize    = (uint32_t)(m_Meshlets.size() * sizeof(srrhi::Meshlet));
-		desc.structStride = sizeof(srrhi::Meshlet);
-		desc.debugName   = "Scene_MeshletBuffer";
-		m_MeshletBuffer  = device->createBuffer(desc);
-		cl->writeBuffer(m_MeshletBuffer, m_Meshlets.data(), desc.byteSize);
-
-		desc.byteSize    = (uint32_t)(m_MeshletVertices.size() * sizeof(uint32_t));
-		desc.structStride = sizeof(uint32_t);
-		desc.debugName   = "Scene_MeshletVerticesBuffer";
-		m_MeshletVerticesBuffer = device->createBuffer(desc);
-		cl->writeBuffer(m_MeshletVerticesBuffer, m_MeshletVertices.data(), desc.byteSize);
-
-		desc.byteSize    = (uint32_t)(m_MeshletTriangles.size() * sizeof(uint32_t));
-		desc.structStride = sizeof(uint32_t);
-		desc.debugName   = "Scene_MeshletTrianglesBuffer";
-		m_MeshletTrianglesBuffer = device->createBuffer(desc);
-		cl->writeBuffer(m_MeshletTrianglesBuffer, m_MeshletTriangles.data(), desc.byteSize);
-
-		if (m_InstanceDataBuffer && !m_InstanceData.empty())
-			cl->writeBuffer(m_InstanceDataBuffer, m_InstanceData.data(),
-				m_InstanceData.size() * sizeof(srrhi::PerInstanceData), 0);
-	}
-	// scopedCmd closes here (flushes all writes / copies above).
-
-	if (bAnyMeshUpdated)
-	{
-		// BVH build uses its own command list (may need different queue requirements).
-		BuildAccelerationStructures(cl);
-	}
-}
-
 void Scene::Shutdown()
 {
-	// Warn if dirty ranges were not consumed before shutdown — this indicates a
-	// frame was skipped or a test left stale state.  If not reset here, the
-	// sentinel values would survive into the next scene load and trigger the
-	// bounds-check assert in UploadDirtyInstanceTransforms().
-	if (AreInstanceTransformsDirty())
-	{
-		SDL_Log("[Scene] Shutdown: m_InstanceDirtyRange was still dirty [%u, %u] — "
-			"resetting to clean. A frame may have been skipped or a test left stale state.",
-			m_InstanceDirtyRange.first, m_InstanceDirtyRange.second);
-	}
-	m_InstanceDirtyRange = { UINT32_MAX, 0 };
-
-	if (m_MaterialDirtyRange.first <= m_MaterialDirtyRange.second)
-	{
-		SDL_Log("[Scene] Shutdown: m_MaterialDirtyRange was still dirty [%u, %u] — resetting.",
-			m_MaterialDirtyRange.first, m_MaterialDirtyRange.second);
-	}
-	m_MaterialDirtyRange = { UINT32_MAX, 0 };
-
 	// Release GPU buffer handles so NVRHI can free underlying resources
 	m_VertexBufferQuantized = nullptr;
 	m_IndexBuffer = nullptr;
@@ -1371,11 +596,6 @@ void Scene::Shutdown()
 	m_DynamicMaterialIndices.clear();
 	m_DynamicNodeIndices.clear();
 	m_InstanceData.clear();
-
-	// Invariant: dirty ranges must be clean after Shutdown so the next scene
-	// load starts from a known-good state.
-	SDL_assert(!AreInstanceTransformsDirty() &&
-		"Scene::Shutdown: m_InstanceDirtyRange is not clean after reset");
 }
 
 void Scene::UpdateNodeBoundingSphere(int nodeIndex)
@@ -1384,7 +604,6 @@ void Scene::UpdateNodeBoundingSphere(int nodeIndex)
     if (node.m_MeshIndex >= 0 && node.m_MeshIndex < (int)m_Meshes.size())
     {
         const Mesh& mesh = m_Meshes[node.m_MeshIndex];
-        SDL_assert(mesh.m_Radius >= 0.0f && "Mesh has negative bounding radius; data is corrupt");
         const DirectX::BoundingSphere localSphere(mesh.m_Center, mesh.m_Radius);
         DirectX::BoundingSphere worldSphere;
         localSphere.Transform(worldSphere, DirectX::XMLoadFloat4x4(&node.m_WorldTransform));

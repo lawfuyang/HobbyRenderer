@@ -383,21 +383,6 @@ void Renderer::Initialize()
         return;
     }
 
-    m_AsyncTextureQueue.Start("AsyncTextureQueue");
-        m_AsyncMeshQueue.Start("AsyncMeshQueue");
-
-    // Estimate scene geometry size to preallocate GPU buffers conservatively
-    // (quick parse — no binary data loaded), then initialise the default cube
-    // as mesh[0] and create the preallocated vertex/index buffers.
-    {
-        uint32_t estimatedVerts   = 0;
-        uint32_t estimatedIndices = 0;
-        SceneLoader::EstimateGeometrySize(Config::Get().m_ScenePath, estimatedVerts, estimatedIndices);
-        // 2× vertex budget (optimiser may remap) + 3× index budget (LOD levels: ~1+0.6+0.36+…≈2.5×)
-        m_Scene.InitializeDefaultCube(estimatedVerts * 2u, estimatedIndices * 3u);
-        ExecutePendingCommandLists();
-    }
-
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
@@ -538,24 +523,6 @@ void Renderer::Run()
         m_Scene.m_ViewPrev = m_Scene.m_View;
         m_Scene.m_Camera.FillPlanarViewConstants(m_Scene.m_View, (float)windowW, (float)windowH);
 
-        // must disable restir renderer while async mesh loads are pending to avoid GPU synchronization stalls
-        {
-            const uint32_t pendingMeshLoads = m_AsyncMeshQueue.GetPendingCount();
-            if (pendingMeshLoads > 0)
-            {
-                if (m_EnableReSTIRDI)
-                {
-                    m_EnableReSTIRDI = false;
-                    m_bRestoreReSTIRDIAfterAsyncMeshLoad = true;
-                }
-            }
-            else if (m_bRestoreReSTIRDIAfterAsyncMeshLoad)
-            {
-                m_EnableReSTIRDI = true;
-                m_bRestoreReSTIRDIAfterAsyncMeshLoad = false;
-            }
-        }
-
         const int readIndex = m_FrameNumber % 2;
         const int writeIndex = (m_FrameNumber + 1) % 2;
 
@@ -620,9 +587,6 @@ void Renderer::Run()
 void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
-
-    m_AsyncMeshQueue.Stop("AsyncMeshQueue");
-    m_AsyncTextureQueue.Stop("AsyncTextureQueue");
 
     MicroProfileShutdown();
 
