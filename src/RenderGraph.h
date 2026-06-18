@@ -184,9 +184,9 @@ public:
     // Set the current active pass for validation (used during Render phase)
     void SetActivePass(uint16_t passIndex);
 
-    // Insert aliasing barriers for a given pass into the command list.
+    // Insert global sync barriers for a given pass into the command list.
     // Must be called at the start of each pass's command list recording, before any GPU work.
-    void InsertAliasBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const;
+    void InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const;
 
     // Returns the pass index for the current pass (valid after BeginPass, before Compile)
     uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
@@ -237,13 +237,11 @@ private:
     // Helper for updating resource lifetimes
     void UpdateResourceLifetime(RenderGraphInternal::ResourceLifetime& lifetime, uint16_t currentPass);
 
-    // Per-pass aliasing barrier info
-    struct AliasBarrierEntry
-    {
-        bool m_IsBuffer = false;
-        uint32_t m_ResourceIndex = UINT32_MAX;
-    };
-    std::vector<std::vector<AliasBarrierEntry>> m_PerPassAliasBarriers; // indexed by pass index
+    // When m_AliasingEnabled is true, records which passes contain at least one aliased resource
+    // that needs a global sync barrier before it's first used.
+    // Set during Compile() by checking each aliased resource's first pass.
+    // Indexed by pass index (1-based, pass 0 is unused).
+    std::vector<bool> m_PassNeedsGlobalSyncBarrier;
 
     // Deferred release: when aliasing replaces a physical resource handle,
     // we must not immediately destroy the old D3D12 object because the GPU

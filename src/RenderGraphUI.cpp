@@ -364,8 +364,8 @@ void RenderGraph::RenderDebugUI()
                         }
 
                         ImGui::TableNextColumn();
-                        int numBarriers = (i < m_PerPassAliasBarriers.size()) ? (int)m_PerPassAliasBarriers[i].size() : 0;
-                        if (numBarriers > 0) ImGui::Text("%d barriers", numBarriers);
+                        bool hasGlobalSync = (i < m_PassNeedsGlobalSyncBarrier.size()) && m_PassNeedsGlobalSyncBarrier[i];
+                        if (hasGlobalSync) ImGui::Text("Global Sync");
                         else ImGui::Text("-");
 
                         if (nodeOpen)
@@ -388,17 +388,9 @@ void RenderGraph::RenderDebugUI()
                                 ImGui::TreePop();
                             }
 
-                            if (numBarriers > 0)
+                            if (hasGlobalSync)
                             {
-                                if (ImGui::TreeNodeEx("Aliasing Barriers Details", ImGuiTreeNodeFlags_DefaultOpen))
-                                {
-                                    for (const AliasBarrierEntry& barrier : m_PerPassAliasBarriers[i])
-                                    {
-                                        const char* name = barrier.m_IsBuffer ? m_Buffers[barrier.m_ResourceIndex].m_Desc.m_NvrhiDesc.debugName.c_str() : m_Textures[barrier.m_ResourceIndex].m_Desc.m_NvrhiDesc.debugName.c_str();
-                                        ImGui::BulletText("%s (%s)", name, barrier.m_IsBuffer ? "Buffer" : "Texture");
-                                    }
-                                    ImGui::TreePop();
-                                }
+                                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f), "  Global Sync Barrier");
                             }
                             ImGui::TreePop();
                         }
@@ -518,15 +510,9 @@ std::string RenderGraph::ExportToString() const
             ss << "\n";
         }
 
-        if (passID < (uint32_t)m_PerPassAliasBarriers.size() && !m_PerPassAliasBarriers[passID].empty())
+        if (passID < (uint32_t)m_PassNeedsGlobalSyncBarrier.size() && m_PassNeedsGlobalSyncBarrier[passID])
         {
-            ss << "   - Aliasing Barriers:";
-            for (const AliasBarrierEntry& barrier : m_PerPassAliasBarriers[passID])
-            {
-                const char* name = barrier.m_IsBuffer ? m_Buffers[barrier.m_ResourceIndex].m_Desc.m_NvrhiDesc.debugName.c_str() : m_Textures[barrier.m_ResourceIndex].m_Desc.m_NvrhiDesc.debugName.c_str();
-                ss << " " << name << " (" << (barrier.m_IsBuffer ? "Buffer" : "Texture") << ")";
-            }
-            ss << "\n";
+            ss << "   - Global Sync Barrier\n";
         }
     }
     ss << "\n";

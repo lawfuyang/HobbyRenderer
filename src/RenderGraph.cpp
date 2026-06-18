@@ -125,7 +125,7 @@ void RenderGraph::Shutdown()
     m_Heaps.clear();
     m_PassNames.clear();
     m_PassAccesses.clear();
-    m_PerPassAliasBarriers.clear();
+    m_PassNeedsGlobalSyncBarrier.clear();
     m_DeferredReleaseTextures.clear();
     m_DeferredReleaseBuffers.clear();
     m_PendingPassAccess = {};
@@ -157,8 +157,7 @@ void RenderGraph::Reset()
     m_Stats = Stats{};
     m_PassNames.clear();
     m_PassAccesses.clear();
-    m_PerPassAliasBarriers.clear();
-    // Clear any pending state that may have been left over if a previous frame
+    m_PassNeedsGlobalSyncBarrier.clear();
     // was interrupted (e.g. a renderer's Setup() threw or returned early after
     // declaring resources).  BeginSetup() also clears these, but Reset() is the
     // authoritative frame-start reset and must leave the graph in a fully clean
@@ -343,7 +342,7 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         }
         g_Renderer.m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]);
 
-        g_Renderer.m_RenderGraph.InsertAliasBarriers(passIndex, scopedCmd);
+        g_Renderer.m_RenderGraph.InsertGlobalSyncBarriers(passIndex, scopedCmd);
         scopedCmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]);
         pRenderer->Render(scopedCmd, g_Renderer.m_RenderGraph);
         g_Renderer.m_RenderGraph.SetActivePass(0);
@@ -982,15 +981,15 @@ void RenderGraph::Compile()
         }
     );
 
-    // Build per-pass aliasing barrier info.
-    // For each aliased resource, insert an aliasing barrier at the pass where it's first used.
-    // This ensures the GPU flushes caches for the shared heap memory before the new resource accesses it.
+    // Build per-pass global sync barrier info.
+    // For each aliased resource, mark its first pass as needing a global sync barrier.
+    // Also validates that aliased resources are write-only on their first use.
     if (m_AliasingEnabled)
     {
-        m_PerPassAliasBarriers.clear();
-        m_PerPassAliasBarriers.resize(m_CurrentPassIndex + 1); // pass indices are 1-based
+        m_PassNeedsGlobalSyncBarrier.clear();
+        m_PassNeedsGlobalSyncBarrier.resize(m_CurrentPassIndex + 1, false); // pass indices are 1-based
 
-        auto addBarrier = [&](bool isBuffer, uint32_t index, const RenderGraphInternal::ResourceLifetime& lifetime, const char* debugName)
+        auto validateAliasedResource = [&](bool isBuffer, uint32_t index, const RenderGraphInternal::ResourceLifetime& lifetime, const char* debugName)
         {
             if (!lifetime.IsValid() || lifetime.m_FirstPass == 0 || lifetime.m_FirstPass > m_PassAccesses.size())
                 return;
@@ -1023,9 +1022,9 @@ void RenderGraph::Compile()
             }
 
             const uint16_t passIdx = lifetime.m_FirstPass;
-            if (passIdx > 0 && passIdx < m_PerPassAliasBarriers.size())
+            if (passIdx > 0 && passIdx < m_PassNeedsGlobalSyncBarrier.size())
             {
-                m_PerPassAliasBarriers[passIdx].push_back({ isBuffer, index });
+                m_PassNeedsGlobalSyncBarrier[passIdx] = true;
             }
         };
 
@@ -1037,7 +1036,7 @@ void RenderGraph::Compile()
 
             if (tex.m_AliasedFromIndex != UINT32_MAX)
             {
-                addBarrier(false, i, tex.m_Lifetime, tex.m_Desc.m_NvrhiDesc.debugName.c_str());
+                validateAliasedResource(false, i, tex.m_Lifetime, tex.m_Desc.m_NvrhiDesc.debugName.c_str());
             }
         }
 
@@ -1049,7 +1048,7 @@ void RenderGraph::Compile()
 
             if (buf.m_AliasedFromIndex != UINT32_MAX)
             {
-                addBarrier(true, i, buf.m_Lifetime, buf.m_Desc.m_NvrhiDesc.debugName.c_str());
+                validateAliasedResource(true, i, buf.m_Lifetime, buf.m_Desc.m_NvrhiDesc.debugName.c_str());
             }
         }
     }
@@ -1077,33 +1076,17 @@ void RenderGraph::PostRender()
 }
 
 // ============================================================================
-// RenderGraph - Aliasing Barriers
+// RenderGraph - Global Sync Barriers
 // ============================================================================
 
-void RenderGraph::InsertAliasBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const
+void RenderGraph::InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const
 {
-    if (!m_AliasingEnabled || passIndex >= m_PerPassAliasBarriers.size())
+    if (!m_AliasingEnabled || passIndex >= m_PassNeedsGlobalSyncBarrier.size())
         return;
 
-    const std::vector<AliasBarrierEntry>& barriers = m_PerPassAliasBarriers[passIndex];
-    for (const AliasBarrierEntry& entry : barriers)
+    if (m_PassNeedsGlobalSyncBarrier[passIndex])
     {
-        if (entry.m_IsBuffer)
-        {
-            const TransientBuffer& buffer = m_Buffers[entry.m_ResourceIndex];
-            if (buffer.m_PhysicalBuffer)
-            {
-                commandList->insertAliasingBarrier(buffer.m_PhysicalBuffer);
-            }
-        }
-        else
-        {
-            const TransientTexture& texture = m_Textures[entry.m_ResourceIndex];
-            if (texture.m_PhysicalTexture)
-            {
-                commandList->insertAliasingBarrier(texture.m_PhysicalTexture);
-            }
-        }
+        commandList->insertGlobalSyncBarrier();
     }
 }
 
