@@ -136,7 +136,7 @@ set(ML_SRC_DIR "${ML_INSTALL_DIR}/${ML_SUBDIR}")
 # ----------------------------------------------------------------------------
 # NVIDIA REAL-TIME DENOISERS (NRD)
 # ----------------------------------------------------------------------------
-set(NRD_VERSION "4.17.2")
+set(NRD_VERSION "4.17.3")
 set(NRD_URL "https://github.com/NVIDIA-RTX/NRD/archive/refs/tags/v${NRD_VERSION}.zip")
 download_library("NRD" "${NRD_VERSION}" "${NRD_URL}" "NRD-*")
 set(NRD_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/NRD")
