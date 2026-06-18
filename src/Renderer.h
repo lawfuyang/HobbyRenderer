@@ -283,7 +283,7 @@ struct Renderer
     bool m_EnableReSTIRDIRelaxDenoising = true;
 
     // Indirect lighting technique (mutually exclusive: None / RestirGI / SHARC)
-    IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
+    IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::SHARC;
 
     // SHARC configuration
     SharcConfig m_SharcConfig;

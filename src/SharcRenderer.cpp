@@ -28,6 +28,10 @@
 // HDR color output (written by SharcQuery, read by post-processing)
 extern RGTextureHandle g_RG_HDRColor;
 
+// Depth and GBuffer (written by BasePass, read by SharcDebugViz for hash grid)
+extern RGTextureHandle g_RG_DepthTexture;
+extern RGTextureHandle g_RG_GBufferNormals;
+
 // Per-pixel bounce count (written by SharcQuery, read by DebugViz)
 static RGTextureHandle g_RG_SharcBounceCount;
 
@@ -104,6 +108,7 @@ static nvrhi::BufferHandle BuildSharcCB(nvrhi::CommandListHandle commandList)
     constants.SetViewportSizeInv(view.m_ViewportSizeInv);
     constants.SetMatClipToWorldNoOffset(view.m_MatClipToWorldNoOffset);
     constants.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
+    constants.SetDebugMode((uint32_t)g_Renderer.m_DebugMode);
 
     commandList->writeBuffer(cb, &constants, sizeof(constants));
     return cb;
@@ -330,13 +335,17 @@ public:
     {
         if (g_Renderer.m_IndirectLightingTechnique != IndirectLightingTechnique::SHARC)
             return false;
-        if (g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
+        if (g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP &&
+            g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_HASH_GRID)
             return false;
         if (!g_RG_SharcBounceCount.IsValid())
             return false;
 
         renderGraph.ReadTexture(g_RG_SharcBounceCount);
         renderGraph.WriteTexture(g_RG_HDRColor);
+        renderGraph.ReadTexture(g_RG_DepthTexture);
+        renderGraph.ReadTexture(g_RG_GBufferNormals);
+
         return true;
     }
 
@@ -348,11 +357,15 @@ public:
         nvrhi::BufferHandle  sharcCB     = BuildSharcCB(commandList);
         nvrhi::TextureHandle bounceCount = renderGraph.GetTexture(g_RG_SharcBounceCount, RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor    = renderGraph.GetTexture(g_RG_HDRColor,         RGResourceAccessMode::Write);
+        nvrhi::TextureHandle depth       = renderGraph.GetTexture(g_RG_DepthTexture,     RGResourceAccessMode::Read);
+        nvrhi::TextureHandle normals     = renderGraph.GetTexture(g_RG_GBufferNormals,  RGResourceAccessMode::Read);
 
         srrhi::SharcDebugVizInputs inputs;
         inputs.SetSharcCB(sharcCB);
         inputs.SetBounceCountInput(bounceCount, 0);
         inputs.SetHeatmapOutput(hdrColor, 0);
+        inputs.SetDepth(depth);
+        inputs.SetGBufferNormals(normals);
 
         const uint32_t dispW = DivideAndRoundUp(g_Renderer.m_RHI->m_SwapchainExtent.x, 8u);
         const uint32_t dispH = DivideAndRoundUp(g_Renderer.m_RHI->m_SwapchainExtent.y, 8u);

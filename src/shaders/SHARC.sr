@@ -46,6 +46,9 @@ cbuffer SharcConstants
 
     // World-space direction toward the sun (normalized)
     float3   m_SunDirection;
+
+    // Active debug mode (DEBUG_MODE_NONE, SHARC_BOUNCE_HEATMAP, SHARC_HASH_GRID, etc.)
+    uint     m_DebugMode;
 };
 
 // ============================================================================
@@ -118,7 +121,9 @@ srinput SharcQueryInputs
 
 // ============================================================================
 // SHARC Debug Visualization inputs
-// Compute pass that converts per-pixel bounce counts to a heatmap.
+// Compute pass supporting multiple debug overlays:
+//   - Bounce-count heatmap (DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
+//   - Hash grid visualization (DEBUG_MODE_SHARC_HASH_GRID)
 // ============================================================================
 srinput SharcDebugVizInputs
 {
@@ -129,4 +134,10 @@ srinput SharcDebugVizInputs
 
     // Output heatmap (written over the main HDR color)
     RWTexture2D<float4> HeatmapOutput;               // u1
+
+    // Depth buffer for world-space position reconstruction (hash grid)
+    Texture2D<float> Depth;                          // t0
+
+    // GBuffer normals (oct-encoded, RG16_FLOAT) for hash grid viz
+    Texture2D<float2> GBufferNormals;                // t1
 };
