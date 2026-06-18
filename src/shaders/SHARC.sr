@@ -49,6 +49,9 @@ cbuffer SharcConstants
 
     // Active debug mode (DEBUG_MODE_NONE, SHARC_BOUNCE_HEATMAP, SHARC_HASH_GRID, etc.)
     uint     m_DebugMode;
+
+    // Number of active lights in the scene (for direct lighting accumulation)
+    uint     m_LightCount;
 };
 
 // ============================================================================

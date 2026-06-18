@@ -137,7 +137,7 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             inputs.sunShadow        = 0.0f; // unused by RNG variant — casts its own shadow rays
 
             PrepareLightingByproducts(inputs);
-            LightingComponents direct = AccumulateDirectLighting(inputs, 1u, g_Lights[0].m_CosSunAngularRadius, rng);
+            LightingComponents direct = AccumulateDirectLighting(inputs, g_Sharc.m_LightCount, g_Lights[0].m_CosSunAngularRadius, rng);
 
             accumulatedRadiance += throughput * (pbr.emissive + direct.diffuse + (bounce == 0 ? direct.specular : 0.0f));
 

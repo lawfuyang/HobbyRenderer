@@ -97,6 +97,7 @@ static nvrhi::BufferHandle BuildSharcCB(nvrhi::CommandListHandle commandList)
     constants.SetMatClipToWorldNoOffset(view.m_MatClipToWorldNoOffset);
     constants.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
     constants.SetDebugMode((uint32_t)g_Renderer.m_DebugMode);
+    constants.SetLightCount(g_Renderer.m_Scene.m_LightCount);
 
     commandList->writeBuffer(cb, &constants, sizeof(constants));
     return cb;
