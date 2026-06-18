@@ -65,12 +65,11 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 * Trigger: `.sr` added/modified
 * Run: `build_srrhi`
 * Outputs:
-
   * C++ → `src/shaders/srrhi/cpp`
   * HLSL → `src/shaders/srrhi/hlsl`
-* ❗ Never edit generated files
-* Include:
+  * Never manually edit any of these generated files from these 2 folders
 
+* Include:
   * C++ → from `cpp`
   * Shaders → from `hlsl`
 * Ref: `external/srrhi/README.md`
