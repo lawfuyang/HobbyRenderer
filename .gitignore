@@ -117,6 +117,7 @@ packages/
 imgui.ini
 
 # HobbyRenderer specific
+REFERENCES/
 external/sdl3
 external/cgltf
 external/dxc
