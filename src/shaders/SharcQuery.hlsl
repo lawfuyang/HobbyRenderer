@@ -35,6 +35,7 @@ static RWStructuredBuffer<SharcAccumulationData>        u_AccumulationBuf = srrh
 static RWStructuredBuffer<SharcPackedData>              u_ResolvedBuf  = srrhi::SharcQueryInputs::GetResolvedBuffer();
 static RWTexture2D<float4>                              g_Output       = srrhi::SharcQueryInputs::GetOutput();
 static RWTexture2D<uint>                                g_BounceCount  = srrhi::SharcQueryInputs::GetBounceCountOutput();
+static RWTexture2D<float4>                              g_CachedRadianceDbg = srrhi::SharcQueryInputs::GetCachedRadianceOutput();
 
 // ─── Compute Shader Entry Point ───────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     float3 accumulatedRadiance = float3(0.0f, 0.0f, 0.0f);
+    float3 cachedRadianceDbg   = float3(0.0f, 0.0f, 0.0f);
     uint   bounceCount = 0;
 
     const int kMaxBounces = 4;
@@ -99,11 +101,13 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 sharcHit.positionWorld = attr.m_WorldPos;
                 sharcHit.normalWorld   = normalize(attr.m_WorldNormal);
 
+                bounceCount = (uint)bounce;
+
                 float3 cachedRadiance;
                 if (SharcGetCachedRadiance(sharcParams, sharcHit, cachedRadiance, false))
                 {
                     accumulatedRadiance += throughput * cachedRadiance;
-                    bounceCount = (uint)bounce;
+                    cachedRadianceDbg = cachedRadiance;
                     break;
                 }
             }
@@ -167,6 +171,9 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
-    g_Output[pixel]      = float4(accumulatedRadiance, 1.0f);
-    g_BounceCount[pixel] = bounceCount;
+    g_Output[pixel]              = float4(accumulatedRadiance, 1.0f);
+    if (g_Sharc.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
+        g_BounceCount[pixel]         = bounceCount;
+    if (g_Sharc.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
+        g_CachedRadianceDbg[pixel] = float4(cachedRadianceDbg, 1.0f);
 }

@@ -1,18 +1,3 @@
-// SharcRenderer.cpp
-//
-// SHARC indirect lighting renderer — implements three GPU passes:
-//
-//   1. SharcUpdate  — sparse path tracing to populate the radiance cache
-//   2. SharcResolve — compute pass to blend accumulation into resolved data
-//   3. SharcQuery   — full path tracing with cache-based early termination
-//
-// Also provides:
-//   - SharcDebugVisualizationRenderer — bounce-count heatmap overlay
-//   - SharcIMGUISettings()            — ImGui settings panel (extern)
-//
-// Registration: REGISTER_RENDERER(SharcRenderer)
-//               REGISTER_RENDERER(SharcDebugVisualizationRenderer)
-
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
@@ -34,6 +19,9 @@ extern RGTextureHandle g_RG_GBufferNormals;
 
 // Per-pixel bounce count (written by SharcQuery, read by DebugViz)
 static RGTextureHandle g_RG_SharcBounceCount;
+
+// Per-pixel cached radiance (written by SharcQuery, read by DebugViz)
+static RGTextureHandle g_RG_SharcCachedRadiance;
 
 // ============================================================================
 // Per-frame state
@@ -176,6 +164,8 @@ public:
         }
 
         // Declare per-pixel bounce count texture (transient, written by Query, read by DebugViz)
+        // Only needed for the Bounce Heatmap debug visualization mode
+        if (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
         {
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width        = g_Renderer.m_RHI->m_SwapchainExtent.x;
@@ -185,6 +175,20 @@ public:
             desc.m_NvrhiDesc.debugName    = "SHARC_BounceCount";
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             renderGraph.DeclareTexture(desc, g_RG_SharcBounceCount);
+        }
+
+        // Declare per-pixel cached radiance texture (transient, written by Query, read by DebugViz)
+        // Only needed for the Cached Radiance debug visualization mode
+        if (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
+        {
+            RGTextureDesc desc;
+            desc.m_NvrhiDesc.width        = g_Renderer.m_RHI->m_SwapchainExtent.x;
+            desc.m_NvrhiDesc.height       = g_Renderer.m_RHI->m_SwapchainExtent.y;
+            desc.m_NvrhiDesc.format       = nvrhi::Format::R11G11B10_FLOAT;
+            desc.m_NvrhiDesc.isUAV        = true;
+            desc.m_NvrhiDesc.debugName    = "SHARC_CachedRadiance";
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            renderGraph.DeclareTexture(desc, g_RG_SharcCachedRadiance);
         }
 
         renderGraph.WriteTexture(g_RG_HDRColor);
@@ -205,8 +209,8 @@ public:
             nvrhi::BufferHandle accumBuf = renderGraph.GetBuffer(m_Sharc_Accumulation, RGResourceAccessMode::Write);
             nvrhi::BufferHandle resBuf   = renderGraph.GetBuffer(m_Sharc_Resolved,     RGResourceAccessMode::Write);
 
-            // Hash entries must be 0xFFFFFFFFFFFFFFFF (HASH_GRID_INVALID_HASH_KEY)
-            commandList->clearBufferUInt(hashBuf,  0xFFFFFFFFu);
+            // Hash entries must be 0u (HASH_GRID_INVALID_HASH_KEY)
+            commandList->clearBufferUInt(hashBuf,  0u);
             commandList->clearBufferUInt(accumBuf, 0u);
             commandList->clearBufferUInt(resBuf,   0u);
 
@@ -293,7 +297,12 @@ private:
         nvrhi::BufferHandle  hashBuf     = renderGraph.GetBuffer(m_Sharc_HashEntries, RGResourceAccessMode::Read);
         nvrhi::BufferHandle  resBuf      = renderGraph.GetBuffer(m_Sharc_Resolved,    RGResourceAccessMode::Read);
         nvrhi::TextureHandle hdrColor    = renderGraph.GetTexture(g_RG_HDRColor,           RGResourceAccessMode::Write);
-        nvrhi::TextureHandle bounceCount = renderGraph.GetTexture(g_RG_SharcBounceCount,   RGResourceAccessMode::Write);
+        nvrhi::TextureHandle bounceCount = (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
+            ? renderGraph.GetTexture(g_RG_SharcBounceCount, RGResourceAccessMode::Write)
+            : CommonResources::GetInstance().DummyUAVTexture;
+        nvrhi::TextureHandle cachedRad   = (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
+            ? renderGraph.GetTexture(g_RG_SharcCachedRadiance, RGResourceAccessMode::Write)
+            : CommonResources::GetInstance().DummyUAVTexture;
 
         srrhi::SharcQueryInputs inputs;
         inputs.SetSharcCB(sharcCB);
@@ -309,6 +318,7 @@ private:
         inputs.SetResolvedBuffer(resBuf);
         inputs.SetOutput(hdrColor, 0);
         inputs.SetBounceCountOutput(bounceCount, 0);
+        inputs.SetCachedRadianceOutput(cachedRad, 0);
 
         const uint32_t dispW = DivideAndRoundUp(g_Renderer.m_RHI->m_SwapchainExtent.x, 8u);
         const uint32_t dispH = DivideAndRoundUp(g_Renderer.m_RHI->m_SwapchainExtent.y, 8u);
@@ -324,10 +334,6 @@ private:
 
 REGISTER_RENDERER(SharcRenderer);
 
-// ============================================================================
-// SharcDebugVisualizationRenderer — bounce-count heatmap overlay
-// ============================================================================
-
 class SharcDebugVisualizationRenderer : public IRenderer
 {
 public:
@@ -336,12 +342,14 @@ public:
         if (g_Renderer.m_IndirectLightingTechnique != IndirectLightingTechnique::SHARC)
             return false;
         if (g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP &&
-            g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_HASH_GRID)
-            return false;
-        if (!g_RG_SharcBounceCount.IsValid())
+            g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_HASH_GRID &&
+            g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
             return false;
 
-        renderGraph.ReadTexture(g_RG_SharcBounceCount);
+        if (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
+            renderGraph.ReadTexture(g_RG_SharcBounceCount);
+        if (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
+            renderGraph.ReadTexture(g_RG_SharcCachedRadiance);
         renderGraph.WriteTexture(g_RG_HDRColor);
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.ReadTexture(g_RG_GBufferNormals);
@@ -354,15 +362,21 @@ public:
         PROFILE_FUNCTION();
         PROFILE_GPU_SCOPED("SharcDebugViz", commandList);
 
-        nvrhi::BufferHandle  sharcCB     = BuildSharcCB(commandList);
-        nvrhi::TextureHandle bounceCount = renderGraph.GetTexture(g_RG_SharcBounceCount, RGResourceAccessMode::Read);
-        nvrhi::TextureHandle hdrColor    = renderGraph.GetTexture(g_RG_HDRColor,         RGResourceAccessMode::Write);
-        nvrhi::TextureHandle depth       = renderGraph.GetTexture(g_RG_DepthTexture,     RGResourceAccessMode::Read);
-        nvrhi::TextureHandle normals     = renderGraph.GetTexture(g_RG_GBufferNormals,  RGResourceAccessMode::Read);
+        nvrhi::BufferHandle  sharcCB      = BuildSharcCB(commandList);
+        nvrhi::TextureHandle bounceCount  = (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
+            ? renderGraph.GetTexture(g_RG_SharcBounceCount, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DefaultTextureBlack;
+        nvrhi::TextureHandle cachedRad    = (g_Renderer.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
+            ? renderGraph.GetTexture(g_RG_SharcCachedRadiance, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DefaultTextureBlack;
+        nvrhi::TextureHandle hdrColor     = renderGraph.GetTexture(g_RG_HDRColor,           RGResourceAccessMode::Write);
+        nvrhi::TextureHandle depth        = renderGraph.GetTexture(g_RG_DepthTexture,       RGResourceAccessMode::Read);
+        nvrhi::TextureHandle normals      = renderGraph.GetTexture(g_RG_GBufferNormals,    RGResourceAccessMode::Read);
 
         srrhi::SharcDebugVizInputs inputs;
         inputs.SetSharcCB(sharcCB);
-        inputs.SetBounceCountInput(bounceCount, 0);
+        inputs.SetBounceCountInput(bounceCount);
+        inputs.SetCachedRadianceInput(cachedRad);
         inputs.SetHeatmapOutput(hdrColor, 0);
         inputs.SetDepth(depth);
         inputs.SetGBufferNormals(normals);

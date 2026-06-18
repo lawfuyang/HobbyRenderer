@@ -117,6 +117,9 @@ srinput SharcQueryInputs
 
     // Per-pixel bounce count output (for debug heatmap)
     RWTexture2D<uint> BounceCountOutput;
+
+    // Per-pixel cached radiance output (for debug cached radiance view)
+    RWTexture2D<float4> CachedRadianceOutput;
 };
 
 // ============================================================================
@@ -124,20 +127,24 @@ srinput SharcQueryInputs
 // Compute pass supporting multiple debug overlays:
 //   - Bounce-count heatmap (DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
 //   - Hash grid visualization (DEBUG_MODE_SHARC_HASH_GRID)
+//   - Cached radiance view (DEBUG_MODE_SHARC_CACHED_RADIANCE)
 // ============================================================================
 srinput SharcDebugVizInputs
 {
     SharcConstants m_SharcCB;
 
-    // Per-pixel bounce count from the Query pass
-    RWTexture2D<uint> BounceCountInput;              // u0
-
     // Output heatmap (written over the main HDR color)
-    RWTexture2D<float4> HeatmapOutput;               // u1
+    RWTexture2D<float4> HeatmapOutput; 
+
+    // Per-pixel bounce count from the Query pass
+    Texture2D<uint> BounceCountInput;
 
     // Depth buffer for world-space position reconstruction (hash grid)
-    Texture2D<float> Depth;                          // t0
+    Texture2D<float> Depth;
 
     // GBuffer normals (oct-encoded, RG16_FLOAT) for hash grid viz
-    Texture2D<float2> GBufferNormals;                // t1
+    Texture2D<float2> GBufferNormals;
+
+    // Per-pixel cached radiance from the Query pass
+    Texture2D<float4> CachedRadianceInput;
 };

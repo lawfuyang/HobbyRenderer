@@ -3,8 +3,9 @@
 // SHARC Debug Visualization pass — supports multiple debug overlay modes.
 //
 // Modes (switched via g_Sharc.m_DebugMode):
-//   DEBUG_MODE_SHARC_BOUNCE_HEATMAP: per-pixel bounce-count heatmap
-//   DEBUG_MODE_SHARC_HASH_GRID:      world-space hash grid visualization
+//   DEBUG_MODE_SHARC_BOUNCE_HEATMAP:   per-pixel bounce-count heatmap
+//   DEBUG_MODE_SHARC_HASH_GRID:        world-space hash grid visualization
+//   DEBUG_MODE_SHARC_CACHED_RADIANCE:  raw cached radiance from SharcGetCachedRadiance()
 //
 // Color mapping for bounce heatmap:
 //   0 bounces → black  (no indirect, primary hit only)
@@ -22,10 +23,11 @@
 
 static const srrhi::SharcConstants g_Sharc = srrhi::SharcDebugVizInputs::GetSharcCB();
 
-static RWTexture2D<uint>   g_BounceCountInput = srrhi::SharcDebugVizInputs::GetBounceCountInput();
 static RWTexture2D<float4> g_HeatmapOutput    = srrhi::SharcDebugVizInputs::GetHeatmapOutput();
+static const Texture2D<uint>   g_BounceCountInput = srrhi::SharcDebugVizInputs::GetBounceCountInput();
 static const Texture2D<float>  g_Depth            = srrhi::SharcDebugVizInputs::GetDepth();
 static const Texture2D<float2> g_GBufferNormals   = srrhi::SharcDebugVizInputs::GetGBufferNormals();
+static const Texture2D<float4> g_CachedRadianceInput = srrhi::SharcDebugVizInputs::GetCachedRadianceInput();
 
 // Map a bounce count to a heatmap color
 float3 BounceCountToColor(uint bounceCount)
@@ -77,6 +79,13 @@ void SharcDebugViz_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         float3 color = HashGridDebugColoredHash(worldPos, normal, gridParams);
         g_HeatmapOutput[pixel] = float4(color, 1.0f);
+    }
+    else if (g_Sharc.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_CACHED_RADIANCE)
+    {
+        // ── Cached Radiance View ───────────────────────────────────────────
+        // Raw output of SharcGetCachedRadiance(); black where no cache hit.
+        float4 cachedRadiance = g_CachedRadianceInput.Load(uint3(pixel, 0));
+        g_HeatmapOutput[pixel] = cachedRadiance;
     }
     else
     {
