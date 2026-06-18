@@ -99,9 +99,6 @@ struct SharcConfig
 
     // Scene scale: controls voxel size distribution. Larger = coarser voxels.
     float m_SceneScale = 50.0f;
-
-    // Show bounce-count heatmap debug overlay
-    bool m_ShowBounceHeatmap = false;
 };
 
 struct Renderer

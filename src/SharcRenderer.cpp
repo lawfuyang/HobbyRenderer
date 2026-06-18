@@ -64,12 +64,6 @@ void SharcIMGUISettings()
                           "Larger = coarser voxels, better for large scenes.");
 
     ImGui::Separator();
-    ImGui::Checkbox("Bounce Count Heatmap", &g_Renderer.m_SharcConfig.m_ShowBounceHeatmap);
-    ImGui::SetItemTooltip("Overlay showing per-pixel bounce count:\n"
-                          "  Black  = 0 (no indirect)\n"
-                          "  Green  = 1 bounce (cache hit)\n"
-                          "  Yellow = 2 bounces\n"
-                          "  Red    = 3+ bounces (no cache hit)");
 
     if (ImGui::Button("Clear Cache"))
         g_SharcNeedsClear = true;
@@ -106,6 +100,10 @@ static nvrhi::BufferHandle BuildSharcCB(nvrhi::CommandListHandle commandList)
     constants.SetAccumulationFrameNum(g_Renderer.m_SharcConfig.m_AccumulationFrameNum);
     constants.SetStaleFrameNumMax(SharcConfig::kStaleFrameNumMax);
     constants.SetFrameIndex(g_Renderer.m_FrameNumber);
+    constants.SetViewportSize(view.m_ViewportSize);
+    constants.SetViewportSizeInv(view.m_ViewportSizeInv);
+    constants.SetMatClipToWorldNoOffset(view.m_MatClipToWorldNoOffset);
+    constants.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
 
     commandList->writeBuffer(cb, &constants, sizeof(constants));
     return cb;
@@ -332,7 +330,7 @@ public:
     {
         if (g_Renderer.m_IndirectLightingTechnique != IndirectLightingTechnique::SHARC)
             return false;
-        if (!g_Renderer.m_SharcConfig.m_ShowBounceHeatmap)
+        if (g_Renderer.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)
             return false;
         if (!g_RG_SharcBounceCount.IsValid())
             return false;

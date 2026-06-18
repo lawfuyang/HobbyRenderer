@@ -3,6 +3,7 @@
 
 #include "Bindless.hlsli"
 #include "MeshCommon.hlsli"
+#include "RNG.hlsli"
 
 #include "srrhi/hlsl/Common.hlsli"
 #include "srrhi/hlsl/Instance.hlsli"
@@ -87,48 +88,6 @@ float2 GetInterpolatedUV(
     return tv.v0.m_Uv * (1.0f - barycentrics.x - barycentrics.y) + tv.v1.m_Uv * barycentrics.x + tv.v2.m_Uv * barycentrics.y;
 }
 
-struct RayGradients
-{
-    float2 uv;
-    float2 ddx;
-    float2 ddy;
-};
-
-RayGradients GetShadowRayGradients(
-    TriangleVertices tv,
-    float2 bary,
-    float3 rayOrigin,
-    float4x4 world)
-{
-    float3 p0 = MatrixMultiply(float4(tv.v0.m_Pos, 1.0f), world).xyz;
-    float3 p1 = MatrixMultiply(float4(tv.v1.m_Pos, 1.0f), world).xyz;
-    float3 p2 = MatrixMultiply(float4(tv.v2.m_Pos, 1.0f), world).xyz;
-
-    float3 hitPos = p0 * (1.0f - bary.x - bary.y) + p1 * bary.x + p2 * bary.y;
-    float dist = length(hitPos - rayOrigin);
-
-    float3 edge1 = p1 - p0;
-    float3 edge2 = p2 - p0;
-    float triangleArea = length(cross(edge1, edge2)) * 0.5f;
-
-    float2 uv0 = tv.v0.m_Uv;
-    float2 uv1 = tv.v1.m_Uv;
-    float2 uv2 = tv.v2.m_Uv;
-    
-    RayGradients grad;
-    grad.uv = uv0 * (1.0f - bary.x - bary.y) + uv1 * bary.x + uv2 * bary.y;
-
-    float2 uvMin = min(uv0, min(uv1, uv2));
-    float2 uvMax = max(uv0, max(uv1, uv2));
-    float2 uvRange = uvMax - uvMin;
-
-    float gradientScale = triangleArea / max(dist, 0.1f);
-    
-    grad.ddx = uvRange * gradientScale;
-    grad.ddy = uvRange * gradientScale;
-    return grad;
-}
-
 bool AlphaTest(
     float2 uv,
     srrhi::MaterialConstants mat,
@@ -170,6 +129,114 @@ bool AlphaTestGrad(
     }
 
     return true;
+}
+
+// ─── Shared inline ray tracing ───────────────────────────────────────────────
+// Standard ray trace with alpha mask/blend support. Used by PathTracer, SHARC
+// Update, and SHARC Query passes. Scene resources are passed as parameters
+// because each shader binds them from different srrhi input namespaces.
+bool TraceRayStandard(
+    RayDesc ray,
+    inout RNG rng,
+    out RayHitInfo hit,
+    RaytracingAccelerationStructure sceneAS,
+    StructuredBuffer<srrhi::PerInstanceData> instances,
+    StructuredBuffer<srrhi::MeshData> meshData,
+    StructuredBuffer<srrhi::MaterialConstants> materials,
+    StructuredBuffer<uint> indices,
+    StructuredBuffer<srrhi::VertexQuantized> vertices)
+{
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(sceneAS, RAY_FLAG_NONE, 0xFF, ray);
+
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+        {
+            uint instanceIndex  = q.CandidateInstanceIndex();
+            uint primitiveIndex = q.CandidatePrimitiveIndex();
+            float2 bary         = q.CandidateTriangleBarycentrics();
+
+            srrhi::PerInstanceData inst = instances[instanceIndex];
+            srrhi::MeshData mesh        = meshData[inst.m_MeshDataIndex];
+            srrhi::MaterialConstants mat= materials[inst.m_MaterialIndex];
+
+            float2 uvSample = GetInterpolatedUV(primitiveIndex, 0, bary, mesh, indices, vertices);
+
+            if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK)
+            {
+                if (AlphaTest(uvSample, mat))
+                    q.CommitNonOpaqueTriangleHit();
+            }
+            else if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_BLEND)
+            {
+                float alpha = mat.m_BaseColor.w;
+                if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
+                {
+                    alpha *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                }
+
+                // For transmissive materials, always keep the hit and let the BSDF branch
+                // decide reflection/transmission. Otherwise use stochastic alpha coverage.
+                if (mat.m_TransmissionFactor > 0.0f || NextFloat(rng) < saturate(alpha))
+                    q.CommitNonOpaqueTriangleHit();
+            }
+        }
+    }
+
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        hit.m_InstanceIndex  = q.CommittedInstanceIndex();
+        hit.m_PrimitiveIndex = q.CommittedPrimitiveIndex();
+        hit.m_Barycentrics   = q.CommittedTriangleBarycentrics();
+        hit.m_RayT           = q.CommittedRayT();
+        return true;
+    }
+
+    hit = (RayHitInfo)0;
+    return false;
+}
+
+struct RayGradients
+{
+    float2 uv;
+    float2 ddx;
+    float2 ddy;
+};
+
+RayGradients GetShadowRayGradients(
+    TriangleVertices tv,
+    float2 bary,
+    float3 rayOrigin,
+    float4x4 world)
+{
+    float3 p0 = MatrixMultiply(float4(tv.v0.m_Pos, 1.0f), world).xyz;
+    float3 p1 = MatrixMultiply(float4(tv.v1.m_Pos, 1.0f), world).xyz;
+    float3 p2 = MatrixMultiply(float4(tv.v2.m_Pos, 1.0f), world).xyz;
+
+    float3 hitPos = p0 * (1.0f - bary.x - bary.y) + p1 * bary.x + p2 * bary.y;
+    float dist = length(hitPos - rayOrigin);
+
+    float3 edge1 = p1 - p0;
+    float3 edge2 = p2 - p0;
+    float triangleArea = length(cross(edge1, edge2)) * 0.5f;
+
+    float2 uv0 = tv.v0.m_Uv;
+    float2 uv1 = tv.v1.m_Uv;
+    float2 uv2 = tv.v2.m_Uv;
+    
+    RayGradients grad;
+    grad.uv = uv0 * (1.0f - bary.x - bary.y) + uv1 * bary.x + uv2 * bary.y;
+
+    float2 uvMin = min(uv0, min(uv1, uv2));
+    float2 uvMax = max(uv0, max(uv1, uv2));
+    float2 uvRange = uvMax - uvMin;
+
+    float gradientScale = triangleArea / max(dist, 0.1f);
+    
+    grad.ddx = uvRange * gradientScale;
+    grad.ddy = uvRange * gradientScale;
+    return grad;
 }
 
 struct PBRAttributes

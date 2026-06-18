@@ -38,60 +38,11 @@ static RWStructuredBuffer<uint64_t>                     u_HashEntries      = srr
 static RWStructuredBuffer<SharcAccumulationData>        u_AccumulationBuf  = srrhi::SharcUpdateInputs::GetAccumulationBuffer();
 static RWStructuredBuffer<SharcPackedData>              u_ResolvedBuf      = srrhi::SharcUpdateInputs::GetResolvedBuffer();
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-bool TraceRayUpdate(RayDesc ray, RNG rng, out RayHitInfo hit)
-{
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(g_SceneAS, RAY_FLAG_NONE, 0xFF, ray);
-
-    while (q.Proceed())
-    {
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
-        {
-            uint instanceIndex  = q.CandidateInstanceIndex();
-            uint primitiveIndex = q.CandidatePrimitiveIndex();
-            float2 bary         = q.CandidateTriangleBarycentrics();
-
-            srrhi::PerInstanceData inst = g_Instances[instanceIndex];
-            srrhi::MeshData mesh        = g_MeshData[inst.m_MeshDataIndex];
-            srrhi::MaterialConstants mat= g_Materials[inst.m_MaterialIndex];
-
-            float2 uvSample = GetInterpolatedUV(primitiveIndex, 0, bary, mesh, g_Indices, g_Vertices);
-
-            if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK)
-            {
-                if (AlphaTest(uvSample, mat))
-                    q.CommitNonOpaqueTriangleHit();
-            }
-            else if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_BLEND)
-            {
-                if (NextFloat(rng) < saturate(mat.m_BaseColor.w))
-                    q.CommitNonOpaqueTriangleHit();
-            }
-        }
-    }
-
-    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-    {
-        hit.m_InstanceIndex  = q.CommittedInstanceIndex();
-        hit.m_PrimitiveIndex = q.CommittedPrimitiveIndex();
-        hit.m_Barycentrics   = q.CommittedTriangleBarycentrics();
-        hit.m_RayT           = q.CommittedRayT();
-        return true;
-    }
-
-    hit = (RayHitInfo)0;
-    return false;
-}
-
 // ─── Compute Shader Entry Point ───────────────────────────────────────────────
 
 [numthreads(8, 8, 1)]
 void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    // Viewport size is stored in the constant buffer
-    uint viewW = (uint)g_Sharc.m_EntriesNum; // placeholder — actual viewport from dispatch size
     // We use the dispatch thread ID directly as the pixel coordinate for the
     // sparse update grid. The dispatch is sized to (width/downscale, height/downscale).
 
@@ -108,20 +59,16 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     );
     uint2 pixel = pixelBase + jitterOffset;
 
-    // We don't have viewport size in this CB — use a fixed large value and
-    // rely on the dispatch size to bound execution.
-    // The actual viewport dimensions are passed implicitly via dispatch size.
+    // Build primary ray using inverse projection from the constant buffer
+    float2 uv      = (float2(pixel) + 0.5f) * g_Sharc.m_ViewportSizeInv;
+    float2 clipPos = UVToClipXY(uv);
 
-    float2 uv = (float2(pixel) + 0.5f) / float2(1920.0f, 1080.0f); // approximate; actual size from dispatch
-    float2 clipPos = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float4 rayEndFar = MatrixMultiply(float4(clipPos, 0.9f, 1.0f), g_Sharc.m_MatClipToWorldNoOffset);
+    rayEndFar.xyz   /= rayEndFar.w;
 
-    // Build ray from clip position using inverse projection stored in camera position
-    // For a proper implementation we need the view/proj matrices — stored in the CB
-    // For now use a simple forward ray from camera position
-    // NOTE: Full implementation requires view matrix in the CB (added in SharcRenderer)
     RayDesc ray;
     ray.Origin    = g_Sharc.m_CameraPosition;
-    ray.Direction = normalize(float3(clipPos.x, clipPos.y, -1.0f)); // simplified
+    ray.Direction = normalize(rayEndFar.xyz - ray.Origin);
     ray.TMin      = 0.001f;
     ray.TMax      = 1e10f;
 
@@ -139,11 +86,11 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
 
-    const int kMaxBounces = 8;
+    const int kMaxBounces = 4;
     for (int bounce = 0; bounce < kMaxBounces; ++bounce)
     {
         RayHitInfo hit;
-        bool didHit = TraceRayUpdate(ray, rng, hit);
+        bool didHit = TraceRayStandard(ray, rng, hit, g_SceneAS, g_Instances, g_MeshData, g_Materials, g_Indices, g_Vertices);
 
         if (didHit)
         {
@@ -178,13 +125,13 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             inputs.indices          = g_Indices;
             inputs.vertices         = g_Vertices;
             inputs.lights           = g_Lights;
-            inputs.sunRadiance      = GetAtmosphereSunRadiance(GetAtmospherePos(attr.m_WorldPos), g_Sharc.m_CameraPosition - attr.m_WorldPos, g_Lights[0].m_Intensity);
-            inputs.sunDirection     = normalize(g_Sharc.m_CameraPosition - attr.m_WorldPos); // placeholder
+            inputs.sunRadiance      = GetAtmosphereSunRadiance(GetAtmospherePos(attr.m_WorldPos), g_Sharc.m_SunDirection, g_Lights[0].m_Intensity);
+            inputs.sunDirection     = g_Sharc.m_SunDirection;
             inputs.useSunRadiance   = true;
-            inputs.sunShadow        = 0.0f;
+            inputs.sunShadow        = 0.0f; // unused by RNG variant — casts its own shadow rays
 
             PrepareLightingByproducts(inputs);
-            LightingComponents direct = AccumulateDirectLighting(inputs, 1u, 0.9999f, rng);
+            LightingComponents direct = AccumulateDirectLighting(inputs, 1u, g_Lights[0].m_CosSunAngularRadius, rng);
             float3 directLighting = pbr.emissive + direct.diffuse + direct.specular;
 
             // SHARC hit update
@@ -216,7 +163,7 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             // Sky miss
             float3 skyRadiance = GetAtmosphereSkyRadiance(
                 ray.Origin, ray.Direction,
-                normalize(g_Sharc.m_CameraPosition), // placeholder sun dir
+                g_Sharc.m_SunDirection,
                 g_Lights[0].m_Intensity, false);
 
             SharcUpdateMiss(sharcParams, sharcState, skyRadiance);

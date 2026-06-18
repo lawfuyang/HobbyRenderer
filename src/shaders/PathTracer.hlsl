@@ -49,60 +49,6 @@ float3 EvalTransmittance(float3 sigmaA, float3 sigmaS, float dist)
     return exp(-(sigmaA + sigmaS) * dist);
 }
 
-// ─── Utility: trace a ray and fill a RayHitInfo ────────────────────────────
-bool TraceRay(RayDesc ray, RNG rng, out RayHitInfo hit)
-{
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(g_SceneAS, RAY_FLAG_NONE, 0xFF, ray);
-
-    while (q.Proceed())
-    {
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
-        {
-            uint instanceIndex  = q.CandidateInstanceIndex();
-            uint primitiveIndex = q.CandidatePrimitiveIndex();
-            float2 bary         = q.CandidateTriangleBarycentrics();
-
-            srrhi::PerInstanceData inst = g_Instances[instanceIndex];
-            srrhi::MeshData mesh        = g_MeshData[inst.m_MeshDataIndex];
-            srrhi::MaterialConstants mat= g_Materials[inst.m_MaterialIndex];
-
-            float2 uvSample = GetInterpolatedUV(primitiveIndex, 0 /*LOD 0: path tracer always uses LOD 0 BLAS*/, bary, mesh, g_Indices, g_Vertices);
-
-            if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK)
-            {
-                if (AlphaTest(uvSample, mat))
-                    q.CommitNonOpaqueTriangleHit();
-            }
-            else if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_BLEND)
-            {
-                float alpha = mat.m_BaseColor.w;
-                if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
-                {
-                    alpha *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
-                }
-
-                // For transmissive materials, always keep the hit and let the BSDF branch
-                // decide reflection/transmission. Otherwise use stochastic alpha coverage.
-                if (mat.m_TransmissionFactor > 0.0f || NextFloat(rng) < saturate(alpha))
-                    q.CommitNonOpaqueTriangleHit();
-            }
-        }
-    }
-
-    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-    {
-        hit.m_InstanceIndex  = q.CommittedInstanceIndex();
-        hit.m_PrimitiveIndex = q.CommittedPrimitiveIndex();
-        hit.m_Barycentrics   = q.CommittedTriangleBarycentrics();
-        hit.m_RayT           = q.CommittedRayT();
-        return true;
-    }
-
-    hit = (RayHitInfo)0;
-    return false;
-}
-
 // ─── Compute Shader Entry Point ───────────────────────────────────────────────
 [numthreads(8, 8, 1)]
 void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -139,7 +85,7 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     for (int bounce = 0; bounce < maxBounces; ++bounce)
     {
         RayHitInfo hit;
-        bool didHit = TraceRay(ray, rng, hit);
+        bool didHit = TraceRayStandard(ray, rng, hit, g_SceneAS, g_Instances, g_MeshData, g_Materials, g_Indices, g_Vertices);
 
         if (didHit)
         {
