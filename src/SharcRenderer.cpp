@@ -32,6 +32,23 @@ static RGTextureHandle g_RG_SharcCachedRadiance;
 // next frame (first use, scene reload, or user-triggered "Clear Cache").
 static bool g_SharcNeedsClear = true;
 
+// SHARC-specific configuration
+struct SharcConfig
+{
+    // Cache capacity: 2^22 entries (~160 MB total across all 3 buffers)
+    static constexpr uint32_t kCacheCapacity = (1u << 22);
+
+    // Maximum number of frames a cache entry survives without new samples
+    // before being evicted. Fixed at 100 frames per spec.
+    static constexpr uint32_t kStaleFrameNumMax = 100;
+
+    // Maximum number of frames used for temporal accumulation window
+    uint32_t m_AccumulationFrameNum = 64;
+
+    // Scene scale: controls voxel size distribution. Larger = coarser voxels.
+    float m_SceneScale = 50.0f;
+} g_SharcConfig;
+
 // ============================================================================
 // SharcIMGUISettings — called from ImGuiLayer when SHARC is selected
 // ============================================================================
@@ -44,13 +61,13 @@ void SharcIMGUISettings()
     ImGui::Separator();
 
     ImGui::SliderInt("Accumulation Frames",
-        (int*)&g_Renderer.m_SharcConfig.m_AccumulationFrameNum,
+        (int*)&g_SharcConfig.m_AccumulationFrameNum,
         1, 120);
     ImGui::SetItemTooltip("Number of frames for temporal accumulation window.\n"
                           "Higher = smoother but slower to respond to changes.");
 
     ImGui::SliderFloat("Scene Scale",
-        &g_Renderer.m_SharcConfig.m_SceneScale,
+        &g_SharcConfig.m_SceneScale,
         5.0f, 200.0f);
     ImGui::SetItemTooltip("Controls voxel size distribution.\n"
                           "Larger = coarser voxels, better for large scenes.");
@@ -88,8 +105,8 @@ static nvrhi::BufferHandle BuildSharcCB(nvrhi::CommandListHandle commandList)
     constants.SetCameraPosition(GetTranslation(view.m_MatViewToWorld));
     constants.SetCameraPositionPrev(GetTranslation(viewPrev.m_MatViewToWorld));
     constants.SetEntriesNum(SharcConfig::kCacheCapacity);
-    constants.SetSceneScale(g_Renderer.m_SharcConfig.m_SceneScale);
-    constants.SetAccumulationFrameNum(g_Renderer.m_SharcConfig.m_AccumulationFrameNum);
+    constants.SetSceneScale(g_SharcConfig.m_SceneScale);
+    constants.SetAccumulationFrameNum(g_SharcConfig.m_AccumulationFrameNum);
     constants.SetStaleFrameNumMax(SharcConfig::kStaleFrameNumMax);
     constants.SetFrameIndex(g_Renderer.m_FrameNumber);
     constants.SetViewportSize(view.m_ViewportSize);

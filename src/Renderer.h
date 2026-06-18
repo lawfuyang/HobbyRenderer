@@ -84,23 +84,6 @@ enum class IndirectLightingTechnique : uint32_t
     SHARC   = 2,
 };
 
-// SHARC-specific configuration
-struct SharcConfig
-{
-    // Cache capacity: 2^22 entries (~160 MB total across all 3 buffers)
-    static constexpr uint32_t kCacheCapacity = (1u << 22);
-
-    // Maximum number of frames a cache entry survives without new samples
-    // before being evicted. Fixed at 100 frames per spec.
-    static constexpr uint32_t kStaleFrameNumMax = 100;
-
-    // Maximum number of frames used for temporal accumulation window
-    uint32_t m_AccumulationFrameNum = 64;
-
-    // Scene scale: controls voxel size distribution. Larger = coarser voxels.
-    float m_SceneScale = 50.0f;
-};
-
 struct Renderer
 {
     SingletonFunctionsSimple(Renderer);
@@ -284,9 +267,6 @@ struct Renderer
 
     // Indirect lighting technique (mutually exclusive: None / RestirGI / SHARC)
     IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::SHARC;
-
-    // SHARC configuration
-    SharcConfig m_SharcConfig;
 
     // bloom
     float m_BloomKnee = 0.1f;
