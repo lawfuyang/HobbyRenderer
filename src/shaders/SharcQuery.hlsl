@@ -74,8 +74,13 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 cachedRadianceDbg   = float3(0.0f, 0.0f, 0.0f);
     uint   bounceCount = 0;
 
-    const int kMaxBounces = 4;
-    for (int bounce = 0; bounce < kMaxBounces; ++bounce)
+    // Tracks accumulated roughness from previous bounces for the
+    // SHARC cache-query validity test (proximity + footprint gate).
+    float  materialRoughnessPrev = 0.0f;
+
+    const int kMaxBounces = 8;
+    int bounce;
+    for (bounce = 0; bounce < kMaxBounces; ++bounce)
     {
         RayHitInfo hit;
         bool didHit = TraceRayStandard(ray, rng, hit, g_SceneAS, g_Instances, g_MeshData, g_Materials, g_Indices, g_Vertices);
@@ -101,14 +106,31 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 sharcHit.positionWorld = attr.m_WorldPos;
                 sharcHit.normalWorld   = normalize(attr.m_WorldNormal);
 
-                bounceCount = (uint)bounce;
+                // Proximity check: only query the cache when the path segment
+                // is longer than the voxel diagonal to avoid adjacent surfaces
+                // reusing the same cache entry immediately.
+                uint  gridLevel  = HashGridGetLevel(attr.m_WorldPos, sharcParams.hashGridParameters);
+                float voxelSize  = HashGridGetVoxelSize(gridLevel, sharcParams.hashGridParameters);
+                bool  isValidHit = hit.m_RayT > voxelSize * sqrt(3.0f);
 
-                float3 cachedRadiance;
-                if (SharcGetCachedRadiance(sharcParams, sharcHit, cachedRadiance, false))
+                // Roughness footprint check: a lobe that spreads beyond the
+                // voxel resolution can safely use the cache at shorter distances.
+                // For pure diffuse the footprint will be ~5× hitDistance,
+                // making this check nearly always true after bounce 1.
+                float clampedRoughness = min(materialRoughnessPrev, 0.99f);
+                float alpha            = clampedRoughness * clampedRoughness;
+                float footprint        = hit.m_RayT * sqrt(0.5f * alpha * alpha / max(1.0f - alpha * alpha, 1e-10f));
+                isValidHit            &= footprint > voxelSize;
+
+                if (isValidHit)
                 {
-                    accumulatedRadiance += throughput * cachedRadiance;
-                    cachedRadianceDbg = cachedRadiance;
-                    break;
+                    float3 cachedRadiance;
+                    if (SharcGetCachedRadiance(sharcParams, sharcHit, cachedRadiance, false))
+                    {
+                        accumulatedRadiance += throughput * cachedRadiance;
+                        cachedRadianceDbg = cachedRadiance;
+                        break;
+                    }
                 }
             }
 
@@ -159,6 +181,10 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             ray.Direction = newDir;
             ray.TMin      = 1e-4f;
             ray.TMax      = 1e10f;
+
+            // Accumulate roughness for the cache-query validity test.
+            // Pure diffuse adds 1.0 per bounce (specular would add material.roughness).
+            materialRoughnessPrev += 1.0f;
         }
         else
         {
@@ -170,6 +196,8 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             break;
         }
     }
+
+    bounceCount = (uint)bounce;
 
     g_Output[pixel]              = float4(accumulatedRadiance, 1.0f);
     if (g_Sharc.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_SHARC_BOUNCE_HEATMAP)

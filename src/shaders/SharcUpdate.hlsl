@@ -86,7 +86,7 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
 
-    const int kMaxBounces = 4;
+    const int kMaxBounces = 8;
     for (int bounce = 0; bounce < kMaxBounces; ++bounce)
     {
         RayHitInfo hit;
