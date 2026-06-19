@@ -52,6 +52,10 @@ cbuffer SharcConstants
 
     // Number of active lights in the scene (for direct lighting accumulation)
     uint     m_LightCount;
+
+    // Minimum roughness clamped on hit materials during update pass.
+    // Prevents near-mirror surfaces from polluting the cache with high-variance entries.
+    float    m_RoughnessThreshold;
 };
 
 // ============================================================================

@@ -47,6 +47,11 @@ struct SharcConfig
 
     // Scene scale: controls voxel size distribution. Larger = coarser voxels.
     float m_SceneScale = 50.0f;
+
+    // Minimum roughness clamped on hit materials during the update pass.
+    // Prevents near-mirror surfaces from polluting the cache with
+    // high-variance entries. Range [0.0, 1.0], RTXGI default = 0.4.
+    float m_RoughnessThreshold = 0.4f;
 } g_SharcConfig;
 
 // ============================================================================
@@ -71,6 +76,13 @@ void SharcIMGUISettings()
         5.0f, 200.0f);
     ImGui::SetItemTooltip("Controls voxel size distribution.\n"
                           "Larger = coarser voxels, better for large scenes.");
+
+    ImGui::SliderFloat("Roughness Threshold",
+        &g_SharcConfig.m_RoughnessThreshold,
+        0.0f, 1.0f);
+    ImGui::SetItemTooltip("Minimum roughness clamped during the update pass.\n"
+                          "Higher values prevent mirror-like surfaces from polluting the cache.\n"
+                          "RTXGI default = 0.4.");
 
     ImGui::Separator();
 
@@ -115,6 +127,7 @@ static nvrhi::BufferHandle BuildSharcCB(nvrhi::CommandListHandle commandList)
     constants.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
     constants.SetDebugMode((uint32_t)g_Renderer.m_DebugMode);
     constants.SetLightCount(g_Renderer.m_Scene.m_LightCount);
+    constants.SetRoughnessThreshold(g_SharcConfig.m_RoughnessThreshold);
 
     commandList->writeBuffer(cb, &constants, sizeof(constants));
     return cb;

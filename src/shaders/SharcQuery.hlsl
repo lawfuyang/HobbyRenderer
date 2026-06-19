@@ -12,11 +12,11 @@
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 1
 #define SHARC_RADIANCE_SCALE 1e3f
 
-#include "SharcCommon.hlsli"
-
 #include "RaytracingCommon.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
+
+#include "SharcCommon.hlsli"
 
 #include "srrhi/hlsl/SHARC.hlsli"
 
@@ -134,34 +134,16 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 }
             }
 
-            // Direct lighting
-            LightingInputs inputs;
-            inputs.N                = N;
-            inputs.V                = V;
-            inputs.L                = float3(0, 0, 0);
-            inputs.worldPos         = attr.m_WorldPos;
-            inputs.baseColor        = pbr.baseColor;
-            inputs.roughness        = pbr.roughness;
-            inputs.metallic         = pbr.metallic;
-            inputs.ior              = mat.m_IOR;
-            inputs.radianceMipCount = 0;
-            inputs.enableRTShadows  = true;
-            inputs.sceneAS          = g_SceneAS;
-            inputs.instances        = g_Instances;
-            inputs.meshData         = g_MeshData;
-            inputs.materials        = g_Materials;
-            inputs.indices          = g_Indices;
-            inputs.vertices         = g_Vertices;
-            inputs.lights           = g_Lights;
-            inputs.sunRadiance      = GetAtmosphereSunRadiance(GetAtmospherePos(attr.m_WorldPos), g_Sharc.m_SunDirection, g_Lights[0].m_Intensity);
-            inputs.sunDirection     = g_Sharc.m_SunDirection;
-            inputs.useSunRadiance   = true;
-            inputs.sunShadow        = 0.0f; // unused by RNG variant — casts its own shadow rays
+            // Direct lighting — shared helper
+            LightingInputs inputs = FillSharcLightingInputs(
+                N, V, attr.m_WorldPos, pbr, mat,
+                g_SceneAS, g_Instances, g_MeshData, g_Materials,
+                g_Indices, g_Vertices, g_Lights, g_Sharc.m_SunDirection);
 
             PrepareLightingByproducts(inputs);
             LightingComponents direct = AccumulateDirectLighting(inputs, g_Sharc.m_LightCount, g_Lights[0].m_CosSunAngularRadius, rng);
 
-            accumulatedRadiance += throughput * (pbr.emissive + direct.diffuse + (bounce == 0 ? direct.specular : 0.0f));
+            accumulatedRadiance += throughput * (pbr.emissive + direct.diffuse + direct.specular);
 
             // Russian roulette
             if (bounce >= 2)
@@ -171,11 +153,13 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 throughput /= continuePr;
             }
 
-            // BRDF sample (diffuse)
-            float3 newDir = SampleHemisphereCosine(NextFloat2(rng), N);
-            if (dot(N, newDir) <= 0.0f) break;
-
-            throughput *= pbr.baseColor * (1.0f - pbr.metallic);
+            // BRDF importance sampling — shared helper
+            float3 newDir;
+            float3 brdfWeight;
+            bool isSpecular;
+            if (!SampleSharcDirection(N, V, pbr, inputs.F, inputs.F0, rng, newDir, brdfWeight, isSpecular))
+                break;
+            throughput *= brdfWeight;
 
             ray.Origin    = attr.m_WorldPos;
             ray.Direction = newDir;
@@ -183,8 +167,8 @@ void SharcQuery_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             ray.TMax      = 1e10f;
 
             // Accumulate roughness for the cache-query validity test.
-            // Pure diffuse adds 1.0 per bounce (specular would add material.roughness).
-            materialRoughnessPrev += 1.0f;
+            // Diffuse adds 1.0 per bounce; specular adds the material roughness.
+            materialRoughnessPrev += isSpecular ? pbr.roughness : 1.0f;
         }
         else
         {

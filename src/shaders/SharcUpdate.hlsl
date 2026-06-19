@@ -16,11 +16,11 @@
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 1
 #define SHARC_RADIANCE_SCALE 1e3f
 
-#include "SharcCommon.hlsli"
-
 #include "RaytracingCommon.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
+
+#include "SharcCommon.hlsli"
 
 #include "srrhi/hlsl/SHARC.hlsli"
 
@@ -101,34 +101,17 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             inst.m_LODIndex = 0;
             FullHitAttributes attr = GetFullHitAttributes(hit, ray, inst, mesh, g_Indices, g_Vertices);
             PBRAttributes     pbr  = GetPBRAttributes(attr, mat, 0.0f);
+            pbr.roughness = max(g_Sharc.m_RoughnessThreshold, pbr.roughness);
 
             float3 N = pbr.normal;
             float3 V = -ray.Direction;
             if (dot(N, V) < 0.0f) N = -N;
 
-            // Direct lighting at this hit point
-            LightingInputs inputs;
-            inputs.N                = N;
-            inputs.V                = V;
-            inputs.L                = float3(0, 0, 0);
-            inputs.worldPos         = attr.m_WorldPos;
-            inputs.baseColor        = pbr.baseColor;
-            inputs.roughness        = pbr.roughness;
-            inputs.metallic         = pbr.metallic;
-            inputs.ior              = mat.m_IOR;
-            inputs.radianceMipCount = 0;
-            inputs.enableRTShadows  = true;
-            inputs.sceneAS          = g_SceneAS;
-            inputs.instances        = g_Instances;
-            inputs.meshData         = g_MeshData;
-            inputs.materials        = g_Materials;
-            inputs.indices          = g_Indices;
-            inputs.vertices         = g_Vertices;
-            inputs.lights           = g_Lights;
-            inputs.sunRadiance      = GetAtmosphereSunRadiance(GetAtmospherePos(attr.m_WorldPos), g_Sharc.m_SunDirection, g_Lights[0].m_Intensity);
-            inputs.sunDirection     = g_Sharc.m_SunDirection;
-            inputs.useSunRadiance   = true;
-            inputs.sunShadow        = 0.0f; // unused by RNG variant — casts its own shadow rays
+            // Direct lighting at this hit point — shared helper
+            LightingInputs inputs = FillSharcLightingInputs(
+                N, V, attr.m_WorldPos, pbr, mat,
+                g_SceneAS, g_Instances, g_MeshData, g_Materials,
+                g_Indices, g_Vertices, g_Lights, g_Sharc.m_SunDirection);
 
             PrepareLightingByproducts(inputs);
             LightingComponents direct = AccumulateDirectLighting(inputs, g_Sharc.m_LightCount, g_Lights[0].m_CosSunAngularRadius, rng);
@@ -143,11 +126,12 @@ void SharcUpdate_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (!continueTracing)
                 break;
 
-            // Sample next direction (diffuse cosine-weighted)
-            float3 newDir = SampleHemisphereCosine(NextFloat2(rng), N);
-            if (dot(N, newDir) <= 0.0f) break;
-
-            float3 brdfWeight = pbr.baseColor * (1.0f - pbr.metallic);
+            // BRDF importance sampling — shared helper
+            float3 newDir;
+            float3 brdfWeight;
+            bool isSpecular;
+            if (!SampleSharcDirection(N, V, pbr, inputs.F, inputs.F0, rng, newDir, brdfWeight, isSpecular))
+                break;
             throughput *= brdfWeight;
 
             SharcSetThroughput(sharcState, throughput);
