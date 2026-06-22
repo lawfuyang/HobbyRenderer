@@ -79,8 +79,9 @@ enum class RenderingMode : uint32_t
 // Indirect lighting technique selection (mutually exclusive)
 enum class IndirectLightingTechnique : uint32_t
 {
-    None    = 0,
+    None     = 0,
     RestirGI = 1,
+    SHARC    = 2,
 };
 
 struct Renderer
