@@ -3,12 +3,10 @@
 // Must be included after SharcCommon.h and srrhi/hlsl/SHARC.hlsli.
 
 // Assemble SharcParameters from per-pass bindings and hardcoded hash-grid defaults.
-// accumulation: pass the RWStructuredBuffer<SharcAccumulationData> for Update;
-//               cast (RWStructuredBuffer<SharcAccumulationData>)0 for Query.
 SharcParameters BuildSharcParameters(
     srrhi::SHARCConstants constants,
-    StructuredBuffer<uint64_t> hashEntries,
-    StructuredBuffer<SharcPackedData> resolved,
+    RWStructuredBuffer<uint64_t> hashEntries,
+    RWStructuredBuffer<SharcPackedData> resolved,
     RWStructuredBuffer<SharcAccumulationData> accumulation)
 {
     SharcParameters sharcParams;

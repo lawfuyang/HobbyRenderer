@@ -16,6 +16,8 @@
 
 // ---- Project headers --------------------------------------------------------
 #include "Common.hlsli"
+#include "CommonLighting.hlsli"
+
 #include "srrhi/hlsl/SHARC.hlsli"
 #include "SharcHelpers.hlsli"
 
@@ -28,9 +30,9 @@ static const srrhi::SHARCConstants g_Const = srrhi::SHARCQueryInputs::GetConst()
 static const Texture2D<float>   g_Depth   = srrhi::SHARCQueryInputs::GetDepth();
 static const Texture2D<float2>  g_Normals = srrhi::SHARCQueryInputs::GetNormals();
 
-static const StructuredBuffer<uint64_t>        g_HashEntries = srrhi::SHARCQueryInputs::GetHashEntries();
-static const StructuredBuffer<SharcPackedData> g_Resolved    = srrhi::SHARCQueryInputs::GetResolved();
-
+static RWStructuredBuffer<uint64_t>        g_HashEntries = srrhi::SHARCQueryInputs::GetHashEntries();
+static RWStructuredBuffer<SharcPackedData> g_Resolved    = srrhi::SHARCQueryInputs::GetResolved();
+static RWStructuredBuffer<SharcAccumulationData> g_Accumulation = srrhi::SHARCQueryInputs::GetAccumulation();
 static RWTexture2D<float4> u_IndirectOutput = srrhi::SHARCQueryInputs::GetIndirectOutput();
 
 // ============================================================================
@@ -60,7 +62,7 @@ void SHARCQuery_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
     hitData.positionWorld = worldPos;
     hitData.normalWorld   = N;
 
-    SharcParameters sharcParams = BuildSharcParameters(g_Const, g_HashEntries, g_Resolved, (RWStructuredBuffer<SharcAccumulationData>)0);
+    SharcParameters sharcParams = BuildSharcParameters(g_Const, g_HashEntries, g_Resolved, g_Accumulation);
 
     float3 indirectRadiance = 0;
     bool   found = SharcGetCachedRadiance(sharcParams, hitData, indirectRadiance, /*debug=*/false);

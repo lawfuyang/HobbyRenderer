@@ -109,8 +109,9 @@ srinput SHARCQueryInputs
     Texture2D<float2>   m_Normals;
 
     // SHARC cache (read-only)
-    StructuredBuffer<uint64_t>          m_HashEntries;
-    StructuredBuffer<SharcPackedData>   m_Resolved;
+    RWStructuredBuffer<uint64_t>          m_HashEntries;
+    RWStructuredBuffer<SharcPackedData>   m_Resolved;
+    RWStructuredBuffer<SharcAccumulationData> m_Accumulation;
 
     // Output
     RWTexture2D<float4> m_IndirectOutput;

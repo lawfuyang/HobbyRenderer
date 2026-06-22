@@ -226,6 +226,7 @@ public:
             // render-graph inserts the UAV→SRV barrier automatically.
             nvrhi::BufferHandle  resolvedSRV   = renderGraph.GetBuffer (g_RG_SHARCResolved,    RGResourceAccessMode::Read);
             nvrhi::BufferHandle  hashEntriesSRV= renderGraph.GetBuffer (g_RG_SHARCHashEntries, RGResourceAccessMode::Read);
+            nvrhi::BufferHandle  accumBuffer   = renderGraph.GetBuffer (g_RG_SHARCAccumulation, RGResourceAccessMode::Read);
             nvrhi::TextureHandle indirectOutput= renderGraph.GetTexture(g_RG_SHARCIndirect,    RGResourceAccessMode::Write);
 
             srrhi::SHARCQueryInputs inputs;
@@ -234,6 +235,7 @@ public:
             inputs.SetNormals(normals);
             inputs.SetHashEntries(hashEntriesSRV);
             inputs.SetResolved(resolvedSRV);
+            inputs.SetAccumulation(accumBuffer);
             inputs.SetIndirectOutput(indirectOutput, 0);
 
             Renderer::RenderPassParams params{};

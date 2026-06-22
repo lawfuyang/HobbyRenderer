@@ -13,6 +13,14 @@ extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_RTXDIDIComposited;   // CompositingPass output — final DI + emissive composite
 extern RGTextureHandle g_RG_SHARCIndirect;       // SHARCQuery output — screen-space indirect radiance
 
+// Ensure srrhi::IndirectLightingMode constants stay in sync with IndirectLightingTechnique enum
+static_assert(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE      == static_cast<uint32_t>(IndirectLightingTechnique::None),
+    "IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE must equal IndirectLightingTechnique::None");
+static_assert(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI == static_cast<uint32_t>(IndirectLightingTechnique::RestirGI),
+    "IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI must equal IndirectLightingTechnique::RestirGI");
+static_assert(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC     == static_cast<uint32_t>(IndirectLightingTechnique::SHARC),
+    "IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC must equal IndirectLightingTechnique::SHARC");
+
 class DeferredRenderer : public IRenderer
 {
 public:

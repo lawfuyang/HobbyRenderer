@@ -1,4 +1,5 @@
 ﻿#define DEFERRED_PASS
+#include "Common.hlsli"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
@@ -109,7 +110,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
         }
 
         // ---- SHARC Indirect ----
-        if (g_Deferred.m_IndirectLightingMode == srrhi::DeferredLightingConsts::INDIRECT_LIGHTING_MODE_SHARC)
+        if (g_Deferred.m_IndirectLightingMode == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
         {
             // SHARC cache stores outgoing indirect radiance (BRDF already baked in during the Update pass). Add directly — no further BRDF modulation needed.
             color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;

@@ -132,3 +132,14 @@ srinput CommonConsts
     static const float DEPTH_NEAR = 1.0f;
     static const float DEPTH_FAR = 0.0f;
 };
+
+// ---------------------------------------------------------------------------
+// Indirect lighting mode constants — used by DeferredLightingConstants
+// to select which technique contributes indirect radiance.
+// ---------------------------------------------------------------------------
+srinput IndirectLightingMode
+{
+    static const uint INDIRECT_LIGHTING_MODE_NONE      = 0;
+    static const uint INDIRECT_LIGHTING_MODE_RESTIR_GI  = 1;
+    static const uint INDIRECT_LIGHTING_MODE_SHARC      = 2;
+};
