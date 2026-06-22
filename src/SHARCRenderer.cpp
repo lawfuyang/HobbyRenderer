@@ -1,20 +1,25 @@
 #include "Renderer.h"
 #include "CommonResources.h"
+#include "Utilities.h"
+
+#include "shaders/srrhi/cpp/SHARC.h"
 
 // ============================================================================
 // SHARCRenderer — Spatial Hash Radiance Cache indirect lighting renderer.
 //
-// Manages the three SHARC GPU buffers (hash entries, accumulation, resolved)
-// plus a screen-space indirect output texture.  The actual Update / Resolve /
-// Query passes will be added in Phase 2; this phase only establishes the
-// resource infrastructure.
+// Pass order each frame:
+//   1. Update  — sparse BRDF-ray compute pass; populates the accumulation cache.
+//   2. Resolve — combines accumulation with the resolved buffer (Phase 3).
+//   3. Query   — screen-space lookup; writes g_RG_SHARCIndirect (Phase 3).
 // ============================================================================
 
 // ---------------------------------------------------------------------------
-// Cache entry count — start at 2^20 (≈1 M entries, ~64 MiB total).
-// Bump to 2^22 (~168 MiB) once the pipeline is validated.
+// GBuffer handles declared by CommonRenderers / BasePassRenderer
 // ---------------------------------------------------------------------------
-static constexpr uint32_t k_SHARCCacheEntries = 1u << 20; // 1,048,576
+extern RGTextureHandle g_RG_DepthTexture;
+extern RGTextureHandle g_RG_GBufferNormals;
+extern RGTextureHandle g_RG_GBufferAlbedo;
+extern RGTextureHandle g_RG_GBufferORM;
 
 // ---------------------------------------------------------------------------
 // Global render-graph handles (read by DeferredRenderer to composite indirect)
@@ -33,11 +38,6 @@ public:
     // ------------------------------------------------------------------
     const char* GetName() const override { return "SHARCRenderer"; }
 
-    void Initialize() override
-    {
-        // Nothing to initialize yet — shader constants will be set up in Phase 2.
-    }
-
     bool Setup(RenderGraph& renderGraph) override
     {
         // Only participate when SHARC is the selected indirect technique.
@@ -49,12 +49,12 @@ public:
 
         // ------------------------------------------------------------------
         // Hash entries buffer  —  RWStructuredBuffer<uint64_t>
-        //   stride = 8 bytes,  count = k_SHARCCacheEntries
+        //   stride = 8 bytes,  count = srrhi::SHARCConsts::SHARC_CACHE_ENTRIES
         //   total  = 8 MiB  (2^20) / 32 MiB (2^22)
         // ------------------------------------------------------------------
         {
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(k_SHARCCacheEntries) * sizeof(uint64_t);
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(srrhi::SHARCConsts::SHARC_CACHE_ENTRIES) * sizeof(uint64_t);
             bd.m_NvrhiDesc.structStride = sizeof(uint64_t);   // 8 bytes
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -70,7 +70,7 @@ public:
         // ------------------------------------------------------------------
         {
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(k_SHARCCacheEntries) * 16u; // sizeof(uint4)
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(srrhi::SHARCConsts::SHARC_CACHE_ENTRIES) * 16u; // sizeof(uint4)
             bd.m_NvrhiDesc.structStride = 16u;
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -86,7 +86,7 @@ public:
         // ------------------------------------------------------------------
         {
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(k_SHARCCacheEntries) * 16u; // sizeof(SharcPackedData)
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(srrhi::SHARCConsts::SHARC_CACHE_ENTRIES) * 16u; // sizeof(SharcPackedData)
             bd.m_NvrhiDesc.structStride = 16u;
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -110,21 +110,85 @@ public:
             renderGraph.DeclareTexture(td, g_RG_SHARCIndirect);
         }
 
-        // Register write access for all resources this renderer owns.
-        renderGraph.WriteBuffer(g_RG_SHARCHashEntries);
-        renderGraph.WriteBuffer(g_RG_SHARCAccumulation);
-        renderGraph.WriteBuffer(g_RG_SHARCResolved);
-        renderGraph.WriteTexture(g_RG_SHARCIndirect);
-
         return true;
     }
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
-        // Phase 1: resource infrastructure only.
-        // Update / Resolve / Query passes will be implemented in Phase 2.
-        (void)commandList;
-        (void)renderGraph;
+        PROFILE_FUNCTION();
+
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
+
+        // ── Resolve physical buffer handles ──────────────────────────────────
+        nvrhi::BufferHandle  hashEntries  = renderGraph.GetBuffer (g_RG_SHARCHashEntries,  RGResourceAccessMode::Write);
+        nvrhi::BufferHandle  accumulation = renderGraph.GetBuffer (g_RG_SHARCAccumulation, RGResourceAccessMode::Write);
+        nvrhi::BufferHandle  resolved     = renderGraph.GetBuffer (g_RG_SHARCResolved,     RGResourceAccessMode::Write);
+        nvrhi::TextureHandle depth        = renderGraph.GetTexture(g_RG_DepthTexture,      RGResourceAccessMode::Read);
+        nvrhi::TextureHandle normals      = renderGraph.GetTexture(g_RG_GBufferNormals,    RGResourceAccessMode::Read);
+        nvrhi::TextureHandle albedo       = renderGraph.GetTexture(g_RG_GBufferAlbedo,     RGResourceAccessMode::Read);
+        nvrhi::TextureHandle orm          = renderGraph.GetTexture(g_RG_GBufferORM,        RGResourceAccessMode::Read);
+
+        // ── Per-frame camera state ────────────────────────────────────────────
+        const Vector3 camPos = g_Renderer.m_Scene.m_Camera.GetPosition();
+
+        // Sun angular radius
+        const float angularSizeDeg = !g_Renderer.m_Scene.m_Lights.empty()
+            ? g_Renderer.m_Scene.m_Lights.back().m_AngularSize
+            : 0.533f;
+        const float halfAngleRad = angularSizeDeg * 0.5f * (std::numbers::pi_v<float> / 180.0f);
+
+        // ── Build SHARCConstants ─────────────────────────────────────────────
+        const nvrhi::BufferDesc cbDesc = nvrhi::utils::CreateVolatileConstantBufferDesc(
+            sizeof(srrhi::SHARCConstants), "SHARC_CB", 1);
+        nvrhi::BufferHandle cb = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(cbDesc);
+
+        srrhi::SHARCConstants constants;
+        constants.SetFrameIndex(g_Renderer.m_FrameNumber);
+        constants.SetCameraPosition(Vector3{ camPos.x, camPos.y, camPos.z });
+        constants.SetLightCount(g_Renderer.m_Scene.m_LightCount);
+        constants.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
+        constants.SetCosSunAngularRadius(cosf(halfAngleRad));
+        constants.SetViewportSize(Vector2U{ width, height });
+        constants.SetViewportSizeInv(Vector2{ 1.0f / width, 1.0f / height });
+        constants.SetMatClipToWorld(g_Renderer.m_Scene.m_Camera.GetInvViewProjMatrix());
+
+        commandList->writeBuffer(cb, &constants, sizeof(constants));
+
+        // ── Pass 1: SHARC Update ─────────────────────────────────────────────
+        // Dispatch over the full viewport; the shader itself skips non-selected
+        // pixels via the sparse block selection logic.
+        {
+            srrhi::SHARCUpdateInputs inputs;
+            inputs.SetConst(cb);
+            inputs.SetDepth(depth);
+            inputs.SetNormals(normals);
+            inputs.SetAlbedo(albedo);
+            inputs.SetORM(orm);
+            inputs.SetHashEntries(hashEntries);
+            inputs.SetAccumulation(accumulation);
+            inputs.SetResolved(resolved);
+            inputs.SetSceneAS(g_Renderer.m_Scene.m_TLAS);
+            inputs.SetLights(g_Renderer.m_Scene.m_LightBuffer);
+            inputs.SetInstances(g_Renderer.m_Scene.m_InstanceDataBuffer);
+            inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
+            inputs.SetMaterials(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
+            inputs.SetVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
+            inputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
+
+            Renderer::RenderPassParams params{};
+            params.commandList    = commandList;
+            params.shaderID       = ShaderID::SHARCUPDATE_SHARCUPDATE_CSMAIN;
+            params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
+            params.dispatchParams = {
+                .x = DivideAndRoundUp(width,  8u),
+                .y = DivideAndRoundUp(height, 8u),
+                .z = 1u
+            };
+            g_Renderer.AddComputePass(params);
+        }
+
+        // Resolve and Query passes will be added in Phase 3.
     }
 };
 

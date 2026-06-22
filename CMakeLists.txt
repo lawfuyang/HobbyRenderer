@@ -278,7 +278,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${NRD_SRC_DIR}/Include")
 
 # SHARC
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external/SHARC/include")
-target_compile_definitions(${PROJECT_NAME} PRIVATE SHARC_ENABLE_64_BIT_ATOMICS=1)
 
 # FidelityFX
 target_link_libraries(${PROJECT_NAME} PRIVATE "${FSR_SDK_BIN_DIR}/amd_fidelityfx_loader_dx12.lib")
@@ -327,7 +326,6 @@ add_custom_target(build_shaders
             --include "${CMAKE_SOURCE_DIR}/external/nvrhi/include"
             --include "${CMAKE_SOURCE_DIR}/src/shaders/rtxdi/SharedShaderInclude"
             --include "${CMAKE_SOURCE_DIR}/external/SHARC/include"
-            -D SHARC_ENABLE_64_BIT_ATOMICS=1
             --relaxedInclude "pch.h"
 
     # DXIL output for D3D12 for NRD

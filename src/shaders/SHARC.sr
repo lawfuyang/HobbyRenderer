@@ -13,7 +13,10 @@
 // ---------------------------------------------------------------------------
 srinput SHARCConsts
 {
-    static const uint SHARC_CACHE_ENTRIES = 1u << 20; // 2^20 = 1,048,576
+    static const uint  SHARC_CACHE_ENTRIES  = 1u << 20; // 2^20 = 1,048,576
+    static const uint  SPARSE_BLOCK_SIZE    = 5;          // 1/25 ≈ 4% pixel coverage
+    static const float RADIANCE_SCALE       = 1e3f;       // quantisation scale; reduce if overflow
+    static const float ROUGHNESS_THRESHOLD  = 0.1f;       // skip near-mirror surfaces
 };
 
 // ---------------------------------------------------------------------------
@@ -22,7 +25,6 @@ srinput SHARCConsts
 // The SHARC headers must be included before srrhi/hlsl/SHARC.hlsli in any
 // shader that uses these types.
 // ---------------------------------------------------------------------------
-extern HashGridParameters;
 extern SharcAccumulationData;
 extern SharcPackedData;
 
@@ -31,17 +33,14 @@ extern SharcPackedData;
 // ---------------------------------------------------------------------------
 cbuffer SHARCConstants
 {
-    HashGridParameters  m_HashGridParams;
-    float               m_RadianceScale;
-    uint                m_AccumulationFrameNum;
-    uint                m_StaleFrameNumMax;
-    // 0=off, 1=voxel color, 2=occupancy, 3=sample count, 4=stale heatmap
-    uint                m_DebugMode;
-    float3              m_CameraPositionPrev;
-    uint                m_FrameIndex;
-    uint                m_EnableAntiFirefly;
-    uint                m_DownscaleFactor;
-    float               m_RoughnessThreshold;
+    uint     m_FrameIndex;
+    float3   m_CameraPosition;       // current-frame camera world position
+    uint     m_LightCount;           // number of active GPULights
+    float3   m_SunDirection;         // world-space sun direction (normalised)
+    float    m_CosSunAngularRadius;  // cos(half angular diameter of sun disc)
+    uint2    m_ViewportSize;         // render resolution (width, height)
+    float2   m_ViewportSizeInv;
+    float4x4 m_MatClipToWorld;       // clip-to-world (jittered) for ReconstructWorldPos
 };
 
 // ---------------------------------------------------------------------------
@@ -62,7 +61,7 @@ srinput SHARCUpdateInputs
     // SHARC buffers (read/write)
     RWStructuredBuffer<uint64_t>                m_HashEntries;
     RWStructuredBuffer<SharcAccumulationData>   m_Accumulation;
-    StructuredBuffer<SharcPackedData>           m_Resolved;     // read for cache resampling
+    RWStructuredBuffer<SharcPackedData>           m_Resolved;     // read for cache resampling (SDK requires RW)
 
     // Scene acceleration structure
     RaytracingAccelerationStructure m_SceneAS;
