@@ -132,8 +132,8 @@ bool AlphaTestGrad(
 }
 
 // ─── Shared inline ray tracing ───────────────────────────────────────────────
-// Standard ray trace with alpha mask/blend support. Used by PathTracer, SHARC
-// Update, and SHARC Query passes. Scene resources are passed as parameters
+// Standard ray trace with alpha mask/blend support. Used by PathTracer.
+// Scene resources are passed as parameters
 // because each shader binds them from different srrhi input namespaces.
 bool TraceRayStandard(
     RayDesc ray,

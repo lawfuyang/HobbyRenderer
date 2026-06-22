@@ -81,7 +81,6 @@ enum class IndirectLightingTechnique : uint32_t
 {
     None    = 0,
     RestirGI = 1,
-    SHARC   = 2,
 };
 
 struct Renderer
@@ -265,8 +264,8 @@ struct Renderer
     bool m_EnableReSTIRDI = true;
     bool m_EnableReSTIRDIRelaxDenoising = true;
 
-    // Indirect lighting technique (mutually exclusive: None / RestirGI / SHARC)
-    IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::SHARC;
+    // Indirect lighting technique (mutually exclusive: None / RestirGI)
+    IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
 
     // bloom
     float m_BloomKnee = 0.1f;

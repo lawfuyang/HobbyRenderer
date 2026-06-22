@@ -104,10 +104,7 @@ void ImGuiLayer::UpdateFrame()
                 "Emissive",
                 "LOD",
                 "Motion Vectors",
-                "ReGIR Cells",
-                "SHARC Bounce Heatmap",
-                "SHARC Hash Grid",
-                "SHARC Cached Radiance"
+                "ReGIR Cells"
             };
             ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 
@@ -141,17 +138,6 @@ void ImGuiLayer::UpdateFrame()
                 ImGui::SameLine();
                 if (ImGui::RadioButton("ReSTIR GI", &technique, static_cast<int>(IndirectLightingTechnique::RestirGI)))
                     g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
-                ImGui::SameLine();
-                if (ImGui::RadioButton("SHARC",    &technique, static_cast<int>(IndirectLightingTechnique::SHARC)))
-                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::SHARC;
-
-                if (g_Renderer.m_IndirectLightingTechnique == IndirectLightingTechnique::SHARC)
-                {
-                    ImGui::Separator();
-                    ImGui::Text("SHARC Settings:");
-                    extern void SharcIMGUISettings();
-                    SharcIMGUISettings();
-                }
 
                 ImGui::TreePop();
             }
