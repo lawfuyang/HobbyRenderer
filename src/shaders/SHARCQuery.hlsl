@@ -19,6 +19,7 @@
 
 // ---- Project headers --------------------------------------------------------
 #include "Common.hlsli"
+#include "RaytracingCommon.hlsli"
 #include "CommonLighting.hlsli"
 
 #include "srrhi/hlsl/SHARC.hlsli"
@@ -38,6 +39,13 @@ static RWStructuredBuffer<SharcPackedData>       g_Resolved     = srrhi::SHARCQu
 static RWStructuredBuffer<SharcAccumulationData> g_Accumulation = srrhi::SHARCQueryInputs::GetAccumulation();
 
 static RWTexture2D<float4>      u_IndirectOutput = srrhi::SHARCQueryInputs::GetIndirectOutput();
+
+static const RaytracingAccelerationStructure     g_SceneAS   = srrhi::SHARCQueryInputs::GetSceneAS();
+static const StructuredBuffer<srrhi::PerInstanceData>    g_Instances = srrhi::SHARCQueryInputs::GetInstances();
+static const StructuredBuffer<srrhi::MeshData>           g_MeshData  = srrhi::SHARCQueryInputs::GetMeshData();
+static const StructuredBuffer<srrhi::MaterialConstants>  g_Materials = srrhi::SHARCQueryInputs::GetMaterials();
+static const StructuredBuffer<srrhi::VertexQuantized>    g_Vertices  = srrhi::SHARCQueryInputs::GetVertices();
+static const StructuredBuffer<uint>                      g_Indices   = srrhi::SHARCQueryInputs::GetIndices();
 
 // ============================================================================
 // Compute shader entry point
@@ -88,28 +96,11 @@ void SHARCQuery_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
         return;
     }
 
-    // Modes 3, 7 all need a cache lookup — do it once here
+    // Modes 2 and 3 all need a cache lookup — do it once here
     HashGridKey  dbgKey;
     HashGridIndex dbgIdx = HashGridFindEntry(sharcParams.hashGridData, worldPos, N, sharcParams.hashGridParameters, dbgKey);
 
-    // Mode 3: SampleCount — Blue(0 samples) → Red(100+ samples)
-    if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_SAMPLE_COUNT)
-    {
-        if (dbgIdx != HASH_GRID_INVALID_CACHE_INDEX)
-        {
-            SharcVoxelData vd = SharcGetVoxelData(g_Resolved, dbgIdx);
-            float t = saturate(vd.accumulatedSampleNum / 100.0f);
-            // Blue=0 samples, Red=100+ samples
-            u_IndirectOutput[pixel] = float4(t, t * 0.25f, 1.0f - t, 1.0f);
-        }
-        else
-        {
-            u_IndirectOutput[pixel] = float4(0, 0, 0, 1.0f);
-        }
-        return;
-    }
-
-    // Mode 7: AccumulatedRadiance — raw SHARC output before BRDF modulation
+    // Mode 2: AccumulatedRadiance — raw SHARC output before BRDF modulation
     if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_ACCUMULATED_RADIANCE)
     {
         if (dbgIdx != HASH_GRID_INVALID_CACHE_INDEX)
@@ -121,6 +112,61 @@ void SHARCQuery_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
         {
             u_IndirectOutput[pixel] = float4(0, 0, 0, 1.0f);
         }
+        return;
+    }
+
+    // Mode 3: CacheHeatmap — RTXGI-style bounce count heatmap.
+    // Traces one cosine-weighted indirect ray from the primary surface.
+    //   Green = SharcGetCachedRadiance had data at the indirect hit → 1 bounce served.
+    //   Red   = cache miss at indirect hit (or sky miss) → would need 2+ bounces.
+    // Corners/occluded pixels naturally show red because indirect rays there
+    // hit nearby surfaces that the sparse Update pass hasn't cached yet.
+    if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_CACHE_HEATMAP)
+    {
+        RNG rng = InitRNG(pixel, g_Const.m_FrameIndex);
+
+        float3 rayDir = SampleHemisphereCosine(NextFloat2(rng), N);
+        if (dot(N, rayDir) <= 0.0f)
+        {
+            u_IndirectOutput[pixel] = float4(0, 0, 0, 1);
+            return;
+        }
+
+        RayDesc ray;
+        ray.Origin    = worldPos + N * 1e-3f;
+        ray.Direction = rayDir;
+        ray.TMin      = 1e-3f;
+        ray.TMax      = 1e10f;
+
+        RayHitInfo hitInfo;
+        bool didHit = TraceRayStandard(ray, rng, hitInfo, g_SceneAS, g_Instances, g_MeshData, g_Materials, g_Indices, g_Vertices);
+
+        if (!didHit)
+        {
+            // Sky miss — no surface to query cache at
+            u_IndirectOutput[pixel] = float4(1.0f, 0.0f, 0.0f, 1.0f);  // red
+            return;
+        }
+
+        // Resolve hit position and geometric normal
+        srrhi::PerInstanceData inst = g_Instances[hitInfo.m_InstanceIndex];
+        srrhi::MeshData        mesh = g_MeshData[inst.m_MeshDataIndex];
+        FullHitAttributes attr      = GetFullHitAttributes(hitInfo, ray, inst, mesh, g_Indices, g_Vertices);
+
+        float3 hitPos = attr.m_WorldPos;
+        float3 hitN   = normalize(attr.m_WorldNormal);
+
+        SharcHitData hitData;
+        hitData.positionWorld = hitPos;
+        hitData.normalWorld   = hitN;
+
+        float3 cached;
+        bool   found = SharcGetCachedRadiance(sharcParams, hitData, cached, false);
+
+        if (found)
+            u_IndirectOutput[pixel] = float4(0.0f, 1.0f, 0.0f, 1.0f);  // green — cache served
+        else
+            u_IndirectOutput[pixel] = float4(1.0f, 0.0f, 0.0f, 1.0f);  // red   — cache miss
         return;
     }
 

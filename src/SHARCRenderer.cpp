@@ -243,6 +243,12 @@ public:
             inputs.SetResolved(resolvedSRV);
             inputs.SetAccumulation(accumBuffer);
             inputs.SetIndirectOutput(indirectOutput, 0);
+            inputs.SetSceneAS(g_Renderer.m_Scene.m_TLAS);
+            inputs.SetInstances(g_Renderer.m_Scene.m_InstanceDataBuffer);
+            inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
+            inputs.SetMaterials(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
+            inputs.SetVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
+            inputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
 
             Renderer::RenderPassParams params{};
             params.commandList    = commandList;

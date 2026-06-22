@@ -145,7 +145,7 @@ void ImGuiLayer::UpdateFrame()
                 // SHARC debug overlay
                 if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
                 {
-                    const char* debugModes[] = { "Off", "Voxel Color", "Sample Count", "Accumulated Radiance" };
+                    const char* debugModes[] = { "Off", "Voxel Color", "Accumulated Radiance", "Cache Heatmap" };
                     int debugMode = static_cast<int>(g_Renderer.m_SHARCDebugMode);
                     if (ImGui::Combo("SHARC Debug", &debugMode, debugModes, IM_ARRAYSIZE(debugModes)))
                         g_Renderer.m_SHARCDebugMode = static_cast<uint32_t>(debugMode);

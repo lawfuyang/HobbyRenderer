@@ -116,4 +116,13 @@ srinput SHARCQueryInputs
 
     // Output
     RWTexture2D<float4> m_IndirectOutput;
+
+    // Scene geometry (read-only) — required by the cache heatmap to trace one
+    // indirect ray and check SharcGetCachedRadiance at the hit point.
+    RaytracingAccelerationStructure m_SceneAS;
+    StructuredBuffer<PerInstanceData>   m_Instances;
+    StructuredBuffer<MeshData>          m_MeshData;
+    StructuredBuffer<MaterialConstants> m_Materials;
+    StructuredBuffer<VertexQuantized>   m_Vertices;
+    StructuredBuffer<uint>              m_Indices;
 };

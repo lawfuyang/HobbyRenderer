@@ -153,6 +153,6 @@ srinput SHARCDebugMode
 {
     static const uint SHARC_DEBUG_OFF                   = 0;
     static const uint SHARC_DEBUG_VOXEL_COLOR           = 1;  // Hash-based color per voxel
-    static const uint SHARC_DEBUG_SAMPLE_COUNT          = 2;  // Blue(0 samples) → Red(100+ samples)
-    static const uint SHARC_DEBUG_ACCUMULATED_RADIANCE  = 3;  // Raw SHARC output before BRDF modulation
+    static const uint SHARC_DEBUG_ACCUMULATED_RADIANCE  = 2;  // Raw SHARC output before BRDF modulation
+    static const uint SHARC_DEBUG_CACHE_HEATMAP         = 3;  // Green=cache hit (found data), Red=cache miss (no data yet)
 };
