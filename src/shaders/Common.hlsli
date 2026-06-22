@@ -56,6 +56,14 @@ float2 ClipXYToUV(float2 xy)
     return xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
 }
 
+// Reconstruct world-space position from a UV coordinate, depth value, and clip-to-world matrix.
+float3 ReconstructWorldPos(float2 uv, float depth, float4x4 matClipToWorld)
+{
+    float2 clipXY  = UVToClipXY(uv);
+    float4 worldH = MatrixMultiply(float4(clipXY, depth, 1.0f), matClipToWorld);
+    return worldH.xyz / worldH.w;
+}
+
 float3 DecodeOct(float2 e)
 {
     float3 v = float3(e, 1.0f - abs(e.x) - abs(e.y));

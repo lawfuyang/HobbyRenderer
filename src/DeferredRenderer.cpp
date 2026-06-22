@@ -11,6 +11,7 @@ extern RGTextureHandle g_RG_GBufferEmissive;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_RTXDIDIComposited;   // CompositingPass output — final DI + emissive composite
+extern RGTextureHandle g_RG_SHARCIndirect;       // SHARCQuery output — screen-space indirect radiance
 
 class DeferredRenderer : public IRenderer
 {
@@ -31,6 +32,10 @@ public:
         // Conditionally read the RTXDI composited output when ReSTIR DI is enabled
         if (g_Renderer.m_EnableReSTIRDI)
             renderGraph.ReadTexture(g_RG_RTXDIDIComposited);
+
+        // Conditionally read the SHARC indirect output when SHARC is the selected technique
+        if (g_Renderer.m_IndirectLightingTechnique == IndirectLightingTechnique::SHARC)
+            renderGraph.ReadTexture(g_RG_SHARCIndirect);
 
         return true;
     }
@@ -69,11 +74,18 @@ public:
         dcb.SetDebugMode(g_Renderer.m_DebugMode);
         dcb.SetUseReSTIRDI(g_Renderer.m_EnableReSTIRDI ? 1u : 0u);
         dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
+        dcb.SetIndirectLightingMode(static_cast<uint32_t>(g_Renderer.m_IndirectLightingTechnique));
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
         // t8: RTXDI composited output (DI + emissive, already remodulated by CompositingPass)
         nvrhi::TextureHandle rtxdiComposited = g_Renderer.m_EnableReSTIRDI
             ? renderGraph.GetTexture(g_RG_RTXDIDIComposited, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DefaultTextureBlack;
+
+        // t14: SHARC indirect radiance (written by SHARCQuery pass; black fallback when SHARC is inactive)
+        nvrhi::TextureHandle sharcIndirect =
+            (g_Renderer.m_IndirectLightingTechnique == IndirectLightingTechnique::SHARC)
+            ? renderGraph.GetTexture(g_RG_SHARCIndirect, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureBlack;
 
         srrhi::DeferredLightingInputs dlInputs;
@@ -92,6 +104,7 @@ public:
         dlInputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
         dlInputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
         dlInputs.SetRTXDIDIComposited(rtxdiComposited);
+        dlInputs.SetSHARCIndirect(sharcIndirect);
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(dlInputs);
 
         nvrhi::FramebufferDesc fbDesc;

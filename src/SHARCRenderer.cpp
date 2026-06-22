@@ -215,7 +215,38 @@ public:
             g_Renderer.AddComputePass(params);
         }
 
-        // Query pass will be added in Phase 4.
+        // ── Pass 3: SHARC Query ──────────────────────────────────────────────
+        // Fullscreen compute pass: reads GBuffer depth + normals, calls
+        // SharcGetCachedRadiance() at each primary surface, and writes the
+        // resulting indirect radiance to g_RG_SHARCIndirect for compositing
+        // in DeferredLighting.
+        {
+            // The Resolve pass left the resolved buffer in UAV state; the Query
+            // pass reads it as an SRV.  Obtain it with Read access so the
+            // render-graph inserts the UAV→SRV barrier automatically.
+            nvrhi::BufferHandle  resolvedSRV   = renderGraph.GetBuffer (g_RG_SHARCResolved,    RGResourceAccessMode::Read);
+            nvrhi::BufferHandle  hashEntriesSRV= renderGraph.GetBuffer (g_RG_SHARCHashEntries, RGResourceAccessMode::Read);
+            nvrhi::TextureHandle indirectOutput= renderGraph.GetTexture(g_RG_SHARCIndirect,    RGResourceAccessMode::Write);
+
+            srrhi::SHARCQueryInputs inputs;
+            inputs.SetConst(cb);
+            inputs.SetDepth(depth);
+            inputs.SetNormals(normals);
+            inputs.SetHashEntries(hashEntriesSRV);
+            inputs.SetResolved(resolvedSRV);
+            inputs.SetIndirectOutput(indirectOutput, 0);
+
+            Renderer::RenderPassParams params{};
+            params.commandList    = commandList;
+            params.shaderID       = ShaderID::SHARCQUERY_SHARCQUERY_CSMAIN;
+            params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
+            params.dispatchParams = {
+                .x = DivideAndRoundUp(width,  8u),
+                .y = DivideAndRoundUp(height, 8u),
+                .z = 1u
+            };
+            g_Renderer.AddComputePass(params);
+        }
     }
 };
 

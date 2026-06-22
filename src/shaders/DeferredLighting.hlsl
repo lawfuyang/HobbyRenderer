@@ -22,6 +22,7 @@ static const StructuredBuffer<srrhi::MeshData>          g_MeshData           = s
 static const StructuredBuffer<uint>                     g_Indices            = srrhi::DeferredLightingInputs::GetIndices();
 static const StructuredBuffer<srrhi::GPULight>          g_Lights             = srrhi::DeferredLightingInputs::GetLights();
 static const Texture2D<float4>                          g_RTXDIDIComposited  = srrhi::DeferredLightingInputs::GetRTXDIDIComposited();
+static const Texture2D<float4>                          g_SHARCIndirect      = srrhi::DeferredLightingInputs::GetSHARCIndirect();
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -105,6 +106,13 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
             LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
             color = directLighting.diffuse + directLighting.specular;
             color += emissive;
+        }
+
+        // ---- SHARC Indirect ----
+        if (g_Deferred.m_IndirectLightingMode == srrhi::DeferredLightingConsts::INDIRECT_LIGHTING_MODE_SHARC)
+        {
+            // SHARC cache stores outgoing indirect radiance (BRDF already baked in during the Update pass). Add directly — no further BRDF modulation needed.
+            color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;
         }
     }
 

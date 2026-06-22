@@ -16,6 +16,7 @@ cbuffer DeferredLightingConstants
     uint m_RadianceMipCount;
     uint m_UseReSTIRDI;
     uint m_UseReSTIRDIDenoised;
+    uint m_IndirectLightingMode;  // 0 = None, 1 = ReSTIR GI, 2 = SHARC
 };
 
 srinput DeferredLightingInputs
@@ -36,4 +37,5 @@ srinput DeferredLightingInputs
     StructuredBuffer<VertexQuantized> Vertices;           // t11
     StructuredBuffer<MeshData> MeshData;                  // t12
     StructuredBuffer<uint> Indices;                       // t13
+    Texture2D<float4> SHARCIndirect;                      // t14
 };
