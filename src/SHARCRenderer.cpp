@@ -152,6 +152,11 @@ public:
         constants.SetViewportSize(Vector2U{ width, height });
         constants.SetViewportSizeInv(Vector2{ 1.0f / width, 1.0f / height });
         constants.SetMatClipToWorld(g_Renderer.m_Scene.m_Camera.GetInvViewProjMatrix());
+        // Previous-frame camera position from Scene's ViewPrev matrix.
+        {
+            const auto& vt = g_Renderer.m_Scene.m_ViewPrev.m_MatViewToWorld;
+            constants.SetCameraPositionPrev(DirectX::XMFLOAT3{ vt.m[3][0], vt.m[3][1], vt.m[3][2] });
+        }
 
         commandList->writeBuffer(cb, &constants, sizeof(constants));
 
@@ -188,7 +193,29 @@ public:
             g_Renderer.AddComputePass(params);
         }
 
-        // Resolve and Query passes will be added in Phase 3.
+        // ── Pass 2: SHARC Resolve ────────────────────────────────────────────
+        // Iterates over every cache entry (linear dispatch) and performs
+        // temporal EMA blending, staleness eviction, and accumulation clear.
+        {
+            srrhi::SHARCResolveInputs inputs;
+            inputs.SetConst(cb);
+            inputs.SetHashEntries(hashEntries);
+            inputs.SetAccumulation(accumulation);
+            inputs.SetResolved(resolved);
+
+            const uint32_t resolveGroups = DivideAndRoundUp(
+                static_cast<uint32_t>(srrhi::SHARCConsts::SHARC_CACHE_ENTRIES),
+                static_cast<uint32_t>(srrhi::SHARCConsts::LINEAR_BLOCK_SIZE));
+
+            Renderer::RenderPassParams params{};
+            params.commandList    = commandList;
+            params.shaderID       = ShaderID::SHARCRESOLVE_SHARCRESOLVE_CSMAIN;
+            params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
+            params.dispatchParams = { .x = resolveGroups, .y = 1u, .z = 1u };
+            g_Renderer.AddComputePass(params);
+        }
+
+        // Query pass will be added in Phase 4.
     }
 };
 

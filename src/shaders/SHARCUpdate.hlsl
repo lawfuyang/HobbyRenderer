@@ -115,9 +115,9 @@ SharcParameters BuildSharcParameters()
 
     // Hash-grid tuning — hardcoded per SHARC defaults for typical scenes.
     sharcParams.hashGridParameters.cameraPosition = g_Const.m_CameraPosition;
-    sharcParams.hashGridParameters.logarithmBase  = 2.0f;
-    sharcParams.hashGridParameters.sceneScale     = 50.0f;
-    sharcParams.hashGridParameters.levelBias      = 0.0f;
+    sharcParams.hashGridParameters.logarithmBase  = srrhi::SHARCConsts::HASH_GRID_LOGARITHM_BASE;
+    sharcParams.hashGridParameters.sceneScale     = srrhi::SHARCConsts::HASH_GRID_SCENE_SCALE;
+    sharcParams.hashGridParameters.levelBias      = srrhi::SHARCConsts::HASH_GRID_LEVEL_BIAS;
 
     sharcParams.hashGridData.capacity             = srrhi::SHARCConsts::SHARC_CACHE_ENTRIES;
     sharcParams.hashGridData.hashEntriesBuffer    = g_HashEntries;
