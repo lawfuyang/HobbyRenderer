@@ -108,6 +108,8 @@ srinput SHARCQueryInputs
     // GBuffer inputs (read)
     Texture2D<float>    m_Depth;
     Texture2D<float2>   m_Normals;
+    Texture2D<float4>   m_Albedo;
+    Texture2D<float2>   m_ORM;
 
     // SHARC cache (read-only)
     RWStructuredBuffer<uint64_t>          m_HashEntries;

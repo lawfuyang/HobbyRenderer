@@ -239,6 +239,8 @@ public:
             inputs.SetConst(cb);
             inputs.SetDepth(depth);
             inputs.SetNormals(normals);
+            inputs.SetAlbedo(albedo);
+            inputs.SetORM(orm);
             inputs.SetHashEntries(hashEntriesSRV);
             inputs.SetResolved(resolvedSRV);
             inputs.SetAccumulation(accumBuffer);
