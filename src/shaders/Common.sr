@@ -143,3 +143,16 @@ srinput IndirectLightingMode
     static const uint INDIRECT_LIGHTING_MODE_RESTIR_GI  = 1;
     static const uint INDIRECT_LIGHTING_MODE_SHARC      = 2;
 };
+
+// ---------------------------------------------------------------------------
+// SHARC debug overlay modes — passed via SHARCConstants::m_SHARCDebugMode.
+// Off (0) means normal operation; all other values redirect the SHARCQuery
+// output to a diagnostic visualization instead of indirect radiance.
+// ---------------------------------------------------------------------------
+srinput SHARCDebugMode
+{
+    static const uint SHARC_DEBUG_OFF                   = 0;
+    static const uint SHARC_DEBUG_VOXEL_COLOR           = 1;  // Hash-based color per voxel
+    static const uint SHARC_DEBUG_SAMPLE_COUNT          = 2;  // Blue(0 samples) → Red(100+ samples)
+    static const uint SHARC_DEBUG_ACCUMULATED_RADIANCE  = 3;  // Raw SHARC output before BRDF modulation
+};

@@ -76,14 +76,6 @@ enum class RenderingMode : uint32_t
     ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER
 };
 
-// Indirect lighting technique selection (mutually exclusive)
-enum class IndirectLightingTechnique : uint32_t
-{
-    None     = 0,
-    RestirGI = 1,
-    SHARC    = 2,
-};
-
 struct Renderer
 {
     SingletonFunctionsSimple(Renderer);
@@ -265,8 +257,11 @@ struct Renderer
     bool m_EnableReSTIRDI = true;
     bool m_EnableReSTIRDIRelaxDenoising = true;
 
-    // Indirect lighting technique (mutually exclusive: None / RestirGI)
-    IndirectLightingTechnique m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
+    // Indirect lighting technique (mutually exclusive: 0=None, 1=RestirGI, 2=SHARC)
+    uint32_t m_IndirectLightingTechnique = 2;
+
+    // SHARC debug overlay (SHARCDebugMode enum value; 0 = off)
+    uint32_t m_SHARCDebugMode = 0;
 
     // bloom
     float m_BloomKnee = 0.1f;

@@ -41,7 +41,7 @@ public:
     bool Setup(RenderGraph& renderGraph) override
     {
         // Only participate when SHARC is the selected indirect technique.
-        if (g_Renderer.m_IndirectLightingTechnique != IndirectLightingTechnique::SHARC)
+        if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
             return false;
 
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
@@ -110,6 +110,11 @@ public:
             renderGraph.DeclareTexture(td, g_RG_SHARCIndirect);
         }
 
+        renderGraph.ReadTexture(g_RG_DepthTexture);
+        renderGraph.ReadTexture(g_RG_GBufferNormals);
+        renderGraph.ReadTexture(g_RG_GBufferAlbedo);
+        renderGraph.ReadTexture(g_RG_GBufferORM);
+
         return true;
     }
 
@@ -157,6 +162,7 @@ public:
             const auto& vt = g_Renderer.m_Scene.m_ViewPrev.m_MatViewToWorld;
             constants.SetCameraPositionPrev(DirectX::XMFLOAT3{ vt.m[3][0], vt.m[3][1], vt.m[3][2] });
         }
+        constants.SetSHARCDebugMode(g_Renderer.m_SHARCDebugMode);
 
         commandList->writeBuffer(cb, &constants, sizeof(constants));
 
@@ -224,10 +230,10 @@ public:
             // The Resolve pass left the resolved buffer in UAV state; the Query
             // pass reads it as an SRV.  Obtain it with Read access so the
             // render-graph inserts the UAV→SRV barrier automatically.
-            nvrhi::BufferHandle  resolvedSRV   = renderGraph.GetBuffer (g_RG_SHARCResolved,    RGResourceAccessMode::Read);
-            nvrhi::BufferHandle  hashEntriesSRV= renderGraph.GetBuffer (g_RG_SHARCHashEntries, RGResourceAccessMode::Read);
-            nvrhi::BufferHandle  accumBuffer   = renderGraph.GetBuffer (g_RG_SHARCAccumulation, RGResourceAccessMode::Read);
-            nvrhi::TextureHandle indirectOutput= renderGraph.GetTexture(g_RG_SHARCIndirect,    RGResourceAccessMode::Write);
+            nvrhi::BufferHandle  resolvedSRV    = renderGraph.GetBuffer (g_RG_SHARCResolved,    RGResourceAccessMode::Read);
+            nvrhi::BufferHandle  hashEntriesSRV = renderGraph.GetBuffer (g_RG_SHARCHashEntries, RGResourceAccessMode::Read);
+            nvrhi::BufferHandle  accumBuffer    = renderGraph.GetBuffer (g_RG_SHARCAccumulation, RGResourceAccessMode::Read);
+            nvrhi::TextureHandle indirectOutput = renderGraph.GetTexture(g_RG_SHARCIndirect,    RGResourceAccessMode::Write);
 
             srrhi::SHARCQueryInputs inputs;
             inputs.SetConst(cb);

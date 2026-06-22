@@ -1066,8 +1066,10 @@ public:
             renderGraph.DeclareBuffer(bd, m_RG_PrimitiveLightBuffer);
         }
 
+        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled && g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI);
+
         // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing
-        if (g_ReSTIRGI_Enabled)
+        if (bDoReSTIRGI)
         {
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(width) * height * sizeof(srrhi::SecondaryGBufferData);
@@ -1079,7 +1081,7 @@ public:
         }
 
         // GI reservoir buffer (persistent — 2 frames of RTXDI_PackedGIReservoir per pixel)
-        if (g_ReSTIRGI_Enabled)
+        if (bDoReSTIRGI)
         {
             const RTXDI_ReservoirBufferParameters giRbp = m_ReSTIRGIContext->GetReservoirBufferParameters();
             const uint64_t totalGIReservoirs = static_cast<uint64_t>(giRbp.reservoirArrayPitch) * rtxdi::c_NumReSTIRGIReservoirBuffers;
@@ -1101,6 +1103,8 @@ public:
         PROFILE_FUNCTION();
         
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled && g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI);
 
         // Advance the frame index so the context produces fresh buffer indices
         m_Context->SetFrameIndex(g_Renderer.m_FrameNumber);
@@ -1262,7 +1266,7 @@ public:
             // only when GI is disabled. When GI is enabled, GI FinalShading (isLastPass=true)
             // is the NRD-packing pass for the combined DI+GI signal.
             restirDI.shadingParams.enableDenoiserInputPacking =
-                (g_Renderer.m_EnableReSTIRDIRelaxDenoising && !g_ReSTIRGI_Enabled) ? 1u : 0u;
+                (g_Renderer.m_EnableReSTIRDIRelaxDenoising && (!bDoReSTIRGI)) ? 1u : 0u;
 
             g_Const.SetRestirDI(restirDI);
         }
@@ -1270,8 +1274,8 @@ public:
         // ---- Misc flags ----
         g_Const.SetEnablePreviousTLAS(1u);
         g_Const.SetDiscountNaiveSamples(m_Context->GetSpatialResamplingParameters().discountNaiveSamples);
-        g_Const.SetEnableBrdfIndirect(g_ReSTIRGI_Enabled ? 1u : 0u);
-        g_Const.SetEnableBrdfAdditiveBlend(g_ReSTIRGI_Enabled ? 1u : 0u);
+        g_Const.SetEnableBrdfIndirect(bDoReSTIRGI ? 1u : 0u);
+        g_Const.SetEnableBrdfAdditiveBlend(bDoReSTIRGI ? 1u : 0u);
         g_Const.SetEnableAccumulation(0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
         // Sync the standalone bool with the debug mode combo so both paths work
@@ -1420,10 +1424,10 @@ public:
         nvrhi::BufferHandle  prepareLightsTaskBuf= renderGraph.GetBuffer(m_RG_PrepareLightsTasks,    RGResourceAccessMode::Write);
         nvrhi::BufferHandle  primitiveLightBuf   = renderGraph.GetBuffer(m_RG_PrimitiveLightBuffer,   RGResourceAccessMode::Write);
         // GI buffers — resolved from render graph when GI is enabled, otherwise fall back to dummies
-        nvrhi::BufferHandle  giReservoirBuf    = g_ReSTIRGI_Enabled
+        nvrhi::BufferHandle  giReservoirBuf    = bDoReSTIRGI
             ? renderGraph.GetBuffer(m_RG_GIReservoirBuffer,  RGResourceAccessMode::Write)
             : cr.DummyUAVStructuredBuffer;
-        nvrhi::BufferHandle  secondaryGBufBuf  = g_ReSTIRGI_Enabled
+        nvrhi::BufferHandle  secondaryGBufBuf  = bDoReSTIRGI
             ? renderGraph.GetBuffer(m_RG_SecondaryGBuffer,   RGResourceAccessMode::Write)
             : cr.DummyUAVStructuredBuffer;
 
@@ -1853,9 +1857,9 @@ public:
         }
 
         // ------------------------------------------------------------------
-        // ReSTIR GI passes (conditional on g_ReSTIRGI_Enabled)
+        // ReSTIR GI passes (conditional on g_ReSTIRGI_Enabled and indirect lighting technique)
         // ------------------------------------------------------------------
-        if (g_ReSTIRGI_Enabled)
+        if (bDoReSTIRGI)
         {
             // 1. BrdfRayTracing — traces BRDF rays and fills the secondary GBuffer
             {

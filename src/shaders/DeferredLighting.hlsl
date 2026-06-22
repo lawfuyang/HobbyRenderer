@@ -113,8 +113,7 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
         if (g_Deferred.m_IndirectLightingMode == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
         {
             // SHARC cache stores outgoing indirect radiance (BRDF already baked in during the Update pass). Add directly — no further BRDF modulation needed.
-            // TODO: uncomment this once SHARC is fully integrated and tested
-            //color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;
+            color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;
         }
     }
 

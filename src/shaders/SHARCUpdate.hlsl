@@ -35,10 +35,9 @@ static const Texture2D<float2>   g_Normals   = srrhi::SHARCUpdateInputs::GetNorm
 static const Texture2D<float4>   g_Albedo    = srrhi::SHARCUpdateInputs::GetAlbedo();
 static const Texture2D<float2>   g_ORM       = srrhi::SHARCUpdateInputs::GetORM();
 
-static RWStructuredBuffer<uint64_t>              g_HashEntries  = srrhi::SHARCUpdateInputs::GetHashEntries();
-static RWStructuredBuffer<SharcAccumulationData> g_Accumulation = srrhi::SHARCUpdateInputs::GetAccumulation();
-static RWStructuredBuffer<SharcPackedData>       g_Resolved     = srrhi::SHARCUpdateInputs::GetResolved();
-
+static RWStructuredBuffer<uint64_t>              g_HashEntries    = srrhi::SHARCUpdateInputs::GetHashEntries();
+static RWStructuredBuffer<SharcAccumulationData> g_Accumulation   = srrhi::SHARCUpdateInputs::GetAccumulation();
+static RWStructuredBuffer<SharcPackedData>       g_Resolved       = srrhi::SHARCUpdateInputs::GetResolved();
 static const RaytracingAccelerationStructure             g_SceneAS   = srrhi::SHARCUpdateInputs::GetSceneAS();
 static const StructuredBuffer<srrhi::GPULight>           g_Lights    = srrhi::SHARCUpdateInputs::GetLights();
 static const StructuredBuffer<srrhi::PerInstanceData>    g_Instances = srrhi::SHARCUpdateInputs::GetInstances();
@@ -188,11 +187,11 @@ void SHARCUpdate_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
 
             if (firstHit)
             {
-                // First miss — create entry with sky radiance
+                // First miss — create entry with sky radiance, modulated by surface BSDF
                 SharcHitData hd;
                 hd.positionWorld = surfPos;
                 hd.normalWorld   = surfN;
-                SharcUpdateHit(sharcParams, sharcState, hd, sky, NextFloat(rng));
+                SharcUpdateHit(sharcParams, sharcState, hd, sky * throughput, NextFloat(rng));
             }
             else
             {
@@ -220,12 +219,16 @@ void SHARCUpdate_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
                         pbr.baseColor, pbr.roughness, pbr.metallic,
                         rng) + pbr.emissive;
 
-        // Store at the surface we bounced FROM
+        // Store at the surface we bounced FROM, modulated by that surface's diffuse BRDF.
+        // throughput = surfColor * (1 - surfMetal) already computed above and
+        // represents the MC weight (BRDF × cosθ / pdf) for cosine-weighted sampling.
+        // SharcSetThroughput only back-propagates to prior vertices, so we must
+        // explicitly apply the current surface's throughput here.
         SharcHitData hd;
         hd.positionWorld = surfPos;
         hd.normalWorld   = surfN;
 
-        if (!SharcUpdateHit(sharcParams, sharcState, hd, Li, NextFloat(rng)))
+        if (!SharcUpdateHit(sharcParams, sharcState, hd, Li * throughput, NextFloat(rng)))
             break;
 
         // Advance to the hit surface for the next bounce

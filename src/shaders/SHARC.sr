@@ -45,6 +45,7 @@ cbuffer SHARCConstants
     float2   m_ViewportSizeInv;
     float4x4 m_MatClipToWorld;       // clip-to-world (jittered) for ReconstructWorldPos
     float3   m_CameraPositionPrev;   // previous-frame camera world position (for resolve)
+    uint     m_SHARCDebugMode;       // SHARCDebugMode enum value (0 = off)
 };
 
 // ---------------------------------------------------------------------------

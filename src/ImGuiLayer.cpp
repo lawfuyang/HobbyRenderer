@@ -133,14 +133,23 @@ void ImGuiLayer::UpdateFrame()
 
                 ImGui::Text("Technique:");
                 ImGui::SameLine();
-                if (ImGui::RadioButton("None",     &technique, static_cast<int>(IndirectLightingTechnique::None)))
-                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::None;
+                if (ImGui::RadioButton("None",     &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE)))
+                    g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE;
                 ImGui::SameLine();
-                if (ImGui::RadioButton("ReSTIR GI", &technique, static_cast<int>(IndirectLightingTechnique::RestirGI)))
-                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::RestirGI;
+                if (ImGui::RadioButton("ReSTIR GI", &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI)))
+                    g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI;
                 ImGui::SameLine();
-                if (ImGui::RadioButton("SHARC", &technique, static_cast<int>(IndirectLightingTechnique::SHARC)))
-                    g_Renderer.m_IndirectLightingTechnique = IndirectLightingTechnique::SHARC;
+                if (ImGui::RadioButton("SHARC", &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)))
+                    g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC;
+
+                // SHARC debug overlay
+                if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+                {
+                    const char* debugModes[] = { "Off", "Voxel Color", "Sample Count", "Accumulated Radiance" };
+                    int debugMode = static_cast<int>(g_Renderer.m_SHARCDebugMode);
+                    if (ImGui::Combo("SHARC Debug", &debugMode, debugModes, IM_ARRAYSIZE(debugModes)))
+                        g_Renderer.m_SHARCDebugMode = static_cast<uint32_t>(debugMode);
+                }
 
                 ImGui::TreePop();
             }

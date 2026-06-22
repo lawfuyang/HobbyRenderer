@@ -5,6 +5,9 @@
 // SharcGetCachedRadiance() to look up the resolved radiance cache.
 // The result is written to an R11G11B10_FLOAT UAV that DeferredLighting reads
 // and composites as diffuse indirect.
+//
+// When g_Const.m_SHARCDebugMode != SHARC_DEBUG_OFF the output is replaced by
+// a diagnostic visualization (see SHARCDebugMode constants in Common.sr).
 
 // ---- SHARC defines (must precede SharcCommon.h) ----------------------------
 #define SHARC_QUERY                     1
@@ -27,13 +30,14 @@
 
 static const srrhi::SHARCConstants g_Const = srrhi::SHARCQueryInputs::GetConst();
 
-static const Texture2D<float>   g_Depth   = srrhi::SHARCQueryInputs::GetDepth();
-static const Texture2D<float2>  g_Normals = srrhi::SHARCQueryInputs::GetNormals();
+static const Texture2D<float>   g_Depth         = srrhi::SHARCQueryInputs::GetDepth();
+static const Texture2D<float2>  g_Normals        = srrhi::SHARCQueryInputs::GetNormals();
 
-static RWStructuredBuffer<uint64_t>        g_HashEntries = srrhi::SHARCQueryInputs::GetHashEntries();
-static RWStructuredBuffer<SharcPackedData> g_Resolved    = srrhi::SHARCQueryInputs::GetResolved();
+static RWStructuredBuffer<uint64_t>              g_HashEntries  = srrhi::SHARCQueryInputs::GetHashEntries();
+static RWStructuredBuffer<SharcPackedData>       g_Resolved     = srrhi::SHARCQueryInputs::GetResolved();
 static RWStructuredBuffer<SharcAccumulationData> g_Accumulation = srrhi::SHARCQueryInputs::GetAccumulation();
-static RWTexture2D<float4> u_IndirectOutput = srrhi::SHARCQueryInputs::GetIndirectOutput();
+
+static RWTexture2D<float4>      u_IndirectOutput = srrhi::SHARCQueryInputs::GetIndirectOutput();
 
 // ============================================================================
 // Compute shader entry point
@@ -58,14 +62,68 @@ void SHARCQuery_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
     float3 worldPos = ReconstructWorldPos(uv, depth, g_Const.m_MatClipToWorld);
     float3 N        = DecodeNormal(g_Normals[pixel]);
 
-    SharcHitData hitData;
-    hitData.positionWorld = worldPos;
-    hitData.normalWorld   = N;
-
     SharcParameters sharcParams = BuildSharcParameters(g_Const, g_HashEntries, g_Resolved, g_Accumulation);
 
-    float3 indirectRadiance = 0;
-    bool   found = SharcGetCachedRadiance(sharcParams, hitData, indirectRadiance, /*debug=*/false);
+    // ---- Normal (non-debug) path -------------------------------------------
+    if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_OFF)
+    {
+        SharcHitData hitData;
+        hitData.positionWorld = worldPos;
+        hitData.normalWorld   = N;
 
-    u_IndirectOutput[pixel] = found ? float4(indirectRadiance, 1.0f) : float4(0, 0, 0, 0);
+        float3 indirectRadiance = 0;
+        bool   found = SharcGetCachedRadiance(sharcParams, hitData, indirectRadiance, /*skipResponsiveLighting=*/false);
+
+        u_IndirectOutput[pixel] = found ? float4(indirectRadiance, 1.0f) : float4(0, 0, 0, 0);
+        return;
+    }
+
+    // ---- Debug overlays ----------------------------------------------------
+
+    // Mode 1: VoxelColor — hash-based color per voxel, reveals grid structure
+    if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_VOXEL_COLOR)
+    {
+        float3 voxelColor = HashGridDebugColoredHash(worldPos, N, sharcParams.hashGridParameters);
+        u_IndirectOutput[pixel] = float4(voxelColor, 1.0f);
+        return;
+    }
+
+    // Modes 3, 7 all need a cache lookup — do it once here
+    HashGridKey  dbgKey;
+    HashGridIndex dbgIdx = HashGridFindEntry(sharcParams.hashGridData, worldPos, N, sharcParams.hashGridParameters, dbgKey);
+
+    // Mode 3: SampleCount — Blue(0 samples) → Red(100+ samples)
+    if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_SAMPLE_COUNT)
+    {
+        if (dbgIdx != HASH_GRID_INVALID_CACHE_INDEX)
+        {
+            SharcVoxelData vd = SharcGetVoxelData(g_Resolved, dbgIdx);
+            float t = saturate(vd.accumulatedSampleNum / 100.0f);
+            // Blue=0 samples, Red=100+ samples
+            u_IndirectOutput[pixel] = float4(t, t * 0.25f, 1.0f - t, 1.0f);
+        }
+        else
+        {
+            u_IndirectOutput[pixel] = float4(0, 0, 0, 1.0f);
+        }
+        return;
+    }
+
+    // Mode 7: AccumulatedRadiance — raw SHARC output before BRDF modulation
+    if (g_Const.m_SHARCDebugMode == srrhi::SHARCDebugMode::SHARC_DEBUG_ACCUMULATED_RADIANCE)
+    {
+        if (dbgIdx != HASH_GRID_INVALID_CACHE_INDEX)
+        {
+            SharcVoxelData vd = SharcGetVoxelData(g_Resolved, dbgIdx);
+            u_IndirectOutput[pixel] = float4(vd.accumulatedRadiance, 1.0f);
+        }
+        else
+        {
+            u_IndirectOutput[pixel] = float4(0, 0, 0, 1.0f);
+        }
+        return;
+    }
+
+    // Fallback for unknown debug modes — write black
+    u_IndirectOutput[pixel] = float4(0, 0, 0, 1.0f);
 }
