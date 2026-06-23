@@ -561,6 +561,16 @@ void Scene::Update(float deltaTime)
 
 void Scene::Shutdown()
 {
+	// Save current camera state before tearing down the scene
+	if (!Config::Get().m_ScenePath.empty())
+	{
+		CameraSavedState state;
+		state.position = m_Camera.GetPosition();
+		state.yaw     = m_Camera.GetYaw();
+		state.pitch   = m_Camera.GetPitch();
+		g_Renderer.m_CameraStateManager.SaveCamera(Config::Get().m_ScenePath, state);
+	}
+
 	// Release GPU buffer handles so NVRHI can free underlying resources
 	m_VertexBufferQuantized = nullptr;
 	m_IndexBuffer = nullptr;

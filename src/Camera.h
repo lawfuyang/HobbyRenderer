@@ -19,6 +19,12 @@ public:
     Camera();
 
     Vector3 GetPosition() const { return m_Position; }
+    float GetYaw() const { return m_Yaw; }
+    float GetPitch() const { return m_Pitch; }
+
+    void SetPosition(const Vector3& pos) { m_Position = pos; }
+    void SetYaw(float yaw) { m_Yaw = yaw; }
+    void SetPitch(float pitch) { m_Pitch = pitch; }
 
     void ProcessEvent(const SDL_Event& event);
     void Update();

@@ -1,4 +1,3 @@
-#include "pch.h"
 #include "ProceduralDefaultCube.h"
 #include "meshoptimizer.h"
 

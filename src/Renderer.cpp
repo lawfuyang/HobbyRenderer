@@ -383,8 +383,27 @@ void Renderer::Initialize()
         return;
     }
 
+    m_CameraStateManager.Initialize();
+
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
+
+    // Restore saved camera state (overrides GLTF camera if present)
+    {
+        const std::string& scenePath = Config::Get().m_ScenePath;
+        if (!scenePath.empty())
+        {
+            m_CameraStateManager.SetScenePath(scenePath);
+            CameraSavedState saved;
+            if (m_CameraStateManager.LoadCamera(scenePath, saved))
+            {
+                m_Scene.m_Camera.SetPosition(saved.position);
+                m_Scene.m_Camera.SetYaw(saved.yaw);
+                m_Scene.m_Camera.SetPitch(saved.pitch);
+                SDL_Log("[CameraState] Restored camera for scene: %s", scenePath.c_str());
+            }
+        }
+    }
 
     // Initialize renderers with scene-dependent resources
     for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
@@ -579,6 +598,17 @@ void Renderer::Run()
 
         // Increment frame number for double buffering
         m_FrameNumber++;
+
+        // Periodic camera-state save (every 1 s, only if camera moved)
+        if (!Config::Get().m_ScenePath.empty())
+        {
+            float dt = static_cast<float>(m_FrameTime / 1000.0);
+            CameraSavedState state;
+            state.position = m_Scene.m_Camera.GetPosition();
+            state.yaw     = m_Scene.m_Camera.GetYaw();
+            state.pitch   = m_Scene.m_Camera.GetPitch();
+            m_CameraStateManager.Update(dt, state);
+        }
 
         MicroProfileFlip(nullptr);
     }

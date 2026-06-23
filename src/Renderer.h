@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Camera.h"
+#include "CameraStateManager.h"
 #include "GraphicRHI.h"
 #include "RenderGraph.h"
 #include "Scene.h"
@@ -216,6 +217,9 @@ struct Renderer
 
     // Scene
     Scene m_Scene;
+
+    // Camera state persistence (periodic save + restore on load)
+    CameraStateManager m_CameraStateManager;
 
     // Renderers
     std::vector<std::shared_ptr<IRenderer>> m_Renderers;
