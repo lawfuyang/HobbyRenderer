@@ -209,7 +209,7 @@ void SHARCQuery_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
         if (dbgIdx != HASH_GRID_INVALID_CACHE_INDEX)
         {
             SharcVoxelData vd = SharcGetVoxelData(g_Resolved, dbgIdx);
-            u_IndirectOutput[pixel] = float4(vd.accumulatedRadiance, 1.0f);
+            u_IndirectOutput[pixel] = float4(vd.accumulatedRadiance.radiance, 1.0f);
         }
         else
         {

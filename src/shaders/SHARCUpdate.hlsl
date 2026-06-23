@@ -213,16 +213,13 @@ void SHARCUpdate_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
         float3 hitN  = getBentNormal(geoN, pbr.normal, ray.Direction);
 
         // Evaluate indirect radiance at the hit point.
-        // NOTE: Li * throughput is needed here because SharcUpdateHit's direct
-        // store (at the CURRENT vertex) uses directLighting with unit weight.
-        // The * throughput makes the cache entry represent *exitant* radiance
-        // (light leaving this surface, modulated by its BSDF).  Without it,
-        // the cache would store incident radiance at the next hit, losing the
-        // current surface's color information.
+        // Clamp roughness — prevents caching local specular highlights from glossy hit surfaces.
+        // The ray direction sampling is always cosine-weighted (purely diffuse), so this clamp only affects
+        // the specular component of EvaluateDirectLightingAtHit.
         float3 V  = -rayDir;
         float3 Li = EvaluateDirectLightingAtHit(
                         attr.m_WorldPos, hitN, V,
-                        pbr.baseColor, pbr.roughness, pbr.metallic,
+                        pbr.baseColor, max(pbr.roughness, srrhi::SHARCConsts::SHARC_ROUGHNESS_MIN), pbr.metallic,
                         rng) + pbr.emissive;
 
         SharcHitData hd;

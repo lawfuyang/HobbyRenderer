@@ -14,11 +14,12 @@ srinput SHARCConsts
     static const uint  SPARSE_BLOCK_SIZE        = 5;          // 1/25 ≈ 4% pixel coverage
     static const float RADIANCE_SCALE           = 1e3f;       // quantisation scale; reduce if overflow
     static const float ROUGHNESS_THRESHOLD      = 0.1f;       // skip near-mirror surfaces
+    static const float SHARC_ROUGHNESS_MIN       = 0.4f;       // clamp material roughness in Update to avoid caching specular highlights
     static const float HASH_GRID_LOGARITHM_BASE = 2.0f;       // controls level distribution with distance
     static const float HASH_GRID_SCENE_SCALE    = 50.0f;      // world-space scale controlling voxel size
     static const float HASH_GRID_LEVEL_BIAS     = 0.0f;       // biases level selection near camera
     static const uint  LINEAR_BLOCK_SIZE        = 256;        // resolve pass thread-group size
-    static const uint  ACCUMULATION_FRAME_NUM    = 120;       // temporal accumulation window (frames)
+    static const uint  ACCUMULATION_FRAME_NUM    = 60;       // temporal accumulation window (frames)
     static const uint  STALE_FRAME_NUM_MAX       = 64;        // frames before untouched entry is evicted
 };
 
