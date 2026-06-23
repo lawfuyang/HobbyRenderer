@@ -134,9 +134,11 @@ void StoreShadingOutput(
     bool isFirstPass,
     bool isLastPass)
 {
-    uint2 lightingTexturePos = (g_Const.denoiserMode != DENOISER_MODE_OFF)
-        ? reservoirPosition
-        : pixelPosition;
+    // Always write at full-screen pixelPosition.
+    // When checkerboard is active, reservoirPosition has a halved X coordinate
+    // that does not match the full-width output texture expected by NRD.
+    // NRD handles the checkerboard fill-in via temporal accumulation.
+    uint2 lightingTexturePos = pixelPosition;
 
     float diffuseHitT = lightDistance;
     float specularHitT = lightDistance;
@@ -219,9 +221,8 @@ void StoreShadingOutput(
     bool isFirstPassSpecular,
     bool isLastPass)
 {
-    uint2 lightingTexturePos = (g_Const.denoiserMode != DENOISER_MODE_OFF)
-        ? reservoirPosition
-        : pixelPosition;
+    // Always write at full-screen pixelPosition (see note above).
+    uint2 lightingTexturePos = pixelPosition;
 
     if (!isFirstPassDiffuse)
     {

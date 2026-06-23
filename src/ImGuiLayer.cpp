@@ -127,7 +127,7 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Separator();
 
             // ── Indirect Lighting Technique ─────────────────────────────────
-            if (ImGui::TreeNode("Indirect Lighting"))
+            if (ImGui::TreeNodeEx("Indirect Lighting", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 int technique = static_cast<int>(g_Renderer.m_IndirectLightingTechnique);
 

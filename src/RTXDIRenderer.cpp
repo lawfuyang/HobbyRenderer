@@ -56,7 +56,6 @@ static RTXDI_BoilingFilterParameters           g_ReSTIRGI_BoilingParams    = rtx
 static RTXDI_GISpatialResamplingParameters     g_ReSTIRGI_SpatialParams    = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
 static RTXDI_GIFinalShadingParameters          g_ReSTIRGI_FinalShadingParams= rtxdi::GetDefaultReSTIRGIFinalShadingParams();
 
-bool g_ReSTIRDI_ShowAdvancedSettings = false;
 rtxdi::ReSTIRDI_ResamplingMode         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
 RTXDI_DIInitialSamplingParameters      g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
 RTXDI_DITemporalResamplingParameters   g_ReSTIRDI_TemporalResamplingParams = rtxdi::GetDefaultReSTIRDITemporalResamplingParams();
@@ -72,9 +71,74 @@ rtxdi::ReGIRDynamicParameters g_ReGIR_DynamicParams{};
 // ReGIR cell visualization toggle
 bool g_ReGIR_VisualizeRegirCells = false;
 
+// ------------------------------------------------------------------
+// Quality mode presets
+// ------------------------------------------------------------------
+enum class ReSTIRDI_QualityMode { HighPerformance, HighQuality };
+
+static ReSTIRDI_QualityMode g_ReSTIRDI_QualityMode = ReSTIRDI_QualityMode::HighPerformance;
+static rtxdi::CheckerboardMode g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
+
+static void ApplyHighPerfPreset()
+{
+    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
+    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 4;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 4;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 4;
+    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightPowerRISSamples;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 0;
+    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
+    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
+    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
+    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Off;
+    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Off;
+    g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
+    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
+    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
+}
+
+static void ApplyHighQualityPreset()
+{
+    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
+    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 16;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 16;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 16;
+    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightReGIRRISSamples;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
+    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 0u;
+    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 0u;
+    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.0f;
+    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
+    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
+    g_ReSTIRDI_SpatialResamplingParams.numSamples = 4;
+    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 16;
+    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 0u;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
+}
+
 void RTXDIIMGUISettings()
 {
     ImGui::Indent();
+
+    // ---- Quality mode preset ---------------------------------------------------
+    if (ImGui::Combo("Quality Mode", reinterpret_cast<int*>(&g_ReSTIRDI_QualityMode),
+            "High Performance\0"
+            "High Quality\0"))
+    {
+        // Apply preset on combo change
+        if (g_ReSTIRDI_QualityMode == ReSTIRDI_QualityMode::HighPerformance)
+            ApplyHighPerfPreset();
+        else
+            ApplyHighQualityPreset();
+    }
+    ImGui::Separator();
 
     // ---- Resampling mode -------------------------------------------------------
     ImGui::PushItemWidth(200.f);
@@ -96,9 +160,6 @@ void RTXDIIMGUISettings()
     if (g_Renderer.m_EnableReSTIRDIRelaxDenoising)
         ImGui::TextDisabled("  Diffuse + specular denoised separately via RELAX D+S.");
 
-    ImGui::Separator();
-
-    ImGui::Checkbox("Show Advanced Settings", &g_ReSTIRDI_ShowAdvancedSettings);
     ImGui::Separator();
 
     // ---- ReGIR Presampling ---------------------------------------------------
@@ -207,16 +268,6 @@ void RTXDIIMGUISettings()
             (int*)&g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode,
             "Off\0Basic\0Pairwise\0Ray Traced\0");
 
-        if (g_ReSTIRDI_ShowAdvancedSettings)
-        {
-            ImGui::SliderFloat("Temporal Depth Threshold",
-                &g_ReSTIRDI_TemporalResamplingParams.depthThreshold, 0.0f, 1.0f);
-            ImGui::SliderFloat("Temporal Normal Threshold",
-                &g_ReSTIRDI_TemporalResamplingParams.normalThreshold, 0.0f, 1.0f);
-            ImGui::SliderFloat("Permutation Sampling Threshold",
-                &g_ReSTIRDI_TemporalResamplingParams.permutationSamplingThreshold, 0.8f, 1.0f);
-        }
-
         ImGui::SliderInt("Max History Length",
             (int*)&g_ReSTIRDI_TemporalResamplingParams.maxHistoryLength, 1, 100);
 
@@ -258,18 +309,6 @@ void RTXDIIMGUISettings()
         ImGui::SliderFloat("Spatial Sampling Radius",
             &g_ReSTIRDI_SpatialResamplingParams.samplingRadius, 1.0f, 32.0f);
 
-        if (g_ReSTIRDI_ShowAdvancedSettings &&
-            g_ReSTIRDI_ResamplingMode != rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
-        {
-            ImGui::SliderFloat("Spatial Depth Threshold",
-                &g_ReSTIRDI_SpatialResamplingParams.depthThreshold, 0.0f, 1.0f);
-            ImGui::SliderFloat("Spatial Normal Threshold",
-                &g_ReSTIRDI_SpatialResamplingParams.normalThreshold, 0.0f, 1.0f);
-            bool discountNaive = g_ReSTIRDI_SpatialResamplingParams.discountNaiveSamples != 0;
-            if (ImGui::Checkbox("Discount Naive Samples", &discountNaive))
-                g_ReSTIRDI_SpatialResamplingParams.discountNaiveSamples = discountNaive ? 1u : 0u;
-        }
-
         ImGui::TreePop();
     }
 
@@ -288,20 +327,12 @@ void RTXDIIMGUISettings()
         if (ImGui::Checkbox("Reuse Final Visibility", &reuseFinalVis))
             g_ReSTIRDI_ShadingParams.reuseFinalVisibility = reuseFinalVis ? 1u : 0u;
 
-        if (reuseFinalVis && g_ReSTIRDI_ShowAdvancedSettings)
-        {
-            ImGui::SliderFloat("Final Visibility Max Distance",
-                &g_ReSTIRDI_ShadingParams.finalVisibilityMaxDistance, 0.0f, 32.0f);
-            ImGui::SliderInt("Final Visibility Max Age",
-                (int*)&g_ReSTIRDI_ShadingParams.finalVisibilityMaxAge, 0, 16);
-        }
-
         ImGui::TreePop();
     }
 
     // ---- ReSTIR GI -----------------------------------------------------------
     ImGui::Separator();
-    if (ImGui::CollapsingHeader("ReSTIR GI", ImGuiTreeNodeFlags_DefaultOpen))
+    if (ImGui::CollapsingHeader("ReSTIR GI"))
     {
         ImGui::Indent();
 
@@ -522,6 +553,10 @@ public:
     // GetReGIRCellOffset() / GetReGIRLightSlotCount() return correct values.
     rtxdi::RISBufferSegmentAllocator        m_RISBufferSegmentAllocator;
 
+    // Cached checkerboard mode used to create the contexts.
+    // When g_ReSTIRDI_CheckerboardMode differs from this, the contexts must be recreated.
+    rtxdi::CheckerboardMode                 m_CachedCheckerboardMode = rtxdi::CheckerboardMode::Black;
+
     std::unique_ptr<NrdIntegration> m_NrdIntegration;
     nrd::RelaxSettings m_NRDRelaxSettings;
 
@@ -539,9 +574,13 @@ public:
         m_RISBufferSegmentAllocator.allocateSegment(k_EnvRISTileSize * k_EnvRISTileCount);
 
         // Create the ReSTIRDI context
+        const rtxdi::CheckerboardMode checkerMode = g_ReSTIRDI_CheckerboardMode;
+        m_CachedCheckerboardMode = checkerMode;
+
         rtxdi::ReSTIRDIStaticParameters staticParams;
         staticParams.RenderWidth = width;
         staticParams.RenderHeight = height;
+        staticParams.CheckerboardSamplingMode = checkerMode;
         m_Context = std::make_unique<rtxdi::ReSTIRDIContext>(staticParams);
 
         // Create the ReGIR context (Onion mode, matching FullSample defaults)
@@ -561,6 +600,7 @@ public:
         rtxdi::ReSTIRGIStaticParameters giStaticParams;
         giStaticParams.RenderWidth  = width;
         giStaticParams.RenderHeight = height;
+        giStaticParams.CheckerboardSamplingMode = checkerMode;
         m_ReSTIRGIContext = std::make_unique<rtxdi::ReSTIRGIContext>(giStaticParams);
     }
 
@@ -573,25 +613,9 @@ public:
         g_ReSTIRDI_SpatialResamplingParams = rtxdi::GetDefaultReSTIRDISpatialResamplingParams();
         g_ReSTIRDI_ShadingParams           = rtxdi::GetDefaultReSTIRDIShadingParams();
 
-        // "medium" preset from FullSample as base, with my own changes
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-        g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-        g_ReSTIRDI_NumLocalLightUniformSamples = 8;
-        g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
-        g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
-        g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode == ReSTIRDI_LocalLightSamplingMode::Uniform ? g_ReSTIRDI_NumLocalLightUniformSamples : 
-            (g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode == ReSTIRDI_LocalLightSamplingMode::Power_RIS ? g_ReSTIRDI_NumLocalLightPowerRISSamples : 
-            g_ReSTIRDI_NumLocalLightReGIRRISSamples);
-        g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-        g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
-        g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
-        g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
-        g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
-        g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
-        g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
-        g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
-        g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
+        // Apply default "High Performance" preset
+        g_ReSTIRDI_QualityMode = ReSTIRDI_QualityMode::HighPerformance;
+        ApplyHighPerfPreset();
 
         g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
 
@@ -1104,7 +1128,19 @@ public:
         
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
+
         const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled && g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI);
+
+        // Recreate RTXDI contexts if checkerboard mode changed (static parameter).
+        // Checkerboard is on for HighPerformance, off for HighQuality.
+        {
+            if (m_CachedCheckerboardMode != g_ReSTIRDI_CheckerboardMode)
+            {
+                CreateRTXDIContext();
+            }
+        }
 
         // Advance the frame index so the context produces fresh buffer indices
         m_Context->SetFrameIndex(g_Renderer.m_FrameNumber);
@@ -1135,14 +1171,23 @@ public:
             m_ReSTIRGIContext->SetFinalShadingParameters(g_ReSTIRGI_FinalShadingParams);
         }
 
-
-
         // ------------------------------------------------------------------
         // Build ResamplingConstants (FullSample's g_Const) from context accessors
         // ------------------------------------------------------------------
         const RTXDI_ReservoirBufferParameters rbp = m_Context->GetReservoirBufferParameters();
         const RTXDI_RuntimeParameters         rtp = m_Context->GetRuntimeParams();
         const RTXDI_DIBufferIndices          bix = m_Context->GetBufferIndices();
+
+        // When checkerboard is enabled, the reservoir buffer stores only half the
+        // pixels (width / 2). The shaders map reservoir positions to full-screen
+        // pixel positions via RTXDI_ReservoirPosToPixelPos (which multiplies X by 2).
+        // Thread groups must therefore be dispatched at half the screen width so
+        // that reservoir indices stay within the buffer bounds.
+        const uint32_t dispatchWidth = (rtp.activeCheckerboardField != 0) ? ((width + 1) / 2) : width;
+
+        // ReGIR is only used in HighQuality mode.
+        // HighPerformance uses REGIR_DISABLED shader variants and skips the ReGIR build pass.
+        const bool useReGIR = (g_ReSTIRDI_QualityMode == ReSTIRDI_QualityMode::HighQuality);
 
         // Rebuild analytical light buffer params only when any light node is dirty
         // (includes sun orientation/pitch changes tracked via m_LightsDirty, and
@@ -1171,9 +1216,6 @@ public:
         lbp.infiniteLightBufferRegion.numLights = m_CachedLightBufferParams.infiniteLightBufferRegion.numLights;
         lbp.environmentLightParams.lightIndex = lbp.infiniteLightBufferRegion.firstLightIndex + lbp.infiniteLightBufferRegion.numLights;
         lbp.environmentLightParams.lightPresent = m_CachedLightBufferParams.environmentLightParams.lightPresent;
-
-        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
-        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         srrhi::ResamplingConstants g_Const{};
 
@@ -1754,9 +1796,9 @@ public:
         }
 
         // ------------------------------------------------------------------
-        // ReGIR Grid Build (every frame — grid center follows the camera)
+        // ReGIR Grid Build (only in HighQuality mode)
         // ------------------------------------------------------------------
-        if (m_ReGIRContext && lbp.localLightBufferRegion.numLights > 0)
+        if (useReGIR && m_ReGIRContext && lbp.localLightBufferRegion.numLights > 0)
         {
             PROFILE_SCOPED("PresampleReGIR");
 
@@ -1782,11 +1824,13 @@ public:
 
             g_Renderer.AddComputePass({
                 .commandList    = commandList,
-                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_GENERATEINITIALSAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
+                .shaderID       = useReGIR
+                    ? ShaderID::RTXDI_LIGHTINGPASSES_DI_GENERATEINITIALSAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION
+                    : ShaderID::RTXDI_LIGHTINGPASSES_DI_GENERATEINITIALSAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_DISABLED,
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
@@ -1808,7 +1852,7 @@ public:
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
@@ -1830,7 +1874,7 @@ public:
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
@@ -1845,11 +1889,13 @@ public:
 
             g_Renderer.AddComputePass({
                 .commandList    = commandList,
-                .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_DI_SHADESAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
+                .shaderID       = useReGIR
+                    ? ShaderID::RTXDI_LIGHTINGPASSES_DI_SHADESAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION
+                    : ShaderID::RTXDI_LIGHTINGPASSES_DI_SHADESAMPLES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_DISABLED,
                 .bindingSetDesc = bset,
                 .bIncludeBindlessResources = true,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
@@ -1870,7 +1916,7 @@ public:
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
-                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .z = 1u
                     }
@@ -1882,11 +1928,13 @@ public:
                 PROFILE_SCOPED("GI ShadeSecondarySurfaces");
                 g_Renderer.AddComputePass({
                     .commandList    = commandList,
-                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION,
+                    .shaderID       = useReGIR
+                        ? ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION
+                        : ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_DISABLED,
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
-                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .z = 1u
                     }
@@ -1906,7 +1954,7 @@ public:
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
-                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .z = 1u
                     }
@@ -1926,7 +1974,7 @@ public:
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
-                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .z = 1u
                     }
@@ -1943,7 +1991,7 @@ public:
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
-                        .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                         .z = 1u
                     }
