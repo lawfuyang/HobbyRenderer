@@ -18,8 +18,8 @@ srinput SHARCConsts
     static const float HASH_GRID_SCENE_SCALE    = 50.0f;      // world-space scale controlling voxel size
     static const float HASH_GRID_LEVEL_BIAS     = 0.0f;       // biases level selection near camera
     static const uint  LINEAR_BLOCK_SIZE        = 256;        // resolve pass thread-group size
-    static const uint  ACCUMULATION_FRAME_NUM    = 32;         // temporal accumulation window (frames)
-    static const uint  STALE_FRAME_NUM_MAX       = 64;         // frames before untouched entry is evicted
+    static const uint  ACCUMULATION_FRAME_NUM    = 120;       // temporal accumulation window (frames)
+    static const uint  STALE_FRAME_NUM_MAX       = 64;        // frames before untouched entry is evicted
 };
 
 // ---------------------------------------------------------------------------

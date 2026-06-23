@@ -11,6 +11,7 @@
 #define SHARC_UPDATE                    1
 #define SHARC_ENABLE_64_BIT_ATOMICS     1
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 1
+#define SHARC_PROPAGATION_DEPTH 4
 
 // ---- SHARC SDK headers -----------------------------------------------------
 #include "SharcCommon.h"
@@ -212,18 +213,19 @@ void SHARCUpdate_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
         float3 geoN = normalize(attr.m_WorldNormal);
         float3 hitN  = getBentNormal(geoN, pbr.normal, ray.Direction);
 
-        // Evaluate indirect radiance at the hit point
+        // Evaluate indirect radiance at the hit point.
+        // NOTE: Li * throughput is needed here because SharcUpdateHit's direct
+        // store (at the CURRENT vertex) uses directLighting with unit weight.
+        // The * throughput makes the cache entry represent *exitant* radiance
+        // (light leaving this surface, modulated by its BSDF).  Without it,
+        // the cache would store incident radiance at the next hit, losing the
+        // current surface's color information.
         float3 V  = -rayDir;
         float3 Li = EvaluateDirectLightingAtHit(
                         attr.m_WorldPos, hitN, V,
                         pbr.baseColor, pbr.roughness, pbr.metallic,
                         rng) + pbr.emissive;
 
-        // Store at the surface we bounced FROM, modulated by that surface's diffuse BRDF.
-        // throughput = surfColor * (1 - surfMetal) already computed above and
-        // represents the MC weight (BRDF × cosθ / pdf) for cosine-weighted sampling.
-        // SharcSetThroughput only back-propagates to prior vertices, so we must
-        // explicitly apply the current surface's throughput here.
         SharcHitData hd;
         hd.positionWorld = surfPos;
         hd.normalWorld   = surfN;
