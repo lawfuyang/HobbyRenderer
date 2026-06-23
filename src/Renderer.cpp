@@ -602,12 +602,11 @@ void Renderer::Run()
         // Periodic camera-state save (every 1 s, only if camera moved)
         if (!Config::Get().m_ScenePath.empty())
         {
-            float dt = static_cast<float>(m_FrameTime / 1000.0);
             CameraSavedState state;
             state.position = m_Scene.m_Camera.GetPosition();
             state.yaw     = m_Scene.m_Camera.GetYaw();
             state.pitch   = m_Scene.m_Camera.GetPitch();
-            m_CameraStateManager.Update(dt, state);
+            m_CameraStateManager.Update(state);
         }
 
         MicroProfileFlip(nullptr);
@@ -639,6 +638,10 @@ void Renderer::Shutdown()
 
     m_StaticSamplerDescriptorTable = nullptr;
     m_StaticSamplerBindingLayout = nullptr;
+
+    // Stop the camera-state async worker before tearing down the scene
+    // (Scene::Shutdown calls SaveCamera synchronously).
+    m_CameraStateManager.StopAsyncWorker();
 
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();

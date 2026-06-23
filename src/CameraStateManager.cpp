@@ -237,6 +237,8 @@ void CameraStateManager::Initialize()
     m_JsonPath = (exeDir / "camera_state.json").string();
 
     SDL_Log("[CameraState] Initialized, JSON path: %s", m_JsonPath.c_str());
+
+    StartAsyncWorker();
 }
 
 void CameraStateManager::SetScenePath(std::string_view scenePath)
@@ -244,34 +246,24 @@ void CameraStateManager::SetScenePath(std::string_view scenePath)
     m_CurrentScenePath = NormalizePath(scenePath);
 }
 
-void CameraStateManager::Update(float dt, const CameraSavedState& currentState)
+void CameraStateManager::Update(const CameraSavedState& currentState)
 {
-    if (dt <= 0.0f || m_CurrentScenePath.empty())
+    if (m_CurrentScenePath.empty())
         return;
 
-    m_AccumulatedDt += dt;
-    if (m_AccumulatedDt < 1.0f)
-        return;
-    m_AccumulatedDt = 0.0f;
-
-    // Skip write if camera hasn't moved significantly since last save
-    if (m_HasLastSaved)
+    // ── Minimal critical section (held for ~10-15 ns) ──────────────────
+    // The worker holds this spinlock for nanoseconds once per second, so the
+    // render thread will almost never spin.
+    while (m_PendingLock.test_and_set(std::memory_order_acquire))
     {
-        const auto& last = m_LastSavedState;
-        float dx = currentState.position.x - last.position.x;
-        float dy = currentState.position.y - last.position.y;
-        float dz = currentState.position.z - last.position.z;
-        float distSq = dx * dx + dy * dy + dz * dz;
-
-        if (distSq < 1e-6f &&
-            std::abs(currentState.yaw   - last.yaw)   < 1e-4f &&
-            std::abs(currentState.pitch - last.pitch) < 1e-4f)
-            return;
+        // Spin — rare in practice (worker lock hold time <1 µs).
     }
 
-    SaveCamera(m_CurrentScenePath, currentState);
-    m_LastSavedState = currentState;
-    m_HasLastSaved   = true;
+    m_PendingState = currentState;
+    m_PendingDirty = true;
+
+    m_PendingLock.clear(std::memory_order_release);
+    // ── End critical section ────────────────────────────────────────────
 }
 
 void CameraStateManager::SaveCamera(std::string_view scenePath, const CameraSavedState& state)
@@ -301,4 +293,91 @@ bool CameraStateManager::LoadCamera(std::string_view scenePath, CameraSavedState
     }
 
     return false;
+}
+
+// ── Async worker thread ─────────────────────────────────────────────────────
+
+CameraStateManager::~CameraStateManager()
+{
+    StopAsyncWorker();
+}
+
+void CameraStateManager::StartAsyncWorker()
+{
+    if (m_WorkerThread.joinable())
+        return; // already running
+
+    m_StopRequested.store(false, std::memory_order_relaxed);
+    m_WorkerThread = std::thread(&CameraStateManager::WorkerLoop, this);
+}
+
+void CameraStateManager::StopAsyncWorker()
+{
+    m_StopRequested.store(true, std::memory_order_release);
+
+    if (m_WorkerThread.joinable())
+    {
+        m_WorkerThread.join();
+    }
+}
+
+void CameraStateManager::WorkerLoop()
+{
+    SDL_Log("[CameraState] Async worker thread started");
+
+    while (!m_StopRequested.load(std::memory_order_relaxed))
+    {
+        // Sleep for the throttle interval (1 s).
+        // Using a simple sleep avoids condition-variable overhead on the
+        // render thread — the render side only does a spinlock + memcpy.
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        if (m_StopRequested.load(std::memory_order_relaxed))
+            break;
+
+        CameraSavedState state;
+        bool             hasWork = false;
+
+        // ── Grab pending state under lock ───────────────────────────────
+        {
+            while (m_PendingLock.test_and_set(std::memory_order_acquire))
+            {
+                // Spin — render holds this for nanoseconds.
+            }
+
+            if (m_PendingDirty)
+            {
+                state          = m_PendingState;
+                m_PendingDirty = false;
+                hasWork        = true;
+            }
+
+            m_PendingLock.clear(std::memory_order_release);
+        }
+        // ── Lock released; I/O work begins ──────────────────────────────
+
+        if (!hasWork)
+            continue;
+
+        // ── Skip write if camera hasn't moved significantly ────────────
+        if (m_HasLastSaved)
+        {
+            float dx = state.position.x - m_LastSavedState.position.x;
+            float dy = state.position.y - m_LastSavedState.position.y;
+            float dz = state.position.z - m_LastSavedState.position.z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+
+            if (distSq < 1e-6f &&
+                std::abs(state.yaw   - m_LastSavedState.yaw)   < 1e-4f &&
+                std::abs(state.pitch - m_LastSavedState.pitch) < 1e-4f)
+                continue;
+        }
+
+        // ── Perform I/O (read-merge-write, no lock held) ───────────────
+        SaveCamera(m_CurrentScenePath, state);
+        m_LastSavedState = state;
+        m_HasLastSaved   = true;
+    }
+
+    SDL_Log("[CameraState] Async worker thread stopped");
 }
