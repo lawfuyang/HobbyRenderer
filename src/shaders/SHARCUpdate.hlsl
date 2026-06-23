@@ -11,7 +11,6 @@
 #define SHARC_UPDATE                    1
 #define SHARC_ENABLE_64_BIT_ATOMICS     1
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 1
-#define SHARC_PROPAGATION_DEPTH 4
 
 // ---- SHARC SDK headers -----------------------------------------------------
 #include "SharcCommon.h"
