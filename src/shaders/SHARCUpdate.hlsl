@@ -222,9 +222,11 @@ void SHARCUpdate_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
                         pbr.baseColor, max(pbr.roughness, srrhi::SHARCConsts::SHARC_ROUGHNESS_MIN), pbr.metallic,
                         rng) + pbr.emissive;
 
+        // Record the actual hit point (not the ray origin) so the cache entry
+        // is stored in the correct voxel for this surface.
         SharcHitData hd;
-        hd.positionWorld = surfPos;
-        hd.normalWorld   = surfN;
+        hd.positionWorld = attr.m_WorldPos;
+        hd.normalWorld   = hitN;
 
         if (!SharcUpdateHit(sharcParams, sharcState, hd, Li * throughput, NextFloat(rng)))
             break;
