@@ -184,6 +184,125 @@ Additional for combined mode:
   - SHARC constants CB      (or embed in RTXDI CB)
 ```
 
+#### 4.4.3 ReSTIR GI Quality Mode Presets
+
+Mirror the existing ReSTIR DI quality mode (`HighPerformance` / `HighQuality`) with
+an equivalent GI quality mode that toggles between a fast low-noise preset and a
+slow high-quality preset. These presets are modeled after the RTXDI full sample
+application at [NVIDIA-RTX/RTXDI](https://github.com/NVIDIA-RTX/RTXDI).
+
+**New enum, globals, and ImGui control:**
+
+```cpp
+// Quality mode presets for ReSTIR GI
+enum class ReSTIRGI_QualityMode { HighPerformance, HighQuality };
+
+static ReSTIRGI_QualityMode g_ReSTIRGI_QualityMode = ReSTIRGI_QualityMode::HighPerformance;
+
+static void ApplyHighPerfGIPreset()
+{
+    // --- Resampling mode ---
+    g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+
+    // --- Temporal resampling ---
+    g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+    g_ReSTIRGI_TemporalParams.maxHistoryLength       = 4;
+    g_ReSTIRGI_TemporalParams.maxReservoirAge        = 15;
+    g_ReSTIRGI_TemporalParams.enableFallbackSampling  = 1u;
+    g_ReSTIRGI_TemporalParams.enablePermutationSampling = 0u;
+    g_ReSTIRGI_TemporalParams.biasCorrectionMode     = RTXDI_GIBiasCorrectionMode::Off;
+    g_ReSTIRGI_TemporalParams.depthThreshold         = 0.1f;
+    g_ReSTIRGI_TemporalParams.normalThreshold        = 0.6f;
+
+    // --- Boiling filter (suppress noise cheaply) ---
+    g_ReSTIRGI_BoilingParams.enableBoilingFilter    = 1u;
+    g_ReSTIRGI_BoilingParams.boilingFilterStrength  = 0.2f;
+
+    // --- Spatial resampling ---
+    g_ReSTIRGI_SpatialParams = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+    g_ReSTIRGI_SpatialParams.numSamples             = 1;
+    g_ReSTIRGI_SpatialParams.samplingRadius         = 16.0f;
+    g_ReSTIRGI_SpatialParams.biasCorrectionMode     = RTXDI_GIBiasCorrectionMode::Off;
+    g_ReSTIRGI_SpatialParams.depthThreshold         = 0.1f;
+    g_ReSTIRGI_SpatialParams.normalThreshold        = 0.6f;
+
+    // --- Final shading ---
+    g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+    g_ReSTIRGI_FinalShadingParams.enableFinalMIS       = 0u;  // cheaper: skip MIS
+    g_ReSTIRGI_FinalShadingParams.enableFinalVisibility = 1u;
+}
+
+static void ApplyHighQualityGIPreset()
+{
+    // --- Resampling mode ---
+    g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+
+    // --- Temporal resampling ---
+    g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+    g_ReSTIRGI_TemporalParams.maxHistoryLength       = 16;
+    g_ReSTIRGI_TemporalParams.maxReservoirAge        = 60;
+    g_ReSTIRGI_TemporalParams.enableFallbackSampling  = 1u;
+    g_ReSTIRGI_TemporalParams.enablePermutationSampling = 1u;
+    g_ReSTIRGI_TemporalParams.biasCorrectionMode     = RTXDI_GIBiasCorrectionMode::Raytraced;
+    g_ReSTIRGI_TemporalParams.depthThreshold         = 0.1f;
+    g_ReSTIRGI_TemporalParams.normalThreshold        = 0.9f;
+
+    // --- Boiling filter (off — let NRD handle noise) ---
+    g_ReSTIRGI_BoilingParams.enableBoilingFilter    = 0u;
+    g_ReSTIRGI_BoilingParams.boilingFilterStrength  = 0.0f;
+
+    // --- Spatial resampling ---
+    g_ReSTIRGI_SpatialParams = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+    g_ReSTIRGI_SpatialParams.numSamples             = 4;
+    g_ReSTIRGI_SpatialParams.samplingRadius         = 48.0f;
+    g_ReSTIRGI_SpatialParams.biasCorrectionMode     = RTXDI_GIBiasCorrectionMode::Raytraced;
+    g_ReSTIRGI_SpatialParams.depthThreshold         = 0.1f;
+    g_ReSTIRGI_SpatialParams.normalThreshold        = 0.9f;
+
+    // --- Final shading ---
+    g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+    g_ReSTIRGI_FinalShadingParams.enableFinalMIS       = 1u;  // MIS reduces bias
+    g_ReSTIRGI_FinalShadingParams.enableFinalVisibility = 1u;
+}
+```
+
+**ImGui control** — add alongside the existing DI quality mode (in `RTXDIIMGUISettings()`):
+
+```cpp
+// ---- GI Quality mode preset ------------------------------------------------
+if (ImGui::Combo("GI Quality Mode", reinterpret_cast<int*>(&g_ReSTIRGI_QualityMode),
+        "High Performance\0"
+        "High Quality\0"))
+{
+    if (g_ReSTIRGI_QualityMode == ReSTIRGI_QualityMode::HighPerformance)
+        ApplyHighPerfGIPreset();
+    else
+        ApplyHighQualityGIPreset();
+}
+```
+
+**Initialization** — call `ApplyHighPerfGIPreset()` at startup (in the existing init block
+near line 625 where `g_ReSTIRGI_*` are initialized), then let `RTXDIIMGUISettings()`
+apply the selected preset every frame via the ImGui combo.
+
+**Key differences between HighPerformance and HighQuality for ReSTIR GI:**
+
+| Parameter | High Performance | High Quality | Effect |
+|-----------|:---------------:|:------------:|--------|
+| `maxHistoryLength` | 4 | 16 | Temporal stability vs reaction speed |
+| `maxReservoirAge` | 15 | 60 | How long a reservoir can live |
+| `biasCorrectionMode` (temporal) | Off | Raytraced | Extra shadow rays for unbiased reuse |
+| `biasCorrectionMode` (spatial) | Off | Raytraced | Extra shadow rays for unbiased reuse |
+| `enablePermutationSampling` | Off | On | Jitters temporal samples for denoiser |
+| `normalThreshold` | 0.6 | 0.9 | Stricter surface similarity test |
+| `enableBoilingFilter` | On (0.2) | Off | Cheap noise suppression vs clean signal |
+| `spatial.numSamples` | 1 | 4 | Neighbor count for spatial reuse |
+| `spatial.samplingRadius` | 16 px | 48 px | Screen-space search radius |
+| `enableFinalMIS` | Off | On | MIS reduces bias at cost of extra eval |
+| `enableFinalVisibility` | On | On | Both modes trace final visibility ray |
+
+
+
 ### 4.5 `src/shaders/rtxdi/LightingPasses/ShadeSecondarySurfaces.hlsl` — **Primary integration point**
 
 This is the **only shader file that needs algorithmic changes**.
@@ -804,12 +923,12 @@ if (g_Const.restirGI.debugShowSharcHits)
 
 | Phase | Tasks | Estimated Effort |
 |-------|-------|:---------------:|
-| **Phase 1: Plumbing** | Add `INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC` constant. Extend `SHARCRenderer::Setup/Render` to also run in combined mode. Add ImGui radio button. Bind SHARC cache buffers into ReSTIR GI binding set. | 2-3 hours |
+| **Phase 1: Plumbing** | Add `INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC` constant. Extend `SHARCRenderer::Setup/Render` to also run in combined mode. Add ImGui radio button. Bind SHARC cache buffers into ReSTIR GI binding set. Add ReSTIR GI HighPerformance/HighQuality presets (enum, ApplyHighPerfGIPreset, ApplyHighQualityGIPreset, ImGui combo) in `RTXDIRenderer.cpp`. | 3-4 hours |
 | **Phase 2: Shader integration** | Include SHARC headers in `ShadeSecondarySurfaces.hlsl`. Add `#if RESTIR_GI_SHARC_MODE` blocks. Implement cache query + fallback. Add shader variant to `shaders.cfg`. | 3-4 hours |
 | **Phase 3: Testing & Tuning** | A/B comparison with ReSTIR GI and SHARC standalone modes. Tune cache thresholds if needed. Verify no regressions in non-combined modes. | 2-3 hours |
 | **Phase 4: Polish** | Add debug overlay. Profile and optimize if needed. Update README/documentation. | 1-2 hours |
 
-**Total estimated effort**: 8-12 hours
+**Total estimated effort**: 9-13 hours
 
 ---
 
