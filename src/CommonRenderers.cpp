@@ -96,7 +96,7 @@ public:
             renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferEmissive);
             
             // Motion Vectors: RG16_FLOAT
-            gbufferDesc.m_NvrhiDesc.isUAV = true;  // Required by REBLUR: writes dilated motion vectors as UAV
+            gbufferDesc.m_NvrhiDesc.isUAV = true;  // Required by REBLUR. it binds it as UAV, but does not modify it internally
             gbufferDesc.m_NvrhiDesc.format = Renderer::GBUFFER_MOTION_FORMAT;
             gbufferDesc.m_NvrhiDesc.debugName = "GBufferMotion_RG";
             renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferMotionVectors);
