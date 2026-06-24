@@ -1503,6 +1503,33 @@ public:
             commandList->copyTexture(geoNormalsHistTex, nvrhi::TextureSlice{}, geoNormalsTex, nvrhi::TextureSlice{});
 
         // ------------------------------------------------------------------
+        // Clear stale persistent state when switching TO ReSTIR GI
+        // ------------------------------------------------------------------
+        // When the user switches from SHARC (or None) to ReSTIR GI the GI
+        // reservoir buffer contains garbage from a previous run (or is
+        // uninitialised).  Temporal resampling will immediately pull those
+        // stale reservoirs in, producing NaNs / overbloom on the first frames.
+        // Zero the reservoir buffer and re-seed all history textures from the
+        // current G-buffer so the temporal pass starts with a clean slate.
+        if (m_bClearOnNextRender)
+        {
+            // Zero the GI reservoir buffer so temporal resampling finds no
+            // valid reservoirs on the first frame (weight = 0 → no contribution).
+            if (bDoReSTIRGI && giReservoirBuf && giReservoirBuf != cr.DummyUAVStructuredBuffer)
+                commandList->clearBufferUInt(giReservoirBuf, 0u);
+
+            // Re-seed history textures from the current G-buffer so the temporal
+            // pass does not see data from a completely different technique.
+            commandList->copyTexture(albedoHistoryTex,  nvrhi::TextureSlice{}, albedoTex,     nvrhi::TextureSlice{});
+            commandList->copyTexture(ormHistoryTex,     nvrhi::TextureSlice{}, ormTex,        nvrhi::TextureSlice{});
+            commandList->copyTexture(depthHistoryTex,   nvrhi::TextureSlice{}, depthTex,      nvrhi::TextureSlice{});
+            commandList->copyTexture(normalsHistoryTex, nvrhi::TextureSlice{}, normalsTex,    nvrhi::TextureSlice{});
+            commandList->copyTexture(geoNormalsHistTex, nvrhi::TextureSlice{}, geoNormalsTex, nvrhi::TextureSlice{});
+
+            m_bClearOnNextRender = false;
+        }
+
+        // ------------------------------------------------------------------
         // Initialize neighbor offsets buffer on first allocation
         // ------------------------------------------------------------------
         if (m_NeighborOffsetsBufferIsNew)

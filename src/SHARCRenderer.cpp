@@ -129,6 +129,20 @@ public:
         nvrhi::BufferHandle  hashEntries  = renderGraph.GetBuffer (g_RG_SHARCHashEntries,  RGResourceAccessMode::Write);
         nvrhi::BufferHandle  accumulation = renderGraph.GetBuffer (g_RG_SHARCAccumulation, RGResourceAccessMode::Write);
         nvrhi::BufferHandle  resolved     = renderGraph.GetBuffer (g_RG_SHARCResolved,     RGResourceAccessMode::Write);
+
+        // ── Clear stale persistent state when switching TO SHARC ─────────────
+        // Stale hash entries, accumulated radiance, and resolved radiance from a
+        // previous technique (or a previous scene) will produce garbage / NaNs on
+        // the first frames after the switch.  Zero all three buffers so the cache
+        // starts fresh.
+        if (m_bClearOnNextRender)
+        {
+            commandList->clearBufferUInt(hashEntries,  0u);
+            commandList->clearBufferUInt(accumulation, 0u);
+            commandList->clearBufferUInt(resolved,     0u);
+            m_bClearOnNextRender = false;
+        }
+
         nvrhi::TextureHandle depth        = renderGraph.GetTexture(g_RG_DepthTexture,      RGResourceAccessMode::Read);
         nvrhi::TextureHandle normals      = renderGraph.GetTexture(g_RG_GBufferNormals,    RGResourceAccessMode::Read);
         nvrhi::TextureHandle albedo       = renderGraph.GetTexture(g_RG_GBufferAlbedo,     RGResourceAccessMode::Read);

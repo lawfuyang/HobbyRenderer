@@ -26,6 +26,11 @@ public:
     float m_GPUTime = 0.0f;
     nvrhi::TimerQueryHandle m_GPUQueries[2];
     bool m_bPassEnabled = false;
+
+    // Set to true by ImGuiLayer when the indirect lighting technique switches TO this
+    // renderer.  Each renderer is responsible for clearing its stale persistent
+    // buffers/textures on the next Render() call and then resetting this flag.
+    bool m_bClearOnNextRender = false;
 };
 
 class RendererRegistry

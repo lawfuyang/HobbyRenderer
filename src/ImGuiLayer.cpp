@@ -131,16 +131,37 @@ void ImGuiLayer::UpdateFrame()
             {
                 int technique = static_cast<int>(g_Renderer.m_IndirectLightingTechnique);
 
+                // Helper: find a renderer by name and set its clear flag.
+                auto RequestRendererClear = [](const char* name)
+                {
+                    for (const std::shared_ptr<IRenderer>& r : g_Renderer.m_Renderers)
+                    {
+                        if (strcmp(r->GetName(), name) == 0)
+                        {
+                            r->m_bClearOnNextRender = true;
+                            break;
+                        }
+                    }
+                };
+
                 ImGui::Text("Technique:");
                 ImGui::SameLine();
                 if (ImGui::RadioButton("None",     &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE)))
                     g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE;
                 ImGui::SameLine();
                 if (ImGui::RadioButton("ReSTIR GI", &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI)))
+                {
+                    if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI)
+                        RequestRendererClear("RTXDIRenderer");
                     g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI;
+                }
                 ImGui::SameLine();
                 if (ImGui::RadioButton("SHARC", &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)))
+                {
+                    if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+                        RequestRendererClear("SHARCRenderer");
                     g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC;
+                }
 
                 // SHARC debug overlay
                 if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
