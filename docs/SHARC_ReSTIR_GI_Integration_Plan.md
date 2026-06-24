@@ -19,6 +19,15 @@ The combination lets SHARC provide cheap multi-bounce radiance at secondary hit
 positions, while ReSTIR GI's reservoir resampling propagates good samples
 spatially/temporally and NRD provides final denoising.
 
+> **SDK Version Note**: The active SHARC SDK is at [`external/SHARC/`](../../external/SHARC)
+> (v1.8), which differs from the older SDK bundled with the RTXGI reference clone
+> at [`REFERENCES/RTXGI/`](../../REFERENCES/RTXGI) (v1.6.5). Key v1.8 changes:
+> `HashGridData` replaces `HashMapData`, `HashGridFindEntry` replaces
+> `HashMapFindEntry`, `SharcGetCachedRadiance` uses `skipResponsiveLighting`
+> instead of `debug`, and `SHARC_ENABLE_SH_ENCODING` support is added.
+> The RTXDI reference at [`REFERENCES/RTXDI/`](../../REFERENCES/RTXDI) provides
+> the authoritative ReSTIR GI integration pattern used by this plan.
+
 ---
 
 ## 2. Architecture: Current vs Proposed
@@ -97,29 +106,40 @@ srinput IndirectLightingMode
 };
 ```
 
-### 4.2 `src/shaders/SHARC.sr` — Add srinput for SHARC cache access from ReSTIR GI passes
+**Important**: [`RTXDI.sr`](../../src/shaders/RTXDI.sr) defines its own
+separate `IndirectLightingMode` constants with different values
+(`RESTIRGI = 2` in RTXDI.sr vs `RESTIR_GI = 1` in Common.sr). These are
+namespaced separately (`srrhi::RTXDIConstants::INDIRECT_LIGHTING_MODE_RESTIRGI`
+vs `srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI`) and serve
+different code paths. The RTXDI.sr constants are used internally by
+`ResamplingConstants::directLightingMode`, while Common.sr's
+`IndirectLightingMode` controls top-level technique selection. Keep both
+unchanged — only add the new value to Common.sr.
 
-Add a new `srinput` (or reuse `SHARCQueryInputs`) to make the SHARC resolved
-buffer and hash entries buffer available in the ReSTIR GI rendering path:
+This allows runtime A/B comparison between all four modes via the ImGui radio
+buttons in [`ImGuiLayer.cpp`](../../src/ImGuiLayer.cpp).
 
-```hlsl
-// New: SHARC cache binding for ReSTIR GI integration
-// This provides read-only access to the resolved cache from
-// ShadeSecondarySurfaces and FinalShading passes.
-srinput SHARCGICacheInputs
-{
-    // Read-only SHARC cache
-    RWStructuredBuffer<uint64_t>          m_HashEntries;   // RW for SDK compatibility
-    RWStructuredBuffer<SharcPackedData>   m_Resolved;      // read-only in practice
-    RWStructuredBuffer<SharcAccumulationData> m_Accumulation; // read-only in practice
+### 4.2 `src/shaders/SHARC.sr` — No additional srinput needed
 
-    SHARCConstants m_Const;
-};
-```
+The SHARC cache buffers are already declared as persistent render-graph
+resources by `SHARCRenderer`. To make them available in ReSTIR GI passes:
 
-**Alternative (simpler)**: Instead of a new srinput, add the SHARC cache buffers
-directly to the existing `RTXDI` binding set in the RTXDIConstants CB. The
-resolved buffer is only ~64 MB and can be bound as a UAV read-only or SRV.
+**Recommended approach**: Extend the existing `ResamplingPassInputs` srinput in
+[`RTXDI.sr`](../../src/shaders/RTXDI.sr) with three additional SRV bindings
+for the SHARC cache buffers when the combined mode is active. These buffers
+are already allocated (declared in `SHARCRenderer::Setup`), so no new srinput
+in SHARC.sr is required — only binding set extension in RTXDI.sr.
+
+Alternatively, the bindings can be added via a separate small binding set
+that is merged with the ReSTIR GI binding set at dispatch time in
+`RTXDIRenderer.cpp`.
+
+**Note**: The `SharcHelpers.hlsli` helper uses `hashGridData` field on
+`SharcParameters` to set `capacity` and `hashEntriesBuffer`. This matches the
+local SDK at [`external/SHARC`](../../external/SHARC) (v1.8), which uses
+`HashGridData` naming. The older SDK in
+[`REFERENCES/RTXGI`](../../REFERENCES/RTXGI) (v1.6.5) uses `HashMapData` naming
+instead. Development should target the local v1.8 SDK.
 
 ### 4.3 `src/shaders/ShaderIDs.h` — Add new shader variant
 
@@ -457,13 +477,13 @@ bool Setup(RenderGraph& renderGraph) override
 │     sharcHitData.positionWorld = secondarySurface.worldPos;         │
 │     sharcHitData.normalWorld   = secondarySurface.normal;           │
 │                                                                     │
-│  3. SharcGetCachedRadiance(sharcParams, sharcHitData, radiance):    │
+│  3. SharcGetCachedRadiance(sharcParams, sharcHitData, radiance):     │
 │     a) HashGridFindEntry → compute hash key from (pos, normal)      │
 │        - Levels chosen by distance to camera (logarithmic LOD)      │
 │        - Voxel size = logBase^level / (sceneScale * logBase^bias)   │
-│     b) HashGridFind → linear probe in hash bucket (8 slots)          │
-│     c) If found: unpack resolved radiance (float16_t4 → float3)     │
-│        Check accumulatedSampleNum > threshold (default: 0)          │
+│     b) HashGridFind → linear probe in hash bucket (16 slots)        │
+│     c) If found: unpack resolved radiance via SharcGetVoxelData           │
+│        (reads SharcPackedData, unpacks float16_t radiance + sample num)    │
 │     d) Return cached radiance                                       │
 │                                                                     │
 │  4. On CACHE HIT:                                                   │
@@ -565,8 +585,8 @@ For surfaces with roughness between `ROUGHNESS_THRESHOLD` (0.1) and
 
 If a specific use case requires sharper indirect specular from secondary
 surfaces, consider enabling `SHARC_ENABLE_SH_ENCODING` (spherical harmonics
-encoding) in the future, which can store directional radiance and reconstruct
-it for any query direction.
+encoding), which the local SDK v1.8 supports. This can store directional
+radiance and reconstruct it for any query direction.
 
 ---
 
@@ -947,17 +967,36 @@ if (g_Const.restirGI.debugShowSharcHits)
 
 ## 14. References
 
+### Online
 - [RTXDI GitHub](https://github.com/NVIDIA-RTX/RTXDI) — ReSTIR DI & GI reference implementation
-- [RTXGI GitHub](https://github.com/NVIDIA-RTX/RTXGI) — RTXGI (includes SHARC SDK v1.8)
+- [RTXGI GitHub](https://github.com/NVIDIA-RTX/RTXGI) — RTXGI with SHARC SDK
+
+### Cloned Reference Implementations
+- [`REFERENCES/RTXDI/`](../../REFERENCES/RTXDI/) — RTXDI SDK + FullSample (includes [`ShadeSecondarySurfaces.hlsl`](../../REFERENCES/RTXDI/Samples/FullSample/Shaders/LightingPasses/ShadeSecondarySurfaces.hlsl), [`ReSTIRGI.h`](../../REFERENCES/RTXDI/Libraries/Rtxdi/Include/Rtxdi/GI/ReSTIRGI.h), etc.)
+- [`REFERENCES/RTXGI/`](../../REFERENCES/RTXGI/) — RTXGI SDK (includes older SHARC v1.6.5 — for reference only)
+- **Note**: The active SHARC SDK is at [`external/SHARC/`](../../external/SHARC) (v1.8), which differs from the RTXGI reference. Key differences: `HashGridData` replaces `HashMapData`, `HashGridFindEntry` replaces `HashMapFindEntry`, `SharcGetCachedRadiance` uses `skipResponsiveLighting` instead of `debug` parameter, and `SHARC_ENABLE_SH_ENCODING` support is added.
+
+### Project Code (Primary Integration Points)
 - [`ShadeSecondarySurfaces.hlsl`](../../src/shaders/rtxdi/LightingPasses/ShadeSecondarySurfaces.hlsl) — Primary integration point
 - [`SHARCUpdate.hlsl`](../../src/shaders/SHARCUpdate.hlsl) — Cache population pass
-- [`SHARCQuery.hlsl`](../../src/shaders/SHARCQuery.hlsl) — Cache query pass (current standalone mode)
+- [`SHARCQuery.hlsl`](../../src/shaders/SHARCQuery.hlsl) — Cache query pass (standalone mode)
 - [`BrdfRayTracing.hlsl`](../../src/shaders/rtxdi/LightingPasses/BrdfRayTracing.hlsl) — BRDF ray tracing for GI initial samples
 - [`GI/FinalShading.hlsl`](../../src/shaders/rtxdi/LightingPasses/GI/FinalShading.hlsl) — Final GI shading with BRDF evaluation
+
+### SHARC SDK
 - [`SharcCommon.h`](../../external/SHARC/include/SharcCommon.h) — SHARC SDK core (v1.8)
 - [`HashGridCommon.h`](../../external/SHARC/include/HashGridCommon.h) — Hash grid implementation
+- [`HashGridTypes.h`](../../external/SHARC/include/HashGridTypes.h) — Hash grid type definitions
+
+### Project Infrastructure
 - [`SHARC.sr`](../../src/shaders/SHARC.sr) — SHARC constants and resource declarations
+- [`RTXDI.sr`](../../src/shaders/RTXDI.sr) — RTXDI constants and binding sets
+- [`Common.sr`](../../src/shaders/Common.sr) — Shared constants including IndirectLightingMode
+- [`SharcHelpers.hlsli`](../../src/shaders/SharcHelpers.hlsli) — BuildSharcParameters helper
 - [`DeferredLighting.hlsl`](../../src/shaders/DeferredLighting.hlsl) — Final compositing
 - [`RTXDIRenderer.cpp`](../../src/RTXDIRenderer.cpp) — ReSTIR GI host-side dispatch
 - [`SHARCRenderer.cpp`](../../src/SHARCRenderer.cpp) — SHARC host-side dispatch
-- [`Common.sr`](../../src/shaders/Common.sr) — Shared constants including IndirectLightingMode
+- [`ImGuiLayer.cpp`](../../src/ImGuiLayer.cpp) — UI controls for technique selection
+
+### Related Docs
+- [`RTXTS_TTM_Integration_Analysis.md`](../RTXTS_TTM_Integration_Analysis.md) — TTM integration analysis
