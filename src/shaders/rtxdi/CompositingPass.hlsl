@@ -31,6 +31,7 @@
 #define t_DiffuseIllumination    srrhi::CompositingPassInputs::GetDiffuseIllumination()
 #define t_SpecularIllumination   srrhi::CompositingPassInputs::GetSpecularIllumination()
 #define DENOISER_MODE_RELAX      srrhi::RTXDIConstants::DENOISER_MODE_RELAX
+#define DENOISER_MODE_REBLUR     srrhi::RTXDIConstants::DENOISER_MODE_REBLUR
 
 float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -52,7 +53,12 @@ float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target
     float4 specular_illumination = t_SpecularIllumination[pixelPos];
 
 #ifdef WITH_NRD
-    if (g_Const.denoiserMode == DENOISER_MODE_RELAX)
+    if (g_Const.denoiserMode == DENOISER_MODE_REBLUR)
+    {
+        diffuse_illumination  = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(diffuse_illumination);
+        specular_illumination = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(specular_illumination);
+    }
+    else if (g_Const.denoiserMode == DENOISER_MODE_RELAX)
     {
         diffuse_illumination  = RELAX_BackEnd_UnpackRadiance(diffuse_illumination);
         specular_illumination = RELAX_BackEnd_UnpackRadiance(specular_illumination);

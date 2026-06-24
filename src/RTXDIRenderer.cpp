@@ -17,8 +17,8 @@
 
 // ---- DI output textures (read by DeferredRenderer) ----
 RGTextureHandle g_RG_RTXDIDIOutput;           // non-denoised diffuse illumination
-RGTextureHandle g_RG_RTXDIDiffuseOutput;      // RELAX denoised diffuse output
-RGTextureHandle g_RG_RTXDISpecularOutput;     // non-denoised specular / RELAX denoised specular
+RGTextureHandle g_RG_RTXDIDiffuseOutput;      // REBLUR denoised diffuse output
+RGTextureHandle g_RG_RTXDISpecularOutput;     // non-denoised specular / REBLUR denoised specular
 RGBufferHandle  g_RG_RTXDILightReservoirBuffer; // u_LightReservoirs — also read by viz renderer
 RGTextureHandle g_RG_RTXDIDIComposited;       // CompositingPass output — read by DeferredRenderer
 
@@ -154,11 +154,11 @@ void RTXDIIMGUISettings()
         "Temporal + Spatial\0");
     ImGui::PopItemWidth();
 
-    // ---- RELAX Denoising toggle -------------------------------------------
+    // ---- REBLUR Denoising toggle -------------------------------------------
     ImGui::Separator();
-    ImGui::Checkbox("Enable RELAX Denoising (NRD)", &g_Renderer.m_EnableReSTIRDIRelaxDenoising);
-    if (g_Renderer.m_EnableReSTIRDIRelaxDenoising)
-        ImGui::TextDisabled("  Diffuse + specular denoised separately via RELAX D+S.");
+    ImGui::Checkbox("Enable REBLUR Denoising (NRD)", &g_Renderer.m_EnableReSTIRDenoising);
+    if (g_Renderer.m_EnableReSTIRDenoising)
+        ImGui::TextDisabled("  Diffuse + specular denoised separately via REBLUR D+S.");
 
     ImGui::Separator();
 
@@ -558,7 +558,7 @@ public:
     rtxdi::CheckerboardMode                 m_CachedCheckerboardMode = rtxdi::CheckerboardMode::Black;
 
     std::unique_ptr<NrdIntegration> m_NrdIntegration;
-    nrd::RelaxSettings m_NRDRelaxSettings;
+    nrd::ReblurSettings m_NRDReblurSettings;
 
     void CreateRTXDIContext()
     {
@@ -628,10 +628,10 @@ public:
         g_ReSTIRGI_SpatialParams     = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
         g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
 
-        m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR);
+        m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
 
-        m_NRDRelaxSettings.enableAntiFirefly = true;
+        m_NRDReblurSettings.enableAntiFirefly = true;
     }
 
     void PostSceneLoad() override
@@ -750,9 +750,9 @@ public:
         const uint32_t totalRISEntries   = k_LocalRISEntries + k_EnvRISEntries + k_ReGIREntries;
 
         // ------------------------------------------------------------------
-        // RELAX denoising output textures (only when denoising is enabled)
+        // NRD denoising output textures (only when denoising is enabled)
         // ------------------------------------------------------------------
-        if (g_Renderer.m_EnableReSTIRDIRelaxDenoising)
+        if (g_Renderer.m_EnableReSTIRDenoising)
         {
             m_NrdIntegration->Setup(renderGraph);
 
@@ -1251,8 +1251,13 @@ public:
         g_Const.SetRuntimeParams(rtp);
 
         // ---- Denoiser mode ----
-        g_Const.SetDenoiserMode(g_Renderer.m_EnableReSTIRDIRelaxDenoising
-            ? srrhi::RTXDIConstants::DENOISER_MODE_RELAX : srrhi::RTXDIConstants::DENOISER_MODE_OFF);
+        g_Const.SetDenoiserMode(g_Renderer.m_EnableReSTIRDenoising
+            ? srrhi::RTXDIConstants::DENOISER_MODE_REBLUR : srrhi::RTXDIConstants::DENOISER_MODE_OFF);
+
+        // ---- REBLUR hit distance params (used by REBLUR_FrontEnd_GetNormHitDist) ----
+        // normHitDist = saturate(hitDist / (A + viewZ * B) * lerp(C, 1.0, smc))
+        // NRD default values — see ReblurHitDistanceParameters in NRDSettings.h
+        g_Const.SetReblurHitDistParams(Vector4{ 3.0f, 0.1f, 20.0f, 0.0f });
 
         // ---- Scene constants ----
         {
@@ -1304,11 +1309,11 @@ public:
             restirDI.spatioTemporalResamplingParams = m_Context->GetSpatioTemporalResamplingParameters();
             restirDI.shadingParams                = m_Context->GetShadingParameters();
 
-            // When RELAX denoising is active, DI ShadeSamples is the last NRD-packing pass
+            // When NRD denoising is active, DI ShadeSamples is the last NRD-packing pass
             // only when GI is disabled. When GI is enabled, GI FinalShading (isLastPass=true)
             // is the NRD-packing pass for the combined DI+GI signal.
             restirDI.shadingParams.enableDenoiserInputPacking =
-                (g_Renderer.m_EnableReSTIRDIRelaxDenoising && (!bDoReSTIRGI)) ? 1u : 0u;
+                (g_Renderer.m_EnableReSTIRDenoising && (!bDoReSTIRGI)) ? 1u : 0u;
 
             g_Const.SetRestirDI(restirDI);
         }
@@ -1474,7 +1479,7 @@ public:
             : cr.DummyUAVStructuredBuffer;
 
         // Denoising path outputs
-        const bool bDenoise = g_Renderer.m_EnableReSTIRDIRelaxDenoising;
+        const bool bDenoise = g_Renderer.m_EnableReSTIRDenoising;
         nvrhi::TextureHandle rawDiffuseTex      = bDenoise ? renderGraph.GetTexture(m_RG_RawDiffuseOutput,  RGResourceAccessMode::Write) : cr.DummyUAVTexture;
         nvrhi::TextureHandle rawSpecularTex     = bDenoise ? renderGraph.GetTexture(m_RG_RawSpecularOutput, RGResourceAccessMode::Write) : cr.DummyUAVTexture;
         nvrhi::TextureHandle denoisedDiffuseTex = bDenoise ? renderGraph.GetTexture(g_RG_RTXDIDiffuseOutput,  RGResourceAccessMode::Write) : cr.DummyUAVTexture;
@@ -1885,7 +1890,7 @@ public:
         // Shade Samples        // Shade Samples → write to DI output (u8/u9)
         // ------------------------------------------------------------------
         {
-            PROFILE_SCOPED(bDenoise ? "Shade Samples (RELAX)" : "Shade Samples");
+        PROFILE_SCOPED(bDenoise ? "Shade Samples (REBLUR)" : "Shade Samples");
 
             g_Renderer.AddComputePass({
                 .commandList    = commandList,
@@ -2000,7 +2005,7 @@ public:
         }
 
         // ------------------------------------------------------------------
-        // RELAX denoising
+        // REBLUR denoising
         // ------------------------------------------------------------------
         if (bDenoise)
         {
@@ -2020,7 +2025,7 @@ public:
                 denoisedDiffuseTex,     // OUT_DIFF_RADIANCE_HITDIST
                 denoisedSpecularTex,    // OUT_SPEC_RADIANCE_HITDIST
                 commonSettings,
-                &m_NRDRelaxSettings);
+                &m_NRDReblurSettings);
         }
 
         // ------------------------------------------------------------------

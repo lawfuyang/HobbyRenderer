@@ -259,7 +259,7 @@ struct Renderer
 
     // ReSTIR DI settings
     bool m_EnableReSTIRDI = true;
-    bool m_EnableReSTIRDIRelaxDenoising = true;
+    bool m_EnableReSTIRDenoising = true;
 
     // Indirect lighting technique (mutually exclusive: 0=None, 1=RestirGI, 2=SHARC)
     uint32_t m_IndirectLightingTechnique = 2;
