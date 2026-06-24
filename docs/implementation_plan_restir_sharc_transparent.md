@@ -5,6 +5,15 @@
 > **Risk level**: Low — additive changes, guarded by compile-time and runtime toggles  
 > **Dependencies**: RTXDI presample passes must run before transparent pass (already true); SHARC Update+Resolve must run before transparent pass (already true in all `IndirectLightingMode` values)
 
+> **SDK Version Context**: The active SHARC SDK is at [`external/SHARC/`](../external/SHARC)
+> (v1.8), which uses `hashGridData` naming (not `hashMapData` from older SDK).
+> `SharcGetCachedRadiance` uses a `skipResponsiveLighting` (bool) 4th parameter
+> instead of the older `debug` parameter. The RTXDI SDK is at
+> [`external/rtxdi/`](../external/rtxdi) and the RTXDI reference clone at
+> [`REFERENCES/RTXDI/`](../REFERENCES/RTXDI). Note that `RAB_LightInfo` =
+> `PolymorphicLightInfo` (a packed 3×uint4 structure); there are no simple
+> `.color`/`.intensity`/`.position` fields — use `RAB_SamplePolymorphicLight()`.
+
 ---
 
 ## 0. Pre-requisites & Infrastructure
@@ -86,6 +95,9 @@ Add to the `BasePassInputs` srinput (after existing entries, before closing `};`
     StructuredBuffer<uint2>  RISBuffer;         // RTXDI RIS tiles (128 × 1024 × uint2)
     StructuredBuffer<uint4>  RISLightDataBuffer; // Compact light info per RIS entry
 
+    // Polymorphic light data (read-only) — needed for non-compact RIS entries
+    StructuredBuffer<PolymorphicLightInfo> LightData;
+
     // SHARC radiance cache (read-only, written by SHARC Update/Resolve)
     RWStructuredBuffer<uint64_t>                SHARCHashEntries;
     RWStructuredBuffer<SharcPackedData>         SHARCResolved;
@@ -93,7 +105,13 @@ Add to the `BasePassInputs` srinput (after existing entries, before closing `};`
     SHARCConstants                              SHARCConst;
 ```
 
-**What changes for the generated C++ binding**: `BasePassInputs` struct gains `SetRISBuffer()`, `SetRISLightDataBuffer()`, `SetSHARCHashEntries()`, `SetSHARCResolved()`, `SetSHARCAccumulation()`, and `SetSHARCConst()` methods. The generated HLSL bindings (`srrhi/hlsl/BasePass.hlsli`) gain `GetRISBuffer()`, `GetRISLightDataBuffer()`, etc.
+**What changes for the generated C++ binding**: `BasePassInputs` struct gains `SetRISBuffer()`, `SetRISLightDataBuffer()`, `SetLightData()`, `SetSHARCHashEntries()`, `SetSHARCResolved()`, `SetSHARCAccumulation()`, and `SetSHARCConst()` methods. The generated HLSL bindings (`srrhi/hlsl/BasePass.hlsli`) gain `GetRISBuffer()`, `GetRISLightDataBuffer()`, `GetLightData()`, etc.
+
+> **Note on `PolymorphicLightInfo`**: This struct is already declared as `extern` in
+> [`RTXDI.sr`](../../src/shaders/RTXDI.sr). Including `srrhi/hlsl/BasePass.hlsli` in the shader
+> will **not** automatically bring `PolymorphicLightInfo` into scope — it must also be forward-declared
+> or included. The simplest approach: add `extern PolymorphicLightInfo;` to [`BasePass.sr`](../../src/shaders/BasePass.sr)
+> before the `srinput BasePassInputs` block, matching the pattern used in RTXDI.sr.
 
 ### Task 1.3: Wire Up Render-Graph Read Access in TransparentPassRenderer::Setup()
 
@@ -173,7 +191,7 @@ cb.m_FrameIndex                = g_Renderer.m_FrameIndex;
 
 ### Task 1.6: Add ImGui Toggles
 
-**File**: The ImGui rendering section (likely in a UI helper file or `Renderer.cpp`)
+**File**: [src/ImGuiLayer.cpp](src/ImGuiLayer.cpp), in the "Transparent" or "Forward Rendering" UI section
 
 Add under the "Transparent" or "Forward Rendering" section:
 
@@ -205,7 +223,7 @@ if (ImGui::TreeNode("Transparent Objects")) {
 }
 ```
 
-Add the corresponding member variables to the `Renderer` class.
+Add the corresponding member variables (`m_EnableReSTIRDI`, `m_EnableSHARCForTransparent`, `m_EnableRTShadowsTransparent`) to the `Renderer` class in [`Renderer.h`](../../src/Renderer.h). These are read from ImGuiLayer.cpp via the global `g_Renderer` reference.
 
 ---
 
@@ -219,15 +237,36 @@ After the existing `#include` block (around line 7), conditionally include RTXDI
 
 ```hlsl
 #if defined(FORWARD_TRANSPARENT)
+
+// SHARC preprocessor defines must precede SharcCommon.h
+#define SHARC_ENABLE_64_BIT_ATOMICS     1
+#define HASH_GRID_ENABLE_64_BIT_ATOMICS 1
 #include "SharcCommon.h"          // SHARC SDK: SharcGetCachedRadiance, SharcParameters, etc.
 #include "srrhi/hlsl/SHARC.hlsli" // Generated SHARC bindings
 #include "SharcHelpers.hlsli"     // BuildSharcParameters helper
-#include "Rtxdi/DI/RISBuffer.hlsli"         // RTXDI RIS tile utilities
-#include "Rtxdi/DI/LocalLightSelection.hlsli" // RTXDI light candidate selection
+
+// RTXDI RIS — requires RTXDI_RIS_BUFFER global macro definition BEFORE includes.
+// In BasePass.hlsl this must point to the RIS buffer bound by BasePassInputs.
+#define RTXDI_RIS_BUFFER    g_RISBuffer
+#include "Rtxdi/LightSampling/RISBuffer.hlsli"         // RTXDI RIS tile utilities
+#include "Rtxdi/LightSampling/LocalLightSelection.hlsli" // RTXDI light candidate selection
+#include "Rtxdi/LightSampling/RISBufferSegmentParameters.h"
+
+// RNG for RIS tile random selection
+#include "RNG.hlsli"
+
 #endif
 ```
 
-> **Note**: Verify that `RISBuffer.hlsli` and `LocalLightSelection.hlsli` exist at the expected paths under `external/rtxdi/Include/Rtxdi/DI/`. If the RTXDI headers are at a different include path, adjust accordingly. The `RtxdiApplicationBridge` already uses these — follow the same include pattern.
+> **Note**: `#include "Rtxdi/LightSampling/RISBuffer.hlsli"` (not `DI/`) — these headers live
+> under [`external/rtxdi/Include/Rtxdi/LightSampling/`](../../external/rtxdi/Include/Rtxdi/LightSampling/).
+> The `RTXDI_RIS_BUFFER` macro must be defined before including `RISBuffer.hlsli` because
+> `RTXDI_RandomlySelectLightDataFromRISTile` accesses the RIS buffer through this global,
+> not through a function parameter. The SDK's application bridge pattern (see
+> [RAB_Buffers.hlsli](../../src/shaders/rtxdi/LightingPasses/RtxdiApplicationBridge/RAB_Buffers.hlsli))
+> uses the same approach. `SHARC_ENABLE_64_BIT_ATOMICS` and `HASH_GRID_ENABLE_64_BIT_ATOMICS`
+> must be defined before `SharcCommon.h` since the transparent pass PS runs at shader model
+> 6.0+ where these are not auto-detected.
 
 Add new resource declarations after the existing `g_Lights` declaration (around line 23):
 
@@ -241,6 +280,15 @@ static const RWStructuredBuffer<SharcAccumulationData> g_SHARCAccumulation  = sr
 static const srrhi::SHARCConstants                    g_SHARCConst         = srrhi::BasePassInputs::GetSHARCConst();
 #endif
 ```
+
+> **Note**: `g_RISBuffer` must be declared as `StructuredBuffer<uint2>` (not `RW`) since
+> it will alias the `RTXDI_RIS_BUFFER` macro, which in the BasePass HLSL reads only.
+> The actual RIS buffer underlying handle is a `StructuredBuffer<uint2>` using `uint2` entries
+> matching the RTXDI SDK convention (`tileData.x` = light index + flags, `tileData.y` = invSourcePdf).
+> The `PolymorphicLightInfo` alias `RAB_LightInfo` is typedef'd to the packed
+> 3×uint4 structure in [`RAB_LightInfo.hlsli`](../../src/shaders/rtxdi/LightingPasses/RtxdiApplicationBridge/RAB_LightInfo.hlsli) —
+> its fields (`.center`, `.colorTypeAndFlags`, etc.) are packed bit-fields, not
+> simple `.color` / `.intensity` floats. Use `RAB_SamplePolymorphicLight()` to decode.
 
 ### Task 2.2: Implement RIS-Guided Single Light in Forward_PSMain
 
@@ -287,37 +335,58 @@ static const srrhi::SHARCConstants                    g_SHARCConst         = srr
         if (g_PerFrame.m_EnableReSTIRDI != 0)
         {
             // ── RIS-Guided Single Light ─────────────────────────────
-            // Select a RIS tile using coherent tile-space RNG
-            uint2 tilePixel = uint2(input.Position.xy) / srrhi::CommonConsts::RTXDI_TILE_PIXEL_WIDTH;
-            RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(
-                tilePixel, g_PerFrame.m_FrameIndex, 42);
+            // The RTXDI RIS buffer is a StructuredBuffer<uint2> where:
+            //   .x = light index | flags  (RTXDI_LIGHT_INDEX_MASK, RTXDI_LIGHT_COMPACT_BIT)
+            //   .y = invSourcePdf as float
+            //
+            // We read tiles directly without the full LightSampling context
+            // machinery, which requires the RAB_Buffers.hlsli bridge globals
+            // (t_LightDataBuffer, u_RisLightDataBuffer, etc.).
+            //
+            // 1. Select a RIS tile using tile-space coherent RNG
+            uint2 tilePixel = uint2(input.Position.xy) / 16u; // 16×16 pixel tiles
+            uint  tileSeed  = tilePixel.x ^ (tilePixel.y << 11) ^ (g_PerFrame.m_FrameIndex * 0x9E3779B9u);
+            uint  tileRnd   = PCGHash(tileSeed);
+            uint  tileIndex = uint(float(tileRnd) * (1.0f / 4294967296.0f) * RTXDI_TILE_COUNT);
+            uint  tileBase  = tileIndex * RTXDI_TILE_SIZE;
 
-            RTXDI_RISBufferSegmentParameters risParams;
-            risParams.tileCount    = srrhi::CommonConsts::RTXDI_TILE_COUNT;
-            risParams.tileSize     = srrhi::CommonConsts::RTXDI_TILE_SIZE;
-            risParams.bufferOffset = 0;
-
-            RTXDI_RISTileInfo tile = RTXDI_RandomlySelectRISTile(
-                tileRng, g_RISBuffer, risParams);
-
-            // Draw one candidate from the selected tile
+            // 2. Draw one random candidate from the selected tile
             RNG rng = InitRNG(uint2(input.Position.xy), g_PerFrame.m_FrameIndex);
-            uint2 tileData;
-            uint  risBufferPtr;
-            float rnd = NextFloat(rng);
-            RTXDI_RandomlySelectLightDataFromRISTile(
-                rnd, tile, g_RISBuffer, g_RISLightDataBuffer, tileData, risBufferPtr);
+            uint  sampleIdx = uint(NextFloat(rng) * RTXDI_TILE_SIZE);
+            uint2 tileData  = g_RISBuffer[tileBase + sampleIdx];
 
-            // Unpack the light info
-            RAB_LightInfo lightInfo;
-            uint lightIndex;
-            float invSourcePdf;
-            RTXDI_UnpackLocalLightFromRISLightData(
-                tileData, g_RISLightDataBuffer, risBufferPtr,
-                lightInfo, lightIndex, invSourcePdf);
+            uint  lightIndex    = tileData.x & RTXDI_LIGHT_INDEX_MASK;
+            bool  isCompact     = (tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0;
+            float invSourcePdf  = asfloat(tileData.y);
 
-            // Evaluate BRDF with the selected light
-            float3 L = normalize(lightInfo.position - input.worldPos);
+            // 3. Decode light info — use compact path when available
+            PolymorphicLightInfo lightInfo;
+            if (isCompact)
+            {
+                uint risPtr = tileBase + sampleIdx;
+                uint4 d1 = g_RISLightDataBuffer[risPtr * 2 + 0];
+                uint4 d2 = g_RISLightDataBuffer[risPtr * 2 + 1];
+                lightInfo = unpackCompactLightInfo(d1, d2);
+            }
+            else
+            {
+                lightInfo = g_LightData[lightIndex];
+            }
+
+            // 4. Sample the polymorphic light for this surface
+            //    RAB_SamplePolymorphicLight handles sphere, rect, disc,
+            //    triangle, directional, and environment light types.
+            RAB_Surface rabSurface;
+            rabSurface.worldPos = input.worldPos;
+            rabSurface.normal   = N;
+            rabSurface.geoNormal = normalize(input.normal);
+            rabSurface.viewDir  = V;
+            float2 lightUV = float2(NextFloat(rng), NextFloat(rng));
+
+            RAB_LightSample ls = RAB_SamplePolymorphicLight(lightInfo, rabSurface, lightUV);
+
+            // 5. Evaluate BRDF with the sampled light direction
+            float3 L = normalize(ls.position - input.worldPos);
             float  NdotL = saturate(dot(N, L));
 
             float3 directDiffuse = 0;
@@ -325,20 +394,18 @@ static const srrhi::SHARCConstants                    g_SHARCConst         = srr
 
             if (NdotL > 1e-5f)
             {
-                float dist = length(lightInfo.position - input.worldPos);
+                float dist = length(ls.position - input.worldPos);
 
                 // Optional shadow ray
                 float shadow = 1.0;
                 if (g_PerFrame.m_EnableRTShadowsTransparent != 0)
                 {
                     lightingInputs.L = L;
-                    shadow = CalculateRTShadow(lightingInputs, L, dist);
+                    shadow = CalculateRTShadow(lightingInputs, L, min(dist, 1e10f));
                 }
 
-                // Simple radiance (point-light approximation for the candidate)
-                // For more accurate light-type-aware evaluation, use
-                // RAB_SamplePolymorphicLight() for area/rect/disc lights
-                float3 radiance = lightInfo.color * lightInfo.intensity * shadow;
+                // Use the radiance pre-computed by RAB_SamplePolymorphicLight
+                float3 radiance = ls.radiance * shadow;
 
                 lightingInputs.L = L;
                 PrepareLightingByproducts(lightingInputs);
@@ -366,11 +433,27 @@ static const srrhi::SHARCConstants                    g_SHARCConst         = srr
     }
 ```
 
-> **API Verification**: The exact function signatures for `RTXDI_RandomlySelectRISTile`, `RTXDI_RandomlySelectLightDataFromRISTile`, and `RTXDI_UnpackLocalLightFromRISLightData` must be verified against the RTXDI SDK headers in `external/rtxdi/Include/Rtxdi/DI/`. The signatures shown above are based on the documented RTXDI API. Adjust parameter names and types as needed.
->
-> Also verify whether `RAB_LightInfo` and `RAB_SamplePolymorphicLight` are accessible from a pixel shader (not just compute). They may need `RAB_` helper functions from the `RtxdiApplicationBridge` headers, which are already included in your codebase. If not available, use the simplified point-light evaluation shown above.
->
-> Verify that the `NextFloat(rng)` / `InitRNG` helpers from `Common.hlsli` or `CommonLighting.hlsli` are available in `FORWARD_TRANSPARENT` scope.
+> **API verification notes**:
+> - `RAB_LightInfo` = `PolymorphicLightInfo` — a tightly packed 3×uint4 struct defined in
+>   [`RTXDI.sr`](../../src/shaders/RTXDI.sr). There are no `.color`, `.intensity`, or `.position`
+>   float fields. Use `RAB_SamplePolymorphicLight()` or the lower-level helpers in
+>   [`PolymorphicLight.hlsli`](../../src/shaders/rtxdi/PolymorphicLight.hlsli).
+> - `RTXDI_LIGHT_INDEX_MASK` and `RTXDI_LIGHT_COMPACT_BIT` are defined in the RTXDI SDK
+>   (pulled in via `RISBuffer.hlsli` → `RtxdiTypes.h`).
+> - `unpackCompactLightInfo()` is defined in `PolymorphicLight.hlsli`, already included by
+>   `RAB_LightInfo.hlsli`.
+> - `RAB_LightSample` fields: `.position` (float3), `.radiance` (float3), `.solidAnglePdf` (float).
+> - The RIS buffer tile size and count match the RTXDI presampling pass constants in
+>   [`RTXDIRenderer.cpp`](../../src/RTXDIRenderer.cpp): `k_RISTileSize = 1024`, `k_RISTileCount = 128`.
+> - `PCGHash()` and `InitRNG()` / `NextFloat()` are from [`RNG.hlsli`](../../src/shaders/RNG.hlsli).
+> - `RAB_SamplePolymorphicLight()` / `RAB_Surface` require including
+>   [`RAB_LightInfo.hlsli`](../../src/shaders/rtxdi/LightingPasses/RtxdiApplicationBridge/RAB_LightInfo.hlsli)
+>   and its transitive includes (`PolymorphicLight.hlsli`, `RAB_Surface.hlsli`, `RAB_LightSample.hlsli`).
+>   `RAB_LightInfo.hlsli` internally uses `u_RisLightDataBuffer` for compact loads — in the
+>   transparent PS scope, this macro must be aliased to the BasePass binding.
+> - `g_LightData` must be bound as a `StructuredBuffer<PolymorphicLightInfo>` — add to
+>   `BasePass.sr` as a new resource (the existing `g_Lights` uses a different `GPULight` struct).
+>   See [Task 1.2 additions](#task-12-add-ris-and-sharc-buffer-bindings-to-basepasssr).
 
 ---
 
@@ -399,6 +482,7 @@ Locate the line where `color` is finalized before the refraction block (approxim
         hitData.normalWorld   = normalize(input.normal);  // geometric normal (SHARC convention)
 
         float3 indirectGI = 0;
+        // v1.8 SDK: 4th param is 'skipResponsiveLighting' (false = include responsive)
         if (SharcGetCachedRadiance(sharcParams, hitData, indirectGI, false))
         {
             // SHARC stores BSDF-modulated exitance at each voxel.
@@ -432,13 +516,19 @@ For improved quality on cache misses, add after the `if (SharcGetCachedRadiance(
 
 ### Task 4.1: Code Review Checklist
 
-- [ ] Verify all `#include` paths resolve (RTXDI headers may need path adjustment for PS compilation vs CS compilation)
+- [ ] Verify all `#include` paths resolve: `Rtxdi/LightSampling/RISBuffer.hlsli` (not `DI/`)
+- [ ] Verify `RTXDI_RIS_BUFFER` macro is defined before `RISBuffer.hlsli` include
+- [ ] Verify `SHARC_ENABLE_64_BIT_ATOMICS=1` and `HASH_GRID_ENABLE_64_BIT_ATOMICS=1` are defined before `SharcCommon.h`
+- [ ] Verify `RNG.hlsli` is included (needed for `InitRNG`/`NextFloat`/`PCGHash`)
+- [ ] Verify `PolymorphicLightInfo` is declared as `extern` in `BasePass.sr` (or `PolymorphicLight.hlsli` is included)
+- [ ] Verify `RAB_LightInfo.hlsli` and its transitive includes (`PolymorphicLight.hlsli`, `RAB_Surface.hlsli`, `RAB_LightSample.hlsli`) are included in `FORWARD_TRANSPARENT` scope
+- [ ] Verify `u_RisLightDataBuffer` macro aliases the BasePass `g_RISLightDataBuffer` binding (required by `RAB_LoadCompactLightInfo` in `RAB_LightInfo.hlsli`)
 - [ ] Verify generated `srrhi/hlsl/BasePass.hlsli` contains all new `Get*()` methods
 - [ ] Verify `BasePassInputs` C++ struct has all new `Set*()` methods
-- [ ] Verify `FORWARD_TRANSPARENT` permutation compiles without errors (PS, not CS — RTXDI functions may need PS-specific handling)
-- [ ] Verify `RAB_LightInfo`, `RAB_SamplePolymorphicLight`, `RTXDI_*` functions are accessible from pixel shader scope (some RTXDI helpers are CS-only)
-- [ ] Verify `SharcPackedData`, `SharcAccumulationData`, `SHARCConstants` types are declared (they come from SharcCommon.h + SHARC.sr)
-- [ ] Verify `BuildSharcParameters` exists and compiles
+- [ ] Verify `FORWARD_TRANSPARENT` permutation compiles without errors (PS, not CS)
+- [ ] Verify `RAB_SamplePolymorphicLight`, `RAB_LightSample`, `RAB_Surface` compile correctly in PS scope
+- [ ] Verify `SharcPackedData`, `SharcAccumulationData`, `SHARCConstants` types are declared (from SharcCommon.h + SHARC.sr)
+- [ ] Verify `BuildSharcParameters` exists and compiles (from SharcHelpers.hlsli)
 
 ### Task 4.2: Edge Cases
 
@@ -498,11 +588,11 @@ enum TransparentGIMode {
 | File | What Changes |
 |------|-------------|
 | [src/RTXDIRenderer.cpp](src/RTXDIRenderer.cpp) | Promote `m_RG_RISBuffer` and `m_RG_RISLightDataBuffer` to global scope; rename usages |
-| [src/shaders/Common.sr](src/shaders/Common.sr) | Add `RTXDI_TILE_COUNT`, `RTXDI_TILE_SIZE`, `RTXDI_TILE_PIXEL_WIDTH` constants |
-| [src/shaders/BasePass.sr](src/shaders/BasePass.sr) | Add 3 new constants to `BasePassConstants`; add 6 new resources to `BasePassInputs` |
-| [src/shaders/BasePass.hlsl](src/shaders/BasePass.hlsl) | Add includes, resource declarations, RIS direct-light code, SHARC GI code (in `Forward_PSMain`) |
+| [src/shaders/Common.sr](src/shaders/Common.sr) | Add `RTXDI_TILE_COUNT`, `RTXDI_TILE_SIZE` constants; add `extern PolymorphicLightInfo` |
+| [src/shaders/BasePass.sr](src/shaders/BasePass.sr) | Add 3 new constants to `BasePassConstants`; add 7 new resources to `BasePassInputs` (RIS, LightData, SHARC) |
+| [src/shaders/BasePass.hlsl](src/shaders/BasePass.hlsl) | Add includes (SHARC SDK, RTXDI LightSampling, RNG, RAB bridge), resource declarations, RIS direct-light code, SHARC GI code (in `Forward_PSMain`) |
 | [src/BasePassRenderer.cpp](src/BasePassRenderer.cpp) | Add `extern` handles; add `ReadBuffer`/`ReadTexture` in `Setup()`; wire bindings in `Render()`; populate new CB fields |
-| [src/Renderer.cpp](src/Renderer.cpp) | Add ImGui toggles; add member variables for `m_EnableReSTIRDI`, `m_EnableSHARCForTransparent`, `m_EnableRTShadowsTransparent` |
+| [src/ImGuiLayer.cpp](src/ImGuiLayer.cpp) | Add ImGui toggles for `m_EnableReSTIRDI`, `m_EnableSHARCForTransparent`, `m_EnableRTShadowsTransparent` |
 
 ---
 
@@ -560,9 +650,9 @@ enum TransparentGIMode {
 
 | Risk | Mitigation |
 |------|-----------|
-| RTXDI functions (`RTXDI_InitRandomSampler`, `RTXDI_RandomlySelectRISTile`, etc.) are CS-only | Check SDK headers for PS-compatible alternatives; fall back to simplified direct buffer reads if needed |
-| `RAB_LightInfo` / `RAB_SamplePolymorphicLight` unavailable in PS scope | Use simple point-light evaluation (color × intensity / dist² × shadow) — sufficient for single-candidate case |
-| PSO compilation fails due to new bindings | Verify `BasePass.sr` srinput is the one used by the transparent permutation; check descriptor table layout |
-| Generated `srrhi` code breaks due to large srinput | srrhi should handle up to ~32 bindings; BasePass currently has 13 |
-| `SharcPackedData` type not found in BasePass scope | Ensure `SharcCommon.h` is included BEFORE `srrhi/hlsl/SHARC.hlsli` (required by SHARC.sr extern declarations) |
-| Memory/performance regression | All paths gated by runtime toggles (default OFF); zero overhead when disabled |
+| `RAB_LightInfo.hlsli` / `RAB_SamplePolymorphicLight` require bridge globals (`u_RisLightDataBuffer`, `t_LightDataBuffer`) not available in BasePass PS scope | Define `#define u_RisLightDataBuffer g_RISLightDataBuffer` and `#define t_LightDataBuffer g_LightData` before including `RAB_LightInfo.hlsli`. Alternatively, use the simplified RIS path that reads the buffer directly without the full bridge include chain — see the compact light decode code path above. |
+| `PolymorphicLightInfo` struct not recognized in BasePass.hlsl (defined in RTXDI.sr, not BasePass.sr) | Add `extern PolymorphicLightInfo;` to `BasePass.sr` before the `srinput` block. This tells srrhi to use the existing global type from `RTXDI.sr`. |
+| PSO compilation fails due to new bindings | Verify `BasePass.sr` srinput is the one used by the transparent permutation; BasePass currently has 13 bindings, adding ~7 more stays well within limits. Check descriptor table layout. |
+| Generated `srrhi` code breaks due to large srinput | srrhi should handle up to ~32 bindings; BasePass currently has 13. The 7 additions are well within budget. |
+| `SharcCommon.h` fails to compile in PS because `SHARC_ENABLE_64_BIT_ATOMICS` auto-detection doesn't trigger for PS shader models | Explicitly define `SHARC_ENABLE_64_BIT_ATOMICS=1` and `HASH_GRID_ENABLE_64_BIT_ATOMICS=1` before the `#include` (already done in the corrected includes above). |
+| Memory/performance regression | All paths gated by runtime toggles (default OFF); zero overhead when disabled. RIS path reads 1-2 buffer elements per pixel (O(1)), vs original O(N) loop over lights. |
