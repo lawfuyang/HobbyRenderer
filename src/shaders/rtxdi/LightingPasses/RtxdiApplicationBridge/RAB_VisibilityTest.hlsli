@@ -117,7 +117,7 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure accelStruct, RAB_Surfa
         if (rayQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
         {
             if (considerTransparentMaterial(
-                rayQuery.CandidateInstanceIndex(),
+                rayQuery.CandidateInstanceID(),
                 rayQuery.CandidateGeometryIndex(),
                 rayQuery.CandidatePrimitiveIndex(),
                 rayQuery.CandidateTriangleBarycentrics(),

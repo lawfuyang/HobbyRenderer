@@ -134,10 +134,8 @@ void StoreShadingOutput(
     bool isFirstPass,
     bool isLastPass)
 {
-    // Always write at full-screen pixelPosition.
-    // When checkerboard is active, reservoirPosition has a halved X coordinate
-    // that does not match the full-width output texture expected by NRD.
-    // NRD handles the checkerboard fill-in via temporal accumulation.
+    // Lighting textures are always full-resolution in this codebase.
+    // Always write at pixelPosition (full-screen coordinates).
     uint2 lightingTexturePos = pixelPosition;
 
     float diffuseHitT = lightDistance;
@@ -164,7 +162,7 @@ void StoreShadingOutput(
         otherFieldPixelPosition.x += (g_Const.runtimeParams.activeCheckerboardField == 1) == ((pixelPosition.y & 1) != 0)
             ? 1 : -1;
 
-        if (g_Const.denoiserMode != DENOISER_MODE_OFF || g_Const.enableAccumulation)
+        if (g_Const.denoiserMode == DENOISER_MODE_RELAX || g_Const.enableAccumulation)
         {
             diffuse *= 2;
             specular *= 2;
@@ -182,20 +180,21 @@ void StoreShadingOutput(
 #if WITH_NRD
     if(g_Const.denoiserMode != DENOISER_MODE_OFF && isLastPass)
     {
+        const bool useReLAX = (g_Const.denoiserMode == DENOISER_MODE_RELAX);
         const bool sanitize = true;
 
-        if (g_Const.denoiserMode == DENOISER_MODE_REBLUR)
-        {
-            float diffNormDist = REBLUR_FrontEnd_GetNormHitDist(diffuseHitT, viewDepth, g_Const.reblurHitDistParams, 1.0);
-            u_DiffuseLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(diffuse, diffNormDist, sanitize);
-
-            float specNormDist = REBLUR_FrontEnd_GetNormHitDist(specularHitT, viewDepth, g_Const.reblurHitDistParams, roughness);
-            u_SpecularLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(specular, specNormDist, sanitize);
-        }
-        else // DENOISER_MODE_RELAX — keep as fallback
+        if (useReLAX)
         {
             u_DiffuseLighting[lightingTexturePos] = RELAX_FrontEnd_PackRadianceAndHitDist(diffuse, diffuseHitT, sanitize);
             u_SpecularLighting[lightingTexturePos] = RELAX_FrontEnd_PackRadianceAndHitDist(specular, specularHitT, sanitize);
+        }
+        else
+        {
+            float diffNormDist = REBLUR_FrontEnd_GetNormHitDist(diffuseHitT, viewDepth, g_Const.reblurHitDistParams.xyz, 1.0);
+            u_DiffuseLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(diffuse, diffNormDist, sanitize);
+
+            float specNormDist = REBLUR_FrontEnd_GetNormHitDist(specularHitT, viewDepth, g_Const.reblurHitDistParams.xyz, roughness);
+            u_SpecularLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(specular, specNormDist, sanitize);
         }
     }
     else
@@ -220,7 +219,8 @@ void StoreShadingOutput(
     bool isFirstPassSpecular,
     bool isLastPass)
 {
-    // Always write at full-screen pixelPosition (see note above).
+    // Lighting textures are always full-resolution in this codebase.
+    // Always write at pixelPosition (full-screen coordinates).
     uint2 lightingTexturePos = pixelPosition;
 
     if (!isFirstPassDiffuse)
@@ -245,7 +245,7 @@ void StoreShadingOutput(
         otherFieldPixelPosition.x += (g_Const.runtimeParams.activeCheckerboardField == 1) == ((pixelPosition.y & 1) != 0)
             ? 1 : -1;
 
-        if (g_Const.denoiserMode != DENOISER_MODE_OFF || g_Const.enableAccumulation)
+        if (g_Const.denoiserMode == DENOISER_MODE_RELAX || g_Const.enableAccumulation)
         {
             diffuse *= 2;
             specular *= 2;
@@ -263,20 +263,21 @@ void StoreShadingOutput(
 #if WITH_NRD
     if(g_Const.denoiserMode != DENOISER_MODE_OFF && isLastPass)
     {
+        const bool useReLAX = (g_Const.denoiserMode == DENOISER_MODE_RELAX);
         const bool sanitize = true;
 
-        if (g_Const.denoiserMode == DENOISER_MODE_REBLUR)
-        {
-            float diffNormDist = REBLUR_FrontEnd_GetNormHitDist(diffuseHitT, viewDepth, g_Const.reblurHitDistParams, 1.0);
-            u_DiffuseLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(diffuse, diffNormDist, sanitize);
-
-            float specNormDist = REBLUR_FrontEnd_GetNormHitDist(specularHitT, viewDepth, g_Const.reblurHitDistParams, roughness);
-            u_SpecularLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(specular, specNormDist, sanitize);
-        }
-        else // DENOISER_MODE_RELAX — keep as fallback
+        if (useReLAX)
         {
             u_DiffuseLighting[lightingTexturePos] = RELAX_FrontEnd_PackRadianceAndHitDist(diffuse, diffuseHitT, sanitize);
             u_SpecularLighting[lightingTexturePos] = RELAX_FrontEnd_PackRadianceAndHitDist(specular, specularHitT, sanitize);
+        }
+        else
+        {
+            float diffNormDist = REBLUR_FrontEnd_GetNormHitDist(diffuseHitT, viewDepth, g_Const.reblurHitDistParams.xyz, 1.0);
+            u_DiffuseLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(diffuse, diffNormDist, sanitize);
+
+            float specNormDist = REBLUR_FrontEnd_GetNormHitDist(specularHitT, viewDepth, g_Const.reblurHitDistParams.xyz, roughness);
+            u_SpecularLighting[lightingTexturePos] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(specular, specNormDist, sanitize);
         }
     }
     else

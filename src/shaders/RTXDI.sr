@@ -130,7 +130,10 @@ cbuffer ResamplingConstants
     uint enableBrdfAdditiveBlend;
     uint enableAccumulation;
     uint directLightingMode;
-    uint _pad0;
+    uint debugVisualizeGIEmission; // DEBUG: 0=off, 1=raw secondary emission,
+                                   // 2=reservoir radiance*weightSum (what the
+                                   // estimator actually consumes), 3=final
+                                   // diffuse contribution before albedo.
 
     SceneConstants sceneConstants;
 
@@ -288,6 +291,9 @@ srinput ResamplingPassInputs
     RWStructuredBuffer<SecondaryGBufferData>    m_SecondaryGBuffer;
     RWTexture2D<float4>                         m_DiffuseLighting;
     RWTexture2D<float4>                         m_SpecularLighting;
+    // DEBUG: per-pixel secondary-surface emission written by GI FinalShading
+    // for visual inspection in PIX (and optional on-screen display).
+    RWTexture2D<float4>                         m_GIDebugEmission;
 };
 
 // ---- CompositingPass ----

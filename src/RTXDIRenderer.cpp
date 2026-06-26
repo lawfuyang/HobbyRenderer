@@ -55,6 +55,12 @@ static RTXDI_GITemporalResamplingParameters    g_ReSTIRGI_TemporalParams   = rtx
 static RTXDI_BoilingFilterParameters           g_ReSTIRGI_BoilingParams    = rtxdi::GetDefaultReSTIRGIBoilingFilterParams();
 static RTXDI_GISpatialResamplingParameters     g_ReSTIRGI_SpatialParams    = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
 static RTXDI_GIFinalShadingParameters          g_ReSTIRGI_FinalShadingParams= rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+// DEBUG: GI secondary visualization mode.
+//   0 = Off
+//   1 = Raw secondary emission * throughput (post-NEE)
+//   2 = Reservoir radiance * weightSum (estimator value before BRDF)
+//   3 = Full GI diffuse contribution (before albedo modulation)
+static int                                     g_DebugVisualizeGIEmission   = 0;
 
 rtxdi::ReSTIRDI_ResamplingMode         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
 RTXDI_DIInitialSamplingParameters      g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
@@ -423,6 +429,36 @@ void RTXDIIMGUISettings()
                 if (ImGui::Checkbox("GI Enable Final MIS", &giFinalMIS))
                     g_ReSTIRGI_FinalShadingParams.enableFinalMIS = giFinalMIS ? 1u : 0u;
 
+                ImGui::Separator();
+                ImGui::TextDisabled("Debug");
+                static const char* kDebugModes[] = {
+                    "Off",
+                    "Raw Secondary Emission",
+                    "Reservoir radiance*weightSum",
+                    "Total GI (diffuse + specular)",
+                    "Specular-only contribution",
+                    "BRDF ray type (red=spec, green=diff)"
+                };
+                ImGui::Combo("Visualize GI Source", &g_DebugVisualizeGIEmission, kDebugModes, IM_ARRAYSIZE(kDebugModes));
+                ImGui::SetItemTooltip("Selects which GI signal is written into the\n"
+                                      "'GIDebugEmission' UAV (visible in PIX) and rendered\n"
+                                      "on-screen instead of the normal GI output.\n"
+                                      "\n"
+                                      "  Raw Secondary Emission: emission*throughput\n"
+                                      "      (post-NEE, what feeds the reservoir)\n"
+                                      "  Reservoir radiance*weightSum: estimator value\n"
+                                      "      after the reservoir round-trip, before BRDF.\n"
+                                      "      For diffuse rays this should be ~3.8x brighter\n"
+                                      "      than 'Raw' due to 1/pdf scaling. For specular\n"
+                                      "      rays it can be MUCH brighter (1/pdf is huge).\n"
+                                      "  Total GI: brdf*radiance, the value multiplied by\n"
+                                      "      albedo at compositing. Should match Raw for\n"
+                                      "      diffuse rays (since brdf/pdf cancels).\n"
+                                      "  Specular-only: just the specular term — useful\n"
+                                      "      to spot specular fireflies from rough primaries.\n"
+                                      "  BRDF ray type: red where the BRDF sampled specular,\n"
+                                      "      green where it sampled diffuse.");
+
                 ImGui::TreePop();
             }
         }
@@ -501,6 +537,8 @@ public:
     RGTextureHandle m_RG_LinearDepth;
     RGTextureHandle m_RG_RawDiffuseOutput;
     RGTextureHandle m_RG_RawSpecularOutput;
+    // DEBUG: per-pixel secondary emission output from GI FinalShading.
+    RGTextureHandle m_RG_GIDebugEmission;
     RGBufferHandle  m_RG_LightDataBuffer;
     RGBufferHandle  m_RG_LightIndexMapping;
     RGBufferHandle  m_RG_GeometryInstanceToLight;
@@ -772,6 +810,11 @@ public:
             makeHDR("RTXDIRawSpecularOutput", m_RG_RawSpecularOutput);
             makeHDR("RTXDIDiffuseOutput", g_RG_RTXDIDiffuseOutput);
             makeHDR("RTXDISpecularOutput", g_RG_RTXDISpecularOutput);
+
+            if (g_DebugVisualizeGIEmission)
+            {
+                makeHDR("GIDebugEmission", m_RG_GIDebugEmission);
+            }
         }
         else
         {
@@ -788,6 +831,11 @@ public:
                 };
             makeHDR("RTXDIDIOutput", g_RG_RTXDIDIOutput);
             makeHDR("RTXDISpecularOutput", g_RG_RTXDISpecularOutput);
+
+            if (g_DebugVisualizeGIEmission)
+            {
+                makeHDR("GIDebugEmission", m_RG_GIDebugEmission);
+            }
         }
 
         // ------------------------------------------------------------------
@@ -1325,6 +1373,7 @@ public:
         g_Const.SetEnableBrdfAdditiveBlend(bDoReSTIRGI ? 1u : 0u);
         g_Const.SetEnableAccumulation(0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
+        g_Const.SetDebugVisualizeGIEmission(static_cast<uint32_t>(g_DebugVisualizeGIEmission));
         // Sync the standalone bool with the debug mode combo so both paths work
         g_ReGIR_VisualizeRegirCells = (g_Renderer.m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
         g_Const.SetVisualizeRegirCells(g_ReGIR_VisualizeRegirCells ? 1u : 0u);
@@ -1578,6 +1627,12 @@ public:
         resamplingInputs.SetSecondaryGBuffer(secondaryGBufBuf);                // u_SecondaryGBuffer
         resamplingInputs.SetDiffuseLighting(bDenoise ? rawDiffuseTex  : diOutputTex,    0);
         resamplingInputs.SetSpecularLighting(bDenoise ? rawSpecularTex : specularOutTex, 0);
+
+        nvrhi::TextureHandle giDebugEmissionTex = (bDoReSTIRGI && g_DebugVisualizeGIEmission)
+            ? renderGraph.GetTexture(m_RG_GIDebugEmission, RGResourceAccessMode::Write)
+            : cr.DummyUAVTexture;
+        resamplingInputs.SetGIDebugEmission(giDebugEmissionTex, 0);
+
         const nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(resamplingInputs);
 
         // ------------------------------------------------------------------

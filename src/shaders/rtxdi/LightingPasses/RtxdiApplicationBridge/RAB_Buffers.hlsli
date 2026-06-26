@@ -74,6 +74,8 @@
 #define u_SecondaryGBuffer          srrhi::ResamplingPassInputs::GetSecondaryGBuffer()
 #define u_DiffuseLighting           srrhi::ResamplingPassInputs::GetDiffuseLighting()
 #define u_SpecularLighting          srrhi::ResamplingPassInputs::GetSpecularLighting()
+// DEBUG: per-pixel secondary-surface emission for PIX inspection.
+#define u_GIDebugEmission           srrhi::ResamplingPassInputs::GetGIDebugEmission()
 
 // RTXDI macro aliases (SDK expects these names)
 #define RTXDI_RIS_BUFFER                u_RisBuffer

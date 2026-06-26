@@ -72,6 +72,26 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
     float3 diffuse = 0;
     float3 specular = 0;
 
+    // Selectable visualization modes via debugVisualizeGIEmission:
+    //   1 = raw secondary emission * throughput (post-NEE)
+    //   2 = reservoir.radiance * weightSum (pre-BRDF estimator value)
+    //   3 = full diffuse contribution = brdf.demodulatedDiffuse * radiance
+    //       (this is what gets multiplied by albedo at compositing)
+    float3 debugSecondaryEmission = 0;
+    float3 debugReservoirEstimator = 0;
+    if (g_Const.debugVisualizeGIEmission != 0)
+    {
+        const uint dbgIndex = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, reservoirPosition, 0);
+        const SecondaryGBufferData dbgGB = u_SecondaryGBuffer[dbgIndex];
+        const float3 dbgThroughput = Unpack_R16G16B16A16_FLOAT(dbgGB.throughputAndFlags).rgb;
+        debugSecondaryEmission = dbgGB.emission * dbgThroughput;
+
+        if (RTXDI_IsValidGIReservoir(reservoir))
+        {
+            debugReservoirEstimator = reservoir.radiance * reservoir.weightSum;
+        }
+    }
+
     if (RTXDI_IsValidGIReservoir(reservoir))
     {
         float3 radiance = reservoir.radiance * reservoir.weightSum;
@@ -114,6 +134,50 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
             specular = brdf.specular * radiance;
         }
         specular = DemodulateSpecular(primarySurface.material.specularF0, specular);
+    }
+
+    // DEBUG: select visualization based on mode and write to debug UAV +
+    // optionally override the on-screen GI output.
+    //   1 = raw secondary emission*throughput (post-NEE input)
+    //   2 = reservoir.radiance * weightSum (estimator value, before BRDF)
+    //   3 = diffuse + DemodulateSpecular(specular) — total GI before albedo
+    //   4 = ONLY specular contribution (DemodulateSpecular'd) from this reservoir
+    //   5 = mask: red = pixel's BRDF ray was specular, green = was diffuse,
+    //       intensity scaled by reservoir.weightSum to highlight bright specular hits
+    if (g_Const.debugVisualizeGIEmission != 0)
+    {
+        float3 dbg = 0;
+        if (g_Const.debugVisualizeGIEmission == 1)
+        {
+            dbg = debugSecondaryEmission;
+        }
+        else if (g_Const.debugVisualizeGIEmission == 2)
+        {
+            dbg = debugReservoirEstimator;
+        }
+        else if (g_Const.debugVisualizeGIEmission == 3)
+        {
+            dbg = diffuse + specular;
+        }
+        else if (g_Const.debugVisualizeGIEmission == 4)
+        {
+            dbg = specular;
+        }
+        else if (g_Const.debugVisualizeGIEmission == 5)
+        {
+            // Read the BRDF ray flag from u_SecondaryGBuffer for this pixel
+            const uint dbgIndex2 = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, reservoirPosition, 0);
+            const SecondaryGBufferData dbgGB2 = u_SecondaryGBuffer[dbgIndex2];
+            const uint flags2 = dbgGB2.throughputAndFlags.y >> 16;
+            const bool wasSpecularRay = (flags2 & kSecondaryGBuffer_IsSpecularRay) != 0;
+            const float intensity = saturate(reservoir.weightSum * 0.1); // scale for visibility
+            dbg = wasSpecularRay ? float3(intensity, 0, 0) : float3(0, intensity, 0);
+        }
+
+        u_GIDebugEmission[pixelPosition] = float4(dbg, 1.0);
+
+        diffuse  = dbg;
+        specular = 0;
     }
 
     StoreShadingOutput(GlobalIndex, pixelPosition,
