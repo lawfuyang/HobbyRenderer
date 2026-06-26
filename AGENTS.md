@@ -60,25 +60,24 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 # Build Pipeline
 
-**SRRHI**
+Detailed documentation on the renderer architecture, IRenderer, Render Graph,
+Resource Binding, nvrhi, srrhi, ShaderIDs, and the full build pipeline lives in
+**[PIPELINE.md](PIPELINE.md)** — refer to that file for comprehensive pipeline and
+codebase usage documentation.
 
-* Trigger: `.sr` added/modified
-* Run: `build_srrhi`
-* Outputs:
-  * C++ → `src/shaders/srrhi/cpp`
-  * HLSL → `src/shaders/srrhi/hlsl`
-  * Never manually edit any of these generated files from these 2 folders
+### Quick Reference
 
-* Include:
-  * C++ → from `cpp`
-  * Shaders → from `hlsl`
-* Ref: `external/srrhi/README.md`
-* Order: **must run before C++ + shader compilation**
+| Step | Command | Description |
+|---|---|---|
+| SRRHI generation | `build_srrhi` | `.sr` files → C++ headers + HLSL includes |
+| Shader IDs | `build_shaderids` | `.cfg` files → `ShaderIDs.h` |
+| Shader compilation | `build_shaders` | `.hlsl` files → DXIL binaries |
+| C++ build | `${PROJECT_NAME}` | Compiles and links the main executable |
 
-**Shaders**
+Build order is enforced by CMake dependencies: `build_srrhi → build_shaders → exe`
+and `build_shaderids → exe`.
 
-* Cmd: `build_shaders` (CMake)
-* Depends on: `build_srrhi` (auto)
+**Never manually edit** files under `src/shaders/srrhi/` or `src/shaders/ShaderIDs.h`.
 
 ---
 
