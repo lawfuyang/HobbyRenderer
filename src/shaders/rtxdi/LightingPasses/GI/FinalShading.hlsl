@@ -144,6 +144,13 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
     //   4 = ONLY specular contribution (DemodulateSpecular'd) from this reservoir
     //   5 = mask: red = pixel's BRDF ray was specular, green = was diffuse,
     //       intensity scaled by reservoir.weightSum to highlight bright specular hits
+    //   6 = ONLY diffuse contribution (brdf.demodulatedDiffuse * radiance)
+    //       — bypasses specular path entirely; if this looks correct but final
+    //       is over-saturated, the bug is in the specular path (DemodulateSpecular,
+    //       compositing F0 remod, or NRD specular history).
+    //   7 = pdf debug: visualize 1/pdf as grayscale (clamped). Bright pixels =
+    //       small pdf = potential specular firefly source. Useful to spot which
+    //       BRDF rays have huge 1/pdf amplification.
     if (g_Const.debugVisualizeGIEmission != 0)
     {
         float3 dbg = 0;
@@ -172,6 +179,18 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
             const bool wasSpecularRay = (flags2 & kSecondaryGBuffer_IsSpecularRay) != 0;
             const float intensity = saturate(reservoir.weightSum * 0.1); // scale for visibility
             dbg = wasSpecularRay ? float3(intensity, 0, 0) : float3(0, intensity, 0);
+        }
+        else if (g_Const.debugVisualizeGIEmission == 6)
+        {
+            dbg = diffuse;
+        }
+        else if (g_Const.debugVisualizeGIEmission == 7)
+        {
+            const uint dbgIndex3 = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, reservoirPosition, 0);
+            const SecondaryGBufferData dbgGB3 = u_SecondaryGBuffer[dbgIndex3];
+            const float invPdf = dbgGB3.pdf > 0.0 ? (1.0 / dbgGB3.pdf) : 0.0;
+            const float v = saturate(invPdf * 0.01); // tonemap so 100 = white
+            dbg = float3(v, v, v);
         }
 
         u_GIDebugEmission[pixelPosition] = float4(dbg, 1.0);

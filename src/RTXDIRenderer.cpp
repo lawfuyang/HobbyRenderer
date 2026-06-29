@@ -437,7 +437,9 @@ void RTXDIIMGUISettings()
                     "Reservoir radiance*weightSum",
                     "Total GI (diffuse + specular)",
                     "Specular-only contribution",
-                    "BRDF ray type (red=spec, green=diff)"
+                    "BRDF ray type (red=spec, green=diff)",
+                    "Diffuse-only contribution",
+                    "1/pdf heatmap (bright = small pdf)"
                 };
                 ImGui::Combo("Visualize GI Source", &g_DebugVisualizeGIEmission, kDebugModes, IM_ARRAYSIZE(kDebugModes));
                 ImGui::SetItemTooltip("Selects which GI signal is written into the\n"
@@ -457,7 +459,13 @@ void RTXDIIMGUISettings()
                                       "  Specular-only: just the specular term — useful\n"
                                       "      to spot specular fireflies from rough primaries.\n"
                                       "  BRDF ray type: red where the BRDF sampled specular,\n"
-                                      "      green where it sampled diffuse.");
+                                      "      green where it sampled diffuse.\n"
+                                      "  Diffuse-only: just the diffuse term. If this looks\n"
+                                      "      correct but final image is over-saturated,\n"
+                                      "      bug is in the specular path or NRD.\n"
+                                      "  1/pdf heatmap: visualize the per-pixel weightSum\n"
+                                      "      magnitude. Bright spots = potential firefly\n"
+                                      "      sources from low-pdf specular rays.");
 
                 ImGui::TreePop();
             }
