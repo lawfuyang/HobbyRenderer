@@ -78,7 +78,6 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
     if (isValidSecondarySurface && !isEnvironmentMap)
     {
         RAB_LightSample lightSample;
-        RTXDI_DISpatialResamplingParameters dummySpatialParams = (RTXDI_DISpatialResamplingParameters)0;
         RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
             g_Const.restirDI.initialSamplingParams, g_Const.lightBufferParams,
 #if RTXDI_ENABLE_PRESAMPLING
@@ -88,6 +87,32 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
 #endif
 #endif
         lightSample);
+
+        // Optional DI spatial resampling on the secondary surface.
+        // Try to find this secondary surface in the primary G-buffer. If found,
+        // resample the lights from that G-buffer surface into the reservoir
+        // using the DI spatial resampling function. This dramatically reduces
+        // NEE variance at the secondary hit (single-sample NEE otherwise
+        // occasionally picks a very bright close light, which then feeds the
+        // GI reservoir and gets locked in by temporal resampling).
+        // Uses the primary's spatial resampling params as-is.
+        if (g_Const.enableSecondaryResampling)
+        {
+            float4 secondaryClipPos = MatrixMultiply(float4(secondaryGBufferData.worldPos, 1.0), g_Const.view.m_MatWorldToClip);
+            secondaryClipPos.xyz /= secondaryClipPos.w;
+
+            if (all(abs(secondaryClipPos.xy) < 1.0) && secondaryClipPos.w > 0)
+            {
+                int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.m_ClipToWindowScale + g_Const.view.m_ClipToWindowBias);
+                secondarySurface.viewDepth = secondaryClipPos.w;
+
+                uint sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
+                reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,
+                    rng, params, g_Const.restirDI.reservoirBufferParams, sourceBufferIndex,
+                    g_Const.restirDI.spatialResamplingParams, lightSample);
+            }
+        }
+
         bool valid = reservoir.weightSum > 0;
 
         float3 indirectDiffuse = 0;

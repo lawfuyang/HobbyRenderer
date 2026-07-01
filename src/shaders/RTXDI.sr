@@ -135,6 +135,14 @@ cbuffer ResamplingConstants
                                    // estimator actually consumes), 3=final
                                    // diffuse contribution before albedo.
 
+    // If non-zero, ShadeSecondarySurfaces reprojects the secondary hit into
+    // screen space and, when found there, performs one DI spatial resampling
+    // pass into its NEE reservoir using the primary's DI reservoir grid.
+    // This dramatically reduces NEE variance at secondary hits and prevents
+    // rare bright light samples from becoming stuck fireflies once temporal
+    // GI resampling locks them in. Reuses restirDI.spatialResamplingParams.
+    uint enableSecondaryResampling;
+
     SceneConstants sceneConstants;
 
     RTXDI_LightBufferParameters           lightBufferParams;

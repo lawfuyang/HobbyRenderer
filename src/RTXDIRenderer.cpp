@@ -55,12 +55,20 @@ static RTXDI_GITemporalResamplingParameters    g_ReSTIRGI_TemporalParams   = rtx
 static RTXDI_BoilingFilterParameters           g_ReSTIRGI_BoilingParams    = rtxdi::GetDefaultReSTIRGIBoilingFilterParams();
 static RTXDI_GISpatialResamplingParameters     g_ReSTIRGI_SpatialParams    = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
 static RTXDI_GIFinalShadingParameters          g_ReSTIRGI_FinalShadingParams= rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+
 // DEBUG: GI secondary visualization mode.
 //   0 = Off
 //   1 = Raw secondary emission * throughput (post-NEE)
 //   2 = Reservoir radiance * weightSum (estimator value before BRDF)
 //   3 = Full GI diffuse contribution (before albedo modulation)
 static int                                     g_DebugVisualizeGIEmission   = 0;
+
+// If true, ShadeSecondarySurfaces reprojects the secondary hit into screen
+// space and (when found there) does one DI spatial resampling pass into its
+// NEE reservoir using the primary DI reservoir grid. Reduces NEE variance
+// at the secondary hit and helps prevent stuck GI fireflies. Matches the
+// reference RTXDI FullSample's brdfPT.enableSecondaryResampling toggle.
+static bool                                    g_ReSTIRGI_EnableSecondaryResampling = true;
 
 rtxdi::ReSTIRDI_ResamplingMode         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
 RTXDI_DIInitialSamplingParameters      g_ReSTIRDI_InitialSamplingParams  = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
@@ -428,6 +436,8 @@ void RTXDIIMGUISettings()
                 bool giFinalMIS = g_ReSTIRGI_FinalShadingParams.enableFinalMIS != 0;
                 if (ImGui::Checkbox("GI Enable Final MIS", &giFinalMIS))
                     g_ReSTIRGI_FinalShadingParams.enableFinalMIS = giFinalMIS ? 1u : 0u;
+
+                ImGui::Checkbox("GI Enable Secondary Resampling", &g_ReSTIRGI_EnableSecondaryResampling);
 
                 ImGui::Separator();
                 ImGui::TextDisabled("Debug");
@@ -1380,9 +1390,9 @@ public:
         g_Const.SetEnableBrdfIndirect(bDoReSTIRGI ? 1u : 0u);
         g_Const.SetEnableBrdfAdditiveBlend(bDoReSTIRGI ? 1u : 0u);
         g_Const.SetEnableAccumulation(0u);
+        g_Const.SetEnableSecondaryResampling((bDoReSTIRGI && g_ReSTIRGI_EnableSecondaryResampling) ? 1u : 0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
         g_Const.SetDebugVisualizeGIEmission(static_cast<uint32_t>(g_DebugVisualizeGIEmission));
-        // Sync the standalone bool with the debug mode combo so both paths work
         g_ReGIR_VisualizeRegirCells = (g_Renderer.m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
         g_Const.SetVisualizeRegirCells(g_ReGIR_VisualizeRegirCells ? 1u : 0u);
 
