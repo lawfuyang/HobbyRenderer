@@ -258,7 +258,7 @@ struct Renderer
     float m_AdaptationSpeed = 5.0f;
     bool m_EnableAutoExposure = true;
 
-    bool m_EnableBloom = true;
+    bool m_EnableBloom = false;
     bool m_DebugBloom = false;
     float m_BloomIntensity = 0.005f;
 
