@@ -105,6 +105,28 @@ std::vector<srrhi::Vertex> rawVertices(vertCount);
 // Fills: m_Pos, m_Normal, m_Uv, m_Tangent (float3, float3, float2, float4)
 // Also applies RH→LH coordinate conversion (negate Z)
 
+// ── STEP 1b: Filter degenerate/duplicate triangles (NEW in v1.2) ──
+rawIndices.resize(meshopt_filterIndexBuffer(rawIndices.data(), rawIndices.data(),
+    rawIndices.size(), &rawVertices[0].m_Pos.x, rawVertices.size(),
+    sizeof(float) * 3, sizeof(srrhi::Vertex)));
+// Removes triangles where any two vertices have the same position (degenerate)
+// or triangles that are exact duplicates of earlier triangles (same winding + positions)
+
+// ── STEP 1c: Generate tangents if not present in glTF (NEW in v1.2) ──
+if (!tangAcc && normAcc && uvAcc)
+{
+    std::vector<float> tangents(rawIndices.size() * 4);
+    meshopt_generateTangents(tangents.data(), rawIndices.data(), rawIndices.size(),
+        &rawVertices[0].m_Pos.x, rawVertices.size(), sizeof(srrhi::Vertex),
+        &rawVertices[0].m_Normal.x, sizeof(srrhi::Vertex),
+        &rawVertices[0].m_Uv.x, sizeof(srrhi::Vertex), 0);
+
+    // Per-corner tangents require vertex splitting at UV seams
+    // (see meshoptimizer README: Tangent spaces section for the splitting algorithm)
+    // ... vertex splitting loop using splits[] chain ...
+}
+// When tangents exist in glTF, they are read directly from the TANGENT accessor
+
 // ── STEP 2: Generate vertex remap (deduplication) ──
 std::vector<uint32_t> remap(rawIndices.size());
 size_t uniqueVertices = meshopt_generateVertexRemap(
@@ -190,6 +212,8 @@ for (uint32_t lod = 0; lod < MAX_LOD_COUNT; ++lod) {
 
 | Function | Purpose |
 |----------|---------|
+| `meshopt_filterIndexBuffer` | Remove degenerate & duplicate triangles **(NEW in v1.2)** |
+| `meshopt_generateTangents` | Generate tangent vectors from positions, normals, UVs **(NEW in v1.2)** |
 | `meshopt_generateVertexRemap` | Deduplicate vertices by value |
 | `meshopt_remapVertexBuffer` | Apply remap to vertex array |
 | `meshopt_remapIndexBuffer` | Apply remap to index array |
