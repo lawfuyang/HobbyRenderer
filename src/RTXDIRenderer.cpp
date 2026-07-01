@@ -389,9 +389,21 @@ void RTXDIIMGUISettings()
                 if (ImGui::Checkbox("GI Fallback Sampling", &giFallback))
                     g_ReSTIRGI_TemporalParams.enableFallbackSampling = giFallback ? 1u : 0u;
 
-                ImGui::Combo("GI Temporal Bias Correction",
-                    (int*)&g_ReSTIRGI_TemporalParams.biasCorrectionMode,
-                    "Off\0Basic\0Ray Traced\0");
+                // RTXDI_GIBiasCorrectionMode: Off=0, Basic=1, Raytraced=3 (no Pairwise for GI).
+                // ImGui combo index 2 must map to enum value 3, not 2.
+                {
+                    static const RTXDI_GIBiasCorrectionMode kGIBiasCorrectionValues[] = {
+                        RTXDI_GIBiasCorrectionMode::Off,
+                        RTXDI_GIBiasCorrectionMode::Basic,
+                        RTXDI_GIBiasCorrectionMode::Raytraced
+                    };
+                    static const char* kGIBiasCorrectionNames = "Off\0Basic\0Ray Traced\0";
+                    int giTemporalBCIdx = 0;
+                    for (int k = 0; k < 3; ++k)
+                        if (g_ReSTIRGI_TemporalParams.biasCorrectionMode == kGIBiasCorrectionValues[k]) { giTemporalBCIdx = k; break; }
+                    if (ImGui::Combo("GI Temporal Bias Correction", &giTemporalBCIdx, kGIBiasCorrectionNames))
+                        g_ReSTIRGI_TemporalParams.biasCorrectionMode = kGIBiasCorrectionValues[giTemporalBCIdx];
+                }
 
                 bool giBoiling = g_ReSTIRGI_BoilingParams.enableBoilingFilter != 0;
                 if (ImGui::Checkbox("##giBoilingFilter", &giBoiling))
@@ -419,9 +431,20 @@ void RTXDIIMGUISettings()
                     &g_ReSTIRGI_SpatialParams.depthThreshold, 0.0f, 1.0f);
                 ImGui::SliderFloat("GI Spatial Normal Threshold",
                     &g_ReSTIRGI_SpatialParams.normalThreshold, 0.0f, 1.0f);
-                ImGui::Combo("GI Spatial Bias Correction",
-                    (int*)&g_ReSTIRGI_SpatialParams.biasCorrectionMode,
-                    "Off\0Basic\0Ray Traced\0");
+                // Same GI enum gap fix: Off=0, Basic=1, Raytraced=3.
+                {
+                    static const RTXDI_GIBiasCorrectionMode kGIBiasCorrectionValues[] = {
+                        RTXDI_GIBiasCorrectionMode::Off,
+                        RTXDI_GIBiasCorrectionMode::Basic,
+                        RTXDI_GIBiasCorrectionMode::Raytraced
+                    };
+                    static const char* kGIBiasCorrectionNames = "Off\0Basic\0Ray Traced\0";
+                    int giSpatialBCIdx = 0;
+                    for (int k = 0; k < 3; ++k)
+                        if (g_ReSTIRGI_SpatialParams.biasCorrectionMode == kGIBiasCorrectionValues[k]) { giSpatialBCIdx = k; break; }
+                    if (ImGui::Combo("GI Spatial Bias Correction", &giSpatialBCIdx, kGIBiasCorrectionNames))
+                        g_ReSTIRGI_SpatialParams.biasCorrectionMode = kGIBiasCorrectionValues[giSpatialBCIdx];
+                }
 
                 ImGui::TreePop();
             }
