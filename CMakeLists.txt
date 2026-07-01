@@ -151,7 +151,7 @@ endif()
 # ----------------------------------------------------------------------------
 # AMD FSR SDK
 # ----------------------------------------------------------------------------
-SET(FSR_SDK_VERSION "2.2.0")
+SET(FSR_SDK_VERSION "2.3.0")
 SET(FSR_SDK_URL "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/archive/refs/tags/v${FSR_SDK_VERSION}.zip")
 download_library("FSR_SDK" "${FSR_SDK_VERSION}" "${FSR_SDK_URL}" "FidelityFX-SDK-*")
 set(FSR_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/FSR_SDK")
