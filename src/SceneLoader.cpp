@@ -1657,7 +1657,7 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 		if (!posAcc)
 			return;
 
-		if (!tangAcc)
+		if (!tangAcc && (!normAcc || !uvAcc))
 		{
 			if (prim.material)
 			{
@@ -1721,8 +1721,62 @@ void SceneLoader::ProcessMeshes(const cgltf_data* data, Scene& scene, std::vecto
 			rawIndices.resize(vertCount);
 			for (uint32_t k = 0; k < vertCount; ++k) rawIndices[k] = k;
 			// glTF RH -> LH: negating Z flips winding; swap 2nd and 3rd index per triangle to restore CCW front-face
-			for (uint32_t k = 0; k + 2 < vertCount; k += 3)
+		for (uint32_t k = 0; k + 2 < vertCount; k += 3)
 				std::swap(rawIndices[k + 1], rawIndices[k + 2]);
+		}
+
+		// Filter out degenerate and duplicate triangles before remapping
+		rawIndices.resize(meshopt_filterIndexBuffer(rawIndices.data(), rawIndices.data(), rawIndices.size(), &rawVertices[0].m_Pos.x, rawVertices.size(), sizeof(float) * 3, sizeof(srrhi::Vertex)));
+
+		// Generate tangents if not provided in the glTF (requires normals and UVs)
+		if (!tangAcc && normAcc && uvAcc)
+		{
+			std::vector<float> tangents(rawIndices.size() * 4);
+			meshopt_generateTangents(tangents.data(), rawIndices.data(), rawIndices.size(),
+				&rawVertices[0].m_Pos.x, rawVertices.size(), sizeof(srrhi::Vertex),
+				&rawVertices[0].m_Normal.x, sizeof(srrhi::Vertex),
+				&rawVertices[0].m_Uv.x, sizeof(srrhi::Vertex), 0);
+
+			// Seed each vertex with one of its corner tangents
+			for (size_t i = 0; i < rawIndices.size(); ++i)
+			{
+				srrhi::Vertex& v = rawVertices[rawIndices[i]];
+				v.m_Tangent.x = tangents[i * 4 + 0];
+				v.m_Tangent.y = tangents[i * 4 + 1];
+				v.m_Tangent.z = tangents[i * 4 + 2];
+				v.m_Tangent.w = tangents[i * 4 + 3];
+			}
+
+			// Split vertices at UV seams where tangents differ
+			std::vector<unsigned int> splits(rawVertices.size(), ~0u);
+			for (size_t i = 0; i < rawIndices.size(); ++i)
+			{
+				unsigned int v = rawIndices[i];
+				float* targetT = &tangents[i * 4];
+
+				// Walk the chain of split copies looking for a vertex whose tangent matches
+				while (v != ~0u &&
+					(rawVertices[v].m_Tangent.x != targetT[0] ||
+					 rawVertices[v].m_Tangent.y != targetT[1] ||
+					 rawVertices[v].m_Tangent.z != targetT[2] ||
+					 rawVertices[v].m_Tangent.w != targetT[3]))
+					v = splits[v];
+
+				// No match in chain: append a new split copy with the target tangent
+				if (v == ~0u)
+				{
+					v = unsigned(rawVertices.size());
+					rawVertices.push_back(rawVertices[rawIndices[i]]);
+					rawVertices[v].m_Tangent.x = targetT[0];
+					rawVertices[v].m_Tangent.y = targetT[1];
+					rawVertices[v].m_Tangent.z = targetT[2];
+					rawVertices[v].m_Tangent.w = targetT[3];
+					splits.push_back(splits[rawIndices[i]]);
+					splits[rawIndices[i]] = v;
+				}
+
+				rawIndices[i] = v;
+			}
 		}
 
 		std::vector<uint32_t> remap(rawIndices.size());
