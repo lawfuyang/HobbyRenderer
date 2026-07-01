@@ -112,7 +112,7 @@ static void ApplyHighPerfPreset()
     g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
     g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
     g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
 }
 
 static void ApplyHighQualityPreset()
