@@ -1,5 +1,6 @@
 ﻿#include "Scene.h"
 #include "SceneLoader.h"
+#include "SceneCache.h"
 #include "Config.h"
 #include "Renderer.h"
 #include "CommonResources.h"
@@ -33,8 +34,13 @@ void Scene::LoadScene()
 	}
 	else
 	{
-		const bool bFromJSONScene = false;
-		success = SceneLoader::LoadGLTFScene(*this, scenePath, allVerticesQuantized, allIndices, bFromJSONScene);
+		// Load non-mesh data from glTF (materials, nodes, textures, cameras, lights, animations)
+		success = SceneLoader::LoadGLTFScene_NonMesh(*this, scenePath, /*bFromJSONScene=*/false);
+		if (success)
+		{
+			// Load or cook mesh data (cache-aware)
+			success = SceneCache::LoadOrCookMeshData(sceneFilePath, *this, allVerticesQuantized, allIndices);
+		}
 	}
 
 	if (!success)

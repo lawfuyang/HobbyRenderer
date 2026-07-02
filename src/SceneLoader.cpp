@@ -2434,3 +2434,136 @@ bool SceneLoader::LoadGLTFSceneFromMemory(Scene& scene, const char* jsonData, si
 	const std::string basePath = sceneDir.empty() ? "" : (sceneDir.string() + "/");
 	return ProcessParsedGLTF(data, scene, basePath, sceneDir, allVerticesQuantized, allIndices, /*ensureDirectionalLight=*/true);
 }
+
+// ─── Cache-aware split loading ────────────────────────────────────────────────
+
+bool SceneLoader::ProcessParsedGLTF_NonMesh(
+	cgltf_data* data,
+	Scene& scene,
+	const std::string& bufferBasePath,
+	const std::filesystem::path& sceneDir,
+	bool ensureDirectionalLight)
+{
+	cgltf_options options{};
+
+	cgltf_result res = cgltf_validate(data);
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF validation failed", "[Scene] glTF validation failed (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	res = cgltf_load_buffers(&options, data, bufferBasePath.c_str());
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] Failed to load glTF buffers (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	res = decompressMeshopt(data);
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF meshopt decompression failed", "[Scene] Failed to decompress meshopt-compressed data (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	SceneOffsets offsets;
+	offsets.nodeOffset     = (int)scene.m_Nodes.size();
+	offsets.meshOffset     = (int)scene.m_Meshes.size();
+	offsets.materialOffset = (int)scene.m_Materials.size();
+	offsets.textureOffset  = (int)scene.m_Textures.size();
+	offsets.cameraOffset   = (int)scene.m_Cameras.size();
+	offsets.lightOffset    = (int)scene.m_Lights.size();
+
+	scene.m_Nodes.resize(offsets.nodeOffset + data->nodes_count);
+	ProcessMaterialsAndImages(data, scene, sceneDir, offsets);
+	ProcessCameras(data, scene, offsets);
+	ProcessLights(data, scene, offsets);
+	ProcessAnimations(data, scene, offsets);
+	// NOTE: ProcessMeshes is intentionally NOT called here.
+	// The caller is responsible for loading mesh data (from cache or via ProcessMeshesFromGLTF).
+
+	if (ensureDirectionalLight)
+		scene.EnsureDefaultDirectionalLight();
+
+	ProcessNodesAndHierarchy(data, scene, offsets);
+
+	cgltf_free(data);
+	return true;
+}
+
+bool SceneLoader::LoadGLTFScene_NonMesh(Scene& scene, const std::string& scenePath, bool bFromJSONScene)
+{
+	const cgltf_options options{};
+	cgltf_data* data = nullptr;
+	cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
+	if (res != cgltf_result_success || !data)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] Failed to parse glTF file: %s (result: %s)", scenePath.c_str(), cgltf_result_tostring(res));
+		return false;
+	}
+
+	const std::filesystem::path sceneDir = std::filesystem::path(scenePath).parent_path();
+	return ProcessParsedGLTF_NonMesh(data, scene, scenePath, sceneDir, !bFromJSONScene);
+}
+
+bool SceneLoader::ProcessMeshesFromGLTF(
+	const std::string& scenePath,
+	Scene& scene,
+	std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
+	std::vector<uint32_t>& outIndices)
+{
+	const cgltf_options options{};
+	cgltf_data* data = nullptr;
+	cgltf_result res = cgltf_parse_file(&options, scenePath.c_str(), &data);
+	if (res != cgltf_result_success || !data)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF parse failed", "[Scene] ProcessMeshesFromGLTF: Failed to parse glTF file: %s (result: %s)", scenePath.c_str(), cgltf_result_tostring(res));
+		return false;
+	}
+
+	cgltf_options opts{};
+	res = cgltf_validate(data);
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF validation failed", "[Scene] ProcessMeshesFromGLTF: glTF validation failed (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	res = cgltf_load_buffers(&opts, data, scenePath.c_str());
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF buffer load failed", "[Scene] ProcessMeshesFromGLTF: Failed to load glTF buffers (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	res = decompressMeshopt(data);
+	if (res != cgltf_result_success)
+	{
+		SDL_LOG_ASSERT_FAIL("glTF meshopt decompression failed", "[Scene] ProcessMeshesFromGLTF: Failed to decompress meshopt-compressed data (result: %s)", cgltf_result_tostring(res));
+		cgltf_free(data);
+		return false;
+	}
+
+	// Compute offsets from the already-loaded non-mesh scene data.
+	// The materials were already loaded by ProcessParsedGLTF_NonMesh, so the
+	// material offset must point to where those materials were originally placed,
+	// i.e. the size BEFORE ProcessParsedGLTF_NonMesh added them.
+	SceneOffsets offsets;
+	offsets.nodeOffset     = (int)scene.m_Nodes.size();
+	offsets.meshOffset     = (int)scene.m_Meshes.size();
+	offsets.materialOffset = (int)(scene.m_Materials.size() - data->materials_count);
+	offsets.textureOffset  = (int)scene.m_Textures.size();
+	offsets.cameraOffset   = (int)scene.m_Cameras.size();
+	offsets.lightOffset    = (int)scene.m_Lights.size();
+
+	ProcessMeshes(data, scene, outVerticesQuantized, outIndices, offsets);
+
+	cgltf_free(data);
+	return true;
+}
