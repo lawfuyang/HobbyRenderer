@@ -22,6 +22,7 @@ cbuffer TonemapConstants
 {
     uint m_Width;
     uint m_Height;
+    float m_MaxDisplayNits;
 };
 
 srinput LuminanceHistogramInputs

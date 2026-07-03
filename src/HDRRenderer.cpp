@@ -195,9 +195,12 @@ public:
         {
             PROFILE_GPU_SCOPED("Tonemapping", commandList);
 
+            const bool bIsHDR = g_Renderer.m_RHI->m_bIsHDR;
+
             srrhi::TonemappingInputs inputs;
             inputs.m_TonemapConstants.SetWidth(g_Renderer.m_RHI->m_SwapchainExtent.x);
             inputs.m_TonemapConstants.SetHeight(g_Renderer.m_RHI->m_SwapchainExtent.y);
+            inputs.m_TonemapConstants.SetMaxDisplayNits(g_Renderer.m_RHI->m_MaxDisplayNits);
 
             inputs.SetHDRColorInput(HDRInput);
             inputs.SetExposureInput(exposureBuffer);
@@ -210,7 +213,7 @@ public:
 
             Renderer::RenderPassParams params{
                 .commandList = commandList,
-                .shaderID = ShaderID::TONEMAP_TONEMAP_PSMAIN,
+                .shaderID = bIsHDR ? ShaderID::TONEMAP_TONEMAPHDR_PSMAIN : ShaderID::TONEMAP_TONEMAP_PSMAIN,
                 .bindingSetDesc = bset,
                 .pushConstants = &inputs.m_TonemapConstants,
                 .pushConstantsSize = srrhi::TonemappingInputs::PushConstantBytes,

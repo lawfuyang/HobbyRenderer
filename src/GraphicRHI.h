@@ -44,6 +44,10 @@ public:
     nvrhi::Format m_SwapchainFormat = nvrhi::Format::UNKNOWN;
     Vector2U m_SwapchainExtent = {0, 0};
 
+    // HDR display support: detected in Initialize(), consumed by HDRRenderer
+    bool m_bIsHDR = false;
+    float m_MaxDisplayNits = 80.0f;  // SDR default (80 nits). Updated by D3D12RHI CreateSwapchain.
+
     inline static NvrhiErrorCallback ms_NvrhiCallback;
 
     virtual ~GraphicRHI() = default;

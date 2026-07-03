@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 #include <directx/d3dx12_check_feature_support.h>
 #include <nvrhi/d3d12.h>
+#include <SDL3/SDL_video.h>  // SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN
 
 #include "GraphicRHI.h"
 #include "Config.h"
@@ -28,6 +29,7 @@ public:
     ComPtr<IDXGISwapChain3> m_SwapChain;
     bool m_bTearingSupported = false;
     bool m_bTightAlignmentSupported = false;
+    bool m_bDisplaySupportsHDR = false;
     int m_MicroProfileGfxQueue = -1;
 
     ~D3D12GraphicRHI() override { Shutdown(); }
@@ -191,6 +193,20 @@ public:
         ID3D12CommandQueue* pGfxQueue = m_CommandQueue.Get();
         ID3D12CommandQueue* pCopyQueue = m_CopyQueue.Get();
         MicroProfileGpuInitD3D12(m_Device.Get(), 1, (void**)&pGfxQueue, (void**)&pCopyQueue);
+
+        // ═══════════════════════════════════════════════════════════════
+        // HDR display auto-detection (Layer 1: SDL3)
+        // ═══════════════════════════════════════════════════════════════
+        {
+            SDL_DisplayID displayID = SDL_GetDisplayForWindow(window);
+            if (displayID != 0)
+            {
+                SDL_PropertiesID props = SDL_GetDisplayProperties(displayID);
+                m_bDisplaySupportsHDR = SDL_GetBooleanProperty(props, SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false);
+
+                SDL_Log("Display HDR support: %s", m_bDisplaySupportsHDR ? "true" : "false");
+            }
+        }
     }
 
     void Shutdown() override
@@ -246,7 +262,9 @@ public:
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
         swapChainDesc.Width = width;
         swapChainDesc.Height = height;
-        swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        // Auto-detect best swap chain format based on HDR display support
+        const bool useHDR = m_bDisplaySupportsHDR;
+        swapChainDesc.Format = useHDR ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
         swapChainDesc.SampleDesc.Count = 1;
         swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         swapChainDesc.BufferCount = GraphicRHI::SwapchainImageCount;
@@ -272,7 +290,68 @@ public:
             return false;
         }
 
-        m_SwapchainFormat = nvrhi::Format::RGBA8_UNORM;
+        // ═══════════════════════════════════════════════════════════════
+        // HDR: Set scRGB color space on the swap chain (Layer 2: DXGI)
+        // ═══════════════════════════════════════════════════════════════
+        if (useHDR)
+        {
+            ComPtr<IDXGISwapChain4> swapChain4;
+            if (SUCCEEDED(m_SwapChain.As(&swapChain4)))
+            {
+                UINT colorSpaceSupport = 0;
+                HRESULT csHr = swapChain4->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &colorSpaceSupport);
+                if (SUCCEEDED(csHr) && (colorSpaceSupport & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT))
+                {
+                    swapChain4->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                    m_bIsHDR = true;
+                    m_SwapchainFormat = nvrhi::Format::RGBA16_FLOAT;
+
+                    // Layer 3: Query display peak luminance
+                    ComPtr<IDXGIOutput> output;
+                    if (SUCCEEDED(m_SwapChain->GetContainingOutput(&output)))
+                    {
+                        ComPtr<IDXGIOutput6> output6;
+                        if (SUCCEEDED(output.As(&output6)))
+                        {
+                            DXGI_OUTPUT_DESC1 desc1;
+                            if (SUCCEEDED(output6->GetDesc1(&desc1)))
+                            {
+                                m_MaxDisplayNits = desc1.MaxLuminance;
+                                // Sanity check: clamp to reasonable range
+                                if (m_MaxDisplayNits <= 0.0f || m_MaxDisplayNits > 10000.0f)
+                                    m_MaxDisplayNits = 1000.0f;
+
+                                SDL_Log("HDR display detected; using HDR swapchain format (scRGB) with peak luminance %.1f nits.", m_MaxDisplayNits);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // scRGB not supported by GPU/driver, fall back to SDR
+                    m_bIsHDR = false;
+                    m_SwapchainFormat = nvrhi::Format::RGBA8_UNORM;
+                    m_MaxDisplayNits = 80.0f;
+                    SDL_Log("HDR display detected but scRGB color space not supported; falling back to SDR.");
+                }
+            }
+            else
+            {
+                // IDXGISwapChain4 not available, fall back to SDR
+                m_bIsHDR = false;
+                m_SwapchainFormat = nvrhi::Format::RGBA8_UNORM;
+                m_MaxDisplayNits = 80.0f;
+                SDL_Log("HDR display detected but IDXGISwapChain4 not available; falling back to SDR.");
+            }
+        }
+        else
+        {
+            m_bIsHDR = false;
+            m_SwapchainFormat = nvrhi::Format::RGBA8_UNORM;
+            m_MaxDisplayNits = 80.0f;
+            SDL_Log("SDR display detected; using standard SDR swapchain format.");
+        }
+
         m_SwapchainExtent = { width, height };
 
         for (uint32_t i = 0; i < GraphicRHI::SwapchainImageCount; i++)
