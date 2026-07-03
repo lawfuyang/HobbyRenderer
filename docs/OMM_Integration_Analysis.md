@@ -1,30 +1,30 @@
 # OMM (Opacity Micro-Maps) Integration Analysis for HobbyRenderer
 
-> **Date**: 2026-06-24
-> **Scope**: Full analysis of OMM generation and runtime usage — load-time generation inspired by [zeux/niagara](https://github.com/zeux/niagara), plus NVRHI native runtime support
+> **Date**: 2026-06-24 (original) | **Updated**: 2026-07-03 — meshoptimizer upgraded to v1.2
+> **Scope**: Full analysis of OMM generation and runtime usage — load-time generation via meshoptimizer v1.2's built-in `opacityMap*` APIs (as used by [zeux/niagara](https://github.com/zeux/niagara)), plus NVRHI native runtime support
 
 ---
 
 ## 1. Executive Summary
 
-**Your NVRHI already handles runtime OMM fully. For OMM data generation, use a minimal load-time rasterization approach — no fat submodule required.**
+**Your NVRHI already handles runtime OMM fully, and meshoptimizer 1.2 now provides built-in OMM baking — no custom code required.**
 
 | Concern | What provides it | Status in your codebase |
 |---|---|---|
-| **OMM Generation** (load-time CPU) | Custom `BakeOmmData()` function (~300 LOC), inspired by [zeux/niagara](https://github.com/zeux/niagara) | ❌ Not yet written |
+| **OMM Generation** (load-time CPU) | `meshoptimizer` v1.2 — `meshopt_opacityMapMeasure` / `meshopt_opacityMapRasterize` / `meshopt_opacityMapCompact` (EXPERIMENTAL) | ✅ Already present (requires integration) |
 | **OMM Runtime** (GPU build, BLAS attachment) | Your NVRHI (`external/nvrhi`) | ✅ Fully implemented |
-| **meshoptimizer** (meshlet clustering, compression, etc.) | meshoptimizer v1.0 (`external/meshoptimizer`) | ✅ Already present, but **no OMM** |
+| **meshoptimizer** (meshlet clustering, compression, etc.) | meshoptimizer v1.2 (`external/meshoptimizer`) | ✅ Already present, **now includes OMM** |
 
-**Key insight**: The OMM binary data format is very simple — 1 bit per micro-triangle encoding opaque/transparent states. You can generate this at load time by rasterizing opacity textures at micro-triangle sample points, just as [zeux/niagara](https://github.com/zeux/niagara) does. This approach is **~200-400 lines of self-contained C++** with zero external dependencies, and runs in milliseconds for typical asset loads.
+**Key insight**: meshoptimizer 1.2 ships with experimental OMM baking APIs that handle subdivision-level measurement, alpha rasterization, and duplicate compaction — the exact pipeline the [zeux/niagara](https://github.com/zeux/niagara) reference renderer uses. You don't need to write a custom `BakeOmmData()` function; instead, integrate `meshopt_opacityMapMeasure` → `meshopt_opacityMapRasterize` → `meshopt_opacityMapCompact` for a proven, zero-dependency OMM generation pipeline.
 
 ---
 
 ## 2. Detailed Analysis
 
-### 2.1 meshoptimizer — Not an OMM Baker, but Helpful
+### 2.1 meshoptimizer — Now Includes OMM Baking (v1.2)
 
 - **Repo**: [https://github.com/zeux/meshoptimizer](https://github.com/zeux/meshoptimizer)
-- **Your version**: `v1.0` (`MESHOPTIMIZER_VERSION 1000`)
+- **Your version**: `v1.2` (`MESHOPTIMIZER_VERSION 1020`)
 - **License**: MIT
 
 #### What it does have:
@@ -33,29 +33,54 @@ meshoptimizer is a mesh optimization library focused on GPU rendering efficiency
 
 | Category | Functions |
 |---|---|
-| Vertex cache optimization | `meshopt_optimizeVertexCache`, `meshopt_optimizeVertexCacheFifo` |
+| Vertex cache optimization | `meshopt_optimizeVertexCache`, `meshopt_optimizeVertexCacheStrip`, `meshopt_optimizeVertexCacheFifo` |
 | Overdraw optimization | `meshopt_optimizeOverdraw` |
 | Vertex fetch optimization | `meshopt_optimizeVertexFetch`, `meshopt_optimizeVertexFetchRemap` |
-| Mesh simplification | `meshopt_simplify`, `meshopt_simplifyWithAttributes`, `meshopt_simplifySloppy` |
+| Vertex remap generation | `meshopt_generateVertexRemap`, `meshopt_generateVertexRemapMulti`, `meshopt_generateVertexRemapCustom` |
+| Index/vertex remapping | `meshopt_remapVertexBuffer`, `meshopt_remapIndexBuffer` |
+| Index buffer filtering | `meshopt_filterIndexBuffer`, `meshopt_filterIndexBufferMulti` |
+| Shadow index buffer | `meshopt_generateShadowIndexBuffer`, `meshopt_generateShadowIndexBufferMulti` |
+| Position remap | `meshopt_generatePositionRemap` |
+| Adjacency/tessellation index | `meshopt_generateAdjacencyIndexBuffer`, `meshopt_generateTessellationIndexBuffer` |
+| Provoking vertex index | `meshopt_generateProvokingIndexBuffer` |
+| Mesh simplification | `meshopt_simplify`, `meshopt_simplifyWithAttributes`, `meshopt_simplifyWithUpdate`, `meshopt_simplifySloppy`, `meshopt_simplifyPrune`, `meshopt_simplifyPoints` |
 | Meshlet/cluster building | `meshopt_buildMeshlets`, `meshopt_buildMeshletsScan`, `meshopt_buildMeshletsSpatial` |
-| Index/vertex compression | `meshopt_encodeIndexBuffer`, `meshopt_encodeVertexBuffer` |
-| Spatial sorting | `meshopt_spatialSortRemap`, `meshopt_spatialSortTriangles` |
+| Meshlet encoding | `meshopt_encodeMeshlet`, `meshopt_decodeMeshlet`, `meshopt_decodeMeshletRaw` |
+| Index/vertex compression | `meshopt_encodeIndexBuffer`, `meshopt_encodeIndexSequence`, `meshopt_encodeVertexBuffer`, `meshopt_encodeVertexBufferLevel` |
+| Spatial sorting | `meshopt_spatialSortRemap`, `meshopt_spatialSortTriangles`, `meshopt_spatialClusterPoints` |
 | Stripification | `meshopt_stripify`, `meshopt_unstripify` |
+| Tangent generation | `meshopt_generateTangents` |
+| OMM baking (EXPERIMENTAL) | `meshopt_opacityMapMeasure`, `meshopt_opacityMapRasterize`, `meshopt_opacityMapEntrySize`, `meshopt_opacityMapCompact` |
+| Analysis | `meshopt_analyzeVertexCache`, `meshopt_analyzeVertexFetch`, `meshopt_analyzeOverdraw`, `meshopt_analyzeCoverage` |
 | Bounds computation | `meshopt_computeClusterBounds`, `meshopt_computeMeshletBounds` |
 
-#### What it does NOT have:
+#### OMM Baking Functions (NEW in v1.2 — EXPERIMENTAL)
 
-- ❌ **No OMM baking/generation** — there is no `meshopt_buildOpacityMicromap` or equivalent function
-- ❌ **No OMM-related data structures** in the header at all
-- ❌ **No opacity/alpha texture processing** for micro-map generation
+meshoptimizer 1.2 ships with a complete OMM baking pipeline behind the `MESHOPTIMIZER_EXPERIMENTAL` flag. These are the same APIs used by the [zeux/niagara](https://github.com/zeux/niagara) reference renderer (see `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()`):
+
+| Function | Purpose |
+|---|---|
+| `meshopt_opacityMapMeasure()` | Analyzes alpha-masked triangles, computes per-triangle subdivision levels, deduplicates identical UV regions |
+| `meshopt_opacityMapRasterize()` | Rasterizes alpha texture at micro-triangle sample points using bilinear filtering and 0.5 alpha cutoff |
+| `meshopt_opacityMapEntrySize()` | Returns the byte size for an OMM entry at a given subdivision level |
+| `meshopt_opacityMapCompact()` | Merges identical micropmap entries and replaces them with special indices (-4..-1) when the entire entry is fully opaque/transparent |
+
+Supports both **2-state** (opaque/transparent, `OC1_2_State`) and **4-state** (opaque/transparent/unknown, `OC1_4_State`) formats. Subdivision levels range from 0–12 with adaptive subdivision via `target_edge`.
+
+#### What it still does NOT have:
+
+- ❌ **No GPU OMM build** — that's NVRHI's job
+- ❌ **No BLAS attachment** — that's NVRHI's job
+- ❌ **No budget management** — you must manage OMM data size yourself
 
 #### How meshoptimizer helps in an OMM pipeline:
 
+- **OMM baking**: The `meshopt_opacityMap*` family provides the full CPU-side OMM pipeline: measure → rasterize → compact. No custom code needed.
 - **Meshlet clustering**: `meshopt_buildMeshlets()` produces spatial clusters that improve OMM efficiency by grouping related triangles together.
 - **Spatial sorting**: `meshopt_spatialSortTriangles()` reorders triangles for better locality, improving OMM bake quality.
 - **Vertex optimization**: Reduces vertex shader overhead when rendering the base geometry alongside OMMs.
 
-**Conclusion**: meshoptimizer is a valuable complementary tool. Keep it and use it alongside the load-time OMM generation approach. No upgrade is needed for OMM specifically.
+**Conclusion**: meshoptimizer v1.2 is now a complete OMM baking solution when paired with NVRHI's runtime. No upgrade is needed — you already have v1.2. Use the `meshopt_opacityMap*` APIs directly instead of writing custom OMM generation code.
 
 ---
 
@@ -144,9 +169,9 @@ NVRHI queries hardware OMM support:
 
 ---
 
-### 2.3 Load-Time OMM Generation — The Approach
+### 2.3 Load-Time OMM Generation — Use meshoptimizer's Built-in APIs
 
-- **Reference**: [zeux/niagara](https://github.com/zeux/niagara) by Arseny Kapoulkine (same author as meshoptimizer)
+- **Reference**: [zeux/niagara](https://github.com/zeux/niagara) by Arseny Kapoulkine (same author as meshoptimizer), specifically `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()`
 - **License**: MIT
 - **Language**: C++ (Vulkan renderer)
 
@@ -172,64 +197,79 @@ Edge/boundary micro-triangles (mix of above and below) must be marked OPAQUE,
 and the AnyHit shader handles the fine-grained alpha test for those regions.
 ```
 
-#### How It Works
+#### The meshoptimizer OMM Pipeline
 
-OMM data is generated at **asset load time** rather than during an expensive offline baking pass:
+meshoptimizer 1.2 provides a complete OMM baking pipeline via four experimental APIs. The [zeux/niagara](https://github.com/zeux/niagara) renderer (see `REFERENCES/niagara/src/scene.cpp`) demonstrates the end-to-end flow:
 
-1. For each alpha-masked triangle, compute its UV bounds and micro-triangle barycentrics
-2. Sample the opacity texture at the center (or multiple points) of each micro-triangle
-3. Compare sampled alpha against a threshold (e.g., `alpha < 0.5` → transparent)
-4. Pack the results into the OMM data buffer (1 bit per micro-triangle)
-5. Create the per-OMM descriptor and usage count histogram
-6. Feed everything into `NVRHI::buildOpacityMicromap()`
-
-**This is ~200-400 lines of C++** — zero external dependencies.
-
-#### Minimal Implementation Outline
-
+**Step 1: Measure** — `meshopt_opacityMapMeasure()`
 ```cpp
-struct OmmBakeInput {
-    const float*  positions;      // vertex positions (float3)
-    const float*  uvs;            // vertex UVs (float2)
-    const uint32_t* indices;      // triangle indices
-    uint32_t      triangleCount;
-    const uint8_t* alphaTexture;  // RGBA8 or single-channel
-    uint32_t      texWidth, texHeight;
-    float         alphaThreshold;  // e.g., 0.5f
-    uint32_t      subdivisionLevel; // N: 4^N micro-triangles
-};
+// For each alpha-masked mesh, determine subdivision levels and deduplicate triangles:
+// - levels[i]: subdivision level for OMM entry i (0–12)
+// - sources[i]: source triangle index for entry i
+// - ommIndices[i]: maps each triangle to its OMM entry (-1 = fully opaque, skip)
+size_t ommCount = meshopt_opacityMapMeasure(
+    levels.data(), sources.data(), ommIndices.data(),
+    indexBuffer, triangleCount * 3,
+    reinterpret_cast<const float*>(texcoords.data()), vertexCount, sizeof(vec2),
+    texture.width, texture.height,
+    maxLevel,       // e.g., 6 (see kOmmSubdivisionLevel in niagara)
+    targetEdge);    // e.g., 3.0 / (1 << ommMip) — adaptive subdivision target
+```
 
-struct OmmBakeOutput {
-    std::vector<uint8_t>  ommData;       // packed OMM bits
-    std::vector<OmmTriangleDesc> ommDescs; // one per triangle
-    std::vector<rt::OpacityMicromapUsageCount> usageCounts;
-};
+**Step 2: Rasterize** — `meshopt_opacityMapRasterize()`
+```cpp
+// For each unique OMM entry, rasterize the alpha texture at micro-triangle sample points:
+for (size_t j = 0; j < ommCount; ++j)
+{
+    uint32_t tri = sources[j];
+    uint8_t* outputData = ommData.data() + ommOffsets[j];
+    
+    meshopt_opacityMapRasterize(
+        outputData, levels[j], ommStates,
+        &uv0.x, &uv1.x, &uv2.x,                // UV coordinates for triangle corners
+        texture.rgba + 3, 4, texture.width * 4, // alpha channel, pixel stride, row pitch
+        texture.width, texture.height);
+}
+```
 
-// For each triangle:
-//   1. Compute micro-triangle sample points in UV space
-//   2. Sample alpha texture at each point
-//   3. Pack bits into ommData
-//   4. Generate OmmTriangleDesc (subdivision level, format, data offset)
+**Step 3: Compact** — `meshopt_opacityMapCompact()`
+```cpp
+// Deduplicate identical OMM entries and replace fully-opaque/transparent with special indices:
+size_t compactCount = meshopt_opacityMapCompact(
+    ommData.data(), ommData.size(),
+    levels.data(), offsets.data(), ommCount,
+    ommIndices.data(), triangleCount, ommStates);
+```
 
-OmmBakeOutput BakeOmmData(const OmmBakeInput& input);
+**Step 4: Feed into NVRHI**
+```cpp
+// Upload ommData + ommDescs to GPU buffers, then call NVRHI's existing runtime:
+NVRHI::buildOpacityMicromap(omm, desc);
+// Attach to BLAS via GeometryDesc::Triangles
 ```
 
 #### Performance
 
 This load-time approach is **very fast** because:
-- The work is trivial: sample N texture fetches per triangle and pack bits
-- For a mesh with 10K alpha-masked triangles at subdiv level 3 (64 micro-triangles each): that's 640K texture samples — done in milliseconds on CPU
-- Can be trivially parallelized with SIMD or worker threads
-- No expensive optimization passes to slow things down
+- `meshopt_opacityMapMeasure` efficiently deduplicates triangles with identical UV regions, minimizing rasterization work
+- `meshopt_opacityMapRasterize` uses bilinear filtering for high-quality results with minimal samples
+- `meshopt_opacityMapCompact` further reduces data size by merging identical entries
+- For a mesh with 10K alpha-masked triangles at subdiv level 3 (64 micro-triangles each): done in milliseconds on CPU
 
-#### What You Give Up vs a Full Baker
+#### Additional Considerations
 
-Skipping the heavy optimization passes means:
-- No near-duplicate detection → more OMM data, larger GPU memory footprint
+- The OMM APIs are marked `MESHOPTIMIZER_EXPERIMENTAL` — the interface may evolve but is already proven in [zeux/niagara](https://github.com/zeux/niagara)
+- Triangle indices must be normalized before passing to `meshopt_opacityMapMeasure` (see niagara's `normalizeIndicesForOMM()` which rotates each triangle so the smallest index is first)
+- Supports both 2-state (`OC1_2_State`) and 4-state (`OC1_4_State`) formats
+- For 2-state, meshes whose triangles are all fully opaque can be skipped entirely (set `OMM_INDEX_BUFFER_ENTRY_OPAQUE` = -1)
+
+#### What You Give Up vs a Full Offline Baker
+
+Skipping the heaviest optimization passes means:
 - No per-triangle format optimization → manual format selection
 - No Z-order optimization → potentially worse cache behavior during traversal
 
-For most use cases (especially prototyping and small-to-medium content), the memory and performance cost is negligible. You can always add these optimizations incrementally if needed.
+For most use cases (especially prototyping and small-to-medium content), the memory and performance cost is negligible. meshoptimizer's compaction pass (`meshopt_opacityMapCompact`) handles the most impactful optimization (near-duplicate detection) automatically.
 
 ---
 
@@ -244,10 +284,12 @@ For most use cases (especially prototyping and small-to-medium content), the mem
 │         └────────┬──────────┘                                        │
 │                  ▼                                                   │
 │     ┌─────────────────────────────┐                                 │
-│     │   BakeOmmData() (~300 LOC)  │  ← Write this once              │
-│     │   - Rasterize alpha texture │                                  │
-│     │   - Pack micro-triangle bits│                                  │
-│     └──────────┬──────────────────┘                                  │
+│     │  meshoptimizer OMM Pipeline │  ← Already in external/         │
+│     │  1. opacityMapMeasure()     │    meshoptimizer v1.2           │
+│     │  2. opacityMapRasterize()   │                                  │
+│     │  3. opacityMapCompact()     │    (see niagara reference:       │
+│     │  4. normalizeIndicesForOMM()│     REFERENCES/niagara/src/      │
+│     └──────────┬──────────────────┘     scene.cpp:buildSceneOmm())   │
 │                │                                                     │
 │                ▼                                                     │
 │     ┌─────────────────────────────┐                                 │
@@ -288,20 +330,23 @@ For most use cases (especially prototyping and small-to-medium content), the mem
 
 ## 4. What You Need to Do
 
-### 4.1 DO: Implement Load-Time OMM Generation
+### 4.1 DO: Integrate meshoptimizer's OMM Pipeline
 
-Write a `BakeOmmData()` function as outlined in Section 2.3. This is the only new code you need — everything else (NVRHI runtime) is already in place.
+Write the glue code that connects meshoptimizer's OMM baking APIs to your NVRHI runtime. The reference implementation is in `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()` — study it for the exact integration pattern.
 
 **Steps:**
-1. Write a `BakeOmmData()` function — ~300 lines of C++ doing texture rasterization + bit packing (see Section 2.3 for the API sketch)
-2. For each alpha-masked mesh at load time, call it with the mesh geometry + opacity texture
-3. Upload the resulting `ommData` and `ommDescs` to GPU buffers
-4. Feed into `NVRHI::buildOpacityMicromap()` — your existing runtime path unchanged
-5. Attach the built OMM array to your BLAS geometry via the existing `GeometryDesc::Triangles` fields
+1. **Normalize triangle indices** — rotate each triangle so the smallest vertex index is first (see niagara's `normalizeIndicesForOMM()`). This is required for correct deduplication in `meshopt_opacityMapMeasure`.
+2. **Resolve mesh→texture mapping** — for each alpha-masked mesh, determine which opacity texture to use. In niagara, this is done by looking up `Material::albedoTexture` for draws with `postPass == 1` (transparent).
+3. **Call `meshopt_opacityMapMeasure()`** — computes per-triangle subdivision levels and deduplicates identical UV regions. Returns the number of unique OMM entries to rasterize.
+4. **Call `meshopt_opacityMapRasterize()`** — for each unique entry, rasterizes the alpha texture at micro-triangle sample points using bilinear filtering.
+5. **Call `meshopt_opacityMapCompact()`** — merges identical OMM entries and replaces fully-opaque/transparent entries with special indices (-4..-1).
+6. **Upload to GPU** — copy `ommData`, `ommDescs`, and `ommIndices` to GPU buffers.
+7. **Feed into NVRHI** — call `createOpacityMicromap()` → `buildOpacityMicromap()` → attach to BLAS via `GeometryDesc::Triangles`.
+8. **Shader side** — ensure your ray tracing hit shaders are aware of OMM (DXR/Vulkan handles this transparently for `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` geometry; for non-opaque geometry with OMM, the system automatically invokes AnyHit shaders only for opaque/unknown micro-triangles).
 
-**Reference implementation**: [zeux/niagara](https://github.com/zeux/niagara) — see its `scenert.cpp` for the load-time OMM generation code.
+**Reference implementation**: `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()` (~200 lines of integration code).
 
-**No new dependencies. No submodules. No offline baking pipeline.**
+**No new dependencies. No submodules. No custom baking code.**
 
 ### 4.2 ALREADY HAVE: Runtime OMM in NVRHI
 
@@ -312,54 +357,57 @@ Your NVRHI already supports:
 - Both D3D12 (Agility SDK + NVAPI) and Vulkan backends
 
 **What you still need to write** in your engine code:
-- Asset loading code for OMM baked data
-- Pipeline that: loads OMM data → uploads to GPU → calls `buildOpacityMicromap()` → attaches to BLAS → builds BLAS → uses in ray tracing
-- Shader side: ensure your ray tracing hit shaders are aware of OMM (DXR/Vulkan handles this transparently for `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` geometry; for non-opaque geometry with OMM, the system automatically invokes AnyHit shaders only for unknown-state micro-triangles)
+- Asset loading integration that calls the meshoptimizer OMM pipeline at load time
+- Pipeline that: bakes OMM data → uploads to GPU → calls `buildOpacityMicromap()` → attaches to BLAS → builds BLAS → uses in ray tracing
+- Shader side: ensure your ray tracing hit shaders are aware of OMM (DXR/Vulkan handles this transparently for `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` geometry; for non-opaque geometry with OMM, the system automatically invokes AnyHit shaders only for opaque/unknown micro-triangles)
 
-### 4.3 NOT NEEDED: Upgrade meshoptimizer for OMM
+### 4.3 NOT NEEDED: Write Custom OMM Baker
 
-meshoptimizer does not have OMM baking and does not need to be upgraded for OMM purposes. However, upgrading to a newer version is still beneficial for:
-- Better simplification (`meshopt_simplifyWithUpdate`, permissive mode)
-- Improved meshlet clustering
-- General bug fixes and performance improvements
+meshoptimizer v1.2 already provides the complete OMM baking pipeline. The previous recommendation to write a ~300-line `BakeOmmData()` function is **no longer necessary** — use `meshopt_opacityMap*` APIs instead. Your existing meshoptimizer v1.2 includes everything needed.
 
 ---
 
 ## 5. Comparison Matrix
 
-| Feature | Load-Time Gen (Niagara-style) | meshoptimizer | NVRHI (your version) |
-|---|---|---|---|
-| OMM Generation (CPU) | ✅ Minimal (~300 LOC) | ❌ None | ❌ None |
-| OMM GPU Build | ❌ (uses NVRHI) | ❌ None | ✅ Full |
-| OMM BLAS Attachment | ❌ (uses NVRHI) | ❌ None | ✅ Full |
-| External Dependency | 🟢 None | 🟢 Already present | 🟢 Already present |
-| Code Footprint | ~300 LOC | N/A | N/A |
-| Generation Speed | 🟢 Very fast (ms) | N/A | N/A |
-| Near-Duplicate Detection | ❌ (can add later) | ❌ | ❌ |
-| Per-Triangle Format Sel. | ❌ (manual) | ❌ | ❌ |
-| Budget Management | ❌ (manual) | ❌ | ❌ |
-| Meshlet Clustering | ❌ | ✅ Full | ❌ N/A |
-| Vertex Optimization | ❌ | ✅ Full | ❌ N/A |
-| D3D12 Agility SDK OMM | ❌ | ❌ | ✅ |
-| NVAPI OMM (Ada+) | ❌ | ❌ | ✅ |
-| Vulkan OMM (VK_EXT) | ❌ | ❌ | ✅ |
+| Feature | meshoptimizer v1.2 | NVRHI (your version) |
+|---|---|---|
+| OMM Generation (CPU) | ✅ Full (`opacityMapMeasure` / `opacityMapRasterize` / `opacityMapCompact`) | ❌ None |
+| OMM GPU Build | ❌ (uses NVRHI) | ✅ Full |
+| OMM BLAS Attachment | ❌ (uses NVRHI) | ✅ Full |
+| External Dependency | 🟢 Already present | 🟢 Already present |
+| Code Footprint | ~200 LOC integration glue | N/A |
+| Generation Speed | 🟢 Very fast (ms) | N/A |
+| Near-Duplicate Detection | ✅ (`meshopt_opacityMapCompact`) | ❌ |
+| Per-Triangle Format Sel. | ✅ (`meshopt_opacityMapMeasure` auto-selects level) | ❌ |
+| Budget Management | ❌ (manual) | ❌ |
+| Meshlet Clustering | ✅ Full | ❌ N/A |
+| Vertex Optimization | ✅ Full | ❌ N/A |
+| Tangent Generation | ✅ (`meshopt_generateTangents`) | ❌ |
+| D3D12 Agility SDK OMM | ❌ | ✅ |
+| NVAPI OMM (Ada+) | ❌ | ✅ |
+| Vulkan OMM (VK_EXT) | ❌ | ✅ |
 
 ---
 
 ## 6. Recommendations
 
-1. **Write a ~300-line `BakeOmmData()` function** inspired by [zeux/niagara](https://github.com/zeux/niagara). This avoids any new submodule, is extremely fast, and gets you OMM working in hours.
-2. **Keep your current meshoptimizer** — it's useful for meshlet clustering and vertex optimization to prepare geometry for OMM baking.
+1. **Use meshoptimizer's built-in OMM APIs** — `meshopt_opacityMapMeasure` → `meshopt_opacityMapRasterize` → `meshopt_opacityMapCompact`. Study `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()` for the exact integration pattern (~200 LOC of glue code). This avoids any custom OMM baking code and leverages the same pipeline used by the [zeux/niagara](https://github.com/zeux/niagara) reference renderer.
+2. **Keep your current meshoptimizer v1.2** — no upgrade needed, it already includes the OMM baking functions. The meshlet clustering and vertex optimization functions remain valuable for geometry preprocessing.
 3. **Your NVRHI is ready** for runtime OMM — no changes needed.
-4. **Use only `OC1_2_State` format** — 1 bit per micro-triangle (opaque/transparent), simplest to implement.
-5. **For the load-time baker**, begin with a fixed subdivision level (e.g., N=3 → 64 micro-triangles) for all meshes, then consider per-mesh tuning later.
+4. **Start with 2-state format** (`ommStates = 2`, `OC1_2_State`) — 1 bit per micro-triangle (opaque/transparent), simplest to implement and sufficient for most alpha-masked content.
+5. **Begin with a fixed max subdivision level** (e.g., N=6 → 4096 micro-triangles max, matching niagara's `kOmmSubdivisionLevel`) with adaptive subdivision via `target_edge`. Tune per-mesh later if needed.
+6. **Note: OMM APIs are EXPERIMENTAL** — the `meshopt_opacityMap*` functions are behind `MESHOPTIMIZER_EXPERIMENTAL`. They are proven in [zeux/niagara](https://github.com/zeux/niagara) but the API surface may evolve in future meshoptimizer releases. Pin your integration against v1.2 and plan to update when upgrading meshoptimizer.
 
 ---
 
 ## 7. References
 
 - [zeux/niagara — Vulkan renderer with load-time OMM generation](https://github.com/zeux/niagara)
+  - Local reference: `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()` — end-to-end OMM baking using meshoptimizer APIs
+  - Local reference: `REFERENCES/niagara/src/scene.h` — OMM data structures (`Geometry::ommData`, `ommIndices`, `ommDescs`)
+  - Local reference: `REFERENCES/niagara/src/scenert.h` — Runtime OMM (`buildOMM()`, `buildBLAS()` with OMM attachment)
 - [meshoptimizer on GitHub](https://github.com/zeux/meshoptimizer)
+  - `meshopt_opacityMapMeasure` / `meshopt_opacityMapRasterize` / `meshopt_opacityMapCompact` in `external/meshoptimizer/src/meshoptimizer.h` (lines ~895-925)
 - [NVIDIA Micro-Mesh Developer Page](https://developer.nvidia.com/rtx/ray-tracing/micro-mesh)
 - NVRHI OMM implementation: `external/nvrhi/src/d3d12/d3d12-raytracing.cpp`
 - NVRHI OMM interface: `external/nvrhi/include/nvrhi/nvrhi.h` (lines 1377-1445)
