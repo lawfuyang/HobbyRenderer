@@ -267,7 +267,7 @@ struct Renderer
     bool m_EnableReSTIRDenoising = true;
 
     // Indirect lighting technique (mutually exclusive: 0=None, 1=RestirGI, 2=SHARC, 3=RestirGI+SHARC)
-    uint32_t m_IndirectLightingTechnique = 2;
+    uint32_t m_IndirectLightingTechnique = 3;
 
     // SHARC debug overlay (SHARCDebugMode enum value; 0 = off)
     uint32_t m_SHARCDebugMode = 0;
