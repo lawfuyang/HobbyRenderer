@@ -16,6 +16,7 @@
 #include <Rtxdi/GI/ReSTIRGIParameters.h>
 #include <Rtxdi/ReGIR/ReGIRParameters.h>
 #include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
+#include "SharcCommon.h"
 #include "srrhi/hlsl/RTXDI.hlsli"
 
 #include "../CommonLighting.hlsli"

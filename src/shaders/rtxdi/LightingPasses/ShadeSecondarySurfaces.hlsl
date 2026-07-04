@@ -12,6 +12,16 @@
 
 #pragma pack_matrix(row_major)
 
+// ---- SHARC cache lookup for combined ReSTIR GI + SHARC mode ----
+// Include SharcCommon.h for SHARC SDK types (SharcParameters, SharcHitData, etc.).
+// Buffer bindings (u_SHARCHashEntries, u_SHARCResolved, u_SHARCAccumulation) come
+// from the ResamplingPassInputs binding set via macros in RAB_Buffers.hlsli.
+// Do NOT include srrhi/hlsl/SHARC.hlsli here — it would re-declare SHARC pass
+// bindings at conflicting register slots.
+#define SHARC_QUERY                     1
+#define SHARC_ENABLE_64_BIT_ATOMICS     1
+#define HASH_GRID_ENABLE_64_BIT_ATOMICS 1
+
 // Disable specular MIS on direct lighting of the secondary surfaces,
 // because we do not trace the BRDF rays further.
 #define RAB_ENABLE_SPECULAR_MIS 0
@@ -77,54 +87,96 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
     // Shade the secondary surface.
     if (isValidSecondarySurface && !isEnvironmentMap)
     {
-        RAB_LightSample lightSample;
-        RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
-            g_Const.restirDI.initialSamplingParams, g_Const.lightBufferParams,
-#if RTXDI_ENABLE_PRESAMPLING
-        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
-#if RTXDI_REGIR_MODE != RTXDI_REGIR_MODE_DISABLED
-        g_Const.regir,
-#endif
-#endif
-        lightSample);
+        bool usedCache = false;
 
-        // Optional DI spatial resampling on the secondary surface.
-        // Try to find this secondary surface in the primary G-buffer. If found,
-        // resample the lights from that G-buffer surface into the reservoir
-        // using the DI spatial resampling function. This dramatically reduces
-        // NEE variance at the secondary hit (single-sample NEE otherwise
-        // occasionally picks a very bright close light, which then feeds the
-        // GI reservoir and gets locked in by temporal resampling).
-        // Uses the primary's spatial resampling params as-is.
-        if (g_Const.enableSecondaryResampling)
+        // ---- Combined mode: try SHARC cache lookup first ----
+        // useSharcCache is set to 1 when IndirectLightingMode == RESTIR_GI_SHARC.
+        // The SHARC buffers (u_SHARCHashEntries, u_SHARCResolved, u_SHARCAccumulation)
+        // are bound as SRVs after the SHARC Resolve pass completes.
+        if (g_Const.useSharcCache)
         {
-            float4 secondaryClipPos = MatrixMultiply(float4(secondaryGBufferData.worldPos, 1.0), g_Const.view.m_MatWorldToClip);
-            secondaryClipPos.xyz /= secondaryClipPos.w;
+            // Build SharcParameters from view constants and hardcoded hash-grid defaults.
+            // Camera position is taken from the current-frame view matrix translation.
+            SharcParameters sharcParams;
+            sharcParams.hashGridParameters.cameraPosition = g_Const.view.m_CameraDirectionOrPosition.xyz;
+            sharcParams.hashGridParameters.logarithmBase  = srrhi::SHARCConsts::HASH_GRID_LOGARITHM_BASE;
+            sharcParams.hashGridParameters.sceneScale     = srrhi::SHARCConsts::HASH_GRID_SCENE_SCALE;
+            sharcParams.hashGridParameters.levelBias      = srrhi::SHARCConsts::HASH_GRID_LEVEL_BIAS;
+            sharcParams.hashGridData.capacity             = srrhi::SHARCConsts::SHARC_CACHE_ENTRIES;
+            sharcParams.hashGridData.hashEntriesBuffer    = u_SHARCHashEntries;
+            sharcParams.radianceScale                     = srrhi::SHARCConsts::RADIANCE_SCALE;
+            sharcParams.accumulationBuffer                = u_SHARCAccumulation;
+            sharcParams.resolvedBuffer                    = u_SHARCResolved;
 
-            if (all(abs(secondaryClipPos.xy) < 1.0) && secondaryClipPos.w > 0)
+            SharcHitData sharcHitData;
+            sharcHitData.positionWorld = secondarySurface.worldPos;
+            sharcHitData.normalWorld   = secondarySurface.normal;
+
+            float3 cachedRadiance;
+            if (SharcGetCachedRadiance(sharcParams, sharcHitData, cachedRadiance, false))
             {
-                int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.m_ClipToWindowScale + g_Const.view.m_ClipToWindowBias);
-                secondarySurface.viewDepth = secondaryClipPos.w;
-
-                uint sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
-                reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,
-                    rng, params, g_Const.restirDI.reservoirBufferParams, sourceBufferIndex,
-                    g_Const.restirDI.spatialResamplingParams, lightSample);
+                // Cache HIT — use cached radiance directly (cheap path)
+                radiance += cachedRadiance;
+                // Apply firefly suppression (same threshold as the fallback path)
+                float indirectLuminance = calcLuminance(radiance);
+                if (indirectLuminance > c_MaxIndirectRadiance)
+                    radiance *= c_MaxIndirectRadiance / indirectLuminance;
+                usedCache = true;
             }
         }
 
-        bool valid = reservoir.weightSum > 0;
+        if (!usedCache)
+        {
+            // ---- Standard path: direct lighting evaluation at secondary hit ----
+            RAB_LightSample lightSample;
+            RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
+                g_Const.restirDI.initialSamplingParams, g_Const.lightBufferParams,
+        #if RTXDI_ENABLE_PRESAMPLING
+            g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
+        #if RTXDI_REGIR_MODE != RTXDI_REGIR_MODE_DISABLED
+            g_Const.regir,
+        #endif
+        #endif
+            lightSample);
 
-        float3 indirectDiffuse = 0;
-        float3 indirectSpecular = 0;
-        float lightDistance = 0;
-        ShadeSurfaceWithLightSample(reservoir, secondarySurface, g_Const.restirDI.shadingParams, lightSample, /* previousFrameTLAS = */ false,
-            /* enableVisibilityReuse = */ false, /* enableVisibilityShortcut */ false, indirectDiffuse, indirectSpecular, lightDistance);
-        radiance += indirectDiffuse * secondarySurface.material.diffuseAlbedo + indirectSpecular;
-        // Firefly suppression
-        float indirectLuminance = calcLuminance(radiance);
-        if (indirectLuminance > c_MaxIndirectRadiance)
-            radiance *= c_MaxIndirectRadiance / indirectLuminance;
+            // Optional DI spatial resampling on the secondary surface.
+            // Try to find this secondary surface in the primary G-buffer. If found,
+            // resample the lights from that G-buffer surface into the reservoir
+            // using the DI spatial resampling function. This dramatically reduces
+            // NEE variance at the secondary hit (single-sample NEE otherwise
+            // occasionally picks a very bright close light, which then feeds the
+            // GI reservoir and gets locked in by temporal resampling).
+            // Uses the primary's spatial resampling params as-is.
+            if (g_Const.enableSecondaryResampling)
+            {
+                float4 secondaryClipPos = MatrixMultiply(float4(secondaryGBufferData.worldPos, 1.0), g_Const.view.m_MatWorldToClip);
+                secondaryClipPos.xyz /= secondaryClipPos.w;
+
+                if (all(abs(secondaryClipPos.xy) < 1.0) && secondaryClipPos.w > 0)
+                {
+                    int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.m_ClipToWindowScale + g_Const.view.m_ClipToWindowBias);
+                    secondarySurface.viewDepth = secondaryClipPos.w;
+
+                    uint sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
+                    reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,
+                        rng, params, g_Const.restirDI.reservoirBufferParams, sourceBufferIndex,
+                        g_Const.restirDI.spatialResamplingParams, lightSample);
+                }
+            }
+
+            bool valid = reservoir.weightSum > 0;
+
+            float3 indirectDiffuse = 0;
+            float3 indirectSpecular = 0;
+            float lightDistance = 0;
+            ShadeSurfaceWithLightSample(reservoir, secondarySurface, g_Const.restirDI.shadingParams, lightSample, /* previousFrameTLAS = */ false,
+                /* enableVisibilityReuse = */ false, /* enableVisibilityShortcut */ false, indirectDiffuse, indirectSpecular, lightDistance);
+            radiance += indirectDiffuse * secondarySurface.material.diffuseAlbedo + indirectSpecular;
+            // Firefly suppression
+            float indirectLuminance = calcLuminance(radiance);
+            if (indirectLuminance > c_MaxIndirectRadiance)
+                radiance *= c_MaxIndirectRadiance / indirectLuminance;
+        } // end if (!usedCache)
     }
 
     bool outputShadingResult = true;

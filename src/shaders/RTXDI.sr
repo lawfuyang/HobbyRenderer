@@ -6,6 +6,7 @@
 #include "Common.sr"
 #include "Instance.sr"
 #include "Mesh.sr"
+#include "SHARC.sr"
 
 // ---------------------------------------------------------------------------
 // External types used only as StructuredBuffer template args (no cbuffer checks)
@@ -142,6 +143,13 @@ cbuffer ResamplingConstants
     // rare bright light samples from becoming stuck fireflies once temporal
     // GI resampling locks them in. Reuses restirDI.spatialResamplingParams.
     uint enableSecondaryResampling;
+
+    // If non-zero, ShadeSecondarySurfaces queries the SHARC radiance cache at
+    // the secondary hit position instead of evaluating direct lighting.
+    // Set to 1 when IndirectLightingMode == INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC.
+    // The SHARC cache buffers (u_SHARCHashEntries, u_SHARCResolved,
+    // u_SHARCAccumulation) must be bound in the ResamplingPassInputs binding set.
+    uint useSharcCache;
 
     SceneConstants sceneConstants;
 
@@ -302,6 +310,13 @@ srinput ResamplingPassInputs
     // DEBUG: per-pixel secondary-surface emission written by GI FinalShading
     // for visual inspection in PIX (and optional on-screen display).
     RWTexture2D<float4>                         m_GIDebugEmission;
+
+    // ---- SHARC cache bindings (used in combined ReSTIR GI + SHARC mode) ----
+    // These are bound as read-only SRVs after the SHARC Resolve pass.
+    // In non-combined modes, dummy buffers are bound to these slots.
+    RWStructuredBuffer<uint64_t>              m_SHARCHashEntries;
+    RWStructuredBuffer<SharcPackedData>       m_SHARCResolved;
+    RWStructuredBuffer<SharcAccumulationData> m_SHARCAccumulation;
 };
 
 // ---- CompositingPass ----

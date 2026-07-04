@@ -40,8 +40,11 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        // Only participate when SHARC is the selected indirect technique.
-        if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+        // Participate when SHARC is the selected indirect technique, or when
+        // the combined ReSTIR GI + SHARC mode is active (SHARC provides the
+        // secondary-surface radiance cache; the Query pass is skipped in that mode).
+        if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC &&
+            g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC)
             return false;
 
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
@@ -240,6 +243,12 @@ public:
         // SharcGetCachedRadiance() at each primary surface, and writes the
         // resulting indirect radiance to g_RG_SHARCIndirect for compositing
         // in DeferredLighting.
+        //
+        // In combined mode (RESTIR_GI_SHARC) the query happens inside
+        // ShadeSecondarySurfaces instead — skip this standalone pass.
+        const bool bCombinedMode = (g_Renderer.m_IndirectLightingTechnique ==
+            srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
+        if (!bCombinedMode)
         {
             // The Resolve pass left the resolved buffer in UAV state; the Query
             // pass reads it as an SRV.  Obtain it with Read access so the

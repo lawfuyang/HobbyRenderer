@@ -33,6 +33,7 @@
 #include "../../Atmosphere.hlsli"
 #include "../../CommonLighting.hlsli"
 
+#include "SharcCommon.h" // for SharcParameters, SharcHitData, etc.
 #include "srrhi/hlsl/RTXDI.hlsli"
 
 #define g_Const              srrhi::BuildEnvLightPDFInputs::GetConst()

@@ -30,6 +30,9 @@
 #include <Rtxdi/LightSampling/RISBufferSegmentParameters.h>
 #include <Rtxdi/Utils/ReservoirAddressing.hlsli>
 
+// ---- SHARC SDK headers -----------------------------------------------------
+#include "SharcCommon.h"
+
 #include "srrhi/hlsl/RTXDI.hlsli"
 
 // ---------------------------------------------------------------------------
@@ -76,6 +79,12 @@
 #define u_SpecularLighting          srrhi::ResamplingPassInputs::GetSpecularLighting()
 // DEBUG: per-pixel secondary-surface emission for PIX inspection.
 #define u_GIDebugEmission           srrhi::ResamplingPassInputs::GetGIDebugEmission()
+
+// SHARC cache buffers — bound in combined ReSTIR GI + SHARC mode.
+// In non-combined modes, dummy UAV buffers are bound to these slots.
+#define u_SHARCHashEntries          srrhi::ResamplingPassInputs::GetSHARCHashEntries()
+#define u_SHARCResolved             srrhi::ResamplingPassInputs::GetSHARCResolved()
+#define u_SHARCAccumulation         srrhi::ResamplingPassInputs::GetSHARCAccumulation()
 
 // RTXDI macro aliases (SDK expects these names)
 #define RTXDI_RIS_BUFFER                u_RisBuffer

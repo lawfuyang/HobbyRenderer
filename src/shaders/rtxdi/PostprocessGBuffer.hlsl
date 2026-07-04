@@ -13,6 +13,7 @@
 #include "../Packing.hlsli"
 #include "../CommonLighting.hlsli"
 
+#include "SharcCommon.h"
 #include "srrhi/hlsl/RTXDI.hlsli"
 
 #define g_Const         srrhi::PostprocessGBufferInputs::GetConst()

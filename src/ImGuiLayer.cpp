@@ -162,9 +162,20 @@ void ImGuiLayer::UpdateFrame()
                         RequestRendererClear("SHARCRenderer");
                     g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC;
                 }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("ReSTIR GI + SHARC", &technique, static_cast<int>(srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC)))
+                {
+                    if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC)
+                    {
+                        RequestRendererClear("RTXDIRenderer");
+                        RequestRendererClear("SHARCRenderer");
+                    }
+                    g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC;
+                }
 
-                // SHARC debug overlay
-                if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+                // SHARC debug overlay (available in SHARC-only and combined modes)
+                if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC ||
+                    g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC)
                 {
                     const char* debugModes[] = { "Off", "Voxel Color", "Accumulated Radiance", "Cache Heatmap" };
                     int debugMode = static_cast<int>(g_Renderer.m_SHARCDebugMode);

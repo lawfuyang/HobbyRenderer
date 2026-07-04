@@ -29,6 +29,9 @@ extern RGTextureHandle g_RG_GBufferGeoNormals;
 extern RGTextureHandle g_RG_GBufferORM;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_GBufferEmissive;
+extern RGBufferHandle g_RG_SHARCHashEntries;
+extern RGBufferHandle g_RG_SHARCResolved;
+extern RGBufferHandle g_RG_SHARCAccumulation;
 
 // ============================================================================
 
@@ -92,6 +95,69 @@ enum class ReSTIRDI_QualityMode { HighPerformance, HighQuality };
 
 static ReSTIRDI_QualityMode g_ReSTIRDI_QualityMode = ReSTIRDI_QualityMode::HighPerformance;
 static rtxdi::CheckerboardMode g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
+
+// ------------------------------------------------------------------
+// ReSTIR GI quality mode presets
+// ------------------------------------------------------------------
+enum class ReSTIRGI_QualityMode { HighPerformance, HighQuality };
+
+static ReSTIRGI_QualityMode g_ReSTIRGI_QualityMode = ReSTIRGI_QualityMode::HighPerformance;
+
+static void ApplyHighPerfGIPreset()
+{
+    g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+
+    g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+    g_ReSTIRGI_TemporalParams.maxHistoryLength              = 4;
+    g_ReSTIRGI_TemporalParams.maxReservoirAge               = 15;
+    g_ReSTIRGI_TemporalParams.enableFallbackSampling        = 1u;
+    g_ReSTIRGI_TemporalParams.enablePermutationSampling     = 0u;
+    g_ReSTIRGI_TemporalParams.biasCorrectionMode            = RTXDI_GIBiasCorrectionMode::Off;
+    g_ReSTIRGI_TemporalParams.depthThreshold                = 0.1f;
+    g_ReSTIRGI_TemporalParams.normalThreshold               = 0.6f;
+
+    g_ReSTIRGI_BoilingParams.enableBoilingFilter            = 1u;
+    g_ReSTIRGI_BoilingParams.boilingFilterStrength          = 0.2f;
+
+    g_ReSTIRGI_SpatialParams = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+    g_ReSTIRGI_SpatialParams.numSamples                     = 1;
+    g_ReSTIRGI_SpatialParams.samplingRadius                 = 16.0f;
+    g_ReSTIRGI_SpatialParams.biasCorrectionMode             = RTXDI_GIBiasCorrectionMode::Off;
+    g_ReSTIRGI_SpatialParams.depthThreshold                 = 0.1f;
+    g_ReSTIRGI_SpatialParams.normalThreshold                = 0.6f;
+
+    g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+    g_ReSTIRGI_FinalShadingParams.enableFinalMIS            = 0u;  // cheaper: skip MIS
+    g_ReSTIRGI_FinalShadingParams.enableFinalVisibility     = 1u;
+}
+
+static void ApplyHighQualityGIPreset()
+{
+    g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+
+    g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+    g_ReSTIRGI_TemporalParams.maxHistoryLength              = 16;
+    g_ReSTIRGI_TemporalParams.maxReservoirAge               = 60;
+    g_ReSTIRGI_TemporalParams.enableFallbackSampling        = 1u;
+    g_ReSTIRGI_TemporalParams.enablePermutationSampling     = 1u;
+    g_ReSTIRGI_TemporalParams.biasCorrectionMode            = RTXDI_GIBiasCorrectionMode::Raytraced;
+    g_ReSTIRGI_TemporalParams.depthThreshold                = 0.1f;
+    g_ReSTIRGI_TemporalParams.normalThreshold               = 0.9f;
+
+    g_ReSTIRGI_BoilingParams.enableBoilingFilter            = 0u;  // off — let NRD handle noise
+    g_ReSTIRGI_BoilingParams.boilingFilterStrength          = 0.0f;
+
+    g_ReSTIRGI_SpatialParams = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+    g_ReSTIRGI_SpatialParams.numSamples                     = 4;
+    g_ReSTIRGI_SpatialParams.samplingRadius                 = 48.0f;
+    g_ReSTIRGI_SpatialParams.biasCorrectionMode             = RTXDI_GIBiasCorrectionMode::Raytraced;
+    g_ReSTIRGI_SpatialParams.depthThreshold                 = 0.1f;
+    g_ReSTIRGI_SpatialParams.normalThreshold                = 0.9f;
+
+    g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+    g_ReSTIRGI_FinalShadingParams.enableFinalMIS            = 1u;  // MIS reduces bias
+    g_ReSTIRGI_FinalShadingParams.enableFinalVisibility     = 1u;
+}
 
 static void ApplyHighPerfPreset()
 {
@@ -354,6 +420,18 @@ void RTXDIIMGUISettings()
 
         if (g_ReSTIRGI_Enabled)
         {
+            // ---- GI Quality mode preset ----------------------------------------
+            if (ImGui::Combo("GI Quality Mode", reinterpret_cast<int*>(&g_ReSTIRGI_QualityMode),
+                    "High Performance\0"
+                    "High Quality\0"))
+            {
+                if (g_ReSTIRGI_QualityMode == ReSTIRGI_QualityMode::HighPerformance)
+                    ApplyHighPerfGIPreset();
+                else
+                    ApplyHighQualityGIPreset();
+            }
+            ImGui::Separator();
+
             // Resampling mode combo (FusedSpatiotemporal excluded)
             if (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::FusedSpatiotemporal)
                 g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
@@ -706,6 +784,10 @@ public:
         g_ReSTIRGI_BoilingParams     = rtxdi::GetDefaultReSTIRGIBoilingFilterParams();
         g_ReSTIRGI_SpatialParams     = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
         g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+
+        // Apply default "High Performance" GI preset
+        g_ReSTIRGI_QualityMode = ReSTIRGI_QualityMode::HighPerformance;
+        ApplyHighPerfGIPreset();
 
         m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
@@ -1179,7 +1261,9 @@ public:
             renderGraph.DeclareBuffer(bd, m_RG_PrimitiveLightBuffer);
         }
 
-        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled && g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI);
+        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled &&
+            (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI ||
+             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC));
 
         // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing
         if (bDoReSTIRGI)
@@ -1207,6 +1291,15 @@ public:
             renderGraph.DeclarePersistentBuffer(bd, m_RG_GIReservoirBuffer);
         }
 
+        const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
+            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
+        if (bCombinedMode)
+        {
+            renderGraph.ReadBuffer(g_RG_SHARCHashEntries);
+            renderGraph.ReadBuffer(g_RG_SHARCResolved);
+            renderGraph.ReadBuffer(g_RG_SHARCAccumulation);
+        }
+
         return true;
     }
 
@@ -1220,7 +1313,11 @@ public:
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
-        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled && g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI);
+        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled &&
+            (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI ||
+             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC));
+        const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
+            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
 
         // Recreate RTXDI contexts if checkerboard mode changed (static parameter).
         // Checkerboard is on for HighPerformance, off for HighQuality.
@@ -1414,6 +1511,7 @@ public:
         g_Const.SetEnableBrdfAdditiveBlend(bDoReSTIRGI ? 1u : 0u);
         g_Const.SetEnableAccumulation(0u);
         g_Const.SetEnableSecondaryResampling((bDoReSTIRGI && g_ReSTIRGI_EnableSecondaryResampling) ? 1u : 0u);
+        g_Const.SetUseSharcCache(bCombinedMode ? 1u : 0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
         g_Const.SetDebugVisualizeGIEmission(static_cast<uint32_t>(g_DebugVisualizeGIEmission));
         g_ReGIR_VisualizeRegirCells = (g_Renderer.m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
@@ -1673,6 +1771,26 @@ public:
             ? renderGraph.GetTexture(m_RG_GIDebugEmission, RGResourceAccessMode::Write)
             : cr.DummyUAVTexture;
         resamplingInputs.SetGIDebugEmission(giDebugEmissionTex, 0);
+
+        // ---- SHARC cache buffers for combined mode ----
+        // In combined mode (RESTIR_GI_SHARC), the SHARC Resolve pass has already
+        // run and left the resolved buffer in UAV state.  Obtain them with Read
+        // access so the render-graph inserts the UAV→SRV barrier automatically.
+        // In non-combined modes, bind dummy UAV buffers to keep the binding set stable.
+        {
+            if (bCombinedMode)
+            {
+                resamplingInputs.SetSHARCHashEntries (renderGraph.GetBuffer(g_RG_SHARCHashEntries,   RGResourceAccessMode::Read));
+                resamplingInputs.SetSHARCResolved    (renderGraph.GetBuffer(g_RG_SHARCResolved,      RGResourceAccessMode::Read));
+                resamplingInputs.SetSHARCAccumulation(renderGraph.GetBuffer(g_RG_SHARCAccumulation,  RGResourceAccessMode::Read));
+            }
+            else
+            {
+                resamplingInputs.SetSHARCHashEntries (cr.DummyUAVStructuredBuffer);
+                resamplingInputs.SetSHARCResolved    (cr.DummyUAVStructuredBuffer);
+                resamplingInputs.SetSHARCAccumulation(cr.DummyUAVStructuredBuffer);
+            }
+        }
 
         const nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(resamplingInputs);
 
