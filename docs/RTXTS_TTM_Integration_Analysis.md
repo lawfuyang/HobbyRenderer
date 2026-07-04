@@ -287,6 +287,178 @@ for each textureSet where this texture is primary:
 
 **Limitation:** If a follower has higher-res mips than the primary, those extra mips won't be requested via matching — they'd need their own feedback.
 
+### 5.3.1 How Texture Sets Are Determined
+
+**This is the key question:** which textures should be grouped together into a `FeedbackTextureSet`? The reference sample provides a clear answer:
+
+#### Reference approach (`main.cpp` `EnsureTextureSets()`)
+
+```cpp
+// 1. Iterate ALL Materials in the scene graph
+auto& materials = GetScene()->GetSceneGraph()->GetMaterials();
+
+// 2. For each Material, create ONE FeedbackTextureSet
+for (auto& material : materials)
+{
+    // Skip materials without a diffuse texture (primary is always diffuse)
+    if (!material->baseOrDiffuseTexture)
+        continue;
+
+    // Skip if the diffuse texture was NOT converted to a streaming texture
+    // (e.g., RGB8 images — not block-compressed, no FeedbackTexture created)
+    if (m_feedbackTextureMaps.m_feedbackTexturesBySource.find(
+            material->baseOrDiffuseTexture.get()) ==
+        m_feedbackTextureMaps.m_feedbackTexturesBySource.end())
+        continue;
+
+    // 3. Create one texture set
+    nvrhi::RefCountPtr<FeedbackTextureSet> textureSet;
+    m_feedbackManager->CreateTextureSet(&textureSet);
+
+    // 4. Add ALL streaming textures from this material (order matters!)
+    //    First texture added → automatically becomes primary
+    addTextureToSet(material->baseOrDiffuseTexture);       // ← PRIMARY
+    addTextureToSet(material->metalRoughOrSpecularTexture); // follower
+    addTextureToSet(material->normalTexture);               // follower
+    addTextureToSet(material->emissiveTexture);             // follower
+    addTextureToSet(material->occlusionTexture);            // follower
+    addTextureToSet(material->transmissionTexture);         // follower
+    addTextureToSet(material->opacityTexture);              // follower
+
+    // 5. Validate: reject if any follower exceeds primary dimensions
+    uint32_t primaryW = primaryTexture->getDesc().width;
+    uint32_t primaryH = primaryTexture->getDesc().height;
+    uint32_t primaryMips = primaryTexture->getDesc().mipLevels;
+    for (uint32_t i = 1; i < textureSet->GetNumTextures(); i++)
+    {
+        auto follower = textureSet->GetTexture(i)->GetReservedTexture();
+        if (follower->getDesc().width > primaryW ||
+            follower->getDesc().height > primaryH ||
+            follower->getDesc().mipLevels > primaryMips)
+        {
+            rejectTextureSet = true;  // destructor cleans up FeedbackTexture state
+            break;
+        }
+    }
+
+    if (!rejectTextureSet)
+        m_feedbackTextureSetsByMaterial[material.get()] = textureSet;
+}
+```
+
+**Key design decisions in the reference:**
+
+| Decision | Rationale |
+|---|---|
+| **One set per Material** (not per mesh, not per scene) | Material textures share the same UV coordinate space; matching tile requests is only valid for textures with identical UV mapping |
+| **BaseColor/Diffuse is always primary** | Every material has one; it's the largest texture; its feedback drives all followers |
+| **Non-streaming textures are silently skipped** | `addTextureToSet` is a no-op if the texture wasn't converted to a `FeedbackTexture` (e.g., small solid-color textures, non-BC formats) |
+| **Followers must not exceed primary size** | If normal map is 4K but albedo is 2K, `MatchPrimaryTexture()` can't express tile requests for mips the primary doesn't have → reject the set, those textures stream independently |
+| **Texture set creation is a POST-load pass** | It runs in `SceneLoaded()` callback — AFTER all texture I/O is done and all `FeedbackTexture` objects are registered. NOT inside the scene file parser itself |
+| **Sets are rebuilt on scene reload** | `m_recreateFeedbackTextureSets = true` in `SceneLoaded()`, and the old map is cleared in `SceneUnloading()` |
+
+#### Mapping to HobbyRenderer
+
+HobbyRenderer's `Scene::Material` uses integer texture indices, not pointer-based lookups. The equivalent algorithm is:
+
+```cpp
+// After SceneLoader has created all FeedbackTextures (Step 1.5),
+// run this separate pass to group them into sets:
+
+const auto& scene = m_scene;  // Scene* from Renderer
+
+for (size_t matIdx = 0; matIdx < scene.m_Materials.size(); matIdx++)
+{
+    const auto& mat = scene.m_Materials[matIdx];
+
+    // ── Is this material even a streaming candidate? ──
+    int baseColorIdx = mat.m_BaseColorTexture;
+    if (baseColorIdx == -1)
+        continue;  // no diffuse → no primary → skip
+
+    const auto& baseTex = scene.m_Textures[baseColorIdx];
+    // Check: was this texture registered as a FeedbackTexture?
+    FeedbackTexture* primaryFt = m_feedbackManager->FindTexture(baseTex.m_Handle);
+    if (!primaryFt)
+        continue;  // not a streaming texture (non-BC, or Vulkan fallback)
+
+    // ── Create set ──
+    FeedbackTextureSet* texSet;
+    m_feedbackManager->CreateTextureSet(&texSet);
+
+    // ── Helper: conditionally add if it's a streaming texture ──
+    auto tryAdd = [&](int texIdx) {
+        if (texIdx == -1) return;
+        FeedbackTexture* ft = m_feedbackManager->FindTexture(
+            scene.m_Textures[texIdx].m_Handle);
+        if (ft) texSet->AddTexture(ft);
+    };
+
+    tryAdd(mat.m_BaseColorTexture);          // PRIMARY (added first)
+    tryAdd(mat.m_NormalTexture);             // follower
+    tryAdd(mat.m_MetallicRoughnessTexture);  // follower
+    tryAdd(mat.m_EmissiveTexture);           // follower
+    // tryAdd(mat.m_OcclusionTexture);       // HobbyRenderer doesn't have this slot today
+    // tryAdd(mat.m_TransmissionTexture);    // HobbyRenderer doesn't have this slot today
+
+    // ── Validate follower sizes ──
+    // (same logic as reference: reject if any follower > primary)
+    uint32_t numTex = texSet->GetNumTextures();
+    if (numTex <= 1)
+        continue;  // no followers — set is pointless but harmless
+
+    auto* primaryTex = texSet->GetPrimaryTexture()->GetReservedTexture();
+    uint32_t pw = primaryTex->getDesc().width;
+    uint32_t ph = primaryTex->getDesc().height;
+    uint32_t pm = primaryTex->getDesc().mipLevels;
+
+    bool valid = true;
+    for (uint32_t i = 1; i < numTex; i++)
+    {
+        auto* ft = texSet->GetTexture(i)->GetReservedTexture();
+        if (ft->getDesc().width > pw || ft->getDesc().height > ph ||
+            ft->getDesc().mipLevels > pm)
+        {
+            valid = false;
+            break;
+        }
+    }
+    if (!valid)
+    {
+        texSet->Release();
+        continue;
+    }
+
+    // ── Store ──
+    m_feedbackTextureSetsByMaterial[&mat] = texSet;
+}
+```
+
+**Key differences vs. the reference:**
+
+| Aspect | Reference (donut) | HobbyRenderer |
+|---|---|---|
+| Texture lookup | `Material*` → `LoadedTexture*` → `FeedbackTexture*` (pointer-based) | `Scene::Material` → `m_BaseColorTexture` (int index) → `Scene::Texture::m_Handle` → `FeedbackManager::FindTexture()` (handle-based) |
+| Texture set storage | `FeedbackTextureMaps::m_feedbackTextureSetsByMaterial` (on `SampleApp`) | `Renderer::m_textureSetsByMaterial` (or separate `StreamingContext` struct) |
+| Where it runs | `SceneLoaded()` override in app | After `SceneLoader::LoadTexturesFromImages()` and `FeedbackManager` initialization, before first frame renders |
+| Materials enumeration | `GetSceneGraph()->GetMaterials()` (donut engine) | `scene.m_Materials` (flat vector in `Scene.h`) |
+
+**Why NOT in SceneLoader?**
+
+The `SceneLoader` class is the file I/O layer — it knows how to parse glTF/DDS and create GPU resources. It does NOT know about the FeedbackManager or streaming policy. Separating concerns:
+
+```
+SceneLoader::LoadTexturesFromImages()     → creates committed textures (Vulkan) OR
+                                             registers FeedbackTextures (D3D12)
+SceneLoader returns, Renderer owns scene
+      ↓
+StreamingContext::BuildTextureSets()       → groups FeedbackTextures by Material
+      ↓
+Renderer::RenderFrame()                   → BeginFrame → Upload → Render → Resolve
+```
+
+This keeps the SceneLoader testable (no streaming dependency) and allows the streaming policy to evolve independently.
+
 ### 5.4 HeapAllocator — Physical Tile Pool
 
 ```cpp
