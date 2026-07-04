@@ -296,9 +296,8 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         // so they don't pollute the frame's allocation.
         if (!m_PendingDeclaredTextures.empty())
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] Renderer '%s' disabled after Setup() but declared %zu texture(s) - rolling back.",
-                        pRenderer->GetName(), m_PendingDeclaredTextures.size());
+            SDL_Log("[RenderGraph] Renderer '%s' disabled after Setup() but declared %zu texture(s) - rolling back.",
+                pRenderer->GetName(), m_PendingDeclaredTextures.size());
             SDL_assert(false && "Renderer declared textures but returned false from Setup() - contract violation");
             for (uint32_t idx : m_PendingDeclaredTextures)
                 if (idx < m_Textures.size())
@@ -306,9 +305,8 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         }
         if (!m_PendingDeclaredBuffers.empty())
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] Renderer '%s' disabled after Setup() but declared %zu buffer(s) - rolling back.",
-                        pRenderer->GetName(), m_PendingDeclaredBuffers.size());
+            SDL_Log("[RenderGraph] Renderer '%s' disabled after Setup() but declared %zu buffer(s) - rolling back.",
+                pRenderer->GetName(), m_PendingDeclaredBuffers.size());
             SDL_assert(false && "Renderer declared buffers but returned false from Setup() - contract violation");
             for (uint32_t idx : m_PendingDeclaredBuffers)
                 if (idx < m_Buffers.size())
@@ -366,10 +364,9 @@ void RenderGraph::BeginSetup()
     //                 → EndSetup() → Compile() → PostRender()
     if (m_CurrentPassIndex != 0)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] BeginSetup() called with m_CurrentPassIndex=%u - "
-                    "Reset() was not called before this frame's BeginSetup().",
-                    m_CurrentPassIndex);
+        SDL_Log("[RenderGraph] BeginSetup() called with m_CurrentPassIndex=%u - "
+            "Reset() was not called before this frame's BeginSetup().",
+            m_CurrentPassIndex);
         SDL_assert(false && "BeginSetup() called without a preceding Reset() - "
                    "call Reset() at the start of every new frame");
     }
@@ -380,9 +377,8 @@ void RenderGraph::BeginSetup()
     // are still live, leading to double-allocation and heap corruption.
     if (m_IsCompiled)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] BeginSetup() called while m_IsCompiled==true - "
-                    "PostRender() was not called after the previous Compile().");
+        SDL_Log("[RenderGraph] BeginSetup() called while m_IsCompiled==true - "
+            "PostRender() was not called after the previous Compile().");
         SDL_assert(false && "BeginSetup() called while graph is still compiled - "
                    "call PostRender() before starting a new frame");
     }
@@ -685,8 +681,7 @@ void RenderGraph::ReadTexture(RGTextureHandle handle)
     TransientTexture& texture = m_Textures[handle.m_Index];
     if (!texture.m_IsDeclaredThisFrame)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] ERROR: Attempting to read undeclared texture '%s' (handle index %u)", texture.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
+        SDL_Log("[RenderGraph] ERROR: Attempting to read undeclared texture '%s' (handle index %u)", texture.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
         SDL_assert(false && "Texture not declared this frame");
         return;
     }
@@ -707,8 +702,7 @@ void RenderGraph::WriteTexture(RGTextureHandle handle)
     TransientTexture& texture = m_Textures[handle.m_Index];
     if (!texture.m_IsDeclaredThisFrame)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] ERROR: Attempting to write undeclared texture '%s' (handle index %u)", texture.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
+        SDL_Log("[RenderGraph] ERROR: Attempting to write undeclared texture '%s' (handle index %u)", texture.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
         SDL_assert(false && "Texture not declared this frame");
         return;
     }
@@ -729,8 +723,7 @@ void RenderGraph::ReadBuffer(RGBufferHandle handle)
     TransientBuffer& buffer = m_Buffers[handle.m_Index];
     if (!buffer.m_IsDeclaredThisFrame)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] ERROR: Attempting to read undeclared buffer '%s' (handle index %u)", buffer.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
+        SDL_Log("[RenderGraph] ERROR: Attempting to read undeclared buffer '%s' (handle index %u)", buffer.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
         SDL_assert(false && "Buffer not declared this frame");
         return;
     }
@@ -751,8 +744,7 @@ void RenderGraph::WriteBuffer(RGBufferHandle handle)
     TransientBuffer& buffer = m_Buffers[handle.m_Index];
     if (!buffer.m_IsDeclaredThisFrame)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] ERROR: Attempting to write undeclared buffer '%s' (handle index %u)", buffer.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
+        SDL_Log("[RenderGraph] ERROR: Attempting to write undeclared buffer '%s' (handle index %u)", buffer.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
         SDL_assert(false && "Buffer not declared this frame");
         return;
     }
@@ -809,16 +801,14 @@ void RenderGraph::Compile()
 
         if (firstAccessPass == UINT16_MAX)
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] ERROR: Texture '%s' (index %u) declared but never accessed", tex.m_Desc.m_NvrhiDesc.debugName.c_str(), i);
+            SDL_Log("[RenderGraph] ERROR: Texture '%s' (index %u) declared but never accessed", tex.m_Desc.m_NvrhiDesc.debugName.c_str(), i);
             SDL_assert(false && "Resource declared but never accessed");
         }
 
         if (tex.m_DeclarationPass > firstAccessPass)
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] ERROR: Texture '%s' (index %u) accessed in pass %u but only declared in pass %u", 
-                    tex.m_Desc.m_NvrhiDesc.debugName.c_str(), i, firstAccessPass, tex.m_DeclarationPass);
+            SDL_Log("[RenderGraph] ERROR: Texture '%s' (index %u) accessed in pass %u but only declared in pass %u",
+                tex.m_Desc.m_NvrhiDesc.debugName.c_str(), i, firstAccessPass, tex.m_DeclarationPass);
             SDL_assert(false && "Resource accessed before it was declared");
         }
     }
@@ -844,16 +834,14 @@ void RenderGraph::Compile()
 
         if (firstAccessPass == UINT16_MAX)
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] ERROR: Buffer '%s' (index %u) declared but never accessed", buf.m_Desc.m_NvrhiDesc.debugName.c_str(), i);
+            SDL_Log("[RenderGraph] ERROR: Buffer '%s' (index %u) declared but never accessed", buf.m_Desc.m_NvrhiDesc.debugName.c_str(), i);
             SDL_assert(false && "Resource declared but never accessed");
         }
 
         if (buf.m_DeclarationPass > firstAccessPass)
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] ERROR: Buffer '%s' accessed in pass '%s' but only declared in pass '%s'", 
-                    buf.m_Desc.m_NvrhiDesc.debugName.c_str(), m_PassNames.at(firstAccessPass), m_PassNames.at(buf.m_DeclarationPass));
+            SDL_Log("[RenderGraph] ERROR: Buffer '%s' accessed in pass '%s' but only declared in pass '%s'",
+                buf.m_Desc.m_NvrhiDesc.debugName.c_str(), m_PassNames.at(firstAccessPass), m_PassNames.at(buf.m_DeclarationPass));
             SDL_assert(false && "Resource accessed before it was declared");
         }
     }
@@ -1011,13 +999,12 @@ void RenderGraph::Compile()
 
             if (!hasWrite || hasRead)
             {
-                if (m_bVerboseLogging)
-                    SDL_Log("[RenderGraph] ERROR: Aliased %s '%s' first used in pass %u must be write-only. hasWrite=%d hasRead=%d",
-                        isBuffer ? "buffer" : "texture",
-                        debugName,
-                        lifetime.m_FirstPass,
-                        hasWrite ? 1 : 0,
-                        hasRead ? 1 : 0);
+                SDL_Log("[RenderGraph] ERROR: Aliased %s '%s' first used in pass %u must be write-only. hasWrite=%d hasRead=%d",
+                    isBuffer ? "buffer" : "texture",
+                    debugName,
+                    lifetime.m_FirstPass,
+                    hasWrite ? 1 : 0,
+                    hasRead ? 1 : 0);
                 SDL_assert(false && "Aliased resource first use must be write-only");
             }
 
@@ -1288,17 +1275,16 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
             // A mismatch means the heap vector was reallocated or the index is stale.
             if (heapEntry.m_Heap != resource->m_Heap)
             {
-                if (m_bVerboseLogging)
-                    SDL_Log("[RenderGraph] HEAP-MISMATCH %s slot %u ('%s'): "
-                            "heapEntry.m_Heap=%p resource->m_Heap=%p heapIdx=%u "
-                            "(heap vector may have been reallocated)",
-                            bIsBuffer ? "buffer" : "texture",
-                            idx,
-                            bIsBuffer ? m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName.c_str()
-                                      : m_Textures[idx].m_Desc.m_NvrhiDesc.debugName.c_str(),
-                            (void*)heapEntry.m_Heap.Get(),
-                            (void*)resource->m_Heap.Get(),
-                            resource->m_HeapIndex);
+                SDL_Log("[RenderGraph] HEAP-MISMATCH %s slot %u ('%s'): "
+                    "heapEntry.m_Heap=%p resource->m_Heap=%p heapIdx=%u "
+                    "(heap vector may have been reallocated)",
+                    bIsBuffer ? "buffer" : "texture",
+                    idx,
+                    bIsBuffer ? m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName.c_str()
+                              : m_Textures[idx].m_Desc.m_NvrhiDesc.debugName.c_str(),
+                    (void*)heapEntry.m_Heap.Get(),
+                    (void*)resource->m_Heap.Get(),
+                    resource->m_HeapIndex);
                 SDL_assert(false && "Heap handle mismatch in trivial-reuse path - "
                            "resource->m_HeapIndex is stale or heap vector was reallocated");
             }
@@ -1503,8 +1489,7 @@ nvrhi::TextureHandle RenderGraph::GetTexture(RGTextureHandle handle, RGResourceA
     const TransientTexture& texture = m_Textures[handle.m_Index];
     if (!texture.m_IsDeclaredThisFrame)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] ERROR: Attempting to get undeclared texture '%s' (handle index %u)", texture.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
+        SDL_Log("[RenderGraph] ERROR: Attempting to get undeclared texture '%s' (handle index %u)", texture.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
         SDL_assert(false && "Texture not declared this frame");
         return nullptr;
     }
@@ -1528,10 +1513,9 @@ nvrhi::TextureHandle RenderGraph::GetTexture(RGTextureHandle handle, RGResourceA
 
         if (!found)
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] ERROR: Pass '%s' attempted to %s texture '%s' without declaring dependency in Setup()",
-                    m_PassNames[activePassIdx - 1], (access == RGResourceAccessMode::Read ? "READ" : "WRITE"),
-                    texture.m_Desc.m_NvrhiDesc.debugName.c_str());
+            SDL_Log("[RenderGraph] ERROR: Pass '%s' attempted to %s texture '%s' without declaring dependency in Setup()",
+                m_PassNames[activePassIdx - 1], (access == RGResourceAccessMode::Read ? "READ" : "WRITE"),
+                texture.m_Desc.m_NvrhiDesc.debugName.c_str());
             SDL_assert(false && "Resource access dependency not declared");
         }
     }
@@ -1555,8 +1539,7 @@ nvrhi::BufferHandle RenderGraph::GetBuffer(RGBufferHandle handle, RGResourceAcce
     const TransientBuffer& buffer = m_Buffers[handle.m_Index];
     if (!buffer.m_IsDeclaredThisFrame)
     {
-        if (m_bVerboseLogging)
-            SDL_Log("[RenderGraph] ERROR: Attempting to get undeclared buffer '%s' (handle index %u)", buffer.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
+        SDL_Log("[RenderGraph] ERROR: Attempting to get undeclared buffer '%s' (handle index %u)", buffer.m_Desc.m_NvrhiDesc.debugName.c_str(), handle.m_Index);
         SDL_assert(false && "Buffer not declared this frame");
         return nullptr;
     }
@@ -1580,10 +1563,9 @@ nvrhi::BufferHandle RenderGraph::GetBuffer(RGBufferHandle handle, RGResourceAcce
 
         if (!found)
         {
-            if (m_bVerboseLogging)
-                SDL_Log("[RenderGraph] ERROR: Pass '%s' (index %u) attempted to %s buffer '%s' without declaring dependency in Setup()",
-                    m_PassNames[activePassIdx - 1], activePassIdx, (access == RGResourceAccessMode::Read ? "READ" : "WRITE"),
-                    buffer.m_Desc.m_NvrhiDesc.debugName.c_str());
+            SDL_Log("[RenderGraph] ERROR: Pass '%s' (index %u) attempted to %s buffer '%s' without declaring dependency in Setup()",
+                m_PassNames[activePassIdx - 1], activePassIdx, (access == RGResourceAccessMode::Read ? "READ" : "WRITE"),
+                buffer.m_Desc.m_NvrhiDesc.debugName.c_str());
             SDL_assert(false && "Resource access dependency not declared");
         }
     }
