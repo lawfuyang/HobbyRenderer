@@ -1,7 +1,7 @@
 # OMM (Opacity Micro-Maps) Integration Analysis for HobbyRenderer
 
-> **Date**: 2026-06-24 (original) | **Updated**: 2026-07-03 — meshoptimizer upgraded to v1.2
-> **Scope**: Full analysis of OMM generation and runtime usage — load-time generation via meshoptimizer v1.2's built-in `opacityMap*` APIs (as used by [zeux/niagara](https://github.com/zeux/niagara)), plus NVRHI native runtime support
+> **Date**: 2026-06-24 (original) | **Updated**: 2026-07-03 — meshoptimizer upgraded to v1.2 | **Updated**: 2026-07-04 — SceneCache caching analysis
+> **Scope**: Full analysis of OMM generation and runtime usage — load-time generation via meshoptimizer v1.2's built-in `opacityMap*` APIs (as used by [zeux/niagara](https://github.com/zeux/niagara)), plus NVRHI native runtime support, plus evaluation of whether OMM data belongs in SceneCache
 
 ---
 
@@ -367,8 +367,196 @@ meshoptimizer v1.2 already provides the complete OMM baking pipeline. The previo
 
 ---
 
-## 5. Comparison Matrix
+## 5. SceneCache & OMM Caching Analysis
 
+> **Question**: Now that we have `SceneCache` ([src/SceneCache.cpp](src/SceneCache.cpp) / [src/SceneCache.h](src/SceneCache.h)) — should OMM baked data be cached alongside the existing cooked mesh data? Does OMM affect the SceneCache architecture?
+
+### 5.1 Current SceneCache Architecture
+
+SceneCache is a binary caching layer that avoids re-running expensive mesh preprocessing passes every time a glTF file is loaded. The flow is:
+
+```
+[glTF source] ──► IsCacheValid? ──Yes──► LoadCookedMesh() ──► GPU upload
+                       │
+                      No
+                       ▼
+              SceneLoader::ProcessMeshesFromGLTF()
+                       │
+                       ▼
+              SaveCookedMesh() ──► GPU upload
+```
+
+**What SceneCache currently serializes** (see [SceneCache.h](src/SceneCache.h) lines 13-21):
+
+| Data | Type | Purpose |
+|---|---|---|
+| `Scene::Mesh` / `Scene::Primitive` | Scene graph | Mesh-to-primitive mapping, material indices, bounding spheres |
+| `srrhi::MeshData` | POD | Index offsets per LOD, meshlet ranges |
+| `srrhi::Meshlet` | POD | Meshlet bounds, vertex/triangle counts |
+| `meshletVertices` | `uint32_t[]` | Meshlet vertex indices |
+| `meshletTriangles` | `uint32_t[]` | Meshlet primitive indices |
+| `allVerticesQuantized` | `srrhi::VertexQuantized[]` | Quantized vertex data |
+| `allIndices` | `uint32_t[]` | Index buffer |
+
+**What is NOT cached**:
+- Textures (loaded separately, not part of mesh processing)
+- Materials (cheap to re-parse from glTF)
+- GPU resources (`nvrhi::BufferHandle`, `nvrhi::AccelStructHandle`, etc.) — these must be created fresh each run
+- BLAS handles — rebuilt in `BuildAccelerationStructures()` each run
+
+**Cache invalidation** (`IsCacheValid`, [SceneCache.cpp](src/SceneCache.cpp) lines 7-18): Compares only the **glTF source file timestamp** against the cache file timestamp. If `cacheTime >= sourceTime`, the cache is considered valid. There is **no tracking of texture file timestamps** or any other dependency.
+
+**Versioning**: `kCookedMeshVersion = 1`, incremented when:
+- meshoptimizer is upgraded to a new major version
+- `ProcessMeshes` algorithm changes
+- `VertexQuantized` or `Meshlet` struct layout changes
+- LOD generation parameters change
+
+### 5.2 What OMM Data Would Need to Be Cached
+
+After the meshoptimizer OMM pipeline runs (`measure` → `rasterize` → `compact`), the output consists of three arrays:
+
+| Data | Type | Size | Persisted? |
+|---|---|---|---|
+| `ommData` | `uint8_t[]` | `data_size` bytes (typically small: ~4KB–64KB per mesh) | **Candidate** |
+| `ommLevels` / `ommOffsets` | `uint8_t[]` / `uint32_t[]` | `omm_count` entries each | **Candidate** |
+| `ommIndices` | `int32_t[]` | `triangleCount` entries (one per triangle) | **Candidate** |
+
+Additionally, the OMM baking depends on these **inputs**:
+
+| Input | Source | In SceneCache Today? |
+|---|---|---|
+| Triangle indices + UVs | Mesh geometry | ✅ Yes (as `allIndices` + `allVerticesQuantized`) |
+| Alpha texture pixels | Texture file (PNG/JPG/KTX) | ❌ No |
+| Baking parameters (`maxLevel`, `targetEdge`, `ommStates`) | Engine constants / per-material config | ❌ No |
+
+Note: meshoptimizer's README explicitly states: *"After compaction, `levels` and `offsets` (`omm_count` entries) and `data` (`data_size` bytes) can be **serialized** and later passed to the raytracing runtime to build the opacity micromap structures."* — so serialization is officially endorsed.
+
+### 5.3 The Key Ordering Constraint
+
+meshoptimizer's documentation also states: *"Opacity micromap data is sensitive to triangle corner order, which index or meshlet compression can change… Since per-triangle OMM indices use the original triangle order, it's recommended to perform OMM processing **after the index order has been finalized**."*
+
+This has implications for SceneCache:
+- OMM baking must happen **after** meshoptimizer passes like `optimizeVertexCache`, index compression, and meshlet building — all of which are currently cached.
+- If you cache OMM data, and then later change the index order (by bumping `kCookedMeshVersion` and re-running the mesh pipeline), the cached OMM data becomes stale — but that's already handled by the version bump.
+- The OMM data inherently depends on the final index order that SceneCache already captures → OMM data is a **downstream artifact** of the mesh pipeline.
+
+### 5.4 Can OMM Data Be Cached? — YES
+
+Technically, OMM data is perfectly cacheable:
+- **Deterministic**: Same UVs + same alpha texture + same parameters = same OMM output, every time.
+- **Serializable**: All three arrays (`ommData`, `ommLevels`/`ommOffsets`, `ommIndices`) are plain POD arrays. `ommIndices` contains `int32_t` values that can be negative (special indices -1 through -4), which is fine for binary serialization.
+- **Compact**: After compaction, OMM data is tiny. For a mesh with 10K alpha-masked triangles, expect <100KB total.
+- **Independent of GPU state**: Unlike BLAS handles or GPU OMM arrays (which must be built fresh), the CPU-side baked data is pure host memory.
+
+### 5.5 Should OMM Data Be Cached? — IT DEPENDS
+
+This is the harder question. Here is a balanced analysis:
+
+#### ✅ Arguments FOR Caching OMM Data
+
+1. **OMM baking touches texture memory**: `meshopt_opacityMapRasterize` reads alpha texture pixels per micro-triangle with bilinear filtering. For a 4K alpha texture with thousands of masked triangles, this is more expensive than the vertex/index processing already cached by SceneCache. Caching avoids re-reading texture pixels on every load.
+
+2. **It's the same pattern as existing cache**: SceneCache already caches the results of meshoptimizer passes (meshlet building, vertex quantization). OMM baking is conceptually identical — it's a CPU-side `calculate → serialize → deserialize` pipeline. Adding OMM data is a natural extension.
+
+3. **meshoptimizer explicitly endorses it**: The library's own README states OMM data "can be serialized" for reuse.
+
+4. **Launch-time latency**: If your renderer loads multiple scenes or supports hot-reload, re-baking OMM data on every glTF load adds latency. Caching eliminates this entirely for unchanged assets.
+
+#### ❌ Arguments AGAINST Caching OMM Data
+
+1. **Texture dependency breaks the simple timestamp model**: SceneCache currently compares only `glTF timestamp vs cache timestamp`. OMM data depends on **alpha textures**, which live in separate files (`.png`, `.jpg`, `.ktx2`). If the texture changes but the glTF doesn't, cached OMM data would be **silently stale**, leading to visual artifacts where old opacity data mismatches a new alpha texture. You would need to:
+   - Track texture file paths referenced by each material
+   - Include texture file timestamps in the cache validation
+   - This significantly complicates `IsCacheValid()`
+
+2. **OMM APIs are EXPERIMENTAL**: The `meshopt_opacityMap*` functions are behind `MESHOPTIMIZER_EXPERIMENTAL`. Their output format may change in future meshoptimizer versions. If OMM data is embedded in the same cache file as mesh data, bumping `kCookedMeshVersion` to handle an OMM format change would invalidate **all** cached mesh data — even for meshes that don't use OMM. This couples the stability of your mesh cache to an experimental API.
+
+3. **OMM is only relevant for alpha-masked geometry**: Most geometry in a typical scene is opaque. OMM only applies to `ALPHA_MODE_MASK` materials. Adding OMM fields to the cache format adds complexity that only benefits a subset of meshes. The cache file format grows more complex for a feature many scenes won't use.
+
+4. **GPU-side OMM arrays cannot be cached anyway**: `nvrhi::createOpacityMicromap()` and `buildOpacityMicromap()` are GPU operations that must run every time the application starts. Caching only saves the CPU-side baking step, not the GPU build. The end-to-end savings are partial.
+
+5. **The absolute performance benefit is unproven**: meshoptimizer's OMM baking is designed to be fast — described as "milliseconds" for typical meshes. Without profiling data showing that OMM baking is a measurable bottleneck in your load pipeline, the added cache complexity may be premature optimization.
+
+6. **Risk of "cache coupling"**: If OMM data is embedded in the same `.bin` file, any change to OMM parameters (`maxLevel`, `targetEdge`) requires invalidating the entire mesh cache. This defeats the purpose of caching — you'd re-process meshes just because you tweaked an OMM knob.
+
+### 5.6 Recommendation: Keep OMM Separate from SceneCache (For Now)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                     RECOMMENDED ARCHITECTURE                          │
+│                                                                       │
+│  [glTF] ──► SceneCache (_mesh.bin) ──► Mesh data + GPU upload        │
+│     │                                                                 │
+│     │  (OMM path is separate)                                         │
+│     ▼                                                                 │
+│  [alpha textures] ──► OMM Baker ──► OMM data (in memory, ephemeral)  │
+│                            │                                          │
+│                            ▼                                          │
+│                    NVRHI::buildOpacityMicromap() ──► GPU OMM array    │
+│                                                                       │
+│  Future (if profiling shows it's a bottleneck):                       │
+│  [alpha textures] ──► OMM Cache (_omm.bin) ──► OMM data ──► GPU      │
+│     • Separate file, separate versioning                              │
+│     • Tracks texture timestamps for invalidation                      │
+│     • Independent of mesh cache lifecycle                             │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Short-term (current recommendation):**
+
+1. **Do NOT cache OMM data in SceneCache yet.** The complexity of correct cache invalidation (tracking texture timestamps, managing experimental API volatility) outweighs the likely performance benefit for a renderer at this stage of development.
+
+2. **Bake OMM data at load time, in memory only.** The meshoptimizer OMM pipeline is fast enough that for typical content (hundreds to low thousands of alpha-masked triangles), the baking cost is negligible compared to GPU resource creation, TLAS/BLAS builds, and texture uploads.
+
+3. **Design the data flow to support caching later.** Store OMM data in `Scene` member fields (e.g., `std::vector<uint8_t> m_OmmData`, `std::vector<uint32_t> m_OmmIndices`) rather than as local variables in a bake function. This keeps the door open for serialization without refactoring later.
+
+**If profiling shows OMM baking IS a bottleneck:**
+
+Create a **separate OMM cache** (`_omm.bin`) with:
+
+| Design Decision | Rationale |
+|---|---|
+| **Separate file** from `_mesh.bin` | OMM and mesh data have independent lifecycle concerns. Changing OMM parameters shouldn't invalidate mesh cache. |
+| **Own version number** (`kOmmCacheVersion`) | Decoupled from `kCookedMeshVersion`. Only bumped when OMM API output format changes. |
+| **Cache validation tracks texture timestamps** | `IsOmmCacheValid()` must check both glTF timestamp AND all referenced alpha texture timestamps. If any texture is newer, invalidate. |
+| **Cache key includes baking parameters** | Serialize `maxLevel`, `targetEdge`, `ommStates` into the cache header. If parameters change (even with same source files), invalidate. |
+| **Per-material granularity** | Only bake and cache OMM data for materials with `ALPHA_MODE_MASK`. Opaque and blend-mode materials generate no OMM data. |
+
+**What changes to `Scene` data structures might look like** (for future reference):
+
+```cpp
+// In Scene::Primitive (or a new OMM-related struct):
+struct OmmEntry
+{
+    std::vector<uint8_t>  m_Data;      // compacted OMM bit data
+    std::vector<uint8_t>  m_Levels;    // per-OMM subdivision level
+    std::vector<uint32_t> m_Offsets;   // per-OMM byte offset into m_Data
+};
+
+// Per-mesh or per-primitive:
+std::vector<int32_t> m_OmmIndices;      // per-triangle OMM index (-1 = opaque, -2 = transparent, etc.)
+std::optional<OmmEntry> m_OmmEntry;     // OMM data (only for masked materials)
+
+// GPU resources (not cached, rebuilt each run):
+nvrhi::rt::IOpacityMicromap* m_OmmArray; // GPU OMM array handle
+nvrhi::BufferHandle m_OmmIndexBuffer;    // GPU per-triangle OMM index buffer
+nvrhi::BufferHandle m_OmmDescBuffer;     // GPU per-OMM descriptor buffer
+```
+
+### 5.7 Summary: Does OMM Affect SceneCache?
+
+| Aspect | Answer |
+|---|---|
+| Does OMM change what SceneCache currently caches? | **No.** The existing cached data (meshes, meshlets, vertices, indices) is unchanged by OMM. |
+| Does OMM add new data that *could* be cached? | **Yes.** `ommData`, `ommLevels`/`ommOffsets`, and `ommIndices` are serializable POD arrays. |
+| Is it safe to cache OMM data in SceneCache today? | **No**, due to missing texture timestamp tracking and experimental API volatility. |
+| Should OMM data ever be cached? | **Yes, eventually** — but in a separate cache file with its own invalidation logic, not embedded in the mesh cache. |
+| What's the immediate action? | Bake OMM data in memory at load time. Profile before adding any caching. Design data structures to be cache-friendly. |
+
+---
+
+## 6. Comparison Matrix
 | Feature | meshoptimizer v1.2 | NVRHI (your version) |
 |---|---|---|
 | OMM Generation (CPU) | ✅ Full (`opacityMapMeasure` / `opacityMapRasterize` / `opacityMapCompact`) | ❌ None |
@@ -389,7 +577,7 @@ meshoptimizer v1.2 already provides the complete OMM baking pipeline. The previo
 
 ---
 
-## 6. Recommendations
+## 7. Recommendations
 
 1. **Use meshoptimizer's built-in OMM APIs** — `meshopt_opacityMapMeasure` → `meshopt_opacityMapRasterize` → `meshopt_opacityMapCompact`. Study `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()` for the exact integration pattern (~200 LOC of glue code). This avoids any custom OMM baking code and leverages the same pipeline used by the [zeux/niagara](https://github.com/zeux/niagara) reference renderer.
 2. **Keep your current meshoptimizer v1.2** — no upgrade needed, it already includes the OMM baking functions. The meshlet clustering and vertex optimization functions remain valuable for geometry preprocessing.
@@ -400,7 +588,7 @@ meshoptimizer v1.2 already provides the complete OMM baking pipeline. The previo
 
 ---
 
-## 7. References
+## 8. References
 
 - [zeux/niagara — Vulkan renderer with load-time OMM generation](https://github.com/zeux/niagara)
   - Local reference: `REFERENCES/niagara/src/scene.cpp:buildSceneOmm()` — end-to-end OMM baking using meshoptimizer APIs
