@@ -160,6 +160,17 @@ set(FSR_SDK_SRC_DIR "${FSR_SDK_INSTALL_DIR}/${FSR_SDK_SUBDIR}")
 SET(FSR_SDK_FIDELITY_FX_DIR "${FSR_SDK_SRC_DIR}/Kits/FidelityFX")
 SET(FSR_SDK_BIN_DIR "${FSR_SDK_FIDELITY_FX_DIR}/signedbin")
 
+# ----------------------------------------------------------------------------
+# RTXTS-TTM (RTX Texture Streaming - Tiled Texture Manager Library)
+# ----------------------------------------------------------------------------
+set(RTXTSTTM_VERSION "0.7.1-release")
+set(RTXTSTTM_URL "https://github.com/NVIDIA-RTX/RTXTS-TTM/archive/refs/tags/v${RTXTSTTM_VERSION}.zip")
+download_library("RTXTS-TTM" "${RTXTSTTM_VERSION}" "${RTXTSTTM_URL}" "RTXTS-TTM-*")
+set(RTXTSTTM_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/RTXTS-TTM")
+set(RTXTSTTM_SUBDIR "RTXTS-TTM-${RTXTSTTM_VERSION}")
+set(RTXTSTTM_SRC_DIR "${RTXTSTTM_INSTALL_DIR}/${RTXTSTTM_SUBDIR}")
+set(RTXTSTTM_INCLUDE_DIR "${RTXTSTTM_SRC_DIR}/include")
+
 # Create symbolic links for DLL files in FSR_SDK_BIN_DIR to bin directory
 if(WIN32)
     file(GLOB FSR_DLL_FILES "${FSR_SDK_BIN_DIR}/*.dll")
@@ -192,6 +203,7 @@ add_subdirectory(external/nvrhi)
 add_subdirectory(external/meshoptimizer)
 add_subdirectory(external/microprofile)
 add_subdirectory(external/rtxdi)
+add_subdirectory(${RTXTSTTM_SRC_DIR})
 
 # ============================================================================
 # ImGui Configuration
@@ -281,6 +293,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external
 
 # FidelityFX
 target_link_libraries(${PROJECT_NAME} PRIVATE "${FSR_SDK_BIN_DIR}/amd_fidelityfx_loader_dx12.lib")
+
+# TTM
+target_include_directories(${PROJECT_NAME} PRIVATE "${RTXTSTTM_INCLUDE_DIR}")
 
 # ============================================================================
 # ShaderMake Integration (offline HLSL compilation)

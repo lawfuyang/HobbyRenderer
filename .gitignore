@@ -127,6 +127,7 @@ external/MathLib
 external/FSR_SDK
 external/doctest
 external/doctest.h
+external/RTXTS-TTM
 src/shaders/NRDShaders.cfg
 src/shaders/NRD.hlsli
 src/shaders/NRDConfig.hlsli
