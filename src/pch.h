@@ -19,6 +19,7 @@
 #include <mutex>
 #include <numbers>
 #include <queue>
+#include <set>
 #include <span>
 #include <sstream>
 #include <string_view>
