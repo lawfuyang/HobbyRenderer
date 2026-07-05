@@ -555,82 +555,109 @@ void ExtractTileFromLinearDDS(
 
 ---
 
-### Step 3.2 — Implement tile upload via raw D3D12 `CopyTextureRegion`
+### Step 3.2 — Implement tile upload via NVRHI `writeTexture` sub-region
 
 | Source file | Action |
 |---|---|
-| `src/Streaming/TileUploadHelper.cpp` | **Modify** — add `UploadTileViaCopyTextureRegion()` |
+| `src/Streaming/TileUploadHelper.cpp` | **Modify** — add `UploadTileToReservedTexture()` |
 
-**Approach (per analysis §7.2):**
+**NVRHI already provides the necessary sub-region upload capability.** The existing `commandList->writeTexture(ITexture*, const TextureSlice&, const void*, size_t, size_t)` method (custom-added with `[rlaw]` annotations) handles:
+
+1. Suballocating from NVRHI's automatic upload buffer
+2. CPU-side memcpy of tile data into the upload buffer
+3. Resource state transition (`ShaderResource → CopyDest`, via NVRHI automatic barriers)
+4. Calling D3D12 `CopyTextureRegion` with the correct x/y/z destination offset from the `TextureSlice`
+
+This means **no raw D3D12 code is needed in the renderer at all.** If any raw API code were necessary, it would be implemented in the NVRHI module — but in this case, the functionality already exists.
+
+**Approach:**
 ```cpp
-void UploadTileViaCopyTextureRegion(
-    nvrhi::IDeviceD3D12* deviceD3D12,   // cast from nvrhi::IDevice
+void UploadTileToReservedTexture(
     nvrhi::ICommandList* cmd,
     nvrhi::ITexture* reservedTexture,
     const TileExtractParams& params,
     const void* tileData,
-    uint32_t tileDataSize)
+    size_t tileDataSize)
 {
-    // 1. Transition resource state: ShaderResource → CopyDest
-    //    (use raw D3D12 barriers or NVRHI beginTrackingTextureState/commitBarriers)
+    // NVRHI's writeTexture with TextureSlice handles:
+    // - Upload buffer suballocation
+    // - CPU→GPU memcpy
+    // - D3D12 CopyTextureRegion with origin = (tileX, tileY)
+    // - Automatic resource state tracking (CopyDest)
+    nvrhi::TextureSlice destSlice;
+    destSlice.x = params.tileXInTexels;
+    destSlice.y = params.tileYInTexels;
+    destSlice.width = params.tileWidthInTexels;
+    destSlice.height = params.tileHeightInTexels;
+    destSlice.mipLevel = params.mipLevel;
+    destSlice.arraySlice = 0;
 
-    // 2. D3D12_TEXTURE_COPY_LOCATION: src = staging buffer, dst = reserved texture subresource coords
-    D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-    srcLoc.pResource = stagingBufferD3D12;
-    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    srcLoc.PlacedFootprint.Footprint.Format = d3d12Format;
-    srcLoc.PlacedFootprint.Footprint.Width  = params.tileWidthInTexels;
-    srcLoc.PlacedFootprint.Footprint.Height = params.tileHeightInTexels;
-    srcLoc.PlacedFootprint.Footprint.RowPitch = rowPitch;
-
-    D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-    dstLoc.pResource = reservedTextureD3D12;
-    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dstLoc.SubresourceIndex = params.mipLevel;
-
-    d3d12CmdList->CopyTextureRegion(
-        &dstLoc, params.tileXInTexels, params.tileYInTexels, 0,
-        &srcLoc, nullptr);
-
-    // 3. Transition back: CopyDest → ShaderResource
+    size_t rowPitch = (params.tileWidthInTexels / params.blockSizeX) * params.bytesPerBlock;
+    cmd->writeTexture(reservedTexture, destSlice, tileData, rowPitch, /*depthPitch=*/0);
 }
 ```
 
-**Important:** `updateTextureTileMappings()` must be called BEFORE `CopyTextureRegion()` — TTM returns tiles as "to map", application uploads data, then calls `UpdateTileMappings()` which calls `updateTextureTileMappings()`.
+**Why `TextureSlice` (not raw D3D12):**
+- The `TextureSlice` variant was added for exactly this purpose — sub-region texture uploads from CPU memory
+- D3D12 backend implementation: [d3d12-texture.cpp lines 1516-1596](d:\Workspace\HobbyRenderer\external\nvrhi\src\d3d12\d3d12-texture.cpp) — suballocates upload buffer, memcpy, then `CopyTextureRegion(&dstLocation, resolvedDstSlice.x, resolvedDstSlice.y, resolvedDstSlice.z, ...)`
+- The `TextureSlice::resolve()` method handles dimension computation for compressed formats (block size rounding)
+- NVRHI's automatic barriers handle the `ShaderResource → CopyDest` transition; no manual barrier code needed
+- Vulkan backend currently has a stub for `writeTexture(TextureSlice)` — the existing D3D12-only streaming restriction means this is not a concern
 
-**Acceptance:** Upload a single tile to a reserved texture; verify via GPU readback or RenderDoc that the tile data is correct.
-
----
-
-### Step 3.3 — Implement staging buffer pool
-
-| Source file | Action |
-|---|---|
-| `src/Streaming/TileUploadHelper.cpp` | **Modify** — add staging buffer pool |
-
-**Design:**
+**`TileExtractParams` — extended fields:**
 ```cpp
-struct StagingBufferPool {
-    nvrhi::BufferHandle buffer;   // upload heap, CPU-writable
-    void* mappedPtr;
-    uint32_t size;
-    uint32_t used;
-
-    void* Allocate(uint32_t bytes) {
-        if (used + bytes > size) return nullptr; // reset for next frame
-        void* ptr = (uint8_t*)mappedPtr + used;
-        used += bytes;
-        return ptr;
-    }
-    void Reset() { used = 0; }
+struct TileExtractParams {
+    uint32_t mipLevel;
+    uint32_t tileXInTexels, tileYInTexels;
+    uint32_t tileWidthInTexels, tileHeightInTexels;
+    uint32_t sourceWidth, sourceHeight;
+    nvrhi::Format format;
+    uint32_t bytesPerBlock;     // e.g., 16 for BC7
+    uint32_t blockSizeX;        // 4 for BC formats, 1 for uncompressed
+    uint32_t blockSizeY;        // 4 for BC formats, 1 for uncompressed
 };
 ```
 
-- Single large upload buffer (e.g., 16MB), reused each frame
-- Reset at frame start (GPU must be done with previous frame's uploads — guaranteed by fence sync)
-- Each tile gets a sub-allocation from this buffer
+**Important:** `updateTextureTileMappings()` must be called BEFORE tile upload — TTM returns tiles as "to map", the application uploads tile data, then calls `UpdateTileMappings()` which acknowledges the mapping via `UpdateTilesMapping()`.
 
-**Acceptance:** Upload 100 tiles in one frame without re-allocating staging memory.
+**Acceptance:** Upload a single tile to a reserved texture; verify via GPU readback or RenderDoc that the tile data is correct. No D3D12 headers or raw API calls in renderer code.
+
+---
+
+### Step 3.3 — Persistent scratch buffer for DDS tile extraction
+
+| Source file | Action |
+|---|---|
+| `src/Streaming/TileUploadHelper.h` | **Modify** — add `std::vector<uint8_t> m_scratchBuffer` member |
+| `src/Streaming/TileUploadHelper.cpp` | **Modify** — resize once, reuse across all UploadTile calls |
+
+**NVRHI handles GPU upload staging internally** via `writeTexture(TextureSlice)` — upload buffer suballocation, memcpy, and `CopyTextureRegion` are all managed transparently. We do **not** need a GPU-side staging buffer pool.
+
+The only allocation needed is a CPU-side scratch buffer for DDS tile extraction output. A single persistent `std::vector<uint8_t>` living for the entire application lifetime is sufficient:
+
+```cpp
+class TileUploadHelper {
+    std::vector<uint8_t> m_scratchBuffer;  // resized once, reused forever
+    // ...
+};
+
+void TileUploadHelper::UploadTileToReservedTexture(...)
+{
+    // Resize once to accommodate the largest tile
+    if (m_scratchBuffer.size() < kMaxTileSize)  // 64KB = standard D3D12 tile size
+        m_scratchBuffer.resize(kMaxTileSize);
+
+    ExtractTileFromLinearDDS(sourceMipBase, params, m_scratchBuffer.data());
+    cmd->writeTexture(reservedTex, destSlice, m_scratchBuffer.data(), rowPitch);
+}
+```
+
+**Rationale for persistent buffer (not stack allocation):**
+- Avoids 64KB stack frame bloat per tile (multiple tiles per frame × stack = unnecessary pressure)
+- Single allocation, zero overhead per upload call
+- Matches the pattern: compute → write to NVRHI (data consumed synchronously before next tile)
+
+**Acceptance:** Upload 100 tiles in one frame with a single persistent scratch buffer. No per-tile allocations. NVRHI's internal upload manager handles GPU staging transparently.
 
 ---
 
@@ -642,10 +669,10 @@ struct StagingBufferPool {
 
 ```cpp
 // Phase B — Tile Data Upload
-nvfeedback::FeedbackTextureCollection tilesThisFrame;
-StagingBufferPool& stagingPool = m_tileUploadHelper->GetStagingPool();
-stagingPool.Reset();
+// Open a command list for upload: NVRHI's writeTexture handles all staging internally
+m_commandList->open();
 
+nvfeedback::FeedbackTextureCollection tilesThisFrame;
 uint32_t uploadBudget = std::min(m_streamingCfg.tilesPerFrame, (uint32_t)requests.size());
 
 for (uint32_t i = 0; i < uploadBudget; i++) {
@@ -659,18 +686,33 @@ for (uint32_t i = 0; i < uploadBudget; i++) {
     // 2. Get DDS source data
     auto& sourceData = feedbackTex->GetSourceData();
 
-    // 3. Extract tile from DDS → staging buffer
+    // 3. Extract tile from DDS → persistent scratch buffer, then upload via NVRHI writeTexture
     for (auto& tileInfo : tileInfos) {
-        void* stagingPtr = stagingPool.Allocate(tileInfo.widthInTexels * tileInfo.heightInTexels * bytesPerBlock);
-        ExtractTileFromLinearDDS(sourceData->GetMipData(tileInfo.mip), tileInfo, stagingPtr);
+        ExtractTileFromLinearDDS(sourceData->GetMipData(tileInfo.mip), tileInfo,
+                                 m_tileUploadHelper->GetScratchBuffer());
+
+        nvrhi::TextureSlice destSlice;
+        destSlice.x = tileInfo.tileXInTexels;
+        destSlice.y = tileInfo.tileYInTexels;
+        destSlice.width = tileInfo.widthInTexels;
+        destSlice.height = tileInfo.heightInTexels;
+        destSlice.mipLevel = tileInfo.mip;
+        destSlice.arraySlice = 0;
+
+        size_t rowPitch = (tileInfo.widthInTexels / tileInfo.blockSizeX) * tileInfo.bytesPerBlock;
+        m_commandList->writeTexture(feedbackTex->GetReservedTexture(), destSlice,
+                                    m_tileUploadHelper->GetScratchBuffer(), rowPitch);
     }
 
-    // 4. Upload via CopyTextureRegion (done on a separate command list before UpdateTileMappings)
     tilesThisFrame.textures.push_back({feedbackTex, {req.tileIndex}});
 }
+
+m_commandList->close();
+m_device->executeCommandList(m_commandList);
+// Tile data upload complete — now proceed to UpdateTileMappings
 ```
 
-**Acceptance:** Streaming textures populate tiles as the camera moves. RenderDoc capture shows `CopyTextureRegion` calls followed by `updateTextureTileMappings()`. Higher-res mip levels appear dynamically.
+**Acceptance:** Streaming textures populate tiles as the camera moves. RenderDoc capture shows `CopyTextureRegion` calls (from within NVRHI) followed by `updateTextureTileMappings()`. Higher-res mip levels appear dynamically.
 
 ---
 
@@ -764,7 +806,7 @@ Texture Streaming
 - Yellow tile = standby (mapped but evictable)
 - Overlay on main render target
 
-**Acceptance:** Toggleable with hotkey (`F3`). Camera movement shows red tiles fading to green as streaming catches up.
+**Acceptance:** Toggleable via ImGui checkbox in the stats panel. Camera movement shows red tiles fading to green as streaming catches up.
 
 ---
 
@@ -912,8 +954,8 @@ Phase 0 (CMake)
               ▼
         Phase 3 (Tile Upload)
         ├── 3.1 Tile extraction
-        ├── 3.2 CopyTextureRegion
-        ├── 3.3 Staging pool
+        ├── 3.2 writeTexture(TextureSlice) upload
+        ├── 3.3 CPU scratch buffer
         ├── 3.4 Wire into loop
         └── 3.5 MinMip upload
               │
@@ -933,7 +975,7 @@ Phase 0 (CMake)
 | Decision | Choice | Rationale |
 |---|---|---|
 | Per-texture tiled resources vs atlas | Per-texture (follow reference) | Simpler initial implementation; atlas can be added later |
-| Upload method | `CopyTextureRegion` (reference approach) | GPU converts linear→tiled automatically; `writeHeap()` requires pre-swizzled data |
+| Upload method | NVRHI `writeTexture(TextureSlice)` (uses `CopyTextureRegion` internally) | GPU converts linear→tiled automatically; no raw D3D12 in renderer; NVRHI handles staging & barriers |
 | Async I/O | Synchronous stub in Phase 1-3, async in follow-up | Reduces initial complexity; packed mips mask latency |
 | D3D12-only streaming | Yes, Vulkan falls back to committed | Sampler feedback is D3D12-only; TTM requires tiled resources (D3D12 sparse) |
 | **How texture sets are grouped** | **One `FeedbackTextureSet` per `Scene::Material`** | Materials share UV coordinates → `MatchPrimaryTexture()` is valid; baseColor is always primary |
@@ -955,10 +997,9 @@ Phase 0 (CMake)
 | `updateTextureTileMappings()` called before tile upload | Ensure BeginFrame→Upload→UpdateMappings ordering | Phase 1.4 |
 | `[earlydepthstencil]` missing on PS | Shader compilation error → add annotation | Phase 2.2 |
 | `CheckAccessFullyMapped()` always true | Verify `isTiled=true` on reserved texture | Phase 2.2 |
-| `CopyTextureRegion` to unmapped tile → GPU hang | Ensure `updateTextureTileMappings()` runs first | Phase 3.2 |
+| `CopyTextureRegion` to unmapped tile → GPU hang | Ensure `updateTextureTileMappings()` runs first; NVRHI barriers handled automatically | Phase 3.2 |
 | DDS mip offset calculation wrong | Unit test with known DDS file | Phase 3.1 |
 | Packed mips not providing fallback | Verify packed mip pre-map code | Phase 1.5 |
-| Staging buffer overwritten before GPU done | Fence/waitForIdle after each frame's uploads | Phase 3.3 |
 
 ---
 
