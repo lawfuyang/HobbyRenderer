@@ -296,6 +296,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE "${FSR_SDK_BIN_DIR}/amd_fidelityfx
 
 # TTM
 target_include_directories(${PROJECT_NAME} PRIVATE "${RTXTSTTM_INCLUDE_DIR}")
+target_link_libraries(${PROJECT_NAME} PRIVATE rtxts-ttm)
 
 # ============================================================================
 # ShaderMake Integration (offline HLSL compilation)
