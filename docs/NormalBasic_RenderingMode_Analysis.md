@@ -12,6 +12,8 @@
 2. [RenderingMode Enum & CommonConsts Changes](#2-renderingmode-enum--commonconsts-changes)
 3. [Render Pass Scheduling — Current vs NormalBasic](#3-render-pass-scheduling--current-vs-normalbasic)
 4. [Cascaded Shadow Maps (CSM) — Deep Dive](#4-cascaded-shadow-maps-csm--deep-dive)
+   - 4.11 [Alpha-Masked Geometry in Shadow Pass (Grass & Foliage)](#411-alpha-masked-geometry-in-shadow-pass-grass--foliage)
+   - 4.12 [Shadow Mask (Screen-Space R8 Texture)](#412-shadow-mask-screen-space-r8-texture)
 5. [RTXGI-DDGI — Deep Dive](#5-rtxgi-ddgi--deep-dive)
 6. [Disabled Features & Impact Analysis](#6-disabled-features--impact-analysis)
 7. [Implementation Roadmap](#7-implementation-roadmap)
@@ -62,6 +64,7 @@ From [Renderer.h](src/Renderer.h) lines 221-310:
 | `m_IndirectLightingTechnique` | `uint32_t` | `2` (SHARC) | 0=None, 1=ReSTIR GI, 2=SHARC |
 | `m_EnableOcclusionCulling` | `bool` | `true` | 2-phase HZB occlusion |
 | `m_EnableSky` | `bool` | `true` | Sky/atmosphere rendering |
+| `m_EnableDDGI` | `bool` | `true` | DDGI probe RT + blending; when disabled, only indirect query from baked probes runs (no RT) |
 
 ### 1.4 Dependencies of Features to Disable
 
@@ -129,7 +132,7 @@ else if (m_Mode == RenderingMode::NormalBasic)
     m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
     // NEW
     m_RenderGraph.ScheduleRenderer(g_ShadowRenderer);       // CSM depth-only pass
-    m_RenderGraph.ScheduleRenderer(g_DDGIRenderer);          // DDGI probe update & indirect query
+    m_RenderGraph.ScheduleRenderer(g_DDGIRenderer);          // DDGI: probe RT+blend (if m_EnableDDGI) + indirect query (always)
     //
     m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
     m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
@@ -153,8 +156,9 @@ else  // NormalAdvanced (old Normal) + IBL
 | OpaqueRenderer | ✅ | ✅ | |
 | MaskedPassRenderer | ✅ | ✅ | |
 | HZBGeneratorPhase2 | ✅ | ✅ | |
-| **ShadowRenderer** | ❌ | ✅ | **NEW** — CSM depth-only |
-| **DDGIRenderer** | ❌ | ✅ | **NEW** — probe trace + blend + query |
+| **ShadowRenderer** | ❌ | ✅ | **NEW** — CSM: renders opaque (null PS) + masked (alpha-test PS) buckets |
+| **ShadowMaskRenderer** | ❌ | ✅ | **NEW** — fullscreen compute: evaluates CSM → writes R8 shadow mask |
+| **DDGIRenderer** | ❌ | ✅ | **NEW** — probe RT + blend (if `m_EnableDDGI`) + indirect query (always); see §5.13 Bake Mode |
 | RTXDIRenderer | ✅ | ❌ | Disabled |
 | SHARCRenderer | ✅ (if enabled) | ❌ | Disabled |
 | DeferredRenderer | ✅ | ✅ | Modified — uses shadow map & DDGI indirect |
@@ -325,6 +329,228 @@ Per Frame:
 4. In DeferredLighting PS: select cascade by pixel depth, sample shadow map, apply PCF
 ```
 
+### 4.11 Alpha-Masked Geometry in Shadow Pass (Grass & Foliage)
+
+#### Problem
+
+The depth-only shadow pass described in §4.2 uses a **null PS** (no pixel shader) — the hardware rasterizer writes depth automatically. This works perfectly for opaque geometry, but **alpha-masked geometry** (grass, foliage, fences, tree leaves, etc.) renders as a **solid opaque quad** in the shadow map. The result: grass and foliage cast full-rectangle shadows instead of respecting their alpha-masked silhouette.
+
+In the existing NormalAdvanced pipeline this is not an issue because RT shadows (inline ray queries) use the `AnyHit` shader which performs alpha testing via `AlphaTest()` in [RaytracingCommon.hlsli](src/shaders/RaytracingCommon.hlsli). For NormalBasic's rasterized CSM, we must handle this differently.
+
+#### Existing Infrastructure
+
+The codebase already has all the pieces needed:
+
+1. **Scene already separates instances by alpha mode** — `m_OpaqueBucket` and `m_MaskedBucket` in `Scene` struct. The `MaskedPassRenderer` renders instances from the masked bucket with `ALPHA_MODE_MASK`.
+
+2. **Alpha-test pixel shader already exists** — `GBuffer_PSMain_AlphaTest` in [BasePass.hlsl](src/shaders/BasePass.hlsl) (lines 284-286) samples the albedo texture, computes alpha, and calls `discard` when `alpha < mat.m_AlphaCutoff`:
+
+```hlsl
+float4 albedoSample = hasAlbedo
+    ? SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, input.uv)
+    : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
+
+float alpha = hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
+
+#if defined(ALPHA_TEST)
+if (alpha < mat.m_AlphaCutoff)
+{
+    discard;
+}
+#endif
+```
+
+3. **Bindless texture system** — `SampleBindlessTexture()` reads any texture by index + sampler index, no descriptor table binding needed. This is already used in the G-Buffer alpha test.
+
+#### Solution: Two-Pass Shadow Rendering
+
+Split the shadow depth pass into two draw batches per cascade:
+
+```
+For each cascade:
+  1. Draw OPAQUE instances   → null PS (depth-only, no material lookups)
+  2. Draw MASKED instances   → alpha-test PS (samples albedo, discards below cutoff)
+```
+
+This way opaque geometry stays fast (null PS, zero texture bandwidth), and only masked geometry pays the cost of texture sampling + alpha test.
+
+#### Shader Variant Strategy
+
+For the shadow pass, create a minimal alpha-test pixel shader that only discards — no need to output anything other than allowing the hardware rasterizer to handle depth:
+
+```hlsl
+// ShadowAlphaTest_PS — depth-only with alpha discard
+void ShadowAlphaTest_PS(VSOut input)
+{
+    srrhi::PerInstanceData inst = g_Instances[input.instanceID];
+    srrhi::MaterialConstants mat = g_Materials[inst.m_MaterialIndex];
+
+    float alpha = mat.m_BaseColor.w;
+    if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
+    {
+        float4 albedoSample = SampleBindlessTexture(
+            mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, input.uv);
+        alpha *= albedoSample.w;
+    }
+
+    if (alpha < mat.m_AlphaCutoff)
+        discard;
+    // No SV_Target output — depth is written by the hardware rasterizer
+}
+```
+
+The vertex/mesh shader outputs `SV_Position` and UV coordinates (same as the existing G-Buffer mesh shader but without material/normal outputs). Only masked instances need UVs; opaque instances can use a stripped position-only mesh shader.
+
+#### Performance Considerations
+
+| Aspect | Impact |
+|---|---|
+| **Opaque instances** | Zero change — still null PS, no texture reads |
+| **Masked instances** | Additional cost: albedo texture reads + alpha compare + `discard` |
+| **Texture bandwidth** | Only paid for masked geometry in the shadow pass; these are typically a small fraction of total geometry |
+| **Quad utilization** | `discard` in a pixel shader reduces quad utilization on GPUs (4-pixel quads); masked geometry already has poor utilization in the G-Buffer pass, so this is not a new regression |
+| **Culling** | Masked instances still culled against the light frustum, so only visible masked geometry triggers the alpha-test shader |
+
+#### Design Decision
+
+**Use the split-pass approach (opaque → null PS, masked → alpha-test PS).** This is the standard approach used by Unreal Engine, Unity, and virtually all production renderers with CSM. The alternative (no alpha testing in shadows → solid blocky shadows for foliage) produces unacceptable visual quality and is not a viable option for any scene with vegetation.
+
+---
+
+### 4.12 Shadow Mask (Screen-Space R8 Texture)
+
+For the NormalBasic implementation with **1 directional light**, shadows are computed via a **screen-space shadow mask** — a separate fullscreen pass that evaluates CSM and writes per-pixel visibility to an `R8_UNORM` render target. The deferred lighting shader then reads this precomputed value with a single texture load.
+
+#### Pipeline
+
+```
+Frame:
+  1. ShadowRenderer → writes CSM depth array (4 × 2048², D32_FLOAT)
+  2. ShadowMaskRenderer → fullscreen compute/pixel pass:
+       for each pixel:
+         - read depth from GBuffer, reconstruct world pos
+         - select cascade by view-space depth
+         - SampleCmpLevelZero() with PCF kernel (3×3 = 9 taps)
+         - write shadow factor (0..1) to R8_UNORM RT
+  3. DeferredRenderer → fullscreen PS:
+       shadow = g_ShadowMask.Load(uvInt).r;  // single R8 load, no CSM sampling
+       color = lighting * shadow;
+```
+
+#### ShadowMaskRenderer Design
+
+```cpp
+class ShadowMaskRenderer : public IRenderer
+{
+    RGTextureHandle m_ShadowMask;  // R8_UNORM, screen resolution
+
+    bool Setup(RenderGraph& renderGraph) override
+    {
+        renderGraph.ReadTexture(g_RG_CSMShadowMap);   // CSM depth array
+        renderGraph.ReadTexture(g_RG_DepthTexture);   // reconstruct world pos
+        renderGraph.WriteTexture(m_ShadowMask);       // output shadow factor
+        return true;
+    }
+};
+```
+
+#### Shadow Mask Compute Shader
+
+```hlsl
+// ShadowMask_CS — fullscreen compute: evaluate CSM, write R8
+[numthreads(8, 8, 1)]
+void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
+{
+    uint2 uvInt = dispatchID.xy;
+    float depth = g_Depth.Load(uint3(uvInt, 0));
+    
+    // Sky / no geometry → fully lit
+    if (depth == 0.0f)
+    {
+        g_RWShadowMask[uvInt] = 1.0f;
+        return;
+    }
+    
+    // Reconstruct world position
+    float2 uv = (float2(uvInt) + 0.5f) / g_Constants.m_OutputSize;
+    float4 clipPos = float4(uv.x * 2.0f - 1.0f, (1.0f - uv.y) * 2.0f - 1.0f, depth, 1.0f);
+    float4 worldPos4 = mul(clipPos, g_Constants.m_ClipToWorld);
+    float3 worldPos = worldPos4.xyz / worldPos4.w;
+    
+    // Cascade selection + shadow evaluation
+    float shadow = ComputeCSMShadow(worldPos, worldPosViewZ,
+        g_CSMShadowMap, g_ShadowSampler,
+        g_Constants.m_ShadowViewProj, g_Constants.m_CascadeSplits);
+    
+    g_RWShadowMask[uvInt] = shadow;
+}
+```
+
+#### Advantages
+
+| Aspect | Benefit |
+|---|---|
+| **Modularity** | Shadow evaluation is a separate, independently debuggable pass |
+| **Deferred lighting simplicity** | Lighting shader reads 1× R8 instead of 9× depth comparison samples + cascade logic |
+| **Filtering flexibility** | Shadow mask can be post-processed: PCSS with variable kernel sizes, temporal accumulation — without touching the lighting shader |
+| **Cache behavior** | CSM depth reads are localized to the shadow mask pass; deferred lighting pass only reads GBuffer + R8 mask |
+| **Multi-light ready** | When multiple shadow-casting lights are added, each contributes to the same mask or separate masks; lighting pass reads precomputed results |
+| **Half-res option** | Shadow mask can be computed at half resolution and bilinearly upsampled for performance |
+| **Debugging** | Trivially visualize the shadow mask RT (e.g., in ImGui) |
+
+#### Resource Specification
+
+```
+Shadow Mask RT:
+  Format:     R8_UNORM
+  Dimensions: screen resolution (e.g., 1920×1080)
+  Memory:     ~2 MB @ 1080p, ~8 MB @ 4K
+  Lifetime:   per-frame transient
+
+Shadow Mask Constants CB:
+  float4x4 m_ShadowViewProj[4];
+  float4   m_CascadeSplits;
+  float4x4 m_ClipToWorld;
+  float2   m_OutputSize;
+```
+
+#### Implementation Note
+
+The CSM shadow evaluation logic lives in a shared HLSL header [CommonShadow.hlsli](src/shaders/CommonShadow.hlsli) (new file), used by both `ShadowMask_CS` and any future passes that need CSM access:
+
+```hlsl
+// In CommonShadow.hlsli (new file)
+float ComputeCSMShadow(
+    float3 worldPos,
+    float viewDepth,
+    Texture2DArray<float> shadowMap,
+    SamplerComparisonState shadowSampler,
+    float4x4 shadowViewProj[4],
+    float4 cascadeSplits)
+{
+    uint cascadeIndex = SelectCascade(viewDepth, cascadeSplits);
+    float4 lightSpacePos = mul(float4(worldPos, 1.0f), shadowViewProj[cascadeIndex]);
+    float3 shadowUV = lightSpacePos.xyz / lightSpacePos.w;
+    shadowUV.xy = shadowUV.xy * 0.5f + 0.5f;
+    shadowUV.y = 1.0f - shadowUV.y;
+
+    // Out of bounds → fully lit
+    if (any(shadowUV.xy < 0.0f) || any(shadowUV.xy > 1.0f))
+        return 1.0f;
+
+    // 3×3 PCF
+    float shadow = 0.0f;
+    float2 texelSize = 1.0f / 2048.0f;
+    for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++)
+            shadow += shadowMap.SampleCmpLevelZero(
+                shadowSampler,
+                float3(shadowUV.xy + float2(x, y) * texelSize, cascadeIndex),
+                shadowUV.z - SHADOW_BIAS);
+    return shadow / 9.0f;
+}
+```
+
 ---
 
 ## 5. RTXGI-DDGI — Deep Dive
@@ -350,7 +576,7 @@ The test harness ([DDGI_D3D12.cpp](REFERENCES/RTXGI-DDGI/samples/test-harness/sr
 - **Single large volume** covering the entire map (Cornell Box / Sponza)
 - **Unmanaged resource mode** — application creates textures, SDK creates PSOs
 - **Bindless resource access** — resources accessed via descriptor heap indices
-- **Probe ray tracing** done in a ray generation shader ([ProbeTraceRGS.hlsl](REFERENCES/RTXGI-DDGI/samples/test-harness/shaders/ddgi/ProbeTraceRGS.hlsl))
+- **Probe ray tracing** uses inline ray tracing (`RayQuery`) in a compute shader, not a ray generation shader. This avoids DXR hit groups and state objects entirely — all DDGI RT is done from a pure CS with a single `Dispatch()` call.
 - **Indirect lighting query** in a fullscreen compute shader ([IndirectCS.hlsl](REFERENCES/RTXGI-DDGI/samples/test-harness/shaders/IndirectCS.hlsl))
 
 **Key SDK API calls:**
@@ -541,8 +767,10 @@ class DDGIRenderer : public IRenderer
 };
 ```
 
-**Per-frame flow:**
+**Per-frame flow:** The DDGIRenderer operates in two modes controlled by `m_EnableDDGI`:
+
 ```
+// LIVE MODE (m_EnableDDGI = true) — probe RT + blending + indirect query
 Setup():
   Declare DDGI textures (persistent: irradiance, distance, probe data)
   Declare ray data texture (transient)
@@ -551,12 +779,26 @@ Setup():
   Write indirect output
 
 Render():
-  1. Update() each volume
+  1. Update() each volume (scroll, random rotation)
   2. Upload constants to GPU
-  3. Dispatch probe ray tracing (ray gen shader → writes ray data)
-  4. UpdateDDGIVolumeProbes() (blending)
+  3. Dispatch probe ray tracing (compute shader with inline `RayQuery` → writes ray data)
+  4. UpdateDDGIVolumeProbes() (blend new ray data into persistent textures)
   5. DDGIGetVolumeIrradiance() in fullscreen CS → writes indirect output
+
+// BAKE MODE (m_EnableDDGI = false) — indirect query only, no RT
+Setup():
+  Declare indirect output texture only
+  Read GBuffer depth/normals
+  Write indirect output
+
+Render():
+  1. DDGIGetVolumeIrradiance() in fullscreen CS → reads baked persistent textures → writes indirect output
 ```
+
+In bake mode, steps 1-4 are skipped entirely. The persistent irradiance/distance/probe data textures survive across frames (they are long-lived GPU resources). The indirect query shader (`DDGIGetVolumeIrradiance()`) simply samples the pre-converged probe data — it has no dependency on ray tracing. This means:
+- **Zero RT cost per frame** in bake mode
+- **Zero transient allocations** for ray data
+- **TLAS not needed** in bake mode (see §6.1)
 
 ### 5.12 Ray Tracing Requirement for DDGI
 
@@ -564,12 +806,87 @@ Render():
 
 - **TLAS is still needed** — but only for DDGI probes, not for shadows
 - **BLAS must be built** — they already are (Scene.cpp builds them for meshlet LOD)
-- **DXR support is required** — DDGI probe rays use `TraceRay()` in a ray generation shader
+- **DXR 1.1 support is required** — DDGI probe rays use inline `RayQuery` in a **compute shader** (no raygen, no any-hit, no hit groups). This keeps everything as a pure `Dispatch()` call with a single compute PSO.
 
 This is a key trade-off: NormalBasic removes ReSTIR DI/GI/SHARC but adds DDGI which still requires RT support. However, DDGI's RT cost is much lower:
 - Fewer rays (probeCount × raysPerProbe vs per-pixel rays for ReSTIR)
-- Simpler hit shaders (no material evaluation, just radiance + distance)
+- Inline RT is simpler and lighter than the DXR hit-group pipeline — no shader tables, no state objects for hit groups
 - Can be amortized over multiple frames
+
+### 5.13 DDGI Bake Mode — Use HWRT to Converge, Then Disable RT
+
+The primary use case for DDGI in NormalBasic is **baking** — not real-time updating. The workflow:
+
+```
+1. Enable DDGI (m_EnableDDGI = true) → probes ray-trace each frame, converge to steady state
+2. Wait for convergence (variability drops below threshold, or manual bake timer)
+3. Disable DDGI (m_EnableDDGI = false) → probes stop updating, RT cost drops to zero
+4. Enjoy baked GI: indirect query reads the persistent converged probe textures
+```
+
+**Feature flag and ImGui control:**
+
+```cpp
+// In Renderer.h
+bool m_EnableDDGI = false;  // Enable DDGI probe ray tracing + blending (for baking)
+```
+
+```cpp
+// In ImGuiLayer.cpp — "DDGI" section
+if (ImGui::CollapsingHeader("DDGI (Global Illumination)"))
+{
+    ImGui::Checkbox("Enable DDGI (Probe RT)", &g_Renderer.m_EnableDDGI);
+    if (g_Renderer.m_EnableDDGI)
+    {
+        ImGui::TextColored(ImVec4(1,1,0,1), "Probes converging... (RT active)");
+        ImGui::SliderFloat("Convergence Threshold", &g_Renderer.m_DDGIConvergenceThreshold, 0.001f, 0.1f);
+        if (ImGui::Button("Stop When Converged"))
+            g_Renderer.m_DDGIAutoStop = true;
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(0,1,0,1), "Baked GI (no RT cost)");
+    }
+}
+```
+
+**What stays and what goes:**
+
+| Component | `m_EnableDDGI = true` | `m_EnableDDGI = false` |
+|---|---|---|
+| Probe ray tracing (inline RT in CS) | ✅ Runs each frame | ❌ Skipped |
+| `UpdateDDGIVolumeProbes()` blending | ✅ Blends new rays | ❌ Skipped |
+| Irradiance/distance/probe data textures | ✅ Updated (persistent) | ✅ Preserved (persistent, baked) |
+| Indirect query (`DDGIGetVolumeIrradiance`) | ✅ Runs | ✅ Runs (reads baked data) |
+| TLAS requirement | ✅ Needed | ❌ Not needed |
+| RT cost per frame | ~930K rays | **0** |
+| GPU memory | ~36 MB (3 volumes) + ray data transient | ~36 MB (3 volumes, persistent only) |
+
+**Key design points:**
+
+- **Persistent textures survive disabling:** The irradiance, distance, and probe data textures are allocated as long-lived GPU resources (not per-frame transient). When `m_EnableDDGI` is toggled off, these textures retain their last converged state — the indirect query shader simply reads from them as before.
+- **DDGI SDK state is preserved:** The SDK's `DDGIVolume` objects and their internal state (probe offsets, classifications) remain in host memory. The renderer just stops calling `Update()` and `UpdateDDGIVolumeProbes()`.
+- **No hot-reload needed:** Switching between bake and live modes is a single checkbox — no scene reload, no probe data loss. Re-enabling DDGI resumes probe updates from the current converged state.
+- **Scrolling still works:** If the camera moves after baking, probes don't follow (ISV scrolling is part of `Update()`, which is skipped). For static-camera scenes this is perfect. For moving cameras, re-enable DDGI briefly to re-converge at the new position.
+- **TLAS is freed in bake mode:** When `m_EnableDDGI = false`, `TLASRenderer` can be skipped entirely (see §6.1). No BLAS rebuild, no TLAS update — pure raster pipeline.
+- **Convergence detection:** The SDK provides `CalculateDDGIVolumeVariability()` and `ReadbackDDGIVolumeVariability()` (see §5.10). When variability drops below threshold across all volumes, probes are considered "converged enough." This can be used for automatic bake stop.
+
+**Bake workflow example:**
+
+```
+User workflow:
+  Load scene → Enable DDGI checkbox → wait 2-5 seconds (probes converge)
+  → Variability drops below 0.02 → auto-stop or manual uncheck
+  → "Baked GI (no RT cost)" shown in UI
+  → Enjoy indirect lighting at zero RT cost for the rest of the session
+
+Developer workflow (for shipping):
+  1. Enable DDGI, place camera at key positions
+  2. Let probes converge at each position
+  3. Serialize converged probe textures to disk
+  4. Ship game with baked probe data
+  5. At runtime: load baked textures, run indirect query only (m_EnableDDGI = false)
+```
 
 ---
 
@@ -586,17 +903,23 @@ NormalAdvanced (current Normal):
                │       └── requires TLAS for ray queries
                └──→ DeferredRenderer (RT shadows via inline ray queries)
 
-NormalBasic:
+NormalBasic (m_EnableDDGI = true):
   TLAS ────────┬──→ ShadowRenderer (depth-only raster, NO TLAS needed)
                └──→ DDGIRenderer (probe rays NEED TLAS)
   ───→ NO ReSTIR DI, NO ReSTIR GI, NO SHARC, NO NRD, NO OMM
+
+NormalBasic (m_EnableDDGI = false) — baked GI mode:
+  ───→ ShadowRenderer (depth-only raster)
+  ───→ DDGIRenderer (indirect query only, NO TLAS)
+  ───→ NO TLAS, NO ReSTIR DI, NO ReSTIR GI, NO SHARC, NO NRD, NO OMM
+  ───→ Pure raster pipeline. Zero RT cost.
 ```
 
 ### 6.2 What Actually Gets Skipped
 
 | Component | What Happens | Impact |
 |---|---|---|
-| `TLASRenderer` | **Still needed** (for DDGI probe rays) but simpler — no per-frame rebuild needed if DDGI probes use the existing static TLAS |
+| `TLASRenderer` | **Conditional** — needed only when `m_EnableDDGI=true` (probe ray tracing). Skipped entirely in bake mode (`m_EnableDDGI=false`) — pure raster pipeline, zero RT cost |
 | `RTXDIRenderer` | Entire renderer skipped (`Setup()` returns false when `m_EnableReSTIRDI=false`) | Saves: RIS buffer alloc, presampling, temporal resampling, spatial resampling, compositing, NRD denoising passes |
 | `SHARCRenderer` | Entire renderer skipped | Saves: Update, Resolve, Query passes |
 | `NrdIntegration` | Not instantiated | Saves: REBLUR denoiser, permanent/transient pools, PackNormalRoughness pass |
@@ -616,25 +939,42 @@ if (g_Renderer.m_IndirectLightingTechnique == SHARC) → reads g_RG_SHARCIndirec
 
 For NormalBasic, modify to:
 ```cpp
-// DI source: CSM shadow map (passed via constant buffer or texture)
+// DI source: shadow mask (precomputed per-pixel visibility)
 // Indirect source: DDGI indirect output (new g_RG_DDGIIndirect)
 if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
 {
-    renderGraph.ReadTexture(g_RG_ShadowMap);
-    renderGraph.ReadTexture(g_RG_DDGIIndirect);
+    renderGraph.ReadTexture(g_RG_ShadowMask);     // Read precomputed shadow mask (R8_UNORM)
+    renderGraph.ReadTexture(g_RG_DDGIIndirect);   // Read DDGI indirect output
 }
 ```
 
 The `DeferredLightingConstants` CB needs:
 ```hlsl
 uint m_RenderingMode;         // existing
-uint m_UseReSTIRDI;           // existing (will be 0)
+uint m_UseReSTIRDI;           // existing (will be 0 for NormalBasic)
 uint m_IndirectLightingMode;  // existing (will be 0 = None, or new DDGI mode)
-// NEW for NormalBasic:
-float4x4 m_ShadowViewProj[4]; // CSM matrices
-float4 m_CascadeSplits;       // cascade split distances
-uint m_NumCascades;            // 4
-float3 m_SunDirection;         // existing
+float3 m_SunDirection;        // existing — for sun lighting direction
+// No CSM matrices needed here — shadow is precomputed in the shadow mask
+```
+
+The deferred lighting shader only needs one new resource binding for the shadow mask:
+```hlsl
+Texture2D<float>             g_ShadowMask;   // R8_UNORM, screen resolution
+```
+
+In `DeferredLighting_PSMain`, the shadow factor is read with a single load:
+```hlsl
+lightingInputs.sunShadow = g_ShadowMask.Load(uint3(uvInt, 0));
+```
+
+The `DeferredRenderer::Setup()` resource declaration:
+```cpp
+// In DeferredRenderer::Setup():
+if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
+{
+    renderGraph.ReadTexture(g_RG_ShadowMask);     // Read shadow mask (R8)
+    renderGraph.ReadTexture(g_RG_DDGIIndirect);   // Read DDGI indirect output
+}
 ```
 
 ---
@@ -650,16 +990,24 @@ float3 m_SunDirection;         // existing
 5. Update ImGui combo in [ImGuiLayer.cpp](src/ImGuiLayer.cpp)
 6. Add feature flag `m_EnableReSTIRDI = false`, `m_EnableRTShadows = false`, `m_IndirectLightingTechnique = 0` when switching to NormalBasic
 
-### Phase 2: ShadowRenderer (CSM)
+### Phase 2: ShadowRenderer (CSM) + ShadowMaskRenderer
 
 1. Create `src/ShadowRenderer.h` / `src/ShadowRenderer.cpp`
 2. Declare shadow map texture array (2048×2048×4, D32_FLOAT)
 3. Implement cascade split computation (CPU-side)
 4. Implement per-cascade VP matrix computation + texel snapping
 5. Reuse `GPUCulling` pipeline with shadow VP matrices → depth-only meshlet draws
-6. Create shadow mesh shader variant (position-only output, null PS — depth written by hardware rasterizer)
-7. Bind shadow map as SRV to deferred lighting
-8. Modify `DeferredLighting.hlsl` to sample CSM with hardware PCF
+6. Create **two** shadow mesh shader variants:
+   - Opaque: position-only output, null PS (fast path)
+   - Masked: position + UV output, alpha-test PS that samples albedo texture and discards (for grass/foliage)
+7. Render opaque bucket first (null PS), then masked bucket (alpha-test PS) per cascade
+8. Create `src/ShadowMaskRenderer.h` / `src/ShadowMaskRenderer.cpp`
+   - Declare `R8_UNORM` shadow mask RT (screen resolution)
+   - Fullscreen compute shader: read depth → reconstruct world pos → `ComputeCSMShadow()` → write R8
+   - Read `g_RG_CSMShadowMap` + `g_RG_DepthTexture`, write shadow mask
+9. Create `src/shaders/CommonShadow.hlsli` with `ComputeCSMShadow()` — cascade selection + 3×3 PCF
+10. Create `src/shaders/ShadowMask.hlsl` — compute shader using `CommonShadow.hlsli`
+11. Wire `g_RG_ShadowMask` into `DeferredRenderer`: single `g_ShadowMask.Load(uvInt).r` in `DeferredLighting_PSMain`
 
 ### Phase 3: DDGIRenderer
 
@@ -667,17 +1015,25 @@ float3 m_SunDirection;         // existing
 2. Create `src/DDGIRenderer.h` / `src/DDGIRenderer.cpp`
 3. Compile DDGI SDK shaders with `RTXGI_DDGI_RESOURCE_MANAGEMENT=0` (unmanaged), bindless mode
 4. Create 3 camera-following ISVs (near / medium / far) with staggered update intervals
-5. Implement probe ray tracing (ray gen shader using existing TLAS)
+5. Implement probe ray tracing (compute shader with inline `RayQuery` using existing TLAS)
 6. Call SDK: `UpdateDDGIVolumeProbes()`, `RelocateDDGIVolumeProbes()`, `ClassifyDDGIVolumeProbes()`
 7. Fullscreen CS pass calling `DDGIGetVolumeIrradiance()` → writes `g_RG_DDGIIndirect`
 8. Wire `g_RG_DDGIIndirect` into `DeferredRenderer`
+9. Add `m_EnableDDGI` flag (default `false`) in `Renderer.h` — controls probe RT + blending
+10. Implement bake mode: when `m_EnableDDGI = false`, skip probe RT/blending but still run indirect query
+11. Add ImGui checkbox for `m_EnableDDGI` + convergence indicators in `ImGuiLayer.cpp` (see §5.13)
+12. Implement convergence detection: `CalculateDDGIVolumeVariability()` → auto-stop when below threshold
 
 ### Phase 4: Integration & Polish
 
 1. Modify `DeferredRenderer` to conditionally use CSM + DDGI in NormalBasic mode
-2. Add ImGui controls for shadow/DDGI quality settings
+2. Add ImGui controls for shadow/DDGI quality settings:
+   - PCSS checkbox + kernel radius slider
+   - DDGI enable checkbox + convergence threshold + auto-stop
+   - DDGI probe density presets (Low/Medium/High)
 3. Profile and tune cascade splits, shadow map resolution, 3-ISV probe density, row slice divisors, PCSS vs fixed-kernel PCF quality/performance tradeoff
-4. Test corner cases: moving camera (ISV scrolling), thin geometry, outdoor scenes
+4. Test DDGI bake workflow: enable → wait for convergence → disable → verify zero RT cost + correct indirect
+5. Test corner cases: moving camera with baked probes, thin geometry, outdoor scenes
 
 ---
 
@@ -711,7 +1067,9 @@ float3 m_SunDirection;         // existing
 | Shadow technique | CSM (4 cascades) | Well-understood, no RT hardware needed for shadows |
 | Shadow map layout | Texture2DArray, 2048×2048×4 | Clean API, independent cascade resolution |
 | Shadow culling | Frustum only (no HZB) | Depth-only draws are fast; HZB overhead isn't worth it |
-| Shadow filtering | Hardware PCF (4-tap bilinear) | Free on hardware comparison samplers |
+| Shadow alpha masking | Split-pass: opaque → null PS, masked → alpha-test PS | Grass/foliage must cast proper silhouetted shadows; opaque stays fast |
+| Shadow sampling | Shadow mask (R8_UNORM screen-space RT) | Separate pass: CSM → shadow mask compute → deferred lighting reads R8; modular, filterable, debuggable |
+| Shadow filtering | Hardware PCF (4-tap bilinear) + 3×3 PCF (default) | Free on hardware comparison samplers; 9-tap PCF for smooth edges |
 | Shadow stability | Texel snapping (quantize VP matrix) | Essential for temporal stability |
 | DDGI volume count | 3 ISVs (near/medium/far, camera-following) | High detail near, ambient far; consistent ~930K rays/frame |
 | DDGI near probe density | 20×12×20, 1.5m spacing | High-quality indirect for surfaces close to camera |
@@ -721,4 +1079,6 @@ float3 m_SunDirection;         // existing
 | DDGI volume culling | Frustum culling only | Simple, sufficient; skip volumes fully outside frustum |
 | DDGI + far distance | Blend with sky ambient | No complex falloff needed |
 | Indirect specular | Not in scope for NormalBasic | SSR can be added later if needed |
-| TLAS | Still needed (DDGI probe rays) | Minimal overhead since BLAS already built |
+| DDGI operation mode | `m_EnableDDGI` flag: bake (default off) vs live (on) | Primary use case is baking: converge probes with HWRT, then disable RT; indirect query always runs from persistent textures |
+| TLAS | Only needed when `m_EnableDDGI = true` | DDGI probe rays need TLAS; when disabled (bake mode), TLASRenderer is skipped entirely |
+| DDGI bake convergence | SDK variability readback + auto-stop | Probes converge in 2-5 seconds; variability < 0.02 indicates "done" |
