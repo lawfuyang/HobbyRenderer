@@ -163,7 +163,7 @@ else  // NormalAdvanced (old Normal) + IBL
 | SHARCRenderer | ✅ (if enabled) | ❌ | Disabled |
 | DeferredRenderer | ✅ | ✅ | Modified — uses shadow map & DDGI indirect |
 | SkyRenderer | ✅ | ✅ | |
-| TransparentPassRenderer | ✅ | ✅ | |
+| TransparentPassRenderer | ✅ (with TLV — ReSTIR DI + SHARC GI) | ✅ (simplified — no TLV; see §6.4) | TLV requires ReSTIR DI + SHARC, both disabled in NormalBasic |
 | TAARenderer | ✅ | ✅ | |
 | BloomRenderer | ✅ | ✅ | |
 | HDRRenderer | ✅ | ✅ | |
@@ -906,12 +906,14 @@ NormalAdvanced (current Normal):
 NormalBasic (m_EnableDDGI = true):
   TLAS ────────┬──→ ShadowRenderer (depth-only raster, NO TLAS needed)
                └──→ DDGIRenderer (probe rays NEED TLAS)
-  ───→ NO ReSTIR DI, NO ReSTIR GI, NO SHARC, NO NRD, NO OMM
+  ───→ NO ReSTIR DI, NO ReSTIR GI, NO SHARC, NO NRD, NO OMM, NO TLV
+  ───→ TransparentPassRenderer (simplified forward — sun + DDGI indirect only; no TLV)
 
 NormalBasic (m_EnableDDGI = false) — baked GI mode:
   ───→ ShadowRenderer (depth-only raster)
   ───→ DDGIRenderer (indirect query only, NO TLAS)
-  ───→ NO TLAS, NO ReSTIR DI, NO ReSTIR GI, NO SHARC, NO NRD, NO OMM
+  ───→ TransparentPassRenderer (simplified forward — sun + DDGI indirect only; no TLV)
+  ───→ NO TLAS, NO ReSTIR DI, NO ReSTIR GI, NO SHARC, NO NRD, NO OMM, NO TLV
   ───→ Pure raster pipeline. Zero RT cost.
 ```
 
@@ -925,6 +927,7 @@ NormalBasic (m_EnableDDGI = false) — baked GI mode:
 | `NrdIntegration` | Not instantiated | Saves: REBLUR denoiser, permanent/transient pools, PackNormalRoughness pass |
 | OMM | Not built for BLAS (or built with `AllowOMM=false`) | Saves: OMM build time, OMM memory. Already handled by `RTXDIRenderer` skipping build flags |
 | RT Shadows (`m_EnableRTShadows`) | Set to `false` in NormalBasic, use CSM instead | DeferredRenderer uses shadow map instead of inline ray queries |
+| TLV (Translucency Lighting Volume) | Entirely skipped — TLV injection reads ReSTIR DI RIS buffers + SHARC resolved buffers, both unavailable in NormalBasic | Transparent objects use simplified forward lighting (sun + DDGI indirect only); see §6.4 |
 
 ### 6.3 DeferredRenderer Modifications
 
@@ -976,6 +979,48 @@ if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
     renderGraph.ReadTexture(g_RG_DDGIIndirect);   // Read DDGI indirect output
 }
 ```
+
+### 6.4 Transparent Lighting in NormalBasic — No TLV
+
+The [Translucency Lighting Volume (TLV)](implementation_plan_restir_sharc_transparent.md) is an **advanced-only feature** that bakes ReSTIR DI stochastic direct lighting and SHARC indirect GI into a 3D volume grid, which transparent objects trilinearly sample in the forward pass. It is **excluded from NormalBasic** for the following reasons:
+
+| Dependency | TLV Requirement | NormalBasic Status |
+|---|---|---|
+| ReSTIR DI RIS buffers (`g_RG_RISBuffer`, `g_RG_RISLightDataBuffer`) | TLV injection pass reads RIS candidate lights | ❌ RTXDIRenderer skipped — no RIS buffers |
+| SHARC resolved radiance cache (`g_RG_SHARCResolved`) | TLV injection pass queries SHARC for indirect | ❌ SHARCRenderer skipped — no radiance cache |
+| RTXDI + SHARC render passes | Must run before TLV injection | ❌ Both disabled |
+
+Since all TLV data sources are unavailable in NormalBasic, the injection and resolve compute passes cannot run. The transparent forward pass falls back to a simplified path:
+
+```hlsl
+// NormalBasic transparent forward lighting (conceptual):
+// ── Direct lighting: sun direction + CSM shadow mask sample ──
+float sunShadow = g_ShadowMask.SampleLevel(linearSampler, screenUV, 0).r;
+float3 directDiffuse = EvaluateSunLight(baseColor, normal, sunDirection) * sunShadow;
+
+// ── Indirect lighting: DDGI probe query ──
+float3 ddgiIndirect = DDGIGetVolumeIrradiance(worldPos, surfaceBias, normal, volumes);
+float3 indirectGI = ddgiIndirect * baseColor * (1.0 - metallic);
+
+// ── Final ──
+float3 color = directDiffuse + indirectGI;
+```
+
+**Summary of differences:**
+
+| Aspect | NormalAdvanced (TLV) | NormalBasic (no TLV) |
+|---|---|---|
+| **Direct light source** | ReSTIR DI RIS importance-sampled from all scene lights | Single directional sun (analytic) |
+| **Direct shadows** | Baked into TLV from stochastic samples | CSM shadow mask (R8 screen-space) |
+| **Indirect GI** | SHARC 2–4 bounce diffuse GI baked into volume | DDGI probe-based indirect (baked or live) |
+| **Light count scaling** | O(1) regardless of scene light count | O(1) — always 1 sun |
+| **Per-pixel cost** | 2 trilinear texture samples (~16 taps) | 1 shadow mask sample + 1 DDGI probe query |
+| **Quality** | Stochastic many-light + SHARC GI | Single sun + DDGI ambient — sufficient for a classic raster pipeline |
+| **GPU memory** | +8.5 MB (64³ volume) | +0 MB (no TLV resources) |
+
+**Design rationale:** NormalBasic targets a **classic rasterizer pipeline** (CSM + DDGI). The TLV is an advanced stochastic-lighting feature that depends on ReSTIR DI and SHARC — both of which are explicitly disabled in NormalBasic. Transparent objects in NormalBasic receive a simplified but correct lighting model: sun direct lighting (with CSM shadow) plus DDGI indirect ambient. This is consistent with the mode's philosophy of trading advanced stochastic quality for simplicity and deterministic performance.
+
+> **Note:** The existing brute-force `AccumulateDirectLighting` loop in [BasePass.hlsl](src/shaders/BasePass.hlsl) iterates over `g_PerFrame.m_LightCount` scene lights. In NormalBasic, this loop could still run but would evaluate at most the sun (1 light), making the O(N) cost trivial. Alternatively, the transparent PS could branch on `RENDERING_MODE_NORMAL_BASIC` to use the simplified sun-only path above, bypassing the polymorphic light loop entirely.
 
 ---
 
