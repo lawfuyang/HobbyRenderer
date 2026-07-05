@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "CommonResources.h"
 #include "SceneLoader.h"
+#include "Streaming/FeedbackTexture.h"
 
 #include <ShaderMake/ShaderBlob.h>
 
@@ -300,6 +301,7 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::Meshlets));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayQuery));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingAccelStruct));
+    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::SamplerFeedback));
 
     int windowWidth  = 0;
     int windowHeight = 0;
@@ -387,6 +389,10 @@ void Renderer::Initialize()
 
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
+
+
+    // Initialize texture streaming (must be after scene load so FeedbackTextures are created)
+    InitStreaming();
 
     // Restore saved camera state (overrides GLTF camera if present)
     {
@@ -555,7 +561,15 @@ void Renderer::Run()
             scopedCmd->beginTimerQuery(m_GPUQueries[writeIndex]);
         }
 
+        // Update texture streaming — pre-render phase:
+        // flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
+        UpdateStreamingPreRender();
+
         ScheduleAndRunAllRenderers();
+
+        // Update texture streaming — post-render phase:
+        // ResolveFeedback (reads sampler feedback written by GBuffer pass) + EndFrame.
+        UpdateStreamingPostRender();
 
         // GPU query for frame timer is super expensive on the CPU for some reason. i give up using it
         if constexpr (false)
@@ -643,6 +657,9 @@ void Renderer::Shutdown()
     // (Scene::Shutdown calls SaveCamera synchronously).
     m_CameraStateManager.StopAsyncWorker();
 
+    // Shutdown texture streaming before scene resources are released
+    ShutdownStreaming();
+
     // Shutdown scene and free its GPU resources
     m_Scene.Shutdown();
 
@@ -672,6 +689,186 @@ void Renderer::Shutdown()
 
     SDL_Quit();
     SDL_Log("[Shutdown] Clean exit");
+}
+
+// ─── Texture Streaming ───────────────────────────────────────────────────────
+
+void Renderer::InitStreaming()
+{
+    nvfeedback::FeedbackManagerDesc desc{};
+    desc.m_NumFramesInFlight = m_StreamingConfig.m_NumFramesInFlight;
+    desc.m_HeapSizeInTiles   = m_StreamingConfig.m_HeapSizeInTiles;
+
+    m_FeedbackManager = std::make_unique<nvfeedback::FeedbackManager>(desc);
+    SDL_assert(m_FeedbackManager && "CreateFeedbackManager failed");
+
+    // Create async tile I/O thread pool
+    m_AsyncTileIO = std::make_unique<nvfeedback::AsyncTileIO>();
+    SDL_assert(m_AsyncTileIO && "Failed to create AsyncTileIO");
+
+    // Build texture sets now that all FeedbackTextures are registered
+    m_StreamingCtx.BuildTextureSets(m_Scene);
+
+    SDL_Log("[Streaming] Initialized: heapSizeInTiles=%u, numFramesInFlight=%u, asyncWorkers=%u",
+            m_StreamingConfig.m_HeapSizeInTiles, m_StreamingConfig.m_NumFramesInFlight,
+            m_AsyncTileIO->WorkerCount());
+}
+
+void Renderer::ShutdownStreaming()
+{
+    // Drain any in-flight async requests before destroying resources
+    m_AsyncTileIO->WaitIdle();
+    m_AsyncTileIO->Flush(nullptr); // discard completed callbacks (resources about to be freed)
+    m_AsyncTileIO.reset();
+
+    m_StreamingCtx.Clear();
+    m_FeedbackManager.reset();
+    SDL_Log("[Streaming] Shutdown complete.");
+}
+
+void Renderer::UpdateStreamingPreRender()
+{
+    PROFILE_FUNCTION();
+
+    // ── Phase B2+A: Flush completed async tile uploads + BeginFrame ──
+    // Merged into one command list; executed before Phase C because
+    // UpdateTileMappings() calls updateTextureTileMappings() which is an
+    // immediate GPU queue op that must follow the tile upload commands.
+    {
+        PROFILE_SCOPED("Streaming TileFlush+BeginFrame");
+        nvrhi::CommandListHandle cmd = AcquireCommandList();
+        ScopedCommandList scopedCmd{ cmd, "Streaming TileFlush+BeginFrame" };
+
+        // Phase B2: Flush completed async tile uploads from previous frame
+        m_AsyncTileIO->Flush(cmd);
+
+        // Phase A: BeginFrame
+        m_StreamingUpdatedTextures.m_Textures.clear();
+        nvfeedback::FeedbackUpdateConfig config{};
+        config.m_FrameIndex           = m_FrameNumber;
+        config.m_MaxTexturesToUpdate  = m_StreamingConfig.m_MaxTexturesPerFrame;
+        config.m_TileTimeoutSeconds   = m_StreamingConfig.m_TileTimeoutSeconds;
+        config.m_bDefragmentHeaps      = true;
+        config.m_bTrimStandbyTiles     = m_StreamingConfig.m_bTrimStandbyTiles;
+        config.m_bReleaseEmptyHeaps    = m_StreamingConfig.m_bReleaseEmptyHeaps;
+        config.m_NumExtraStandbyTiles = m_StreamingConfig.m_NumExtraStandbyTiles;
+
+        m_FeedbackManager->BeginFrame(cmd, config, &m_StreamingUpdatedTextures);
+    }
+
+    // Execute merged B2+A commands so GPU has tile uploads queued before
+    // Phase C's updateTextureTileMappings (immediate GPU queue call).
+    ExecutePendingCommandLists();
+
+    // ── Phase B: Submit new tile requests to async thread pool ──
+    if (!m_StreamingUpdatedTextures.m_Textures.empty())
+    {
+        PROFILE_SCOPED("Streaming TileSubmit");
+
+        uint32_t submitBudget = m_StreamingConfig.m_TilesPerFrame;
+        uint32_t submitted = 0;
+
+        for (auto& texUpdate : m_StreamingUpdatedTextures.m_Textures)
+        {
+            if (submitted >= submitBudget) break;
+
+            nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
+
+            nvrhi::ITexture* reservedTex = feedbackTex->GetReservedTexture();
+            const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
+
+            Scene::StreamingTexture* st = nullptr;
+            for (auto& [idx, streamTex] : m_Scene.m_StreamingTextures)
+            {
+                if (streamTex.m_ReservedTexture.Get() == reservedTex)
+                {
+                    st = &streamTex;
+                    break;
+                }
+            }
+
+            if (!st || !st->m_SourceData) continue;
+
+            const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
+
+            for (uint32_t tileIndex : texUpdate.m_TileIndices)
+            {
+                if (submitted >= submitBudget) break;
+
+                std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
+                feedbackTex->GetTileInfo(tileIndex, tileInfos);
+
+                for (const auto& tileInfo : tileInfos)
+                {
+                    if (submitted >= submitBudget) break;
+
+                    nvfeedback::TileRequest req;
+                    req.m_SourceData         = st->m_SourceData;
+                    req.m_ReservedTexture    = st->m_ReservedTexture;
+                    req.m_MipLevel           = tileInfo.m_Mip;
+                    req.m_TileXInTexels      = tileInfo.m_XInTexels;
+                    req.m_TileYInTexels      = tileInfo.m_YInTexels;
+                    req.m_TileWidthInTexels  = tileInfo.m_WidthInTexels;
+                    req.m_TileHeightInTexels = tileInfo.m_HeightInTexels;
+                    req.m_TextureWidth       = texDesc.width;
+                    req.m_TextureHeight      = texDesc.height;
+                    req.m_Format             = texDesc.format;
+                    req.m_BytesPerBlock      = fmtInfo.bytesPerBlock;
+                    req.m_BlockSize          = fmtInfo.blockSize;
+
+                    req.m_OnComplete = [](const nvfeedback::TileRequest& r,
+                                            const void* tileData, size_t /*tileDataSize*/,
+                                            nvrhi::ICommandList* cmd)
+                    {
+                        if (!cmd || !r.m_ReservedTexture) return;
+
+                        const nvrhi::FormatInfo& fi = nvrhi::getFormatInfo(r.m_Format);
+                        uint32_t tileBlocksW = (r.m_TileWidthInTexels + fi.blockSize - 1) / fi.blockSize;
+                        uint32_t rowPitch    = tileBlocksW * fi.bytesPerBlock;
+
+                        nvrhi::TextureSlice destSlice{};
+                        destSlice.x          = r.m_TileXInTexels;
+                        destSlice.y          = r.m_TileYInTexels;
+                        destSlice.width      = r.m_TileWidthInTexels;
+                        destSlice.height     = r.m_TileHeightInTexels;
+                        destSlice.mipLevel   = r.m_MipLevel;
+                        destSlice.arraySlice = 0;
+
+                        cmd->writeTexture(
+                            r.m_ReservedTexture, destSlice, tileData, rowPitch, 0);
+                    };
+
+                    m_AsyncTileIO->Submit(std::move(req));
+                    submitted++;
+                }
+            }
+        }
+    }
+
+    // ── Phase C: UpdateTileMappings ──
+    {
+        PROFILE_SCOPED("Streaming UpdateMappings");
+        nvrhi::CommandListHandle cmd = AcquireCommandList();
+        ScopedCommandList scopedCmd{ cmd, "Streaming UpdateTileMappings" };
+        m_FeedbackManager->UpdateTileMappings(cmd, &m_StreamingUpdatedTextures);
+    }
+}
+
+void Renderer::UpdateStreamingPostRender()
+{
+    PROFILE_FUNCTION();
+
+    // ── Phase E: ResolveFeedback ──
+    // Called AFTER ScheduleAndRunAllRenderers() so the GBuffer pass has written
+    // sampler feedback into the UAV feedback textures.
+    {
+        nvrhi::CommandListHandle cmd = AcquireCommandList();
+        ScopedCommandList scopedCmd{ cmd, "Streaming ResolveFeedback" };
+        m_FeedbackManager->ResolveFeedback(cmd);
+    }
+
+    // ── Phase F: EndFrame ──
+    m_FeedbackManager->EndFrame();
 }
 
 void Renderer::UploadDirtyInstanceTransforms()
@@ -1048,6 +1245,44 @@ bool Renderer::RegisterTextureAtIndex(uint32_t index, nvrhi::TextureHandle textu
         return false;
     }
     //SDL_Log("[Renderer] Registered texture (%s) at index %u", texture->getDesc().debugName.c_str(), index);
+    return true;
+}
+
+uint32_t Renderer::RegisterSamplerFeedbackTexture(nvrhi::SamplerFeedbackTextureHandle texture)
+{
+    if (!texture || !m_StaticTextureDescriptorTable)
+    {
+        SDL_LOG_ASSERT_FAIL("Invalid sampler feedback texture or descriptor table not initialized", "[Renderer] Invalid sampler feedback texture or descriptor table not initialized");
+        return UINT32_MAX;
+    }
+
+    SINGLE_THREAD_GUARD();
+
+    const uint32_t index = m_NextTextureIndex++;
+    const bool bResult = RegisterSamplerFeedbackTextureAtIndex(index, texture);
+    if (!bResult)
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to register sampler feedback texture in global descriptor table", "[Renderer] Failed to register sampler feedback texture at index %u", index);
+        return UINT32_MAX;
+    }
+    return index;
+}
+
+bool Renderer::RegisterSamplerFeedbackTextureAtIndex(uint32_t index, nvrhi::SamplerFeedbackTextureHandle texture)
+{
+    if (!texture || !m_StaticTextureDescriptorTable)
+    {
+        return false;
+    }
+
+    SINGLE_THREAD_GUARD();
+
+    const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::SamplerFeedbackTexture_UAV(index, texture);
+    if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_StaticTextureDescriptorTable, item))
+    {
+        SDL_LOG_ASSERT_FAIL("Failed to register sampler feedback texture in static descriptor table", "[Renderer] Failed to register sampler feedback texture at index %u", index);
+        return false;
+    }
     return true;
 }
 

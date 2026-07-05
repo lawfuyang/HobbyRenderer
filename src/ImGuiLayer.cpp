@@ -1,6 +1,6 @@
-﻿
-#include "Renderer.h"
+﻿#include "Renderer.h"
 #include "CommonResources.h"
+#include "Streaming/FeedbackManager.h"
 
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -499,6 +499,44 @@ void ImGuiLayer::UpdateFrame()
 
         // Render Graph debug UI
         g_Renderer.m_RenderGraph.RenderDebugUI();
+
+        // ─── Texture Streaming Stats ──────────────────────────────────────────
+        if (g_Renderer.m_FeedbackManager)
+        {
+            if (ImGui::TreeNode("Texture Streaming"))
+            {
+                const nvfeedback::FeedbackManagerStats& stats = g_Renderer.m_FeedbackManager->GetStats();
+
+                ImGui::SeparatorText("Memory");
+                ImGui::Text("Heap Allocated:  %.1f MB",
+                            static_cast<double>(stats.m_HeapAllocationInBytes) / (1024.0 * 1024.0));
+                ImGui::Text("Heap Free Tiles: %u", stats.m_HeapTilesFree);
+                ImGui::Text("Tiles Total:     %u", stats.m_TilesTotal);
+
+                ImGui::SeparatorText("Activity");
+                uint32_t pct = stats.m_TilesTotal > 0
+                    ? (stats.m_TilesAllocated * 100u / stats.m_TilesTotal) : 0u;
+                ImGui::Text("Tiles Allocated: %u (%u%%)", stats.m_TilesAllocated, pct);
+                ImGui::Text("Tiles Standby:   %u", stats.m_TilesStandby);
+
+                ImGui::SeparatorText("CPU Timing");
+                ImGui::Text("BeginFrame:       %.3f ms", stats.m_CpuTimeBeginFrame * 1000.0);
+                ImGui::Text("UpdateMappings:   %.3f ms", stats.m_CpuTimeUpdateTileMappings * 1000.0);
+                ImGui::Text("ResolveFeedback:  %.3f ms", stats.m_CpuTimeResolve * 1000.0);
+
+                ImGui::SeparatorText("Config");
+                ImGui::SliderInt("Max Textures/Frame",
+                    reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_MaxTexturesPerFrame), 1, 32);
+                ImGui::SliderInt("Tiles Per Frame",
+                    reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_TilesPerFrame), 1, 128);
+                ImGui::SliderFloat("Tile Timeout (s)",
+                    &g_Renderer.m_StreamingConfig.m_TileTimeoutSeconds, 0.0f, 10.0f);
+                ImGui::SliderInt("Extra Standby Tiles",
+                    reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_NumExtraStandbyTiles), 0, 2000);
+
+                ImGui::TreePop();
+            }
+        }
     }
     ImGui::End();
 

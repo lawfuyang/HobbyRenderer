@@ -255,6 +255,26 @@ float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIn
     return float3(0.0f, 0.0f, 0.0f); // Should not reach here
 }
 
+float3 GetResidencyDebugColor(uint minMipIndex, float2 uv)
+{
+    if (minMipIndex != srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK)
+    {
+        Texture2D<float> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
+        SamplerState pointSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX)];
+        float minResidentMip = minMipTex.SampleLevel(pointSam, uv, 0);
+        if (minResidentMip < 0.5f)
+            return float3(0.0f, 1.0f, 0.0f);   // Green: fully resident
+        else if (minResidentMip < 1.5f)
+            return float3(1.0f, 1.0f, 0.0f);   // Yellow: partially resident
+        else
+            return float3(1.0f, 0.0f, 0.0f);   // Red: not resident
+    }
+    else
+    {
+        return float3(0.3f, 0.3f, 0.3f);       // Gray: no streaming
+    }
+}
+
 // Direction of refracted light.
 float3 GetVolumeTransmissionRay(float3 n, float3 v, float thickness, float ior, float3 modelScale)
 {
@@ -281,8 +301,10 @@ float3 ApplyVolumeAttenuation(float3 radiance, float transmissionDistance, float
 #if defined(FORWARD_TRANSPARENT)
 float4 Forward_PSMain(VSOut input) : SV_TARGET
 #elif defined(ALPHA_TEST)
+[earlydepthstencil]
 GBufferOut GBuffer_PSMain_AlphaTest(VSOut input)
 #else
+[earlydepthstencil]
 GBufferOut GBuffer_PSMain(VSOut input)
 #endif
 {
@@ -293,7 +315,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
     // Texture sampling (only when present)
     bool hasAlbedo = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0;
     float4 albedoSample = hasAlbedo
-        ? SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, input.uv)
+        ? SampleBindlessStreamedTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                        mat.m_AlbedoMinMipIndex, mat.m_AlbedoFeedbackIndex, input.uv)
         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
     // Alpha test (discard) as early as possible
@@ -308,17 +331,20 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
     bool hasORM = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ROUGHNESS_METALLIC) != 0;
     float4 ormSample = hasORM
-        ? SampleBindlessTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex, input.uv)
+        ? SampleBindlessStreamedTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex,
+                                        mat.m_RoughnessMinMipIndex, mat.m_RoughnessFeedbackIndex, input.uv)
         : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 1.0f, 0.0f); // R=occ, G=rough, B=metal
 
     bool hasNormal = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_NORMAL) != 0;
     float4 nmSample = hasNormal
-        ? SampleBindlessTexture(mat.m_NormalTextureIndex, mat.m_NormalSamplerIndex, input.uv)
+        ? SampleBindlessStreamedTexture(mat.m_NormalTextureIndex, mat.m_NormalSamplerIndex,
+                                        mat.m_NormalMinMipIndex, mat.m_NormalFeedbackIndex, input.uv)
         : float4(0.5f, 0.5f, 1.0f, 0.0f);
 
     bool hasEmissive = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_EMISSIVE) != 0;
     float4 emissiveSample = hasEmissive
-        ? SampleBindlessTexture(mat.m_EmissiveTextureIndex, mat.m_EmissiveSamplerIndex, input.uv)
+        ? SampleBindlessStreamedTexture(mat.m_EmissiveTextureIndex, mat.m_EmissiveSamplerIndex,
+                                        mat.m_EmissiveMinMipIndex, mat.m_EmissiveFeedbackIndex, input.uv)
         : float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Normal (from normal map when available)
@@ -483,6 +509,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
             color = metallic.xxx;
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_EMISSIVE)
             color = emissive;
+        else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_TILE_RESIDENCY)
+            color = GetResidencyDebugColor(mat.m_AlbedoMinMipIndex, input.uv);
     }
 
     return float4(color, alpha);
@@ -509,6 +537,13 @@ GBufferOut GBuffer_PSMain(VSOut input)
             output.Normal = float2(0.5f, 0.5f); // Default normal
             output.ORM = float2(0.5f, 0.0f); // Default ORM
             output.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f); // No emissive
+        }
+        else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_TILE_RESIDENCY)
+        {
+            output.Albedo = float4(GetResidencyDebugColor(mat.m_AlbedoMinMipIndex, input.uv), alpha);
+            output.Normal = float2(0.5f, 0.5f);
+            output.ORM = float2(0.5f, 0.0f);
+            output.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f);
         }
     }
     

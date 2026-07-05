@@ -4,6 +4,8 @@
 #include "CommonResources.h"
 #include "Utilities.h"
 #include "TextureLoader.h"
+#include "Streaming/FeedbackManager.h"
+#include "Streaming/FeedbackTexture.h"
 
 #include "shaders/srrhi/cpp/GPULight.h"
 
@@ -1335,6 +1337,106 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 		}
 
 		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+		// ── Streaming path: block-compressed 2D textures on D3D12 ──
+		const bool bIsBC = (desc.format >= nvrhi::Format::BC1_UNORM && desc.format <= nvrhi::Format::BC7_UNORM_SRGB);
+		const bool bIs2D = (desc.dimension == nvrhi::TextureDimension::Texture2D);
+		const bool bUseStreaming = bIsBC && bIs2D && (desc.arraySize == 1);
+
+		if (bUseStreaming)
+		{
+			nvfeedback::FeedbackManager* feedbackManager = g_Renderer.m_FeedbackManager.get();
+			nvfeedback::FeedbackTexture* feedbackTex = feedbackManager->CreateTexture(desc);
+
+			// Use the reserved texture as the scene texture handle
+			tex.m_Handle = feedbackTex->GetReservedTexture();
+			SDL_assert(tex.m_Handle && "Failed to get reserved texture from FeedbackTexture");
+
+			// Register the reserved texture in the bindless table
+			const uint32_t bindlessIndex = g_Renderer.RegisterTexture(tex.m_Handle);
+			SDL_assert(bindlessIndex != UINT32_MAX && "Failed to register streaming texture in bindless table");
+			tex.m_BindlessIndex = bindlessIndex;
+
+			// Store in scene streaming map
+			Scene::StreamingTexture& st = scene.m_StreamingTextures[i];
+			st.m_ReservedTexture = feedbackTex->GetReservedTexture();
+			st.m_FeedbackTex     = feedbackTex->GetSamplerFeedbackTexture();
+			st.m_MinMipTexture   = feedbackTex->GetMinMipTexture();
+			st.m_TtmTextureId    = feedbackTex->GetTiledTextureId();
+			st.m_BindlessIndex   = bindlessIndex;
+			// Keep the mmap open for tile extraction
+			st.m_SourceData = std::shared_ptr<MemoryMappedDataReader>(data.release());
+
+			// Register MinMip texture in the bindless heap so shaders can sample it
+			if (st.m_MinMipTexture)
+			{
+				const uint32_t minMipBindlessIndex = g_Renderer.RegisterTexture(st.m_MinMipTexture);
+				SDL_assert(minMipBindlessIndex != UINT32_MAX && "Failed to register MinMip texture in bindless table");
+				st.m_MinMipBindlessIndex = minMipBindlessIndex;
+			}
+
+			// Register sampler feedback texture in the bindless heap so shaders can write feedback
+			if (st.m_FeedbackTex)
+			{
+				const uint32_t feedbackBindlessIndex = g_Renderer.RegisterSamplerFeedbackTexture(st.m_FeedbackTex);
+				SDL_assert(feedbackBindlessIndex != UINT32_MAX && "Failed to register feedback texture in bindless table");
+				st.m_FeedbackBindlessIndex = feedbackBindlessIndex;
+			}
+
+			// ── Packed mip pre-mapping ──
+			// Upload packed (tail) mips immediately so the texture has a valid fallback
+			// before streaming loads the higher-resolution standard mips.
+			// Packed mips are permanently mapped — they are never passed to TTM for eviction.
+			{
+				const nvrhi::PackedMipDesc& packedMipDesc = feedbackTex->GetPackedMipInfo();
+
+				if (packedMipDesc.numPackedMips > 0)
+				{
+					// Compute byte offset to the first packed mip in the DDS data
+					const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(desc.format);
+					const uint8_t* srcBase = static_cast<const uint8_t*>(st.m_SourceData->GetData());
+					size_t packedMipOffset = 0;
+					for (uint32_t m = 0; m < packedMipDesc.numStandardMips; m++)
+					{
+						uint32_t mw = std::max(desc.width  >> m, 1u);
+						uint32_t mh = std::max(desc.height >> m, 1u);
+						uint32_t blocksW = (mw + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
+						uint32_t blocksH = (mh + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
+						packedMipOffset += (size_t)blocksW * blocksH * fmtInfo.bytesPerBlock;
+					}
+
+					// Upload each packed mip level directly to the reserved texture.
+					// NVRHI's writeTexture handles the CopyTextureRegion + state transitions.
+					const uint8_t* packedBase = srcBase + packedMipOffset;
+					size_t mipDataOffset = 0;
+					for (uint32_t pm = 0; pm < packedMipDesc.numPackedMips; pm++)
+					{
+						uint32_t mipIdx = packedMipDesc.numStandardMips + pm;
+						uint32_t mw = std::max(desc.width  >> mipIdx, 1u);
+						uint32_t mh = std::max(desc.height >> mipIdx, 1u);
+						uint32_t blocksW = (mw + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
+						uint32_t blocksH = (mh + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
+						uint32_t rowPitch = blocksW * fmtInfo.bytesPerBlock;
+						size_t mipSize = (size_t)blocksH * rowPitch;
+
+						cl->writeTexture(st.m_ReservedTexture, 0, mipIdx,
+						                 packedBase + mipDataOffset, rowPitch);
+						mipDataOffset += mipSize;
+					}
+
+					SDL_Log("[Scene] Pre-mapped %u packed mips for streaming texture '%s'",
+					        packedMipDesc.numPackedMips, fullPath.c_str());
+				}
+			}
+
+			// Register in the streaming context reverse-lookup map
+			g_Renderer.m_StreamingCtx.m_FeedbackTexturesByHandle[tex.m_Handle.Get()] = feedbackTex;
+
+			SDL_Log("[Scene] Created streaming texture '%s' (bindless index %u)", fullPath.c_str(), bindlessIndex);
+			continue;
+		}
+
+		// ── Committed (non-streaming) path ──
 		tex.m_Handle = device->createTexture(desc);
 		SDL_assert(tex.m_Handle && "Failed to create texture");
 
@@ -1348,8 +1450,9 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 	}
 
 	// Re-resolve all material texture indices
-	for (Scene::Material& mat : scene.m_Materials)
+	for (int matIdx = 0; matIdx < (int)scene.m_Materials.size(); matIdx++)
 	{
+		Scene::Material& mat = scene.m_Materials[matIdx];
 		if (mat.m_BaseColorTexture != -1)
 			mat.m_AlbedoTextureIndex = scene.m_Textures[mat.m_BaseColorTexture].m_BindlessIndex;
 		if (mat.m_NormalTexture != -1)
@@ -1358,6 +1461,30 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 			mat.m_RoughnessMetallicTextureIndex = scene.m_Textures[mat.m_MetallicRoughnessTexture].m_BindlessIndex;
 		if (mat.m_EmissiveTexture != -1)
 			mat.m_EmissiveTextureIndex = scene.m_Textures[mat.m_EmissiveTexture].m_BindlessIndex;
+
+		// Populate MinMip and feedback bindless indices for streaming textures
+		auto getMinMipIndex = [&](int texIdx) -> uint32_t {
+			if (texIdx == -1) return srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK;
+			auto it = scene.m_StreamingTextures.find(texIdx);
+			if (it != scene.m_StreamingTextures.end())
+				return it->second.m_MinMipBindlessIndex;
+			return srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK;
+		};
+		auto getFeedbackIndex = [&](int texIdx) -> uint32_t {
+			if (texIdx == -1) return 0u;
+			auto it = scene.m_StreamingTextures.find(texIdx);
+			if (it != scene.m_StreamingTextures.end())
+				return it->second.m_FeedbackBindlessIndex;
+			return 0u;
+		};
+		mat.m_AlbedoMinMipBindlessIndex    = getMinMipIndex(mat.m_BaseColorTexture);
+		mat.m_NormalMinMipBindlessIndex    = getMinMipIndex(mat.m_NormalTexture);
+		mat.m_RoughnessMinMipBindlessIndex = getMinMipIndex(mat.m_MetallicRoughnessTexture);
+		mat.m_EmissiveMinMipBindlessIndex  = getMinMipIndex(mat.m_EmissiveTexture);
+		mat.m_AlbedoFeedbackBindlessIndex    = getFeedbackIndex(mat.m_BaseColorTexture);
+		mat.m_NormalFeedbackBindlessIndex    = getFeedbackIndex(mat.m_NormalTexture);
+		mat.m_RoughnessFeedbackBindlessIndex = getFeedbackIndex(mat.m_MetallicRoughnessTexture);
+		mat.m_EmissiveFeedbackBindlessIndex  = getFeedbackIndex(mat.m_EmissiveTexture);
 	}
 }
 
@@ -1390,6 +1517,16 @@ srrhi::MaterialConstants MaterialConstantsFromMaterial(const Scene::Material& ma
 	mc.m_NormalSamplerIndex    = (mat.m_NormalTexture != -1)           ? (uint32_t)textures[mat.m_NormalTexture].m_Sampler           : (uint32_t)Scene::Texture::Wrap;
 	mc.m_RoughnessSamplerIndex = (mat.m_MetallicRoughnessTexture != -1)? (uint32_t)textures[mat.m_MetallicRoughnessTexture].m_Sampler : (uint32_t)Scene::Texture::Wrap;
 	mc.m_EmissiveSamplerIndex  = (mat.m_EmissiveTexture != -1)         ? (uint32_t)textures[mat.m_EmissiveTexture].m_Sampler         : (uint32_t)Scene::Texture::Wrap;
+	// Streaming MinMip indices — default to black (0) when not streaming
+	mc.m_AlbedoMinMipIndex     = mat.m_AlbedoMinMipBindlessIndex;
+	mc.m_NormalMinMipIndex     = mat.m_NormalMinMipBindlessIndex;
+	mc.m_RoughnessMinMipIndex  = mat.m_RoughnessMinMipBindlessIndex;
+	mc.m_EmissiveMinMipIndex   = mat.m_EmissiveMinMipBindlessIndex;
+	// Streaming feedback indices — 0 when not streaming
+	mc.m_AlbedoFeedbackIndex    = mat.m_AlbedoFeedbackBindlessIndex;
+	mc.m_NormalFeedbackIndex    = mat.m_NormalFeedbackBindlessIndex;
+	mc.m_RoughnessFeedbackIndex = mat.m_RoughnessFeedbackBindlessIndex;
+	mc.m_EmissiveFeedbackIndex  = mat.m_EmissiveFeedbackBindlessIndex;
 	return mc;
 }
 

@@ -34,6 +34,7 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_filesystem.h>
 
+#include <nvrhi/nvrhi.h>
 #include <nvrhi/validation.h>
 #include <nvrhi/utils.h>
 

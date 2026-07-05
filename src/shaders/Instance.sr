@@ -13,6 +13,18 @@ struct MaterialConstants
     uint   m_NormalSamplerIndex;
     uint   m_RoughnessSamplerIndex;
     uint   m_EmissiveSamplerIndex;
+    // Streaming: bindless indices for MinMip residency textures (R32_FLOAT, tile-count dims).
+    // Set to DEFAULT_TEXTURE_BLACK (0) when streaming is disabled for this texture.
+    uint   m_AlbedoMinMipIndex;
+    uint   m_NormalMinMipIndex;
+    uint   m_RoughnessMinMipIndex;
+    uint   m_EmissiveMinMipIndex;
+    // Streaming: bindless indices for sampler feedback UAV textures.
+    // Set to 0 when streaming is disabled for this texture.
+    uint   m_AlbedoFeedbackIndex;
+    uint   m_NormalFeedbackIndex;
+    uint   m_RoughnessFeedbackIndex;
+    uint   m_EmissiveFeedbackIndex;
     uint   m_AlphaMode;
     float  m_AlphaCutoff;
     float  m_IOR;
