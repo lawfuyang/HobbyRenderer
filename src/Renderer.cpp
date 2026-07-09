@@ -387,12 +387,13 @@ void Renderer::Initialize()
 
     m_CameraStateManager.Initialize();
 
+    InitStreaming();
+
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
-
-    // Initialize texture streaming (must be after scene load so FeedbackTextures are created)
-    InitStreaming();
+    // Build texture sets now that all FeedbackTextures are registered
+    m_StreamingCtx.BuildTextureSets(m_Scene);
 
     // Restore saved camera state (overrides GLTF camera if present)
     {
@@ -705,9 +706,6 @@ void Renderer::InitStreaming()
     // Create async tile I/O thread pool
     m_AsyncTileIO = std::make_unique<nvfeedback::AsyncTileIO>();
     SDL_assert(m_AsyncTileIO && "Failed to create AsyncTileIO");
-
-    // Build texture sets now that all FeedbackTextures are registered
-    m_StreamingCtx.BuildTextureSets(m_Scene);
 
     SDL_Log("[Streaming] Initialized: heapSizeInTiles=%u, numFramesInFlight=%u, asyncWorkers=%u",
             m_StreamingConfig.m_HeapSizeInTiles, m_StreamingConfig.m_NumFramesInFlight,

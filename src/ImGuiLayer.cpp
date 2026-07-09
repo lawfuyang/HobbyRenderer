@@ -104,7 +104,8 @@ void ImGuiLayer::UpdateFrame()
                 "Emissive",
                 "LOD",
                 "Motion Vectors",
-                "ReGIR Cells"
+                "ReGIR Cells",
+                "Tile Residency"
             };
             ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 
