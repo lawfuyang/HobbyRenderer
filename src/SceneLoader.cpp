@@ -1363,6 +1363,7 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 			st.m_FeedbackTex     = feedbackTex->GetSamplerFeedbackTexture();
 			st.m_MinMipTexture   = feedbackTex->GetMinMipTexture();
 			st.m_TtmTextureId    = feedbackTex->GetTiledTextureId();
+			feedbackTex->SetUserIndex(static_cast<int>(i));
 			st.m_BindlessIndex   = bindlessIndex;
 			// Keep the mmap open for tile extraction
 			st.m_SourceData = std::shared_ptr<MemoryMappedDataReader>(data.release());

@@ -766,24 +766,21 @@ void Renderer::UpdateStreamingPreRender()
         uint32_t submitBudget = m_StreamingConfig.m_TilesPerFrame;
         uint32_t submitted = 0;
 
-        // Helper: resolve a FeedbackTexture back to its StreamingTexture
-        // (which holds the mmap'd DDS source data and reserved texture handle).
+        // Helper: resolve a FeedbackTexture back to its StreamingTexture via
+        // the user index set at texture creation time (O(1) lookup).
         auto FindStreamingTex = [this](nvfeedback::FeedbackTexture* feedbackTex) -> Scene::StreamingTexture*
         {
-            nvrhi::ITexture* reservedTex = feedbackTex->GetReservedTexture();
-            for (auto& [idx, streamTex] : m_Scene.m_StreamingTextures)
-            {
-                if (streamTex.m_ReservedTexture.Get() == reservedTex)
-                    return &streamTex;
-            }
-            return nullptr;
+            int idx = feedbackTex->GetUserIndex();
+            assert(idx >= 0 && "FeedbackTexture has invalid user index");
+            auto it = m_Scene.m_StreamingTextures.find(idx);
+            return (it != m_Scene.m_StreamingTextures.end()) ? &it->second : nullptr;
         };
 
         if (m_StreamingConfig.m_bAsyncTileIO)
         {
             // ── Async path: submit tile-extraction work to the thread pool ──
             // Uploads are flushed next frame (Phase B2) via the completion callback.
-            for (auto& texUpdate : m_StreamingUpdatedTextures.m_Textures)
+            for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
             {
                 if (submitted >= submitBudget) break;
 
@@ -791,7 +788,7 @@ void Renderer::UpdateStreamingPreRender()
                 Scene::StreamingTexture* st = FindStreamingTex(feedbackTex);
                 if (!st || !st->m_SourceData) continue;
 
-                nvrhi::ITexture* reservedTex = feedbackTex->GetReservedTexture();
+                nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
                 const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
                 const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
 
@@ -802,7 +799,7 @@ void Renderer::UpdateStreamingPreRender()
                     std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
                     feedbackTex->GetTileInfo(tileIndex, tileInfos);
 
-                    for (const auto& tileInfo : tileInfos)
+                    for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
                     {
                         if (submitted >= submitBudget) break;
 
@@ -858,7 +855,7 @@ void Renderer::UpdateStreamingPreRender()
 
             std::vector<uint8_t> scratch;
 
-            for (auto& texUpdate : m_StreamingUpdatedTextures.m_Textures)
+            for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
             {
                 if (submitted >= submitBudget) break;
 
@@ -866,7 +863,7 @@ void Renderer::UpdateStreamingPreRender()
                 Scene::StreamingTexture* st = FindStreamingTex(feedbackTex);
                 if (!st || !st->m_SourceData) continue;
 
-                nvrhi::ITexture* reservedTex = feedbackTex->GetReservedTexture();
+                nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
                 const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
                 const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
                 const uint8_t* ddsBase = static_cast<const uint8_t*>(st->m_SourceData->GetData());
@@ -878,7 +875,7 @@ void Renderer::UpdateStreamingPreRender()
                     std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
                     feedbackTex->GetTileInfo(tileIndex, tileInfos);
 
-                    for (const auto& tileInfo : tileInfos)
+                    for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
                     {
                         if (submitted >= submitBudget) break;
 

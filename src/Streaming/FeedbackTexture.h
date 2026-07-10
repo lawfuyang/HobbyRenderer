@@ -51,6 +51,10 @@ namespace nvfeedback
         const nvrhi::PackedMipDesc& GetPackedMipInfo() const { return m_PackedMipDesc; }
         uint32_t GetTiledTextureId() const           { return m_TiledTextureId; }
 
+        // User-defined index for O(1) lookup into external data structures (e.g., Scene::m_StreamingTextures)
+        int  GetUserIndex() const              { return m_UserIndex; }
+        void SetUserIndex(int index)           { m_UserIndex = index; }
+
         // Texture set membership management
         bool AddToTextureSet(FeedbackTextureSet* textureSet);
         bool RemoveFromTextureSet(FeedbackTextureSet* textureSet);
@@ -71,6 +75,7 @@ namespace nvfeedback
         nvrhi::TileShape m_TileShape{};
 
         uint32_t m_TiledTextureId = 0;
+        int m_UserIndex = -1;
 
         std::vector<FeedbackTextureSet*> m_TextureSets;
         std::vector<FeedbackTextureSet*> m_PrimaryTextureSets;
