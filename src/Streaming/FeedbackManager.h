@@ -1,5 +1,8 @@
 #pragma once
 
+#include <deque>
+#include <map>
+
 #include "FeedbackTexture.h"
 #include "FeedbackTextureSet.h"
 #include <rtxts-ttm/TiledTextureManager.h>
@@ -51,14 +54,21 @@ namespace nvfeedback
     };
 
     // ─── HeapAllocator ───────────────────────────────────────────────────────
+    //
+    // Manages D3D12 heap + virtual buffer pairs used as tile pools for tiled
+    // resources.  Heaps are released via deferred frame-bucket queues so that
+    // GPU command lists still referencing the heap (up to NumFramesInFlight
+    // frames ago) are guaranteed to have finished before the heap is destroyed.
+    // ─────────────────────────────────────────────────────────────────────────
 
     class HeapAllocator
     {
     public:
-        HeapAllocator(uint64_t heapSizeInBytes);
+        HeapAllocator(uint64_t heapSizeInBytes, uint32_t framesInFlight);
 
         uint32_t AllocateHeap();
-        void ReleaseHeap(uint32_t heapId);
+        void ReleaseHeap(uint32_t heapId, uint32_t frameIndex);
+        void DrainReleaseQueue(uint32_t frameIndex);
 
         nvrhi::HeapHandle   GetHeapHandle(uint32_t heapId)   { return m_Heaps[heapId]; }
         nvrhi::BufferHandle GetBufferHandle(uint32_t heapId) { return m_Buffers[heapId]; }
@@ -74,6 +84,13 @@ namespace nvfeedback
         uint64_t m_HeapSizeInBytes;
         uint32_t m_NumHeaps;
         uint64_t m_TotalAllocatedBytes;
+        uint32_t m_FramesInFlight;
+
+        // Deferred release: handles are queued into frame-bucket [frameIndex % FramesInFlight]
+        // and only truly destroyed when DrainReleaseQueue is called for the same bucket
+        // N frames later (guaranteeing the GPU is done with them).
+        std::map<uint32_t, std::vector<nvrhi::HeapHandle>>   m_HeapsToRelease;
+        std::map<uint32_t, std::vector<nvrhi::BufferHandle>> m_BuffersToRelease;
     };
 
     // ─── FeedbackManager ─────────────────────────────────────────────────────
@@ -112,8 +129,7 @@ namespace nvfeedback
         uint32_t m_FrameIndex;
 
         std::vector<std::unique_ptr<FeedbackTexture>> m_Textures;
-        std::vector<FeedbackTexture*>              m_TexturesRingbuffer;
-        uint32_t                                   m_RingbufferCursor = 0;
+        std::deque<FeedbackTexture*>               m_TexturesRingbuffer;
         std::vector<std::vector<FeedbackTexture*>> m_TexturesToReadback;
 
         FeedbackManagerStats m_StatsLastFrame{};

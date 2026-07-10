@@ -81,7 +81,7 @@ srinput CommonConsts
     static const int DEBUG_MODE_LOD = 8;
     static const int DEBUG_MODE_MOTION_VECTORS = 9;
     static const int DEBUG_MODE_REGIR_CELLS = 10;
-    static const int DEBUG_MODE_TILE_RESIDENCY = 11;
+    static const int DEBUG_MODE_STREAMING_MIP = 11;
 
     // Rendering modes
     static const int RENDERING_MODE_NORMAL = 0;

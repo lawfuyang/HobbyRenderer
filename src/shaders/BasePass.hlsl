@@ -255,24 +255,43 @@ float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIn
     return float3(0.0f, 0.0f, 0.0f); // Should not reach here
 }
 
-float3 GetResidencyDebugColor(uint minMipIndex, float2 uv)
+// Mip color LUT from SamplerFeedbackStreaming reference (GetLodVisualizationColor.h)
+float3 GetStreamingMipDebugColor(uint minMipIndex, float2 uv)
 {
-    if (minMipIndex != srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK)
+    if (minMipIndex == 0)
     {
-        Texture2D<float> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-        SamplerState pointSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX)];
-        float minResidentMip = minMipTex.SampleLevel(pointSam, uv, 0);
-        if (minResidentMip < 0.5f)
-            return float3(0.0f, 1.0f, 0.0f);   // Green: fully resident
-        else if (minResidentMip < 1.5f)
-            return float3(1.0f, 1.0f, 0.0f);   // Yellow: partially resident
-        else
-            return float3(1.0f, 0.0f, 0.0f);   // Red: not resident
+        return float3(0.3f, 0.3f, 0.3f);       // Gray: not a streaming texture
     }
+
+    Texture2D<float> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
+    SamplerState pointSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX)];
+    float minResidentMip = minMipTex.SampleLevel(pointSam, uv, 0);
+    int mipLevel = int(round(minResidentMip));
+
+    // LUT from SamplerFeedbackStreaming GetLodVisualizationColor.h
+    float3 lut[16] = {
+        float3(1.0f, 1.0f, 1.0f),          // 0: white
+        float3(1.0f, 0.25f, 0.25f),         // 1: light red
+        float3(0.25f, 1.0f, 0.25f),         // 2: light green
+        float3(0.25f, 0.25f, 1.0f),         // 3: light blue
+        float3(1.0f, 0.25f, 1.0f),          // 4: light magenta
+        float3(1.0f, 1.0f, 0.25f),          // 5: light yellow
+        float3(0.25f, 1.0f, 1.0f),          // 6: light cyan
+        float3(0.9f, 0.5f, 0.2f),           // 7: orange
+        float3(0.59f, 0.48f, 0.8f),         // 8: dark magenta
+        float3(0.53f, 0.25f, 0.11f),        // 9
+        float3(0.8f, 0.48f, 0.53f),         // 10
+        float3(0.64f, 0.8f, 0.48f),         // 11
+        float3(0.48f, 0.75f, 0.8f),         // 12
+        float3(0.5f, 0.25f, 0.75f),         // 13
+        float3(0.99f, 0.68f, 0.42f),        // 14
+        float3(0.4f, 0.5f, 0.6f),           // 15
+    };
+
+    if (mipLevel > 15)
+        return float3(0.3f, 0.4f, 0.2f);    // olive-ish green
     else
-    {
-        return float3(0.3f, 0.3f, 0.3f);       // Gray: no streaming
-    }
+        return lut[max(mipLevel, 0)];
 }
 
 // Direction of refracted light.
@@ -509,8 +528,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
             color = metallic.xxx;
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_EMISSIVE)
             color = emissive;
-        else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_TILE_RESIDENCY)
-            color = GetResidencyDebugColor(mat.m_AlbedoMinMipIndex, input.uv);
+        else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_STREAMING_MIP)
+            color = GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, input.uv);
     }
 
     return float4(color, alpha);
@@ -538,9 +557,9 @@ GBufferOut GBuffer_PSMain(VSOut input)
             output.ORM = float2(0.5f, 0.0f); // Default ORM
             output.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f); // No emissive
         }
-        else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_TILE_RESIDENCY)
+        else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_STREAMING_MIP)
         {
-            output.Albedo = float4(GetResidencyDebugColor(mat.m_AlbedoMinMipIndex, input.uv), alpha);
+            output.Albedo = float4(GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, input.uv), alpha);
             output.Normal = float2(0.5f, 0.5f);
             output.ORM = float2(0.5f, 0.0f);
             output.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f);

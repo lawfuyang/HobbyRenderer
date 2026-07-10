@@ -105,7 +105,7 @@ void ImGuiLayer::UpdateFrame()
                 "LOD",
                 "Motion Vectors",
                 "ReGIR Cells",
-                "Tile Residency"
+                "Streaming Mip"
             };
             ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 
@@ -502,41 +502,94 @@ void ImGuiLayer::UpdateFrame()
         g_Renderer.m_RenderGraph.RenderDebugUI();
 
         // ─── Texture Streaming Stats ──────────────────────────────────────────
-        if (g_Renderer.m_FeedbackManager)
+        if (ImGui::TreeNode("Texture Streaming"))
         {
-            if (ImGui::TreeNode("Texture Streaming"))
+            const nvfeedback::FeedbackManagerStats& stats = g_Renderer.m_FeedbackManager->GetStats();
+
+            ImGui::SeparatorText("Memory");
+            ImGui::Text("Heap Allocated:  %.1f MB",
+                static_cast<double>(stats.m_HeapAllocationInBytes) / (1024.0 * 1024.0));
+            ImGui::Text("Heap Free Tiles: %u", stats.m_HeapTilesFree);
+            ImGui::Text("Tiles Total:     %u", stats.m_TilesTotal);
+
+            ImGui::SeparatorText("Activity");
+            uint32_t pct = stats.m_TilesTotal > 0
+                ? (stats.m_TilesAllocated * 100u / stats.m_TilesTotal) : 0u;
+            ImGui::Text("Tiles Allocated: %u (%u%%)", stats.m_TilesAllocated, pct);
+            ImGui::Text("Tiles Standby:   %u", stats.m_TilesStandby);
+
+            // ── Bandwidth moving average graph ──
+            ImGui::SeparatorText("Bandwidth (MB/s)");
             {
-                const nvfeedback::FeedbackManagerStats& stats = g_Renderer.m_FeedbackManager->GetStats();
+                // Lazily initialize ring buffer
+                if (g_Renderer.m_StreamingBandwidthHistory.empty())
+                {
+                    g_Renderer.m_StreamingBandwidthHistory.resize(128, 0.0f);
+                    g_Renderer.m_StreamingBandwidthHistoryIndex = 0;
+                }
 
-                ImGui::SeparatorText("Memory");
-                ImGui::Text("Heap Allocated:  %.1f MB",
-                            static_cast<double>(stats.m_HeapAllocationInBytes) / (1024.0 * 1024.0));
-                ImGui::Text("Heap Free Tiles: %u", stats.m_HeapTilesFree);
-                ImGui::Text("Tiles Total:     %u", stats.m_TilesTotal);
+                // Count tiles submitted this frame
+                uint32_t tilesSubmitted = 0;
+                for (const auto& tex : g_Renderer.m_StreamingUpdatedTextures.m_Textures)
+                    tilesSubmitted += (uint32_t)tex.m_TileIndices.size();
 
-                ImGui::SeparatorText("Activity");
-                uint32_t pct = stats.m_TilesTotal > 0
-                    ? (stats.m_TilesAllocated * 100u / stats.m_TilesTotal) : 0u;
-                ImGui::Text("Tiles Allocated: %u (%u%%)", stats.m_TilesAllocated, pct);
-                ImGui::Text("Tiles Standby:   %u", stats.m_TilesStandby);
+                // Compute bandwidth: tiles * 64KB / seconds / 1MB
+                float dt = ImGui::GetIO().DeltaTime;
+                if (dt > 0.0f && tilesSubmitted > 0)
+                {
+                    float mbps = (float)(tilesSubmitted * 64u * 1024u) / (dt * 1000.0f * 1000.0f);
+                    uint32_t idx = g_Renderer.m_StreamingBandwidthHistoryIndex;
+                    g_Renderer.m_StreamingBandwidthHistory[idx] = mbps;
+                    g_Renderer.m_StreamingBandwidthHistoryIndex = (idx + 1) % (uint32_t)g_Renderer.m_StreamingBandwidthHistory.size();
+                }
 
-                ImGui::SeparatorText("CPU Timing");
-                ImGui::Text("BeginFrame:       %.3f ms", stats.m_CpuTimeBeginFrame * 1000.0);
-                ImGui::Text("UpdateMappings:   %.3f ms", stats.m_CpuTimeUpdateTileMappings * 1000.0);
-                ImGui::Text("ResolveFeedback:  %.3f ms", stats.m_CpuTimeResolve * 1000.0);
+                // Build draw buffer in order (oldest first)
+                auto& hist = g_Renderer.m_StreamingBandwidthHistory;
+                uint32_t head = g_Renderer.m_StreamingBandwidthHistoryIndex;
+                std::vector<float> drawBuffer;
+                drawBuffer.reserve(hist.size());
+                drawBuffer.insert(drawBuffer.end(), hist.begin() + head, hist.end());
+                drawBuffer.insert(drawBuffer.end(), hist.begin(), hist.begin() + head);
 
-                ImGui::SeparatorText("Config");
-                ImGui::SliderInt("Max Textures/Frame",
-                    reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_MaxTexturesPerFrame), 1, 32);
-                ImGui::SliderInt("Tiles Per Frame",
-                    reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_TilesPerFrame), 1, 128);
-                ImGui::SliderFloat("Tile Timeout (s)",
-                    &g_Renderer.m_StreamingConfig.m_TileTimeoutSeconds, 0.0f, 10.0f);
-                ImGui::SliderInt("Extra Standby Tiles",
-                    reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_NumExtraStandbyTiles), 0, 2000);
+                // Compute avg bandwidth from last values
+                float avgBw = 0.0f;
+                for (float v : drawBuffer) avgBw += v;
+                avgBw /= (float)drawBuffer.size();
 
-                ImGui::TreePop();
+                char overlay[64];
+                snprintf(overlay, sizeof(overlay), "Bandwidth (MB/s) avg = %.2f", avgBw);
+
+                float graphMax = 0.0f;
+                for (float v : drawBuffer) graphMax = std::max(graphMax, v);
+                float graphMaxScale = 12.5f;
+                while (graphMaxScale < graphMax) graphMaxScale *= 2.0f;
+
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+                ImGui::PlotLines("##bwgraph", drawBuffer.data(), (int)drawBuffer.size(),
+                    0, overlay, 0.0f, graphMaxScale, ImVec2(0, 50.0f));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Bandwidth (MB/s) max: %.2f, scale: %.2f", graphMax, graphMaxScale);
+                ImGui::PopStyleColor();
+
+                ImGui::Text("Tiles submitted this frame: %u", tilesSubmitted);
             }
+
+            ImGui::SeparatorText("CPU Timing");
+            ImGui::Text("BeginFrame:       %.3f ms", stats.m_CpuTimeBeginFrame * 1000.0);
+            ImGui::Text("UpdateMappings:   %.3f ms", stats.m_CpuTimeUpdateTileMappings * 1000.0);
+            ImGui::Text("ResolveFeedback:  %.3f ms", stats.m_CpuTimeResolve * 1000.0);
+
+            ImGui::SeparatorText("Config");
+            ImGui::SliderInt("Max Textures/Frame",
+                reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_MaxTexturesPerFrame), 1, 32);
+            ImGui::SliderInt("Tiles Per Frame",
+                reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_TilesPerFrame), 1, 128);
+            ImGui::SliderFloat("Tile Timeout (s)",
+                &g_Renderer.m_StreamingConfig.m_TileTimeoutSeconds, 0.0f, 10.0f);
+            ImGui::SliderInt("Extra Standby Tiles",
+                reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_NumExtraStandbyTiles), 0, 2000);
+
+            ImGui::TreePop();
         }
     }
     ImGui::End();

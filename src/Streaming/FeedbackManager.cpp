@@ -10,10 +10,11 @@ namespace nvfeedback
 {
     // ─── HeapAllocator ───────────────────────────────────────────────────────
 
-    HeapAllocator::HeapAllocator(uint64_t heapSizeInBytes)
+    HeapAllocator::HeapAllocator(uint64_t heapSizeInBytes, uint32_t framesInFlight)
         : m_HeapSizeInBytes(heapSizeInBytes)
         , m_NumHeaps(0)
         , m_TotalAllocatedBytes(0)
+        , m_FramesInFlight(framesInFlight)
     {
     }
 
@@ -56,15 +57,27 @@ namespace nvfeedback
         return heapId;
     }
 
-    void HeapAllocator::ReleaseHeap(uint32_t heapId)
+    void HeapAllocator::ReleaseHeap(uint32_t heapId, uint32_t frameIndex)
     {
         m_FreeHeapIds.push_back(heapId);
+
+        // Defer actual destruction
+        uint32_t bucket = frameIndex % m_FramesInFlight;
+        m_BuffersToRelease[bucket].push_back(m_Buffers[heapId]);
+        m_HeapsToRelease[bucket].push_back(m_Heaps[heapId]);
 
         m_Heaps[heapId] = nullptr;
         m_Buffers[heapId] = nullptr;
 
         m_TotalAllocatedBytes -= m_HeapSizeInBytes;
         m_NumHeaps--;
+    }
+
+    void HeapAllocator::DrainReleaseQueue(uint32_t frameIndex)
+    {
+        uint32_t bucket = frameIndex % m_FramesInFlight;
+        m_HeapsToRelease[bucket].clear();
+        m_BuffersToRelease[bucket].clear();
     }
 
     // ─── FeedbackManager ─────────────────────────────────────────────────────
@@ -77,7 +90,8 @@ namespace nvfeedback
         m_TexturesToReadback.resize(m_NumFramesInFlight);
 
         m_HeapAllocator = std::make_unique<HeapAllocator>(
-            static_cast<uint64_t>(desc.m_HeapSizeInTiles) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES);
+            static_cast<uint64_t>(desc.m_HeapSizeInTiles) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES,
+            m_NumFramesInFlight);
 
         rtxts::TiledTextureManagerDesc tiledTextureManagerDesc{};
         tiledTextureManagerDesc.heapTilesCapacity = desc.m_HeapSizeInTiles;
@@ -112,12 +126,7 @@ namespace nvfeedback
         {
             auto it = std::find(m_TexturesRingbuffer.begin(), m_TexturesRingbuffer.end(), feedbackTexture);
             if (it != m_TexturesRingbuffer.end())
-            {
-                size_t idx = std::distance(m_TexturesRingbuffer.begin(), it);
                 m_TexturesRingbuffer.erase(it);
-                if (idx < m_RingbufferCursor)
-                    m_RingbufferCursor--;
-            }
         }
 
         for (auto& vec : m_TexturesToReadback)
@@ -138,9 +147,6 @@ namespace nvfeedback
         }
         else if (!bIncludeInRingBuffer && it != m_TexturesRingbuffer.end())
         {
-            size_t idx = std::distance(m_TexturesRingbuffer.begin(), it);
-            if (idx < m_RingbufferCursor)
-                m_RingbufferCursor--;
             m_TexturesRingbuffer.erase(it);
         }
     }
@@ -154,6 +160,10 @@ namespace nvfeedback
 
         m_FrameIndex = config.m_FrameIndex % m_NumFramesInFlight;
         m_UpdateConfigThisFrame = config;
+
+        // Drain deferred heap/buffer releases that are now safely past the
+        // GPU fence (NumFramesInFlight frames have elapsed).
+        m_HeapAllocator->DrainReleaseQueue(m_FrameIndex);
 
         // Update TTM config
         rtxts::TiledTextureManagerConfig ttmConfig{};
@@ -207,11 +217,10 @@ namespace nvfeedback
         readbackTextures.clear();
         {
             uint32_t updatesLeft = m_UpdateConfigThisFrame.m_MaxTexturesToUpdate;
-            size_t count = m_TexturesRingbuffer.size();
-            for (size_t i = 0; i < count && updatesLeft > 0; i++)
+            for (FeedbackTexture* feedbackTexture : m_TexturesRingbuffer)
             {
-                size_t idx = (m_RingbufferCursor + i) % count;
-                FeedbackTexture* feedbackTexture = m_TexturesRingbuffer[idx];
+                if (updatesLeft == 0)
+                    break;
                 commandList->clearSamplerFeedbackTexture(feedbackTexture->GetSamplerFeedbackTexture());
                 readbackTextures.push_back(feedbackTexture);
                 updatesLeft--;
@@ -239,7 +248,7 @@ namespace nvfeedback
             for (uint32_t heapId : emptyHeaps)
             {
                 m_TiledTextureManager->RemoveHeap(heapId);
-                m_HeapAllocator->ReleaseHeap(heapId);
+                m_HeapAllocator->ReleaseHeap(heapId, m_FrameIndex);
             }
         }
 
@@ -475,11 +484,16 @@ namespace nvfeedback
 
     void FeedbackManager::EndFrame()
     {
-        // Advance ring buffer cursor
+        // Rotate textures that were processed this frame from front to back
         if (!m_TexturesRingbuffer.empty() && m_UpdateConfigThisFrame.m_MaxTexturesToUpdate > 0)
         {
-            uint32_t numToRotate = m_UpdateConfigThisFrame.m_MaxTexturesToUpdate;
-            m_RingbufferCursor = (m_RingbufferCursor + numToRotate) % uint32_t(m_TexturesRingbuffer.size());
+            uint32_t numTexturesToUpdate = m_UpdateConfigThisFrame.m_MaxTexturesToUpdate;
+            for (uint32_t i = 0; i < numTexturesToUpdate && !m_TexturesRingbuffer.empty(); i++)
+            {
+                FeedbackTexture* tex = m_TexturesRingbuffer.front();
+                m_TexturesRingbuffer.pop_front();
+                m_TexturesRingbuffer.push_back(tex);
+            }
         }
 
         // Update stats
