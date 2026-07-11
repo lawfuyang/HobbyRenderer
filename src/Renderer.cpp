@@ -771,7 +771,7 @@ void Renderer::UpdateStreamingPreRender()
         auto FindStreamingTex = [this](nvfeedback::FeedbackTexture* feedbackTex) -> Scene::StreamingTexture*
         {
             int idx = feedbackTex->GetUserIndex();
-            assert(idx >= 0 && idx < (int)m_Scene.m_StreamingTextures.size());
+            SDL_assert(idx >= 0 && idx < (int)m_Scene.m_StreamingTextures.size());
             Scene::StreamingTexture& st = m_Scene.m_StreamingTextures[idx];
             return st.m_ReservedTexture ? &st : nullptr;
         };
@@ -786,7 +786,7 @@ void Renderer::UpdateStreamingPreRender()
 
                 nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
                 Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
-                assert(st.m_ReservedTexture && st.m_SourceData);
+                SDL_assert(st.m_ReservedTexture && st.m_SourceData);
 
                 nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
                 const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
@@ -861,7 +861,7 @@ void Renderer::UpdateStreamingPreRender()
 
                 nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
                 Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
-                assert(st.m_ReservedTexture && st.m_SourceData);
+                SDL_assert(st.m_ReservedTexture && st.m_SourceData);
 
                 nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
                 const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
