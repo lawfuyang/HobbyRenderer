@@ -1312,6 +1312,8 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 	nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cl, "LoadTextures" };
 
+	scene.m_StreamingTextures.resize(scene.m_Textures.size());
+
 	for (uint32_t i = 0; i < (uint32_t)scene.m_Textures.size(); ++i)
 	{
 		Scene::Texture& tex = scene.m_Textures[i];
@@ -1466,16 +1468,14 @@ void SceneLoader::LoadTexturesFromImages(Scene& scene, const std::filesystem::pa
 		// Populate MinMip and feedback bindless indices for streaming textures
 		auto getMinMipIndex = [&](int texIdx) -> uint32_t {
 			if (texIdx == -1) return srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK;
-			auto it = scene.m_StreamingTextures.find(texIdx);
-			if (it != scene.m_StreamingTextures.end())
-				return it->second.m_MinMipBindlessIndex;
+			if (texIdx < (int)scene.m_StreamingTextures.size() && scene.m_StreamingTextures[texIdx].m_ReservedTexture)
+				return scene.m_StreamingTextures[texIdx].m_MinMipBindlessIndex;
 			return srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK;
 		};
 		auto getFeedbackIndex = [&](int texIdx) -> uint32_t {
 			if (texIdx == -1) return 0u;
-			auto it = scene.m_StreamingTextures.find(texIdx);
-			if (it != scene.m_StreamingTextures.end())
-				return it->second.m_FeedbackBindlessIndex;
+			if (texIdx < (int)scene.m_StreamingTextures.size() && scene.m_StreamingTextures[texIdx].m_ReservedTexture)
+				return scene.m_StreamingTextures[texIdx].m_FeedbackBindlessIndex;
 			return 0u;
 		};
 		mat.m_AlbedoMinMipBindlessIndex    = getMinMipIndex(mat.m_BaseColorTexture);

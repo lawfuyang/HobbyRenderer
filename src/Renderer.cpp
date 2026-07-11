@@ -767,13 +767,13 @@ void Renderer::UpdateStreamingPreRender()
         uint32_t submitted = 0;
 
         // Helper: resolve a FeedbackTexture back to its StreamingTexture via
-        // the user index set at texture creation time (O(1) lookup).
+        // the user index set at texture creation time (O(1) direct-index lookup).
         auto FindStreamingTex = [this](nvfeedback::FeedbackTexture* feedbackTex) -> Scene::StreamingTexture*
         {
             int idx = feedbackTex->GetUserIndex();
-            assert(idx >= 0 && "FeedbackTexture has invalid user index");
-            auto it = m_Scene.m_StreamingTextures.find(idx);
-            return (it != m_Scene.m_StreamingTextures.end()) ? &it->second : nullptr;
+            assert(idx >= 0 && idx < (int)m_Scene.m_StreamingTextures.size());
+            Scene::StreamingTexture& st = m_Scene.m_StreamingTextures[idx];
+            return st.m_ReservedTexture ? &st : nullptr;
         };
 
         if (m_StreamingConfig.m_bAsyncTileIO)
@@ -785,8 +785,8 @@ void Renderer::UpdateStreamingPreRender()
                 if (submitted >= submitBudget) break;
 
                 nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
-                Scene::StreamingTexture* st = FindStreamingTex(feedbackTex);
-                if (!st || !st->m_SourceData) continue;
+                Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
+                assert(st.m_ReservedTexture && st.m_SourceData);
 
                 nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
                 const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
@@ -804,8 +804,8 @@ void Renderer::UpdateStreamingPreRender()
                         if (submitted >= submitBudget) break;
 
                         nvfeedback::TileRequest req;
-                        req.m_SourceData         = st->m_SourceData;
-                        req.m_ReservedTexture    = st->m_ReservedTexture;
+                        req.m_SourceData         = st.m_SourceData;
+                        req.m_ReservedTexture    = st.m_ReservedTexture;
                         req.m_MipLevel           = tileInfo.m_Mip;
                         req.m_TileXInTexels      = tileInfo.m_XInTexels;
                         req.m_TileYInTexels      = tileInfo.m_YInTexels;
@@ -860,13 +860,13 @@ void Renderer::UpdateStreamingPreRender()
                 if (submitted >= submitBudget) break;
 
                 nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
-                Scene::StreamingTexture* st = FindStreamingTex(feedbackTex);
-                if (!st || !st->m_SourceData) continue;
+                Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
+                assert(st.m_ReservedTexture && st.m_SourceData);
 
                 nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
                 const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
                 const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
-                const uint8_t* ddsBase = static_cast<const uint8_t*>(st->m_SourceData->GetData());
+                const uint8_t* ddsBase = static_cast<const uint8_t*>(st.m_SourceData->GetData());
 
                 for (uint32_t tileIndex : texUpdate.m_TileIndices)
                 {
