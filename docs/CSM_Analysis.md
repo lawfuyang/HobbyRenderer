@@ -158,6 +158,7 @@ else  // NormalAdvanced (old Normal) + IBL
 | HZBGeneratorPhase2 | ✅ | ✅ | |
 | **ShadowRenderer** | ❌ | ✅ | **NEW** — CSM: renders opaque (null PS) + masked (alpha-test PS) per cascade |
 | **ShadowMaskRenderer** | ❌ | ✅ | **NEW** — fullscreen compute: evaluates CSM → writes R8 shadow mask |
+| **CSMDebugRenderer** | ❌ | ✅ | **NEW** — debug overlay (cascade splits, shadow map viz, PCF footprint, etc.) |
 | **DDGIRenderer** | ❌ | ✅ | **NEW** — DDGI indirect query (next phase; placeholder) |
 | RTXDIRenderer | ✅ | ❌ | Disabled |
 | SHARCRenderer | ✅ (if enabled) | ❌ | Disabled |
@@ -550,6 +551,193 @@ float ComputeCSMShadow(
     return shadow / 9.0f;
 }
 
+### 4.13 CSM Debug View Modes
+
+Debug visualization is **critical** for CSM development. Shadow artifacts are notoriously hard to diagnose without visual feedback. All debug modes should be wired to an ImGui dropdown (`CSM Debug View` combo) and implemented **early** — ideally right after the skeleton renderer produces its first shadow map.
+
+Each debug mode is a distinct fullscreen pass or overlay that replaces (or composites atop) the final output. All modes use a single `uint m_CSMDebugMode` constant in the shader constant buffer.
+
+---
+
+#### Mode 1: Cascade Split Overlay
+
+**Purpose:** Visualize which cascade each pixel falls into. This is the single most important debug view — wrong split positions cause cascade boundaries to be visible as hard seams or resolution transitions.
+
+**Implementation:**
+```hlsl
+// In DeferredLighting PS or a dedicated debug pass:
+static const float3 kCascadeColors[4] = {
+    float3(1.0f, 0.2f, 0.2f),  // Red    — Cascade 0 (near)
+    float3(0.2f, 1.0f, 0.2f),  // Green  — Cascade 1
+    float3(0.2f, 0.2f, 1.0f),  // Blue   — Cascade 2
+    float3(1.0f, 1.0f, 0.2f),  // Yellow — Cascade 3 (far)
+};
+
+uint cascadeIndex = SelectCascade(viewDepth, cascadeSplits);
+return float4(kCascadeColors[cascadeIndex] * 0.5f + albedo * 0.5f, 1.0f);
+```
+
+**Diagnoses:** Split distance tuning, cascade overlapping, view-dependent split drift.
+
+---
+
+#### Mode 2: Shadow Map Array Visualization
+
+**Purpose:** Display each cascade's depth map as a small 2D quad in screen corners. Shows what geometry each cascade captures and whether occluders are present.
+
+**Implementation:** Render 4 quads in a fixed screen-space layout (e.g., 4-up horizontal strip at the bottom). Sample each slice of the `Texture2DArray` with a linear depth→grayscale conversion:
+
+```hlsl
+float depth = g_CSMShadowMap.SampleLevel(pointSampler, float3(uv, cascadeIndex), 0);
+float gray = saturate(depth * DEPTH_SCALE);  // or: LinearizeDepth(depth) / farPlane
+return float4(gray, gray, gray, 1.0f);
+```
+
+**Diagnoses:** Empty cascade frusta, shadow caster coverage, depth precision issues (near vs far), cascade AABB tightness.
+
+---
+
+#### Mode 3: Raw Shadow Mask
+
+**Purpose:** Display the `R8_UNORM` shadow mask as a grayscale image. This is the final visibility signal consumed by the deferred lighting pass — any artifacts here propagate directly to the final image.
+
+**Implementation:** Copy or overlay the shadow mask RT:
+```hlsl
+float shadow = g_ShadowMask.Load(uint3(uvInt, 0));
+return float4(shadow, shadow, shadow, 1.0f);
+```
+
+**Diagnoses:** PCF quality, shadow acne (where mask should be 0 but is 1), Peter Panning (where mask should be 1 but is 0), cascade boundary seams, shadow bias tuning.
+
+---
+
+#### Mode 4: PCF Sample Footprint
+
+**Purpose:** Visualize the PCF kernel sample density by modulating pixel brightness based on the number of PCF taps that pass the depth test. Identifies shadow edge quality issues.
+
+**Implementation:** Compute shadow twice — once at full PCF quality (9-tap), once at 1-tap (hardware PCF only). The difference reveals where the PCF kernel is active:
+```hlsl
+float shadow1Tap = shadowMap.SampleCmpLevelZero(sampler, float3(uv, cascadeIndex), depth);
+float shadow9Tap = Compute3x3PCF(...);
+float kernelEffect = abs(shadow9Tap - shadow1Tap);  // 0 = hard edge, >0 = PCF active
+return float4(kernelEffect, shadow9Tap, shadow1Tap, 1.0f);
+// R: kernel influence, G: soft shadow, B: hard shadow
+```
+
+**Diagnoses:** PCF kernel width effectiveness, shadow edge softness falloff, identifying areas where PCF is over-blurring or under-blurring.
+
+---
+
+#### Mode 5: Alpha-Masked Overlay
+
+**Purpose:** Highlight only pixels whose shadow evaluation went through the alpha-test path (masked geometry: grass, foliage, fences) vs the opaque fast path (null PS).
+
+**Implementation:** Two-pass shadow mask: one pass for opaque (write 0.0 to a stencil or separate RT), one for masked (write 1.0). Then visualize:
+```hlsl
+bool bIsMasked = g_MaskedFlag.Load(uint3(uvInt, 0)).r > 0.5f;
+float3 color = bIsMasked ? float3(1.0f, 0.5f, 0.0f) : float3(0.5f, 0.5f, 0.5f);
+return float4(color, 1.0f);
+```
+
+**Diagnoses:** Verify alpha-masked geometry is correctly separated from opaque, ensure foliage casts proper silhouetted shadows, detect missing alpha-test coverage.
+
+---
+
+#### Mode 6: Light-Space Depth Compare
+
+**Purpose:** Directly visualize the shadow depth comparison. Show red where the depth test fails (in shadow), green where it passes (lit).
+
+**Implementation:**
+```hlsl
+float depthSM = shadowMap.SampleCmpLevelZero(sampler, float3(uv, cascadeIndex), depth);
+float3 color = depthSM < 0.5f
+    ? float3(0.8f, 0.1f, 0.1f)   // Red = shadowed
+    : float3(0.1f, 0.8f, 0.1f);  // Green = lit
+return float4(color, 1.0f);
+```
+
+**Diagnoses:** Shadow acne (speckled red in lit areas), Peter Panning (green gaps at contact points), depth bias calibration, false shadowing from out-of-frustum casters.
+
+---
+
+#### Mode 7: Split Frustum Wireframe (3D)
+
+**Purpose:** Draw the 8 corners and 12 edges of each cascade's sub-frustum in the 3D view, color-coded per cascade. Requires a simple line-draw pass (e.g., ImGui 3D lines or a dedicated wireframe overlay).
+
+**Implementation:** Compute frustum corner world positions on CPU, submit to an ImGui 3D line-drawing call or a dedicated debug line renderer:
+```cpp
+// CPU-side: compute frustum corners for each cascade
+for (uint cascadeIdx = 0; cascadeIdx < 4; cascadeIdx++)
+{
+    float3 corners[8];
+    ComputeFrustumCorners(camera, cascadeSplits[cascadeIdx], cascadeSplits[cascadeIdx+1], corners);
+    DrawFrustumWireframe(corners, kCascadeColors[cascadeIdx]);
+}
+```
+
+**Diagnoses:** Frustum AABB tightness, split plane placement in 3D, light direction vs cascade alignment, dueling frusta detection.
+
+---
+
+#### Mode 8: Cascade Transition Blend Zone
+
+**Purpose:** Highlight the blend band between cascades where both shadow maps are sampled and interpolated. Reveals whether the blend band is too narrow (visible seam) or too wide (wasted performance).
+
+**Implementation:** In the cascade selection logic, track whether the pixel falls in the blend zone:
+```hlsl
+float blendFactor = saturate((viewDepth - splitEnd - BLEND_BAND * 0.5f) / BLEND_BAND);
+bool bInBlendZone = blendFactor > 0.0f && blendFactor < 1.0f;
+float3 color = bInBlendZone ? float3(1.0f, 0.0f, 1.0f) : kCascadeColors[cascadeIndex];
+return float4(color, 1.0f);
+```
+
+**Diagnoses:** Blend band width tuning, cascade seam visibility, dithering vs blending quality comparison.
+
+---
+
+#### Debug Mode Summary
+
+| Mode | Name | Visual Output | Primary Diagnosis |
+|---|---|---|---|
+| 1 | Cascade Split Overlay | Color-per-cascade tint on scene | Split position tuning |
+| 2 | Shadow Map Array Viz | 4-up depth maps in screen corners | Caster coverage, empty cascades |
+| 3 | Raw Shadow Mask | Grayscale mask RT | PCF quality, bias, acne |
+| 4 | PCF Sample Footprint | RGB: kernel influence + soft/hard edges | PCF kernel effectiveness |
+| 5 | Alpha-Masked Overlay | Orange=alpha-tested, gray=opaque | Masked geometry separation |
+| 6 | Light-Space Depth Compare | Red=shadowed, Green=lit | Bias calibration, false shadowing |
+| 7 | Split Frustum Wireframe | 3D frustum edges color-coded | Frustum shape, light alignment |
+| 8 | Cascade Blend Zone | Magenta=blend, cascade color=non-blend | Blend band width tuning |
+
+#### Debug View Architecture
+
+All debug modes share a single compute/pixel shader with a `uint m_DebugMode` branch:
+
+```hlsl
+// CSMDebug_PS or integrated into DeferredLighting PS debug path
+float3 DebugOutput = float3(0, 0, 0);
+switch (m_DebugMode)
+{
+    case CSM_DEBUG_CASCADE_SPLITS:    DebugOutput = DebugCascadeSplits(...); break;
+    case CSM_DEBUG_SHADOW_MAP_VIZ:    DebugOutput = DebugShadowMapViz(...); break;
+    case CSM_DEBUG_SHADOW_MASK:       DebugOutput = DebugShadowMask(...); break;
+    case CSM_DEBUG_PCF_FOOTPRINT:     DebugOutput = DebugPCFFootprint(...); break;
+    case CSM_DEBUG_ALPHA_MASKED:      DebugOutput = DebugAlphaMasked(...); break;
+    case CSM_DEBUG_DEPTH_COMPARE:     DebugOutput = DebugDepthCompare(...); break;
+    case CSM_DEBUG_BLEND_ZONE:        DebugOutput = DebugBlendZone(...); break;
+    default:                          DebugOutput = finalLighting; break;
+}
+```
+
+ImGui integration:
+```cpp
+static const char* kCSMDebugModes[] = {
+    "Off", "Cascade Splits", "Shadow Map Array", "Raw Shadow Mask",
+    "PCF Footprint", "Alpha-Masked Overlay", "Depth Compare",
+    "Frustum Wireframe", "Blend Zone"
+};
+ImGui::Combo("CSM Debug", &g_Renderer.m_CSMDebugMode, kCSMDebugModes, IM_ARRAYSIZE(kCSMDebugModes));
+```
+
 ---
 
 ## 5. Feature Dependency Map & Disabled Features
@@ -704,6 +892,37 @@ float3 color = directDiffuse + indirectGI;
 5. Update ImGui combo in [ImGuiLayer.cpp](../src/ImGuiLayer.cpp)
 6. Add feature flag `m_EnableReSTIRDI = false`, `m_EnableRTShadows = false`, `m_IndirectLightingTechnique = 0` when switching to NormalBasic
 
+### Phase 1.5: CSM Debug View Modes 🔍
+
+> **Rationale:** Debug views must be implemented **immediately after** the first shadow map is produced. Without visual feedback, shadow quality issues (bias, acne, cascade seams, PCF artifacts) are essentially undiagnosable. Every subsequent phase benefits from these diagnostics.
+
+**Deliverable:** A single ImGui `CSM Debug` dropdown that cycles through 8 debug modes (see §4.13). This should be implemented as soon as `ShadowRenderer` produces its first depth map and `ShadowMaskRenderer` writes the first R8 mask — even before the deferred lighting shader consumes them.
+
+1. Add `uint m_CSMDebugMode` to `CommonConsts` in [Common.sr](../src/shaders/Common.sr) — maps to `CSM_DEBUG_OFF = 0` through `CSM_DEBUG_BLEND_ZONE = 8`
+2. Add `uint32_t m_CSMDebugMode = 0` to `Renderer` struct in [Renderer.h](../src/Renderer.h)
+3. Create `src/shaders/CSMDebug.hlsli` with all 8 debug mode functions (uses `CommonShadow.hlsli` for CSM sampling)
+4. Create `src/CSMDebugRenderer.h` / `src/CSMDebugRenderer.cpp` — a lightweight `IRenderer` that:
+   - Reads `g_RG_CSMShadowMap` (depth array), `g_RG_ShadowMask` (R8), `g_RG_DepthTexture`, GBuffer textures
+   - Writes a debug visualization to a temporary RGBA8 RT (or composites directly into the final output)
+   - Returns early (`Setup()` returns false) when `m_CSMDebugMode == CSM_DEBUG_OFF`
+5. Wire into `ScheduleAndRunAllRenderers()` — schedule `g_CSMDebugRenderer` **after** `ShadowMaskRenderer` and **before** `DeferredRenderer` (or as a post-process overlay after `DeferredRenderer`)
+6. Add ImGui combo in [ImGuiLayer.cpp](../src/ImGuiLayer.cpp):
+   ```cpp
+   static const char* kCSMDebugModes[] = { "Off", "Cascade Splits", "Shadow Map Array",
+       "Raw Shadow Mask", "PCF Footprint", "Alpha-Masked Overlay",
+       "Depth Compare", "Frustum Wireframe", "Blend Zone" };
+   ImGui::Combo("CSM Debug", &m_CSMDebugMode, kCSMDebugModes, IM_ARRAYSIZE(kCSMDebugModes));
+   ```
+7. Implement per-mode visualization:
+   - **Mode 1 (Cascade Splits):** Color-tint scene by cascade index. Implemented in `DeferredLighting` debug path or as a dedicated overlay.
+   - **Mode 2 (Shadow Map Array):** 4-up depth-map quads in screen corners. Sample each slice of the `Texture2DArray`.
+   - **Mode 3 (Raw Shadow Mask):** Display `g_ShadowMask` as grayscale.
+   - **Mode 4 (PCF Footprint):** RGB: R=kernel influence (9-tap vs 1-tap diff), G=9-tap shadow, B=1-tap shadow.
+   - **Mode 5 (Alpha-Masked Overlay):** Orange tint on pixels from the masked geometry path.
+   - **Mode 6 (Depth Compare):** Red=shadowed, Green=lit. Direct visualization of the depth comparison.
+   - **Mode 7 (Frustum Wireframe):** CPU-computed frustum corners submitted as ImGui 3D lines.
+   - **Mode 8 (Blend Zone):** Magenta overlay on pixels in the cascade transition blend band.
+
 ### Phase 2: ShadowRenderer (CSM) + ShadowMaskRenderer
 
 1. Create `src/ShadowRenderer.h` / `src/ShadowRenderer.cpp`
@@ -758,7 +977,13 @@ float3 color = directDiffuse + indirectGI;
 | [RTXDIRenderer.cpp](../src/RTXDIRenderer.cpp) | ReSTIR DI + GI — to be skipped in NormalBasic |
 | [SHARCRenderer.cpp](../src/SHARCRenderer.cpp) | SHARC indirect — to be skipped in NormalBasic |
 | [NrdIntegration.h](../src/NrdIntegration.h) | NRD denoiser — to be skipped in NormalBasic |
-| [ImGuiLayer.cpp](../src/ImGuiLayer.cpp) | UI controls — needs RenderingMode combo update |
+| [ImGuiLayer.cpp](../src/ImGuiLayer.cpp) | UI controls — needs RenderingMode combo + CSM Debug combo |
+| [ShadowRenderer.h](../src/ShadowRenderer.h) | **NEW** — CSM depth-only raster renderer per cascade |
+| [ShadowMaskRenderer.h](../src/ShadowMaskRenderer.h) | **NEW** — fullscreen compute: CSM evaluation → R8 shadow mask |
+| [CSMDebugRenderer.h](../src/CSMDebugRenderer.h) | **NEW** — CSM debug visualization overlay (8 modes) |
+| [CommonShadow.hlsli](../src/shaders/CommonShadow.hlsli) | **NEW** — shared CSM evaluation: cascade selection + PCF |
+| [ShadowMask.hlsl](../src/shaders/ShadowMask.hlsl) | **NEW** — compute shader for R8 shadow mask |
+| [CSMDebug.hlsli](../src/shaders/CSMDebug.hlsli) | **NEW** — 8 debug visualization modes for CSM |
 
 ## Appendix B: Key Design Decisions
 
@@ -774,4 +999,5 @@ float3 color = directDiffuse + indirectGI;
 | Indirect GI | DDGI (next phase) | Baked or live probe-based GI; separate document |
 | Transparent lighting | Simplified forward (sun + DDGI indirect, no TLV) | TLV depends on ReSTIR + SHARC which are disabled |
 | TLAS | Not needed for CSM phase | CSM is pure raster; TLAS only needed later for DDGI probe rays |
+| Debug views | 8-mode ImGui dropdown (Phase 1.5) | Cascade splits, shadow map viz, PCF footprint, alpha overlay, depth compare, frustum wireframe, blend zone — critical for diagnosing all shadow quality issues |
 ```
