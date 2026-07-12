@@ -324,5 +324,27 @@ uint32_t ComputeDDSMipOffsets(const nvrhi::TextureDesc& desc, size_t outOffsets[
         offset += static_cast<size_t>(blocksW) * blocksH * info.bytesPerBlock;
     }
 
+    // Zero out any remaining entries beyond mipCount
+    for (uint32_t m = mipCount; m < srrhi::CommonConsts::MAX_MIP_COUNT; ++m)
+        outOffsets[m] = 0;
+
     return mipCount;
+}
+
+bool ValidateDDSMipOffsets(const nvrhi::TextureDesc& desc, const size_t offsets[srrhi::CommonConsts::MAX_MIP_COUNT], size_t totalDataSize)
+{
+    const uint32_t mipCount = std::min(desc.mipLevels, srrhi::CommonConsts::MAX_MIP_COUNT);
+    if (mipCount == 0) return true;
+
+    const nvrhi::FormatInfo& info = nvrhi::getFormatInfo(desc.format);
+
+    // Compute expected total size from the last mip's offset + its byte count
+    const uint32_t lastMip = mipCount - 1;
+    const uint32_t mw = std::max(1u, desc.width >> lastMip);
+    const uint32_t mh = std::max(1u, desc.height >> lastMip);
+    const uint32_t blocksW = (mw + info.blockSize - 1) / info.blockSize;
+    const uint32_t blocksH = (mh + info.blockSize - 1) / info.blockSize;
+    const size_t expectedSize = offsets[lastMip] + static_cast<size_t>(blocksW) * blocksH * info.bytesPerBlock;
+
+    return expectedSize == totalDataSize;
 }

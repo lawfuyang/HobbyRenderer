@@ -610,16 +610,6 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Text("UpdateMappings:   %.3f ms", stats.m_CpuTimeUpdateTileMappings * 1000.0);
             ImGui::Text("ResolveFeedback:  %.3f ms", stats.m_CpuTimeResolve * 1000.0);
 
-            ImGui::SeparatorText("Config");
-            ImGui::SliderInt("Max Textures/Frame",
-                reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_MaxTexturesPerFrame), 1, 32);
-            ImGui::SliderInt("Tiles Per Frame",
-                reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_TilesPerFrame), 1, 128);
-            ImGui::SliderFloat("Tile Timeout (s)",
-                &g_Renderer.m_StreamingConfig.m_TileTimeoutSeconds, 0.0f, 10.0f);
-            ImGui::SliderInt("Extra Standby Tiles",
-                reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_NumExtraStandbyTiles), 0, 2000);
-
             ImGui::TreePop();
         }
     }

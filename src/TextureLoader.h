@@ -15,3 +15,7 @@ void LoadSTBITexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::u
 // Fills outOffsets[m] with the byte offset (from start of pixel data) of each mip.
 // Returns the number of mips written (desc.mipLevels, clamped to MAX_MIP_COUNT).
 uint32_t ComputeDDSMipOffsets(const nvrhi::TextureDesc& desc, size_t outOffsets[srrhi::CommonConsts::MAX_MIP_COUNT]);
+
+// Validates that the total data size computed from the offsets matches totalDataSize.
+// Returns true if the DDS pixel data layout is consistent.
+bool ValidateDDSMipOffsets(const nvrhi::TextureDesc& desc, const size_t offsets[srrhi::CommonConsts::MAX_MIP_COUNT], size_t totalDataSize);

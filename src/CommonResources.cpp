@@ -82,6 +82,20 @@ void CommonResources::Initialize()
         desc.borderColor = nvrhi::Color(1.0f, 1.0f, 1.0f, 1.0f);
         LinearClampBorderWhite = createSampler("LinearClampBorderWhite", desc);
     }
+    {
+        nvrhi::SamplerDesc desc;
+        desc.setAllFilters(false);  // point filtering
+        desc.setAllAddressModes(nvrhi::SamplerAddressMode::ClampToEdge);
+        desc.reductionType = nvrhi::SamplerReductionType::Maximum;
+        PointMaxReductionClamp = createSampler("PointMaxReductionClamp", desc);
+    }
+    {
+        nvrhi::SamplerDesc desc;
+        desc.setAllFilters(false);  // point filtering
+        desc.setAllAddressModes(nvrhi::SamplerAddressMode::Wrap);
+        desc.reductionType = nvrhi::SamplerReductionType::Maximum;
+        PointMaxReductionWrap = createSampler("PointMaxReductionWrap", desc);
+    }
 
     // Register common samplers with global sampler descriptor heap
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_CLAMP_INDEX, AnisotropicClamp);
@@ -93,6 +107,8 @@ void CommonResources::Initialize()
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX, MinReductionClamp);
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_MAX_REDUCTION_INDEX, MaxReductionClamp);
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX, LinearClampBorderWhite);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX, PointMaxReductionClamp);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_WRAP_INDEX, PointMaxReductionWrap);
 
     // Initialize common raster states
     // Solid, no cull
@@ -502,4 +518,6 @@ void CommonResources::Shutdown()
     MaxReductionClamp = nullptr;
     MinReductionClamp = nullptr;
     LinearClampBorderWhite = nullptr;
+    PointMaxReductionClamp = nullptr;
+    PointMaxReductionWrap = nullptr;
 }

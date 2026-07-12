@@ -3,13 +3,6 @@
 
 namespace nvfeedback
 {
-    FeedbackTextureSet::FeedbackTextureSet(
-        uint32_t /*numReadbacks*/)
-        : m_PrimaryTextureIndex(0)
-    {
-        // Empty set — textures added via AddTexture()
-    }
-
     FeedbackTextureSet::~FeedbackTextureSet()
     {
         for (auto& texture : m_Textures)

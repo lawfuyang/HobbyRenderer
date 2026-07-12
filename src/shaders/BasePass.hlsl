@@ -263,10 +263,10 @@ float3 GetStreamingMipDebugColor(uint minMipIndex, float2 uv)
         return float3(0.3f, 0.3f, 0.3f);       // Gray: not a streaming texture
     }
 
-    Texture2D<float> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-    SamplerState pointSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX)];
-    float minResidentMip = minMipTex.SampleLevel(pointSam, uv, 0);
-    int mipLevel = int(round(minResidentMip));
+    Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
+    SamplerState maxReductionSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX)];
+    uint minResidentMip = minMipTex.SampleLevel(maxReductionSam, uv, 0);
+    int mipLevel = int(minResidentMip);
 
     // LUT from SamplerFeedbackStreaming GetLodVisualizationColor.h
     float3 lut[16] = {

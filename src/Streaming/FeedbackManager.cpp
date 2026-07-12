@@ -1,34 +1,22 @@
 #include "FeedbackManager.h"
 #include "../Renderer.h"
 
-// D3D12 tile size constant (64 KB)
-#ifndef D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES
-#define D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES 65536u
-#endif
-
 namespace nvfeedback
 {
+    const uint64_t kHeapSizeInBytes = kHeapSizeInTiles * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+
     // ─── HeapAllocator ───────────────────────────────────────────────────────
-
-    HeapAllocator::HeapAllocator(uint64_t heapSizeInBytes, uint32_t framesInFlight)
-        : m_HeapSizeInBytes(heapSizeInBytes)
-        , m_NumHeaps(0)
-        , m_TotalAllocatedBytes(0)
-        , m_FramesInFlight(framesInFlight)
-    {
-    }
-
     uint32_t HeapAllocator::AllocateHeap()
     {
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         nvrhi::HeapDesc heapDesc{};
-        heapDesc.capacity = m_HeapSizeInBytes;
+        heapDesc.capacity = kHeapSizeInBytes;
         heapDesc.type = nvrhi::HeapType::DeviceLocal;
         nvrhi::HeapHandle heap = device->createHeap(heapDesc);
 
         nvrhi::BufferDesc bufferDesc{};
-        bufferDesc.byteSize = m_HeapSizeInBytes;
+        bufferDesc.byteSize = kHeapSizeInBytes;
         bufferDesc.isVirtual = true;
         bufferDesc.initialState = nvrhi::ResourceStates::CopySource;
         bufferDesc.keepInitialState = true;
@@ -51,7 +39,7 @@ namespace nvfeedback
             m_Buffers[heapId] = buffer;
         }
 
-        m_TotalAllocatedBytes += m_HeapSizeInBytes;
+        m_TotalAllocatedBytes += kHeapSizeInBytes;
         m_NumHeaps++;
 
         return heapId;
@@ -62,104 +50,115 @@ namespace nvfeedback
         m_FreeHeapIds.push_back(heapId);
 
         // Defer actual destruction
-        uint32_t bucket = frameIndex % m_FramesInFlight;
+        uint32_t bucket = frameIndex % kNumFramesInFlight;
         m_BuffersToRelease[bucket].push_back(m_Buffers[heapId]);
         m_HeapsToRelease[bucket].push_back(m_Heaps[heapId]);
 
         m_Heaps[heapId] = nullptr;
         m_Buffers[heapId] = nullptr;
 
-        m_TotalAllocatedBytes -= m_HeapSizeInBytes;
+        m_TotalAllocatedBytes -= kHeapSizeInBytes;
         m_NumHeaps--;
     }
 
     void HeapAllocator::DrainReleaseQueue(uint32_t frameIndex)
     {
-        uint32_t bucket = frameIndex % m_FramesInFlight;
+        uint32_t bucket = frameIndex % kNumFramesInFlight;
         m_HeapsToRelease[bucket].clear();
         m_BuffersToRelease[bucket].clear();
     }
 
     // ─── FeedbackManager ─────────────────────────────────────────────────────
 
-    FeedbackManager::FeedbackManager(const FeedbackManagerDesc& desc)
-        : m_Desc(desc)
-        , m_NumFramesInFlight(desc.m_NumFramesInFlight)
-        , m_FrameIndex(0)
+    FeedbackManager::FeedbackManager()
+        : m_FrameIndex(0)
     {
-        m_TexturesToReadback.resize(m_NumFramesInFlight);
-
-        m_HeapAllocator = std::make_unique<HeapAllocator>(
-            static_cast<uint64_t>(desc.m_HeapSizeInTiles) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES,
-            m_NumFramesInFlight);
+        m_HeapAllocator = std::make_unique<HeapAllocator>();
 
         rtxts::TiledTextureManagerDesc tiledTextureManagerDesc{};
-        tiledTextureManagerDesc.heapTilesCapacity = desc.m_HeapSizeInTiles;
+        tiledTextureManagerDesc.heapTilesCapacity = kHeapSizeInTiles;
         m_TiledTextureManager = std::unique_ptr<rtxts::TiledTextureManager>(
             rtxts::CreateTiledTextureManager(tiledTextureManagerDesc));
     }
 
     FeedbackTexture* FeedbackManager::CreateTexture(const nvrhi::TextureDesc& desc)
     {
-        auto feedbackTexture = std::make_unique<FeedbackTexture>(
-            desc, m_TiledTextureManager.get(), m_NumFramesInFlight);
+        auto feedbackTexture = std::make_unique<FeedbackTexture>(desc, m_TiledTextureManager.get());
         FeedbackTexture* rawPtr = feedbackTexture.get();
+        uint32_t idx = (uint32_t)m_Textures.size();
+        rawPtr->SetManagerIndex(idx);
         m_Textures.push_back(std::move(feedbackTexture));
-        m_TexturesRingbuffer.push_back(rawPtr);
+        m_TexturesRingbuffer.push_back(idx);
         return rawPtr;
     }
 
     std::unique_ptr<FeedbackTextureSet> FeedbackManager::CreateTextureSet()
     {
-        return std::make_unique<FeedbackTextureSet>(m_NumFramesInFlight);
+        return std::make_unique<FeedbackTextureSet>();
     }
 
-    void FeedbackManager::UnregisterTexture(FeedbackTexture* feedbackTexture)
+    void FeedbackManager::UnregisterTexture(uint32_t textureIdx)
     {
-        {
-            auto it = std::find_if(m_Textures.begin(), m_Textures.end(),
-                [feedbackTexture](const std::unique_ptr<FeedbackTexture>& p) { return p.get() == feedbackTexture; });
-            if (it != m_Textures.end())
-                m_Textures.erase(it);
-        }
-
-        {
-            auto it = std::find(m_TexturesRingbuffer.begin(), m_TexturesRingbuffer.end(), feedbackTexture);
-            if (it != m_TexturesRingbuffer.end())
-                m_TexturesRingbuffer.erase(it);
-        }
-
+        // Remove from readback slots
         for (auto& vec : m_TexturesToReadback)
         {
-            auto it = std::find(vec.begin(), vec.end(), feedbackTexture);
+            auto it = std::find(vec.begin(), vec.end(), textureIdx);
             if (it != vec.end()) vec.erase(it);
         }
 
-        m_MinMipDirtyTextures.erase(feedbackTexture);
+        // Remove from ringbuffer
+        {
+            auto it = std::find(m_TexturesRingbuffer.begin(), m_TexturesRingbuffer.end(), textureIdx);
+            if (it != m_TexturesRingbuffer.end())
+            {
+                const size_t pos = it - m_TexturesRingbuffer.begin();
+                m_TexturesRingbuffer.erase(it);
+                if (pos < m_RingbufferCursor && m_RingbufferCursor > 0)
+                    --m_RingbufferCursor;
+                if (!m_TexturesRingbuffer.empty())
+                    m_RingbufferCursor %= (uint32_t)m_TexturesRingbuffer.size();
+                else
+                    m_RingbufferCursor = 0;
+            }
+        }
+
+        m_MinMipDirtyTextures.erase(textureIdx);
+
+        // Release ownership — this destroys the FeedbackTexture (and its nvrhi resources)
+        m_Textures.erase(m_Textures.begin() + textureIdx);
+
+        // Fix up m_ManagerIndex for textures that shifted
+        for (uint32_t i = textureIdx; i < (uint32_t)m_Textures.size(); ++i)
+            m_Textures[i]->SetManagerIndex(i);
     }
 
-    void FeedbackManager::UpdateTextureRingBufferState(FeedbackTexture* pTex, bool bIncludeInRingBuffer)
+    void FeedbackManager::UpdateTextureRingBufferState(uint32_t textureIdx, bool bIncludeInRingBuffer)
     {
-        auto it = std::find(m_TexturesRingbuffer.begin(), m_TexturesRingbuffer.end(), pTex);
+        auto it = std::find(m_TexturesRingbuffer.begin(), m_TexturesRingbuffer.end(), textureIdx);
         if (bIncludeInRingBuffer && it == m_TexturesRingbuffer.end())
         {
-            m_TexturesRingbuffer.push_back(pTex);
+            m_TexturesRingbuffer.push_back(textureIdx);
         }
         else if (!bIncludeInRingBuffer && it != m_TexturesRingbuffer.end())
         {
+            const size_t pos = it - m_TexturesRingbuffer.begin();
             m_TexturesRingbuffer.erase(it);
+            if (pos < m_RingbufferCursor && m_RingbufferCursor > 0)
+                --m_RingbufferCursor;
+            if (!m_TexturesRingbuffer.empty())
+                m_RingbufferCursor %= (uint32_t)m_TexturesRingbuffer.size();
+            else
+                m_RingbufferCursor = 0;
         }
     }
 
     void FeedbackManager::BeginFrame(
         nvrhi::ICommandList* commandList,
-        const FeedbackUpdateConfig& config,
-        FeedbackTextureCollection* results)
+        FeedbackTextureCollection& results)
     {
         SimpleTimer timer;
 
-        m_FrameIndex = config.m_FrameIndex % m_NumFramesInFlight;
-        m_UpdateConfigThisFrame = config;
+        m_FrameIndex = g_Renderer.m_FrameNumber % kNumFramesInFlight;
 
         // Drain deferred heap/buffer releases that are now safely past the
         // GPU fence (NumFramesInFlight frames have elapsed).
@@ -167,16 +166,17 @@ namespace nvfeedback
 
         // Update TTM config
         rtxts::TiledTextureManagerConfig ttmConfig{};
-        ttmConfig.numExtraStandbyTiles = config.m_NumExtraStandbyTiles;
+        ttmConfig.numExtraStandbyTiles = 0;
         m_TiledTextureManager->SetConfig(ttmConfig);
 
         // ── Step 1: Read back feedback from N frames ago ──
-        std::vector<FeedbackTexture*>& readbackTextures = m_TexturesToReadback[m_FrameIndex];
+        std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[m_FrameIndex];
         if (!readbackTextures.empty())
         {
             float timeStamp = static_cast<float>(GetTickCount64()) / 1000.0f;
-            for (FeedbackTexture* readbackTexture : readbackTextures)
+            for (uint32_t texIdx : readbackTextures)
             {
+                FeedbackTexture* readbackTexture = GetTextureByIndex(texIdx);
                 uint8_t* pReadbackData = static_cast<uint8_t*>(
                     g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
                                         nvrhi::CpuAccessMode::Read));
@@ -187,7 +187,7 @@ namespace nvfeedback
                     readbackTexture->GetTiledTextureId(),
                     samplerFeedbackDesc,
                     timeStamp,
-                    m_UpdateConfigThisFrame.m_TileTimeoutSeconds);
+                    0.0f);
 
                 g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex));
 
@@ -206,30 +206,36 @@ namespace nvfeedback
                                 readbackTexture->GetTiledTextureId(),
                                 follower->GetTiledTextureId(),
                                 timeStamp,
-                                m_UpdateConfigThisFrame.m_TileTimeoutSeconds);
+                                0.0f);
                         }
                     }
                 }
             }
         }
 
-        // ── Step 2: Collect textures to read back this frame ──
-        readbackTextures.clear();
+        // ── Step 2: Collect textures to read back NEXT frame ──
+        // Assign to the NEXT slot so that the following frame's Step 1 reads from the
+        // correct index (ResolveFeedback also decodes into this next slot).
         {
-            uint32_t updatesLeft = m_UpdateConfigThisFrame.m_MaxTexturesToUpdate;
-            for (FeedbackTexture* feedbackTexture : m_TexturesRingbuffer)
+            std::vector<uint32_t>& nextReadbackTextures = m_TexturesToReadback[(m_FrameIndex + 1) % kNumFramesInFlight];
+            nextReadbackTextures.clear();
+            if (!m_TexturesRingbuffer.empty())
             {
-                if (updatesLeft == 0)
-                    break;
-                commandList->clearSamplerFeedbackTexture(feedbackTexture->GetSamplerFeedbackTexture());
-                readbackTextures.push_back(feedbackTexture);
-                updatesLeft--;
+                uint32_t updatesLeft = UINT32_MAX;
+                const uint32_t count = (uint32_t)m_TexturesRingbuffer.size();
+                for (uint32_t i = 0; i < count && updatesLeft > 0; ++i)
+                {
+                    uint32_t texIdx = m_TexturesRingbuffer[(m_RingbufferCursor + i) % count];
+                    FeedbackTexture* feedbackTexture = GetTextureByIndex(texIdx);
+                    commandList->clearSamplerFeedbackTexture(feedbackTexture->GetSamplerFeedbackTexture());
+                    nextReadbackTextures.push_back(texIdx);
+                    updatesLeft--;
+                }
             }
         }
 
         // ── Step 3: Trim standby tiles ──
-        if (m_UpdateConfigThisFrame.m_bTrimStandbyTiles)
-            m_TiledTextureManager->TrimStandbyTiles();
+        m_TiledTextureManager->TrimStandbyTiles();
 
         // ── Step 4: Heap management ──
         uint32_t numRequiredHeaps = m_TiledTextureManager->GetNumDesiredHeaps();
@@ -241,7 +247,7 @@ namespace nvfeedback
                 m_TiledTextureManager->AddHeap(heapId);
             }
         }
-        else if (m_UpdateConfigThisFrame.m_bReleaseEmptyHeaps)
+        else
         {
             std::vector<uint32_t> emptyHeaps;
             m_TiledTextureManager->GetEmptyHeaps(emptyHeaps);
@@ -259,9 +265,9 @@ namespace nvfeedback
         std::vector<uint32_t> tilesRequestedNew;
         std::vector<uint32_t> tilesToUnmap;
 
-        for (const auto& feedbackTexturePtr : m_Textures)
+        for (uint32_t texIdx = 0; texIdx < (uint32_t)m_Textures.size(); ++texIdx)
         {
-            FeedbackTexture* feedbackTexture = feedbackTexturePtr.get();
+            FeedbackTexture* feedbackTexture = m_Textures.at(texIdx).get();
             // Unmap tiles
             m_TiledTextureManager->GetTilesToUnmap(feedbackTexture->GetTiledTextureId(), tilesToUnmap);
             if (!tilesToUnmap.empty())
@@ -292,38 +298,42 @@ namespace nvfeedback
                 }
 
                 g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(feedbackTexture->GetReservedTexture(), &textureTilesMapping, 1);
-                m_MinMipDirtyTextures.insert(feedbackTexture);
+                m_MinMipDirtyTextures.insert(texIdx);
             }
 
-            // Collect new tiles to stream in
+            // Collect new tiles to stream in (skip packed mips — handled at scene load)
             m_TiledTextureManager->GetTilesToMap(feedbackTexture->GetTiledTextureId(), tilesRequestedNew);
             if (!tilesRequestedNew.empty())
             {
                 FeedbackTextureUpdate update;
                 update.m_Texture = feedbackTexture;
                 for (uint32_t tileIndex : tilesRequestedNew)
+                {
+                    if (feedbackTexture->IsTilePacked(tileIndex))
+                        continue; // packed mips are permanently mapped at scene load
                     update.m_TileIndices.push_back(tileIndex);
-                results->m_Textures.push_back(update);
+                }
+                if (!update.m_TileIndices.empty())
+                    results.m_Textures.push_back(update);
             }
         }
 
         // ── Step 7: Defragmentation ──
-        if (m_UpdateConfigThisFrame.m_bDefragmentHeaps)
-            m_TiledTextureManager->DefragmentTiles(16);
+        m_TiledTextureManager->DefragmentTiles(16);
 
         m_BeginFrameCPUTime = timer.LapSeconds();
     }
 
     void FeedbackManager::UpdateTileMappings(
         nvrhi::ICommandList* commandList,
-        FeedbackTextureCollection* tilesReady)
+        FeedbackTextureCollection& tilesReady)
     {
         SimpleTimer timer;
 
-        for (FeedbackTextureUpdate& texUpdate : tilesReady->m_Textures)
+        for (FeedbackTextureUpdate& texUpdate : tilesReady.m_Textures)
         {
             FeedbackTexture* texture = texUpdate.m_Texture;
-            m_MinMipDirtyTextures.insert(texture);
+            m_MinMipDirtyTextures.insert(texture->GetManagerIndex());
 
             uint32_t tiledTextureId = texture->GetTiledTextureId();
             m_TiledTextureManager->UpdateTilesMapping(tiledTextureId, texUpdate.m_TileIndices);
@@ -335,6 +345,8 @@ namespace nvfeedback
             std::map<nvrhi::HeapHandle, std::vector<uint32_t>> heapTilesMapping;
             for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
+                if (texture->IsTilePacked(tileIndex))
+                    continue; // packed mips are permanently mapped at scene load
                 nvrhi::HeapHandle heap = m_HeapAllocator->GetHeapHandle(tileAllocations[tileIndex].heapId);
                 heapTilesMapping[heap].push_back(tileIndex);
             }
@@ -390,8 +402,8 @@ namespace nvfeedback
 
             if (!bUseAutomaticBarriers)
             {
-                for (FeedbackTexture* feedbackTexture : m_MinMipDirtyTextures)
-                    commandList->setTextureState(feedbackTexture->GetMinMipTexture(),
+                for (uint32_t texIdx : m_MinMipDirtyTextures)
+                    commandList->setTextureState(GetTextureByIndex(texIdx)->GetMinMipTexture(),
                                                  nvrhi::AllSubresources,
                                                  nvrhi::ResourceStates::CopyDest);
             }
@@ -399,14 +411,15 @@ namespace nvfeedback
             std::vector<uint8_t> minMipData;
             std::vector<uint8_t> uploadData;
 
-            for (FeedbackTexture* texture : m_MinMipDirtyTextures)
+            for (uint32_t texIdx : m_MinMipDirtyTextures)
             {
+                FeedbackTexture* texture = GetTextureByIndex(texIdx);
                 rtxts::TextureDesc desc = m_TiledTextureManager->GetTextureDesc(
                     texture->GetTiledTextureId(), rtxts::TextureTypes::eMinMipTexture);
 
                 // Size scratch buffers for this texture's MinMip dimensions
                 uint32_t numElements = desc.textureOrMipRegionWidth * desc.textureOrMipRegionHeight;
-                uint32_t rowPitch = (desc.textureOrMipRegionWidth * sizeof(float) + 0xFF) & ~0xFF;
+                uint32_t rowPitch = (desc.textureOrMipRegionWidth * sizeof(uint32_t) + 0xFF) & ~0xFF;
                 minMipData.resize(numElements);
                 uploadData.resize(rowPitch * desc.textureOrMipRegionHeight);
 
@@ -415,9 +428,9 @@ namespace nvfeedback
                 uint8_t* pUploadData = uploadData.data();
                 for (uint32_t y = 0; y < desc.textureOrMipRegionHeight; ++y)
                 {
-                    float* pDataFloat = reinterpret_cast<float*>(pUploadData);
+                    uint32_t* pDataUint = reinterpret_cast<uint32_t*>(pUploadData);
                     for (uint32_t x = 0; x < desc.textureOrMipRegionWidth; ++x)
-                        pDataFloat[x] = static_cast<float>(minMipData[y * desc.textureOrMipRegionWidth + x]);
+                        pDataUint[x] = static_cast<uint32_t>(minMipData[y * desc.textureOrMipRegionWidth + x]);
                     pUploadData += rowPitch;
                 }
 
@@ -426,8 +439,8 @@ namespace nvfeedback
 
             if (!bUseAutomaticBarriers)
             {
-                for (FeedbackTexture* feedbackTexture : m_MinMipDirtyTextures)
-                    commandList->setTextureState(feedbackTexture->GetMinMipTexture(),
+                for (uint32_t texIdx : m_MinMipDirtyTextures)
+                    commandList->setTextureState(GetTextureByIndex(texIdx)->GetMinMipTexture(),
                                                  nvrhi::AllSubresources,
                                                  nvrhi::ResourceStates::ShaderResource);
             }
@@ -441,7 +454,8 @@ namespace nvfeedback
 
     void FeedbackManager::ResolveFeedback(nvrhi::ICommandList* commandList)
     {
-        std::vector<FeedbackTexture*>& readbackTextures = m_TexturesToReadback[m_FrameIndex];
+        // Use the NEXT slot — matches BeginFrame Step 2 which also assigns to (m_FrameIndex+1)%F
+        std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[(m_FrameIndex + 1) % kNumFramesInFlight];
         if (readbackTextures.empty())
         {
             m_ResolveCPUTime = 0.0;
@@ -455,25 +469,28 @@ namespace nvfeedback
 
         if (!bUseAutomaticBarriers)
         {
-            for (FeedbackTexture* feedbackTexture : readbackTextures)
+            for (uint32_t texIdx : readbackTextures)
                 commandList->setSamplerFeedbackTextureState(
-                    feedbackTexture->GetSamplerFeedbackTexture(),
+                    GetTextureByIndex(texIdx)->GetSamplerFeedbackTexture(),
                     nvrhi::ResourceStates::ResolveSource);
         }
 
-        for (FeedbackTexture* feedbackTexture : readbackTextures)
+        for (uint32_t texIdx : readbackTextures)
         {
+            FeedbackTexture* texture = GetTextureByIndex(texIdx);
+            // Decode into the NEXT slot to match BeginFrame Step 2's assignment
+            const uint32_t resolveSlot = (m_FrameIndex + 1) % kNumFramesInFlight;
             commandList->decodeSamplerFeedbackTexture(
-                feedbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
-                feedbackTexture->GetSamplerFeedbackTexture(),
+                texture->GetFeedbackResolveBuffer(resolveSlot),
+                texture->GetSamplerFeedbackTexture(),
                 nvrhi::Format::R8_UINT);
         }
 
         if (!bUseAutomaticBarriers)
         {
-            for (FeedbackTexture* feedbackTexture : readbackTextures)
+            for (uint32_t texIdx : readbackTextures)
                 commandList->setSamplerFeedbackTextureState(
-                    feedbackTexture->GetSamplerFeedbackTexture(),
+                    GetTextureByIndex(texIdx)->GetSamplerFeedbackTexture(),
                     nvrhi::ResourceStates::UnorderedAccess);
         }
 
@@ -484,16 +501,13 @@ namespace nvfeedback
 
     void FeedbackManager::EndFrame()
     {
-        // Rotate textures that were processed this frame from front to back
-        if (!m_TexturesRingbuffer.empty() && m_UpdateConfigThisFrame.m_MaxTexturesToUpdate > 0)
+        // Advance ring buffer cursor by the number of textures processed this frame
+        if (!m_TexturesRingbuffer.empty() && UINT32_MAX > 0)
         {
-            uint32_t numTexturesToUpdate = m_UpdateConfigThisFrame.m_MaxTexturesToUpdate;
-            for (uint32_t i = 0; i < numTexturesToUpdate && !m_TexturesRingbuffer.empty(); i++)
-            {
-                FeedbackTexture* tex = m_TexturesRingbuffer.front();
-                m_TexturesRingbuffer.pop_front();
-                m_TexturesRingbuffer.push_back(tex);
-            }
+            const uint32_t count = (uint32_t)m_TexturesRingbuffer.size();
+            // Clamp to count; use 64-bit arithmetic to safely handle UINT32_MAX
+            const uint64_t advance = std::min<uint64_t>(UINT32_MAX, count);
+            m_RingbufferCursor = (uint32_t)(((uint64_t)m_RingbufferCursor + advance) % count);
         }
 
         // Update stats
@@ -512,6 +526,50 @@ namespace nvfeedback
     const FeedbackManagerStats& FeedbackManager::GetStats() const
     {
         return m_StatsLastFrame;
+    }
+
+    void FeedbackManager::MapPackedMips(uint32_t textureIdx)
+    {
+        FeedbackTexture* texture = m_Textures.at(textureIdx).get();
+        const nvrhi::PackedMipDesc& packedMipDesc = texture->GetPackedMipInfo();
+        if (packedMipDesc.numPackedMips == 0)
+            return;
+
+        const uint32_t numPackedTiles = packedMipDesc.numTilesForPackedMips;
+        const uint32_t firstSubresource = packedMipDesc.numStandardMips;
+
+        // Ensure we have at least one heap with enough free tiles
+        if (m_HeapAllocator->GetNumHeaps() == 0)
+            m_HeapAllocator->AllocateHeap();
+
+        // Map packed mips as a single contiguous tile region starting at the first packed subresource.
+        // In nvrhi, TiledTextureCoordinate::mipLevel maps to D3D12's Subresource index.
+        nvrhi::TiledTextureCoordinate startCoord{};
+        startCoord.mipLevel   = static_cast<uint16_t>(firstSubresource);
+        startCoord.arrayLevel = 0;
+        startCoord.x = 0;
+        startCoord.y = 0;
+        startCoord.z = 0;
+
+        nvrhi::TiledTextureRegion region{};
+        region.tilesNum = numPackedTiles;
+
+        std::vector<uint64_t> byteOffsets(numPackedTiles);
+        for (uint32_t i = 0; i < numPackedTiles; ++i)
+            byteOffsets[i] = static_cast<uint64_t>(i) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES; // 64KB per tile
+
+        nvrhi::TextureTilesMapping mapping{};
+        mapping.numTextureRegions       = 1;
+        mapping.tiledTextureCoordinates = &startCoord;
+        mapping.tiledTextureRegions     = &region;
+        mapping.byteOffsets             = byteOffsets.data();
+        mapping.heap                    = m_HeapAllocator->GetHeapHandle(0);
+
+        g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(texture->GetReservedTexture(), &mapping, 1);
+
+        SDL_Log("[Streaming] MapPackedMips: mapped %u packed mip tile(s) for subresources %u-%u",
+                numPackedTiles, firstSubresource,
+                firstSubresource + packedMipDesc.numPackedMips - 1);
     }
 
 } // namespace nvfeedback

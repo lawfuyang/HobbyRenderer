@@ -6,8 +6,7 @@ namespace nvfeedback
 {
     FeedbackTexture::FeedbackTexture(
         const nvrhi::TextureDesc& desc,
-        rtxts::TiledTextureManager* tiledTextureManager,
-        uint32_t numReadbacks)
+        rtxts::TiledTextureManager* tiledTextureManager)
     {
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
@@ -66,8 +65,8 @@ namespace nvfeedback
         m_FeedbackTexture = device->createSamplerFeedbackTexture(m_ReservedTexture, samplerFeedbackTextureDesc);
 
         // Create readback (resolve) buffers — one per frame-in-flight
-        m_FeedbackResolveBuffers.resize(numReadbacks);
-        for (uint32_t i = 0; i < numReadbacks; i++)
+        m_FeedbackResolveBuffers.resize(3);
+        for (uint32_t i = 0; i < 3; i++)
         {
             uint32_t feedbackTilesX = (desc.width - 1) / feedbackDesc.textureOrMipRegionWidth + 1;
             uint32_t feedbackTilesY = (desc.height - 1) / feedbackDesc.textureOrMipRegionHeight + 1;
@@ -87,7 +86,7 @@ namespace nvfeedback
             nvrhi::TextureDesc textureDesc{};
             textureDesc.width = minMipDesc.textureOrMipRegionWidth;
             textureDesc.height = minMipDesc.textureOrMipRegionHeight;
-            textureDesc.format = nvrhi::Format::R32_FLOAT;
+            textureDesc.format = nvrhi::Format::R32_UINT;
             textureDesc.initialState = nvrhi::ResourceStates::ShaderResource;
             textureDesc.keepInitialState = true;
             textureDesc.debugName = "MinMip Texture";
@@ -216,7 +215,7 @@ namespace nvfeedback
 
         // Only include in ring buffer if not in any set, or if we are the primary
         bool bNeedsRingBuffer = m_TextureSets.empty() || IsPrimaryTexture();
-        g_Renderer.m_FeedbackManager->UpdateTextureRingBufferState(this, bNeedsRingBuffer);
+        g_Renderer.m_FeedbackManager->UpdateTextureRingBufferState(m_ManagerIndex, bNeedsRingBuffer);
     }
 
     bool FeedbackTexture::IsPrimaryTexture() const

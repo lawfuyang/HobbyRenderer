@@ -7,7 +7,6 @@ namespace nvfeedback
     class FeedbackTextureSet
     {
     public:
-        FeedbackTextureSet(uint32_t numReadbacks);
         ~FeedbackTextureSet();
 
         uint32_t GetNumTextures() const { return (uint32_t)m_Textures.size(); }

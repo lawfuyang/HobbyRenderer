@@ -122,6 +122,8 @@ srinput CommonConsts
     static const int SAMPLER_MIN_REDUCTION_INDEX = 6;
     static const int SAMPLER_MAX_REDUCTION_INDEX = 7;
     static const int SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX = 8;
+    static const int SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX = 9;
+    static const int SAMPLER_POINT_MAX_REDUCTION_WRAP_INDEX = 10;
 
     // Alpha modes
     static const int ALPHA_MODE_OPAQUE = 0;

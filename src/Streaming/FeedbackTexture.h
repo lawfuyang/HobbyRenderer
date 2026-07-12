@@ -31,8 +31,7 @@ namespace nvfeedback
     public:
         FeedbackTexture(
             const nvrhi::TextureDesc& desc,
-            rtxts::TiledTextureManager* tiledTextureManager,
-            uint32_t numReadbacks);
+            rtxts::TiledTextureManager* tiledTextureManager);
         ~FeedbackTexture();
 
         nvrhi::TextureHandle GetReservedTexture()                  { return m_ReservedTexture; }
@@ -55,6 +54,10 @@ namespace nvfeedback
         int  GetUserIndex() const              { return m_UserIndex; }
         void SetUserIndex(int index)           { m_UserIndex = index; }
 
+        // Index within FeedbackManager::m_Textures — set by FeedbackManager::CreateTexture
+        uint32_t GetManagerIndex() const       { return m_ManagerIndex; }
+        void     SetManagerIndex(uint32_t idx) { m_ManagerIndex = idx; }
+
         // Texture set membership management
         bool AddToTextureSet(FeedbackTextureSet* textureSet);
         bool RemoveFromTextureSet(FeedbackTextureSet* textureSet);
@@ -76,6 +79,7 @@ namespace nvfeedback
 
         uint32_t m_TiledTextureId = 0;
         int m_UserIndex = -1;
+        uint32_t m_ManagerIndex = UINT32_MAX;
 
         std::vector<FeedbackTextureSet*> m_TextureSets;
         std::vector<FeedbackTextureSet*> m_PrimaryTextureSets;

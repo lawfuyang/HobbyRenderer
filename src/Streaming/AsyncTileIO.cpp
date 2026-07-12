@@ -13,17 +13,21 @@ namespace nvfeedback
         uint32_t bytesPerBlock, uint32_t blockSize,
         uint8_t* dst)
     {
-        uint32_t blocksPerRow = (mipWidth + blockSize - 1) / blockSize;
-        uint32_t tileBlocksW  = (tileWidthInTexels  + blockSize - 1) / blockSize;
-        uint32_t tileBlocksH  = (tileHeightInTexels + blockSize - 1) / blockSize;
-        uint32_t srcBlockX    = tileXInTexels / blockSize;
-        uint32_t srcBlockY    = tileYInTexels / blockSize;
-        uint32_t rowPitchSrc  = blocksPerRow * bytesPerBlock;
-        uint32_t rowPitchTile = tileBlocksW  * bytesPerBlock;
+        const uint32_t blocksPerRow = (mipWidth + blockSize - 1) / blockSize;
+        const uint32_t mipHeightInBlocks = blocksPerRow; // square-ish, but safe upper bound: use blocksPerRow
+        const uint32_t tileBlocksW  = (tileWidthInTexels  + blockSize - 1) / blockSize;
+        const uint32_t tileBlocksH  = (tileHeightInTexels + blockSize - 1) / blockSize;
+        const uint32_t srcBlockX    = tileXInTexels / blockSize;
+        const uint32_t srcBlockY    = tileYInTexels / blockSize;
+        const uint32_t rowPitchSrc  = blocksPerRow * bytesPerBlock;
+        const uint32_t rowPitchTile = tileBlocksW  * bytesPerBlock;
+
+        SDL_assert(tileBlocksW > 0 && tileBlocksH > 0);
+        SDL_assert(srcBlockX + tileBlocksW <= blocksPerRow);
 
         for (uint32_t row = 0; row < tileBlocksH; row++)
         {
-            uint32_t readOffset = (srcBlockY + row) * rowPitchSrc + srcBlockX * bytesPerBlock;
+            const uint32_t readOffset = (srcBlockY + row) * rowPitchSrc + srcBlockX * bytesPerBlock;
             memcpy(dst + row * rowPitchTile, srcBase + readOffset, rowPitchTile);
         }
     }
@@ -81,12 +85,15 @@ namespace nvfeedback
             std::swap(local, m_CompletedQueue);
         }
 
+        if (!cmd)
+        {
+            return 0;
+        }
+
         for (CompletedRequest& cr : local)
         {
-            if (cr.m_Request.m_OnComplete)
-            {
-                cr.m_Request.m_OnComplete(cr.m_Request, cr.m_TileData.data(), cr.m_TileData.size(), cmd);
-            }
+            SDL_assert(cr.m_Request.m_OnComplete);
+            cr.m_Request.m_OnComplete(cr.m_Request, cr.m_TileData.data(), cr.m_TileData.size(), cmd);
             processed++;
         }
 
@@ -129,12 +136,18 @@ namespace nvfeedback
 
             // Use the cached per-mip file offsets (parsed once from the DDS header at load time)
             size_t mipOffset = req.m_MipOffsets[req.m_MipLevel];
+            SDL_assert(req.m_MipLevel < srrhi::CommonConsts::MAX_MIP_COUNT);
 
             uint32_t mipWidth = std::max(req.m_TextureWidth >> req.m_MipLevel, 1u);
 
             uint32_t tileBlocksW = (req.m_TileWidthInTexels  + req.m_BlockSize - 1) / req.m_BlockSize;
             uint32_t tileBlocksH = (req.m_TileHeightInTexels + req.m_BlockSize - 1) / req.m_BlockSize;
             size_t tileDataSize  = static_cast<size_t>(tileBlocksW) * tileBlocksH * req.m_BytesPerBlock;
+
+            // SDL_Log("[Streaming] Extracting tile: mip=%u tex=(%u,%u) size=(%u,%u) blocks=(%u,%u) dataSize=%zu offset=%zu",
+            //         req.m_MipLevel, req.m_TileXInTexels, req.m_TileYInTexels,
+            //         req.m_TileWidthInTexels, req.m_TileHeightInTexels,
+            //         tileBlocksW, tileBlocksH, tileDataSize, mipOffset);
 
             // Resize scratch buffer (only grows, never shrinks)
             if (scratch.size() < tileDataSize)

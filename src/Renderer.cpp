@@ -1,4 +1,4 @@
-﻿#include "Renderer.h"
+#include "Renderer.h"
 #include "Utilities.h"
 #include "Config.h"
 #include "CommonResources.h"
@@ -270,18 +270,18 @@ void Renderer::SaveBackBufferScreenshot()
 }
 
 // ----------------------------------------------------------------------------
-// InitializeGPUStack — shared helper called by Initialize().
+// InitializeGPUStack � shared helper called by Initialize().
 // Assumes m_Window is already set.
 //
 // Responsibilities:
-//   • Create + init the D3D12 RHI device
-//   • Create the swapchain against the given window
-//   • Resolve asset paths (irradiance / radiance / BRDF LUT)
-//   • Initialise static bindless texture + sampler heaps
-//   • Load compiled shader blobs
-//   • Bring up CommonResources (samplers, states, default textures)
-//   • Allocate per-renderer GPU timer queries
-//   • Flush any pending upload command lists
+//   � Create + init the D3D12 RHI device
+//   � Create the swapchain against the given window
+//   � Resolve asset paths (irradiance / radiance / BRDF LUT)
+//   � Initialise static bindless texture + sampler heaps
+//   � Load compiled shader blobs
+//   � Bring up CommonResources (samplers, states, default textures)
+//   � Allocate per-renderer GPU timer queries
+//   � Flush any pending upload command lists
 //
 // Returns true on success, false on any fatal failure.
 // ----------------------------------------------------------------------------
@@ -562,13 +562,13 @@ void Renderer::Run()
             scopedCmd->beginTimerQuery(m_GPUQueries[writeIndex]);
         }
 
-        // Update texture streaming — pre-render phase:
+        // Update texture streaming � pre-render phase:
         // flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
         UpdateStreamingPreRender();
 
         ScheduleAndRunAllRenderers();
 
-        // Update texture streaming — post-render phase:
+        // Update texture streaming � post-render phase:
         // ResolveFeedback (reads sampler feedback written by GBuffer pass) + EndFrame.
         UpdateStreamingPostRender();
 
@@ -692,23 +692,18 @@ void Renderer::Shutdown()
     SDL_Log("[Shutdown] Clean exit");
 }
 
-// ─── Texture Streaming ───────────────────────────────────────────────────────
+// --- Texture Streaming -------------------------------------------------------
 
 void Renderer::InitStreaming()
 {
-    nvfeedback::FeedbackManagerDesc desc{};
-    desc.m_NumFramesInFlight = m_StreamingConfig.m_NumFramesInFlight;
-    desc.m_HeapSizeInTiles   = m_StreamingConfig.m_HeapSizeInTiles;
-
-    m_FeedbackManager = std::make_unique<nvfeedback::FeedbackManager>(desc);
+    m_FeedbackManager = std::make_unique<nvfeedback::FeedbackManager>();
     SDL_assert(m_FeedbackManager && "CreateFeedbackManager failed");
 
     // Create async tile I/O thread pool
     m_AsyncTileIO = std::make_unique<nvfeedback::AsyncTileIO>();
     SDL_assert(m_AsyncTileIO && "Failed to create AsyncTileIO");
 
-    SDL_Log("[Streaming] Initialized: heapSizeInTiles=%u, numFramesInFlight=%u, asyncWorkers=%u",
-            m_StreamingConfig.m_HeapSizeInTiles, m_StreamingConfig.m_NumFramesInFlight,
+    SDL_Log("[Streaming] Initialized: asyncWorkers=%u",
             m_AsyncTileIO->WorkerCount());
 }
 
@@ -728,7 +723,7 @@ void Renderer::UpdateStreamingPreRender()
 {
     PROFILE_FUNCTION();
 
-    // ── Phase B2+A: Flush completed async tile uploads + BeginFrame ──
+    // -- Phase B2+A: Flush completed async tile uploads + BeginFrame --
     // Merged into one command list; executed before Phase C because
     // UpdateTileMappings() calls updateTextureTileMappings() which is an
     // immediate GPU queue op that must follow the tile upload commands.
@@ -742,27 +737,19 @@ void Renderer::UpdateStreamingPreRender()
 
         // Phase A: BeginFrame
         m_StreamingUpdatedTextures.m_Textures.clear();
-        nvfeedback::FeedbackUpdateConfig config{};
-        config.m_FrameIndex           = m_FrameNumber;
-        config.m_MaxTexturesToUpdate  = m_StreamingConfig.m_MaxTexturesPerFrame;
-        config.m_TileTimeoutSeconds   = m_StreamingConfig.m_TileTimeoutSeconds;
-        config.m_bDefragmentHeaps      = true;
-        config.m_bTrimStandbyTiles     = m_StreamingConfig.m_bTrimStandbyTiles;
-        config.m_bReleaseEmptyHeaps    = m_StreamingConfig.m_bReleaseEmptyHeaps;
-        config.m_NumExtraStandbyTiles = m_StreamingConfig.m_NumExtraStandbyTiles;
 
-        m_FeedbackManager->BeginFrame(cmd, config, &m_StreamingUpdatedTextures);
+        m_FeedbackManager->BeginFrame(cmd, m_StreamingUpdatedTextures);
     }
 
     // Execute merged B2+A commands before tile submits and Phase C
     ExecutePendingCommandLists();
 
-    // ── Phase B: Submit new tile requests (async or sync) ──
+    // -- Phase B: Submit new tile requests (async or sync) --
     if (!m_StreamingUpdatedTextures.m_Textures.empty())
     {
         PROFILE_SCOPED("Streaming TileSubmit");
 
-        uint32_t submitBudget = m_StreamingConfig.m_TilesPerFrame;
+        const uint32_t submitBudget = UINT32_MAX;
         uint32_t submitted = 0;
 
         // Helper: resolve a FeedbackTexture back to its StreamingTexture via
@@ -775,7 +762,7 @@ void Renderer::UpdateStreamingPreRender()
             return st.m_ReservedTexture ? &st : nullptr;
         };
 
-        // ── Async path: submit tile-extraction work to the thread pool ──
+        // -- Async path: submit tile-extraction work to the thread pool --
         // Uploads are flushed next frame (Phase B2) via the completion callback.
         for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
         {
@@ -792,6 +779,8 @@ void Renderer::UpdateStreamingPreRender()
             for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
                 if (submitted >= submitBudget) break;
+
+                SDL_assert(!feedbackTex->IsTilePacked(tileIndex));
 
                 std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
                 feedbackTex->GetTileInfo(tileIndex, tileInfos);
@@ -819,7 +808,8 @@ void Renderer::UpdateStreamingPreRender()
                                             const void* tileData, size_t /*tileDataSize*/,
                                             nvrhi::ICommandList* cmd)
                     {
-                        if (!cmd || !r.m_ReservedTexture) return;
+                        SDL_assert(cmd);
+                        SDL_assert(r.m_ReservedTexture);
 
                         const nvrhi::FormatInfo& fi = nvrhi::getFormatInfo(r.m_Format);
                         uint32_t tileBlocksW = (r.m_TileWidthInTexels + fi.blockSize - 1) / fi.blockSize;
@@ -833,8 +823,7 @@ void Renderer::UpdateStreamingPreRender()
                         destSlice.mipLevel   = r.m_MipLevel;
                         destSlice.arraySlice = 0;
 
-                        cmd->writeTexture(
-                            r.m_ReservedTexture, destSlice, tileData, rowPitch, 0);
+                        cmd->writeTexture(r.m_ReservedTexture, destSlice, tileData, rowPitch, 0);
                     };
 
                     m_AsyncTileIO->Submit(std::move(req));
@@ -844,12 +833,12 @@ void Renderer::UpdateStreamingPreRender()
         }
     }
 
-    // ── Phase C: UpdateTileMappings ──
+    // -- Phase C: UpdateTileMappings --
     {
         PROFILE_SCOPED("Streaming UpdateMappings");
         nvrhi::CommandListHandle cmd = AcquireCommandList();
         ScopedCommandList scopedCmd{ cmd, "Streaming UpdateTileMappings" };
-        m_FeedbackManager->UpdateTileMappings(cmd, &m_StreamingUpdatedTextures);
+        m_FeedbackManager->UpdateTileMappings(cmd, m_StreamingUpdatedTextures);
     }
 }
 
@@ -857,7 +846,7 @@ void Renderer::UpdateStreamingPostRender()
 {
     PROFILE_FUNCTION();
 
-    // ── Phase E: ResolveFeedback ──
+    // -- Phase E: ResolveFeedback --
     // Called AFTER ScheduleAndRunAllRenderers() so the GBuffer pass has written
     // sampler feedback into the UAV feedback textures.
     {
@@ -866,7 +855,7 @@ void Renderer::UpdateStreamingPostRender()
         m_FeedbackManager->ResolveFeedback(cmd);
     }
 
-    // ── Phase F: EndFrame ──
+    // -- Phase F: EndFrame --
     m_FeedbackManager->EndFrame();
 }
 
@@ -875,8 +864,8 @@ void Renderer::UploadDirtyInstanceTransforms()
     // Upload dirty instance transforms and reset the dirty range.
     // This must be called once per frame before renderers run (the TLAS rebuild
     // reads the RT instance descs written here).  The dirty range can be set by:
-    //   • Scene::Update() animation evaluation (when m_EnableAnimations is true)
-    //   • Manual scene mutations (node transforms, async mesh arrivals, tests)
+    //   � Scene::Update() animation evaluation (when m_EnableAnimations is true)
+    //   � Manual scene mutations (node transforms, async mesh arrivals, tests)
     // It is intentionally outside the m_EnableAnimations guard so that manually-
     // set dirty ranges are always consumed regardless of animation state.
     if (!m_Scene.AreInstanceTransformsDirty())
@@ -905,7 +894,7 @@ void Renderer::UploadDirtyInstanceTransforms()
         "UploadDirtyInstanceTransforms: m_InstanceDataBuffer is null");
     SDL_assert((uint64_t)(startIdx + count) * sizeof(srrhi::PerInstanceData)
             <= m_Scene.m_InstanceDataBuffer->getDesc().byteSize &&
-        "UploadDirtyInstanceTransforms: dirty range write would overflow m_InstanceDataBuffer — "
+        "UploadDirtyInstanceTransforms: dirty range write would overflow m_InstanceDataBuffer � "
         "buffer was not resized after m_InstanceData grew");
 
     scopedCmd->writeBuffer(m_Scene.m_InstanceDataBuffer,
@@ -926,7 +915,7 @@ void Renderer::UploadDirtyInstanceTransforms()
 
     // Invariant: the dirty range must be clean immediately after this function.
     SDL_assert(!m_Scene.AreInstanceTransformsDirty() &&
-        "Instance dirty range was not cleared after upload — stale dirty state will corrupt next frame");
+        "Instance dirty range was not cleared after upload � stale dirty state will corrupt next frame");
 }
 
 void Renderer::UploadDirtyMaterialConstants()
@@ -936,9 +925,9 @@ void Renderer::UploadDirtyMaterialConstants()
     // RenderFrame() (main loop).
     //
     // Guard conditions (no-op if any fail):
-    //   • m_MaterialConstantsBuffer must be non-null (scene loaded)
-    //   • m_Materials must be non-empty
-    //   • dirty range must be active (first <= second)
+    //   � m_MaterialConstantsBuffer must be non-null (scene loaded)
+    //   � m_Materials must be non-empty
+    //   � dirty range must be active (first <= second)
     if (!m_Scene.m_MaterialConstantsBuffer)
         return;
     if (m_Scene.m_Materials.empty())
@@ -1016,7 +1005,7 @@ void Renderer::ScheduleAndRunAllRenderers()
     }
     else if (m_Mode == RenderingMode::NormalBasic)
     {
-        // NormalBasic: raster-only pipeline — no TLAS, no RTXDI, no SHARC, no RT shadows
+        // NormalBasic: raster-only pipeline � no TLAS, no RTXDI, no SHARC, no RT shadows
         m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);
         m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
         m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);

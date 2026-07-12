@@ -48,7 +48,7 @@ void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint fee
 // Parameters:
 //   textureIndex   — bindless index of the reserved (tiled) Texture2D
 //   samplerIndex   — bindless index of the anisotropic sampler
-//   minMipIndex    — bindless index of the R32_FLOAT MinMip residency texture (0 = not streaming)
+//   minMipIndex    — bindless index of the R32_UINT MinMip residency texture (0 = not streaming)
 //   feedbackIndex  — bindless index of the FeedbackTexture2D UAV (0 = not streaming)
 //   uv             — texture coordinates
 //   forcedMip      — -1 = auto, >=0 = force this mip level (clamped to texture's mip count)
@@ -67,7 +67,7 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
         return color;
     }
 
-    if (minMipIndex == 0)
+    if (minMipIndex == srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK)
     {
         // Not a streaming texture — regular sample, no feedback
         return tex.Sample(sam, uv);
@@ -78,9 +78,9 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
     float4 color = tex.Sample(sam, uv, 0, 0, status);
     if (!CheckAccessFullyMapped(status))
     {
-        Texture2D<float> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-        SamplerState pointSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_CLAMP_INDEX)];
-        float minResidentMip = minMipTex.SampleLevel(pointSam, uv, 0);
+        Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
+        SamplerState maxReductionSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX)];
+        uint minResidentMip = minMipTex.SampleLevel(maxReductionSam, uv, 0);
         color = tex.Sample(sam, uv, 0, minResidentMip, status);
     }
 

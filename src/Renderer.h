@@ -305,20 +305,6 @@ struct Renderer
     std::string m_RadianceTexturePath = "radiance.dds";
     std::string m_BRDFLutTexture = "brdf_lut.dds";
 
-    // ─── Texture Streaming ────────────────────────────────────────────────────
-    struct StreamingConfig
-    {
-        uint32_t m_MaxTexturesPerFrame = 8;
-        uint32_t m_TilesPerFrame = 32;
-        float    m_TileTimeoutSeconds = 0.0f;
-        bool     m_bTrimStandbyTiles = true;
-        bool     m_bReleaseEmptyHeaps = true;
-        uint32_t m_NumExtraStandbyTiles = 0;
-        uint32_t m_HeapSizeInTiles = 256;
-        uint32_t m_NumFramesInFlight = 3;
-    };
-
-    StreamingConfig m_StreamingConfig;
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
     nvfeedback::StreamingContext m_StreamingCtx;
     std::unique_ptr<nvfeedback::AsyncTileIO> m_AsyncTileIO; // Async tile I/O thread pool
