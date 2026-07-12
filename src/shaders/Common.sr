@@ -56,6 +56,9 @@ srinput CommonConsts
     // Max LOD count
     static const uint MAX_LOD_COUNT = 8;
 
+    // Max mip count (upper bound for texture streaming)
+    static const uint MAX_MIP_COUNT = 16;
+
     // Bruneton atmosphere precomputed texture dimensions
     static const int TRANSMITTANCE_TEXTURE_WIDTH = 256;
     static const int TRANSMITTANCE_TEXTURE_HEIGHT = 64;

@@ -810,6 +810,7 @@ void Renderer::UpdateStreamingPreRender()
                     req.m_TileHeightInTexels = tileInfo.m_HeightInTexels;
                     req.m_TextureWidth       = texDesc.width;
                     req.m_TextureHeight      = texDesc.height;
+                    std::memcpy(req.m_MipOffsets, st.m_MipDataOffsets, sizeof(st.m_MipDataOffsets));
                     req.m_Format             = texDesc.format;
                     req.m_BytesPerBlock      = fmtInfo.bytesPerBlock;
                     req.m_BlockSize          = fmtInfo.blockSize;

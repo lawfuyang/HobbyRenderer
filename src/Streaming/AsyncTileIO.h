@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Utilities.h"
+#include "srrhi/cpp/Common.h"
 
 namespace nvfeedback
 {
@@ -25,9 +26,13 @@ namespace nvfeedback
         uint32_t m_TileWidthInTexels  = 0;
         uint32_t m_TileHeightInTexels = 0;
 
-        // Full texture dimensions (needed to compute mip offset in DDS)
+        // Full texture dimensions (needed for mipWidth computation)
         uint32_t m_TextureWidth  = 0;
         uint32_t m_TextureHeight = 0;
+
+        // Cached mip data offsets (fixed-size array; indexed by m_MipLevel).
+        // Filled from StreamingTexture::m_MipDataOffsets at submit time.
+        size_t m_MipOffsets[srrhi::CommonConsts::MAX_MIP_COUNT] = {};
 
         // Format info (filled from nvrhi::getFormatInfo)
         nvrhi::Format m_Format       = nvrhi::Format::UNKNOWN;

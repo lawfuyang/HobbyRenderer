@@ -305,3 +305,24 @@ void UploadTexture(nvrhi::ICommandList* cmd, nvrhi::ITexture* texture, const nvr
         }
     }
 }
+
+uint32_t ComputeDDSMipOffsets(const nvrhi::TextureDesc& desc, size_t outOffsets[srrhi::CommonConsts::MAX_MIP_COUNT])
+{
+    const uint32_t mipCount = std::min(desc.mipLevels, srrhi::CommonConsts::MAX_MIP_COUNT);
+    const nvrhi::FormatInfo& info = nvrhi::getFormatInfo(desc.format);
+
+    size_t offset = 0;
+    for (uint32_t m = 0; m < mipCount; ++m)
+    {
+        outOffsets[m] = offset;
+
+        const uint32_t mw = std::max(1u, desc.width >> m);
+        const uint32_t mh = std::max(1u, desc.height >> m);
+        const uint32_t blocksW = (mw + info.blockSize - 1) / info.blockSize;
+        const uint32_t blocksH = (mh + info.blockSize - 1) / info.blockSize;
+
+        offset += static_cast<size_t>(blocksW) * blocksH * info.bytesPerBlock;
+    }
+
+    return mipCount;
+}

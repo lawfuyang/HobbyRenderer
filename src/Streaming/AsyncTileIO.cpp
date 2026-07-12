@@ -4,24 +4,6 @@ namespace nvfeedback
 {
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
-    // Compute the byte offset of a given mip level within a linear DDS data blob.
-    static size_t ComputeMipOffset(
-        uint32_t textureWidth, uint32_t textureHeight,
-        uint32_t mipLevel,
-        uint32_t bytesPerBlock, uint32_t blockSize)
-    {
-        size_t offset = 0;
-        for (uint32_t m = 0; m < mipLevel; m++)
-        {
-            uint32_t mw = std::max(textureWidth  >> m, 1u);
-            uint32_t mh = std::max(textureHeight >> m, 1u);
-            uint32_t blocksW = (mw + blockSize - 1) / blockSize;
-            uint32_t blocksH = (mh + blockSize - 1) / blockSize;
-            offset += static_cast<size_t>(blocksW) * blocksH * bytesPerBlock;
-        }
-        return offset;
-    }
-
     // Extract a tile from a linear DDS mip into dst.
     static void ExtractTile(
         const uint8_t* srcBase,
@@ -145,10 +127,8 @@ namespace nvfeedback
             // ── Extract tile data from mmap'd DDS ──
             const uint8_t* ddsBase = static_cast<const uint8_t*>(req.m_SourceData->GetData());
 
-            size_t mipOffset = ComputeMipOffset(
-                req.m_TextureWidth, req.m_TextureHeight,
-                req.m_MipLevel,
-                req.m_BytesPerBlock, req.m_BlockSize);
+            // Use the cached per-mip file offsets (parsed once from the DDS header at load time)
+            size_t mipOffset = req.m_MipOffsets[req.m_MipLevel];
 
             uint32_t mipWidth = std::max(req.m_TextureWidth >> req.m_MipLevel, 1u);
 
