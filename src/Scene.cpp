@@ -54,7 +54,21 @@ void Scene::LoadScene()
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
 	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
-	BuildAccelerationStructures();
+	if (g_Renderer.m_Mode != RenderingMode::NormalBasic)
+	{
+		BuildAccelerationStructures();
+	}
+	else
+	{
+		// NormalBasic: create an empty TLAS so that shader bindings don't fail,
+		// but skip BLAS building entirely (no RT features are used).
+		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
+		nvrhi::rt::AccelStructDesc tlasDesc;
+		tlasDesc.topLevelMaxInstances = 1;
+		tlasDesc.debugName = "Scene TLAS (NormalBasic — empty)";
+		tlasDesc.isTopLevel = true;
+		m_TLAS = device->createAccelStruct(tlasDesc);
+	}
 
 	if (!m_Cameras.empty())
 	{
@@ -544,12 +558,15 @@ void Scene::Update(float deltaTime)
 				m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
 
 				// Update RT instance transform
-				const Matrix& world = node.m_WorldTransform;
-				nvrhi::rt::AffineTransform transform;
-				transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
-				transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;
-				transform[8] = world._13; transform[9] = world._23; transform[10] = world._33; transform[11] = world._43;
-				m_RTInstanceDescs[instIdx].setTransform(transform);
+				if (instIdx < m_RTInstanceDescs.size())
+				{
+					const Matrix& world = node.m_WorldTransform;
+					nvrhi::rt::AffineTransform transform;
+					transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
+					transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;
+					transform[8] = world._13; transform[9] = world._23; transform[10] = world._33; transform[11] = world._43;
+					m_RTInstanceDescs[instIdx].setTransform(transform);
+				}
 			}
 		}
 		else

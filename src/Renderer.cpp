@@ -1101,6 +1101,18 @@ void Renderer::ScheduleAndRunAllRenderers()
     {
         m_RenderGraph.ScheduleRenderer(g_PathTracerRenderer);
     }
+    else if (m_Mode == RenderingMode::NormalBasic)
+    {
+        // NormalBasic: raster-only pipeline — no TLAS, no RTXDI, no SHARC, no RT shadows
+        m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);
+        m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
+        m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
+        m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
+        m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
+        m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);
+        m_RenderGraph.ScheduleRenderer(g_TAARenderer);
+        m_RenderGraph.ScheduleRenderer(g_BloomRenderer);
+    }
     else
     {
         m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);

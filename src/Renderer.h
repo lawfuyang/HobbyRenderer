@@ -84,7 +84,8 @@ enum class RenderingMode : uint32_t
 {
     Normal = srrhi::CommonConsts::RENDERING_MODE_NORMAL,
     IBL = srrhi::CommonConsts::RENDERING_MODE_IBL,
-    ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER
+    ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER,
+    NormalBasic = srrhi::CommonConsts::RENDERING_MODE_NORMAL_BASIC
 };
 
 struct Renderer
