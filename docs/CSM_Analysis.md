@@ -81,34 +81,37 @@ From [Renderer.h](../src/Renderer.h) lines 221-310:
 
 ## 2. RenderingMode Enum & CommonConsts Changes
 
-### 2.1 Current State
+### 2.1 Current State (NormalBasic implemented ✅)
 
-**Host-side** ([Renderer.h](../src/Renderer.h) line 82):
+**Host-side** ([Renderer.h](../src/Renderer.h) line 83):
 ```cpp
 enum class RenderingMode : uint32_t
 {
-    Normal = srrhi::CommonConsts::RENDERING_MODE_NORMAL,          // = 0
-    IBL = srrhi::CommonConsts::RENDERING_MODE_IBL,                // = 1
-    ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER  // = 2
+    Normal = srrhi::CommonConsts::RENDERING_MODE_NORMAL,                      // = 0
+    IBL = srrhi::CommonConsts::RENDERING_MODE_IBL,                            // = 1
+    ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER,    // = 2
+    NormalBasic = srrhi::CommonConsts::RENDERING_MODE_NORMAL_BASIC            // = 3
 };
 ```
 
-**Shader-side** ([Common.sr](../src/shaders/Common.sr) line 85):
+**Shader-side** ([Common.sr](../src/shaders/Common.sr) line 86):
 ```hlsl
 static const int RENDERING_MODE_NORMAL = 0;
 static const int RENDERING_MODE_IBL = 1;
 static const int RENDERING_MODE_PATH_TRACER = 2;
+static const int RENDERING_MODE_NORMAL_BASIC = 3;
 ```
 
-### 2.2 Required Changes
+### 2.2 Completed Changes ✅
 
-1. **Rename `RENDERING_MODE_NORMAL` → `RENDERING_MODE_NORMAL_ADVANCED`** (value stays 0)
-2. **Add `RENDERING_MODE_NORMAL_BASIC = 3`** (new value)
-3. Update both [Renderer.h](../src/Renderer.h) and [Common.sr](../src/shaders/Common.sr)
-4. Update ImGui combo in [ImGuiLayer.cpp](../src/ImGuiLayer.cpp):
-   ```cpp
-   static const char* kRenderingModes[] = { "NormalAdvanced", "IBL", "Pathtracer", "NormalBasic" };
-   ```
+1. ~~**Rename `RENDERING_MODE_NORMAL` → `RENDERING_MODE_NORMAL_ADVANCED`**~~ — **SKIPPED**: kept `Normal` as-is; NormalBasic is a separate new mode.
+2. ✅ **Add `RENDERING_MODE_NORMAL_BASIC = 3`** — done in [Common.sr](../src/shaders/Common.sr), srrhi auto-regenerated both headers.
+3. ✅ **Update [Renderer.h](../src/Renderer.h)** — `NormalBasic` added to `RenderingMode` enum.
+4. ✅ **Update [ImGuiLayer.cpp](../src/ImGuiLayer.cpp)** — combo now has `"Normal", "Image Based Lighting", "Reference Pathtracer", "NormalBasic"`.
+5. ✅ **`--normalbasic` CLI flag** — added in [Config.cpp](../src/Config.cpp); auto-disables RT feature flags.
+6. ✅ **Skip BLAS/TLAS in NormalBasic** — [Scene.cpp](../src/Scene.cpp) skips `BuildAccelerationStructures`, creates empty placeholder TLAS.
+7. ✅ **NormalBasic scheduling branch** — [Renderer.cpp](../src/Renderer.cpp) skips TLAS, RTXDI, SHARC.
+8. ✅ **Mode-switch assert** — switching from NormalBasic to Normal/PathTracer asserts TLAS is built. IBL does not assert (no RT needed).
 
 ---
 

@@ -52,17 +52,17 @@ Screen-space shadows (SS shadows, also called **contact shadows**) are a compute
 | **Bindless textures** | Global descriptor tables | N/A | ✅ Available to any shader |
 | **CSM shadow map** | `g_RG_CSMShadowMap` (planned) | `D32_FLOAT` array | ⚠️ **Planned** — CSM must be implemented first |
 | **Shadow mask** | `g_RG_ShadowMask` (planned) | `R8_UNORM` | ⚠️ **Planned** — CSM must be implemented first |
-| **NormalBasic mode** | `RenderingMode::NormalBasic` (planned) | N/A | ⚠️ **Planned** — CSM phase adds this |
+| **NormalBasic mode** | `RenderingMode::NormalBasic` | N/A | ✅ **Implemented** — available via `--normalbasic` CLI flag or ImGui combo |
 
 ### 2.2 What Does NOT Yet Exist (CSM Phase Must Deliver First)
 
 SS shadows depend on the CSM phase being completed:
 
-1. `RenderingMode::NormalBasic` enum value in [Renderer.h](../src/Renderer.h) and [Common.sr](../src/shaders/Common.sr)
-2. `NormalBasic` branch in `ScheduleAndRunAllRenderers()` in [Renderer.cpp](../src/Renderer.cpp)
-3. CSM shadow map array (`g_RG_CSMShadowMap`) — depth-only raster pass
-4. Shadow mask RT (`g_RG_ShadowMask`) — `R8_UNORM`, screen resolution, written by `ShadowMaskRenderer`
-5. Deferred lighting shader reading `g_ShadowMask` instead of firing inline ray queries
+1. ✅ `RenderingMode::NormalBasic` enum value — **DONE** (in [Renderer.h](../src/Renderer.h) and [Common.sr](../src/shaders/Common.sr))
+2. ✅ `NormalBasic` branch in `ScheduleAndRunAllRenderers()` — **DONE** ([Renderer.cpp](../src/Renderer.cpp))
+3. ❌ CSM shadow map array (`g_RG_CSMShadowMap`) — depth-only raster pass (still pending)
+4. ❌ Shadow mask RT (`g_RG_ShadowMask`) — `R8_UNORM`, screen resolution, written by `ShadowMaskRenderer` (still pending)
+5. ❌ Deferred lighting shader reading `g_ShadowMask` instead of firing inline ray queries (still pending)
 
 ### 2.3 Current Render Pass Order (Normal Mode)
 

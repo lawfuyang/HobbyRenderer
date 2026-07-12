@@ -281,7 +281,15 @@ Your project already has NRD (`NrdIntegration.cpp`).
 
 ### 8.1 Pipeline Insertion Point
 
-Current NormalBasic pass order (from `Renderer.cpp::ScheduleAndRunAllRenderers()`, CSM_Analysis.md):
+**Current** NormalBasic pass order (as implemented in `Renderer.cpp::ScheduleAndRunAllRenderers()`):
+
+```
+ClearRenderer → OpaqueRenderer → MaskedPassRenderer → HZBGeneratorPhase2
+→ DeferredRenderer → SkyRenderer → TransparentPassRenderer
+→ TAARenderer → BloomRenderer → HDRRenderer → ImGuiRenderer
+```
+
+**Future** NormalBasic pass order (after CSM + DDGI phases — planned, not yet implemented):
 
 ```
 ClearRenderer → OpaqueRenderer → MaskedPassRenderer → HZBGeneratorPhase2
@@ -293,12 +301,8 @@ ClearRenderer → OpaqueRenderer → MaskedPassRenderer → HZBGeneratorPhase2
 **SSGI insertion (after DeferredRenderer, before SkyRenderer):**
 
 ```
-ClearRenderer → OpaqueRenderer → MaskedPassRenderer → HZBGeneratorPhase2
-→ ShadowRenderer → ShadowMaskRenderer → DDGIRenderer
-→ DeferredRenderer → [SSGIRenderer] ← NEW
-→ SkyRenderer → TransparentPassRenderer
-→ TAARenderer → BloomRenderer → HDRRenderer → ImGuiRenderer
-```
+… → DeferredRenderer → [SSGIRenderer] ← NEW
+→ SkyRenderer → TransparentPassRenderer → …
 
 **Rationale:**
 - Needs direct-lighting buffer from `DeferredRenderer` as radiance source
