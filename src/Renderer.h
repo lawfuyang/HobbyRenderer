@@ -316,7 +316,6 @@ struct Renderer
         uint32_t m_NumExtraStandbyTiles = 0;
         uint32_t m_HeapSizeInTiles = 256;
         uint32_t m_NumFramesInFlight = 3;
-        bool     m_bAsyncTileIO = false;
     };
 
     StreamingConfig m_StreamingConfig;

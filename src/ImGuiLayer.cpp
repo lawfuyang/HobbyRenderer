@@ -611,7 +611,6 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Text("ResolveFeedback:  %.3f ms", stats.m_CpuTimeResolve * 1000.0);
 
             ImGui::SeparatorText("Config");
-            ImGui::Checkbox("Async Tile IO", &g_Renderer.m_StreamingConfig.m_bAsyncTileIO);
             ImGui::SliderInt("Max Textures/Frame",
                 reinterpret_cast<int*>(&g_Renderer.m_StreamingConfig.m_MaxTexturesPerFrame), 1, 32);
             ImGui::SliderInt("Tiles Per Frame",

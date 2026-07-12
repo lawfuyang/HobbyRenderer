@@ -561,10 +561,10 @@ GBufferOut GBuffer_PSMain(VSOut input)
         }
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_STREAMING_MIP)
         {
-            output.Albedo = float4(GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, input.uv), alpha);
+            output.Albedo = float4(0,0,0,0);
             output.Normal = float2(0.5f, 0.5f);
             output.ORM = float2(0.5f, 0.0f);
-            output.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            output.Emissive = float4(GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, input.uv), alpha);
         }
     }
     

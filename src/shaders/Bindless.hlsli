@@ -24,13 +24,20 @@ float4 SampleTextureClampedMip(Texture2D tex, SamplerState sam, float2 uv, int f
 }
 
 // Helper: write sampler feedback for a streaming texture.
-void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint feedbackIndex)
+void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint feedbackIndex, int forcedMip)
 {
     if (feedbackIndex != 0)
     {
-        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackTex =
-            ResourceDescriptorHeap[NonUniformResourceIndex(feedbackIndex)];
-        feedbackTex.WriteSamplerFeedback(tex, sam, uv);
+        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackTex = ResourceDescriptorHeap[NonUniformResourceIndex(feedbackIndex)];
+
+        if (forcedMip >= 0)
+        {
+            feedbackTex.WriteSamplerFeedbackLevel(tex, sam, uv, forcedMip);
+        }
+        else
+        {
+            feedbackTex.WriteSamplerFeedback(tex, sam, uv);
+        }
     }
 }
 
@@ -56,7 +63,7 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
     if (forcedMip >= 0)
     {
         float4 color = SampleTextureClampedMip(tex, sam, uv, forcedMip);
-        WriteStreamingFeedback(tex, sam, uv, feedbackIndex);
+        WriteStreamingFeedback(tex, sam, uv, feedbackIndex, forcedMip);
         return color;
     }
 
@@ -77,7 +84,7 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
         color = tex.Sample(sam, uv, 0, minResidentMip, status);
     }
 
-    WriteStreamingFeedback(tex, sam, uv, feedbackIndex);
+    WriteStreamingFeedback(tex, sam, uv, feedbackIndex, forcedMip);
     return color;
 }
 

@@ -738,8 +738,7 @@ void Renderer::UpdateStreamingPreRender()
         ScopedCommandList scopedCmd{ cmd, "Streaming TileFlush+BeginFrame" };
 
         // Phase B2: Flush completed async tile uploads from previous frame
-        if (m_StreamingConfig.m_bAsyncTileIO)
-            m_AsyncTileIO->Flush(cmd);
+        m_AsyncTileIO->Flush(cmd);
 
         // Phase A: BeginFrame
         m_StreamingUpdatedTextures.m_Textures.clear();
@@ -776,160 +775,71 @@ void Renderer::UpdateStreamingPreRender()
             return st.m_ReservedTexture ? &st : nullptr;
         };
 
-        if (m_StreamingConfig.m_bAsyncTileIO)
+        // ── Async path: submit tile-extraction work to the thread pool ──
+        // Uploads are flushed next frame (Phase B2) via the completion callback.
+        for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
         {
-            // ── Async path: submit tile-extraction work to the thread pool ──
-            // Uploads are flushed next frame (Phase B2) via the completion callback.
-            for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
+            if (submitted >= submitBudget) break;
+
+            nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
+            Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
+            SDL_assert(st.m_ReservedTexture && st.m_SourceData);
+
+            nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
+            const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
+            const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
+
+            for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
                 if (submitted >= submitBudget) break;
 
-                nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
-                Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
-                SDL_assert(st.m_ReservedTexture && st.m_SourceData);
+                std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
+                feedbackTex->GetTileInfo(tileIndex, tileInfos);
 
-                nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
-                const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
-                const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
-
-                for (uint32_t tileIndex : texUpdate.m_TileIndices)
+                for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
                 {
                     if (submitted >= submitBudget) break;
 
-                    std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
-                    feedbackTex->GetTileInfo(tileIndex, tileInfos);
+                    nvfeedback::TileRequest req;
+                    req.m_SourceData         = st.m_SourceData;
+                    req.m_ReservedTexture    = st.m_ReservedTexture;
+                    req.m_MipLevel           = tileInfo.m_Mip;
+                    req.m_TileXInTexels      = tileInfo.m_XInTexels;
+                    req.m_TileYInTexels      = tileInfo.m_YInTexels;
+                    req.m_TileWidthInTexels  = tileInfo.m_WidthInTexels;
+                    req.m_TileHeightInTexels = tileInfo.m_HeightInTexels;
+                    req.m_TextureWidth       = texDesc.width;
+                    req.m_TextureHeight      = texDesc.height;
+                    req.m_Format             = texDesc.format;
+                    req.m_BytesPerBlock      = fmtInfo.bytesPerBlock;
+                    req.m_BlockSize          = fmtInfo.blockSize;
 
-                    for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
+                    req.m_OnComplete = [](const nvfeedback::TileRequest& r,
+                                            const void* tileData, size_t /*tileDataSize*/,
+                                            nvrhi::ICommandList* cmd)
                     {
-                        if (submitted >= submitBudget) break;
+                        if (!cmd || !r.m_ReservedTexture) return;
 
-                        nvfeedback::TileRequest req;
-                        req.m_SourceData         = st.m_SourceData;
-                        req.m_ReservedTexture    = st.m_ReservedTexture;
-                        req.m_MipLevel           = tileInfo.m_Mip;
-                        req.m_TileXInTexels      = tileInfo.m_XInTexels;
-                        req.m_TileYInTexels      = tileInfo.m_YInTexels;
-                        req.m_TileWidthInTexels  = tileInfo.m_WidthInTexels;
-                        req.m_TileHeightInTexels = tileInfo.m_HeightInTexels;
-                        req.m_TextureWidth       = texDesc.width;
-                        req.m_TextureHeight      = texDesc.height;
-                        req.m_Format             = texDesc.format;
-                        req.m_BytesPerBlock      = fmtInfo.bytesPerBlock;
-                        req.m_BlockSize          = fmtInfo.blockSize;
+                        const nvrhi::FormatInfo& fi = nvrhi::getFormatInfo(r.m_Format);
+                        uint32_t tileBlocksW = (r.m_TileWidthInTexels + fi.blockSize - 1) / fi.blockSize;
+                        uint32_t rowPitch    = tileBlocksW * fi.bytesPerBlock;
 
-                        req.m_OnComplete = [](const nvfeedback::TileRequest& r,
-                                                const void* tileData, size_t /*tileDataSize*/,
-                                                nvrhi::ICommandList* cmd)
-                        {
-                            if (!cmd || !r.m_ReservedTexture) return;
+                        nvrhi::TextureSlice destSlice{};
+                        destSlice.x          = r.m_TileXInTexels;
+                        destSlice.y          = r.m_TileYInTexels;
+                        destSlice.width      = r.m_TileWidthInTexels;
+                        destSlice.height     = r.m_TileHeightInTexels;
+                        destSlice.mipLevel   = r.m_MipLevel;
+                        destSlice.arraySlice = 0;
 
-                            const nvrhi::FormatInfo& fi = nvrhi::getFormatInfo(r.m_Format);
-                            uint32_t tileBlocksW = (r.m_TileWidthInTexels + fi.blockSize - 1) / fi.blockSize;
-                            uint32_t rowPitch    = tileBlocksW * fi.bytesPerBlock;
+                        cmd->writeTexture(
+                            r.m_ReservedTexture, destSlice, tileData, rowPitch, 0);
+                    };
 
-                            nvrhi::TextureSlice destSlice{};
-                            destSlice.x          = r.m_TileXInTexels;
-                            destSlice.y          = r.m_TileYInTexels;
-                            destSlice.width      = r.m_TileWidthInTexels;
-                            destSlice.height     = r.m_TileHeightInTexels;
-                            destSlice.mipLevel   = r.m_MipLevel;
-                            destSlice.arraySlice = 0;
-
-                            cmd->writeTexture(
-                                r.m_ReservedTexture, destSlice, tileData, rowPitch, 0);
-                        };
-
-                        m_AsyncTileIO->Submit(std::move(req));
-                        submitted++;
-                    }
+                    m_AsyncTileIO->Submit(std::move(req));
+                    submitted++;
                 }
             }
-        }
-        else
-        {
-            // ── Sync path: extract tiles inline and upload on a dedicated
-            // command list.  Executed immediately so tile data is resident
-            // before Phase C's updateTextureTileMappings (immediate GPU call).
-            nvrhi::CommandListHandle uploadCmd = AcquireCommandList();
-            ScopedCommandList scopedUpload{ uploadCmd, "Streaming SyncTileUpload" };
-
-            std::vector<uint8_t> scratch;
-
-            for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
-            {
-                if (submitted >= submitBudget) break;
-
-                nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
-                Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
-                SDL_assert(st.m_ReservedTexture && st.m_SourceData);
-
-                nvrhi::TextureHandle reservedTex = feedbackTex->GetReservedTexture();
-                const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
-                const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
-                const uint8_t* ddsBase = static_cast<const uint8_t*>(st.m_SourceData->GetData());
-
-                for (uint32_t tileIndex : texUpdate.m_TileIndices)
-                {
-                    if (submitted >= submitBudget) break;
-
-                    std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
-                    feedbackTex->GetTileInfo(tileIndex, tileInfos);
-
-                    for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
-                    {
-                        if (submitted >= submitBudget) break;
-
-                        // Compute byte offset of this mip level within the linear DDS blob
-                        size_t mipOffset = 0;
-                        for (uint32_t m = 0; m < tileInfo.m_Mip; m++)
-                        {
-                            uint32_t mw = std::max(texDesc.width >> m, 1u);
-                            uint32_t mh = std::max(texDesc.height >> m, 1u);
-                            uint32_t bw = (mw + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
-                            uint32_t bh = (mh + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
-                            mipOffset += static_cast<size_t>(bw) * bh * fmtInfo.bytesPerBlock;
-                        }
-
-                        uint32_t mipW  = std::max(texDesc.width >> tileInfo.m_Mip, 1u);
-                        uint32_t tbW   = (tileInfo.m_WidthInTexels  + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
-                        uint32_t tbH   = (tileInfo.m_HeightInTexels + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
-
-                        // Extract tile from mmap'd DDS into scratch buffer
-                        scratch.resize(static_cast<size_t>(tbW) * tbH * fmtInfo.bytesPerBlock);
-
-                        uint32_t blocksPerRow = (mipW + fmtInfo.blockSize - 1) / fmtInfo.blockSize;
-                        uint32_t rowPitchSrc  = blocksPerRow * fmtInfo.bytesPerBlock;
-                        uint32_t rowPitchTile = tbW * fmtInfo.bytesPerBlock;
-                        uint32_t srcBlockX    = tileInfo.m_XInTexels / fmtInfo.blockSize;
-                        uint32_t srcBlockY    = tileInfo.m_YInTexels / fmtInfo.blockSize;
-
-                        const uint8_t* srcBase = ddsBase + mipOffset;
-                        for (uint32_t row = 0; row < tbH; row++)
-                        {
-                            uint32_t ro = (srcBlockY + row) * rowPitchSrc + srcBlockX * fmtInfo.bytesPerBlock;
-                            memcpy(scratch.data() + row * rowPitchTile, srcBase + ro, rowPitchTile);
-                        }
-
-                        // Record writeTexture on the upload command list
-                        nvrhi::TextureSlice dest{};
-                        dest.x          = tileInfo.m_XInTexels;
-                        dest.y          = tileInfo.m_YInTexels;
-                        dest.width      = tileInfo.m_WidthInTexels;
-                        dest.height     = tileInfo.m_HeightInTexels;
-                        dest.mipLevel   = tileInfo.m_Mip;
-                        dest.arraySlice = 0;
-
-                        uploadCmd->writeTexture(reservedTex, dest, scratch.data(), rowPitchTile, 0);
-                        submitted++;
-                    }
-                }
-            }
-        }
-
-        if (!m_StreamingConfig.m_bAsyncTileIO)
-        {
-            // Execute the sync upload command list immediately so tile data is resident on the GPU before Phase C's updateTextureTileMappings.
-            ExecutePendingCommandLists();
         }
     }
 
