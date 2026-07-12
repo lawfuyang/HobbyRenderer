@@ -15,6 +15,25 @@ float4 SampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv)
     return tex.Sample(sam, uv);
 }
 
+// Helper: sample a texture at a forced mip level, clamped to the texture's mip count.
+float4 SampleTextureClampedMip(Texture2D tex, SamplerState sam, float2 uv, int forcedMip)
+{
+    uint dummyW, dummyH, numMips;
+    tex.GetDimensions(0, dummyW, dummyH, numMips);
+    return tex.SampleLevel(sam, uv, (uint)clamp(forcedMip, 0, (int)(numMips - 1)));
+}
+
+// Helper: write sampler feedback for a streaming texture.
+void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint feedbackIndex)
+{
+    if (feedbackIndex != 0)
+    {
+        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackTex =
+            ResourceDescriptorHeap[NonUniformResourceIndex(feedbackIndex)];
+        feedbackTex.WriteSamplerFeedback(tex, sam, uv);
+    }
+}
+
 // Streaming-aware variant: if minMipIndex > 0 (streaming enabled for this texture),
 // performs an opportunistic sample with MinMip fallback and writes sampler feedback.
 // When minMipIndex == 0, degrades to a regular Sample() with no feedback write.
@@ -25,12 +44,21 @@ float4 SampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv)
 //   minMipIndex    — bindless index of the R32_FLOAT MinMip residency texture (0 = not streaming)
 //   feedbackIndex  — bindless index of the FeedbackTexture2D UAV (0 = not streaming)
 //   uv             — texture coordinates
+//   forcedMip      — -1 = auto, >=0 = force this mip level (clamped to texture's mip count)
 //
 // Requires [earlydepthstencil] on the pixel shader entry point.
-float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint minMipIndex, uint feedbackIndex, float2 uv)
+float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint minMipIndex, uint feedbackIndex, float2 uv, int forcedMip)
 {
     Texture2D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
     SamplerState sam = SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
+
+    // Forced mip path: use SampleLevel, clamped to the texture's mip chain, and still write feedback.
+    if (forcedMip >= 0)
+    {
+        float4 color = SampleTextureClampedMip(tex, sam, uv, forcedMip);
+        WriteStreamingFeedback(tex, sam, uv, feedbackIndex);
+        return color;
+    }
 
     if (minMipIndex == 0)
     {
@@ -49,15 +77,7 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
         color = tex.Sample(sam, uv, 0, minResidentMip, status);
     }
 
-    // Write sampler feedback so the streaming system knows which tiles are needed.
-    // feedbackIndex == 0 means no feedback texture was registered for this slot.
-    if (feedbackIndex != 0)
-    {
-        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackTex =
-            ResourceDescriptorHeap[NonUniformResourceIndex(feedbackIndex)];
-        feedbackTex.WriteSamplerFeedback(tex, sam, uv);
-    }
-
+    WriteStreamingFeedback(tex, sam, uv, feedbackIndex);
     return color;
 }
 

@@ -259,6 +259,7 @@ struct Renderer
     // Rendering options
     bool m_UseMeshletRendering = true;
     int m_ForcedLOD = -1;
+    int m_ForcedTextureMip = -1; // -1 = auto, 0-15 = forced mip level
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;
     uint32_t m_PathTracerMaxBounces = 8;

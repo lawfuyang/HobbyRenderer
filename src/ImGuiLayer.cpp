@@ -140,6 +140,15 @@ void ImGuiLayer::UpdateFrame()
             ImGui::SameLine();
             ImGui::Text("%s", lodNames[forcedLODIdx]);
 
+            static const char* kMipNames[] = { "Auto", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15" };
+            int forcedMipIdx = g_Renderer.m_ForcedTextureMip + 1;
+            if (ImGui::SliderInt("Forced Texture Mip", &forcedMipIdx, 0, 16))
+            {
+                g_Renderer.m_ForcedTextureMip = forcedMipIdx - 1;
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", kMipNames[forcedMipIdx]);
+
             ImGui::Checkbox("ReSTIR DI", &g_Renderer.m_EnableReSTIRDI);
             if (g_Renderer.m_EnableReSTIRDI)
             {

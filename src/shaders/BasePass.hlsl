@@ -320,10 +320,8 @@ float3 ApplyVolumeAttenuation(float3 radiance, float transmissionDistance, float
 #if defined(FORWARD_TRANSPARENT)
 float4 Forward_PSMain(VSOut input) : SV_TARGET
 #elif defined(ALPHA_TEST)
-[earlydepthstencil]
 GBufferOut GBuffer_PSMain_AlphaTest(VSOut input)
 #else
-[earlydepthstencil]
 GBufferOut GBuffer_PSMain(VSOut input)
 #endif
 {
@@ -335,7 +333,8 @@ GBufferOut GBuffer_PSMain(VSOut input)
     bool hasAlbedo = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0;
     float4 albedoSample = hasAlbedo
         ? SampleBindlessStreamedTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
-                                        mat.m_AlbedoMinMipIndex, mat.m_AlbedoFeedbackIndex, input.uv)
+                                        mat.m_AlbedoMinMipIndex, mat.m_AlbedoFeedbackIndex, input.uv,
+                                        g_PerFrame.m_ForcedTextureMip)
         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
     // Alpha test (discard) as early as possible
@@ -351,19 +350,22 @@ GBufferOut GBuffer_PSMain(VSOut input)
     bool hasORM = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ROUGHNESS_METALLIC) != 0;
     float4 ormSample = hasORM
         ? SampleBindlessStreamedTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex,
-                                        mat.m_RoughnessMinMipIndex, mat.m_RoughnessFeedbackIndex, input.uv)
+                                        mat.m_RoughnessMinMipIndex, mat.m_RoughnessFeedbackIndex, input.uv,
+                                        g_PerFrame.m_ForcedTextureMip)
         : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 1.0f, 0.0f); // R=occ, G=rough, B=metal
 
     bool hasNormal = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_NORMAL) != 0;
     float4 nmSample = hasNormal
         ? SampleBindlessStreamedTexture(mat.m_NormalTextureIndex, mat.m_NormalSamplerIndex,
-                                        mat.m_NormalMinMipIndex, mat.m_NormalFeedbackIndex, input.uv)
+                                        mat.m_NormalMinMipIndex, mat.m_NormalFeedbackIndex, input.uv,
+                                        g_PerFrame.m_ForcedTextureMip)
         : float4(0.5f, 0.5f, 1.0f, 0.0f);
 
     bool hasEmissive = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_EMISSIVE) != 0;
     float4 emissiveSample = hasEmissive
         ? SampleBindlessStreamedTexture(mat.m_EmissiveTextureIndex, mat.m_EmissiveSamplerIndex,
-                                        mat.m_EmissiveMinMipIndex, mat.m_EmissiveFeedbackIndex, input.uv)
+                                        mat.m_EmissiveMinMipIndex, mat.m_EmissiveFeedbackIndex, input.uv,
+                                        g_PerFrame.m_ForcedTextureMip)
         : float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Normal (from normal map when available)

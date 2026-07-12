@@ -924,9 +924,11 @@ void Renderer::UpdateStreamingPreRender()
                     }
                 }
             }
+        }
 
-            // Execute the sync upload command list immediately so tile data is
-            // resident on the GPU before Phase C's updateTextureTileMappings.
+        if (!m_StreamingConfig.m_bAsyncTileIO)
+        {
+            // Execute the sync upload command list immediately so tile data is resident on the GPU before Phase C's updateTextureTileMappings.
             ExecutePendingCommandLists();
         }
     }
