@@ -622,6 +622,52 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Text("UpdateMappings:   %.3f ms", stats.m_CpuTimeUpdateTileMappings * 1000.0);
             ImGui::Text("ResolveFeedback:  %.3f ms", stats.m_CpuTimeResolve * 1000.0);
 
+            ImGui::SeparatorText("Tile Residency Debug");
+            {
+                const uint32_t numTex = g_Renderer.m_FeedbackManager->GetNumTextures();
+
+                static std::vector<std::string> s_TexNames;
+                static std::vector<const char*> s_TexNamePtrs;
+                s_TexNames.clear();
+                s_TexNamePtrs.clear();
+
+                s_TexNames.push_back("None");
+                s_TexNamePtrs.push_back(s_TexNames.back().c_str());
+
+                for (uint32_t i = 0; i < numTex; ++i)
+                {
+                    nvfeedback::FeedbackTexture* ft = g_Renderer.m_FeedbackManager->GetTextureByIndex(i);
+                    int userIdx = ft->GetUserIndex();
+                    std::string name;
+                    if (userIdx >= 0 && userIdx < (int)g_Renderer.m_Scene.m_Textures.size())
+                    {
+                        const std::string& uri = g_Renderer.m_Scene.m_Textures[userIdx].m_Uri;
+                        if (!uri.empty())
+                            name = std::filesystem::path(uri).filename().string();
+                    }
+                    if (name.empty())
+                        s_TexNames.push_back("Texture " + std::to_string(i));
+                    else
+                        s_TexNames.push_back(name);
+                    s_TexNamePtrs.push_back(s_TexNames.back().c_str());
+                }
+
+                int selectedIdx = g_Renderer.m_TileResidencyDebugTextureIdx + 1;
+                if (selectedIdx >= (int)s_TexNamePtrs.size())
+                    selectedIdx = 0; // clamp if previously-selected texture was unregistered
+
+                if (ImGui::Combo("Texture", &selectedIdx, s_TexNamePtrs.data(), (int)s_TexNamePtrs.size()))
+                {
+                    g_Renderer.m_TileResidencyDebugTextureIdx = selectedIdx - 1;
+                }
+
+                if (g_Renderer.m_TileResidencyDebugTextureIdx >= 0)
+                {
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Visualizing: %s", s_TexNamePtrs[selectedIdx]);
+                    ImGui::Text("Black tiles = not streamed in yet");
+                }
+            }
+
             ImGui::TreePop();
         }
     }

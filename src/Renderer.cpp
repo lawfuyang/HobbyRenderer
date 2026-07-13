@@ -991,6 +991,7 @@ void Renderer::ScheduleAndRunAllRenderers()
     extern IRenderer* g_BloomRenderer;
     extern IRenderer* g_TAARenderer;
     extern IRenderer* g_HDRRenderer;
+    extern IRenderer* g_TileResidencyDebugRenderer;
     extern IRenderer* g_ImGuiRenderer;
     extern IRenderer* g_PathTracerRenderer;
     extern IRenderer* g_SHARCRenderer;
@@ -1031,6 +1032,7 @@ void Renderer::ScheduleAndRunAllRenderers()
     }
 
     m_RenderGraph.ScheduleRenderer(g_HDRRenderer);
+    m_RenderGraph.ScheduleRenderer(g_TileResidencyDebugRenderer);
     m_RenderGraph.ScheduleRenderer(g_ImGuiRenderer);
 
     m_RenderGraph.EndSetup();

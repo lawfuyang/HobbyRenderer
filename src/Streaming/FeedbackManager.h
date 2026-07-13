@@ -93,6 +93,7 @@ namespace nvfeedback
         // Resolve an index (from FeedbackTextureUpdate::m_TextureIdx) to the actual FeedbackTexture pointer.
         // External code uses this after receiving a FeedbackTextureCollection from BeginFrame.
         FeedbackTexture* GetTextureByIndex(uint32_t idx) { return m_Textures.at(idx).get(); }
+        uint32_t GetNumTextures() const { return (uint32_t)m_Textures.size(); }
 
         // Internal helpers called by FeedbackTexture
         // Called to destroy a texture — cleans up ringbuffer/readback references and releases ownership.

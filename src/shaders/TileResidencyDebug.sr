@@ -1,0 +1,4 @@
+srinput TileResidencyDebugInputs
+{
+    Texture2D<float4> SrcTexture;  // t0
+};
