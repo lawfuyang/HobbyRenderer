@@ -24,6 +24,9 @@ float4 SampleTextureClampedMip(Texture2D tex, SamplerState sam, float2 uv, int f
 }
 
 // Helper: write sampler feedback for a streaming texture.
+// UV is passed through unchanged — the sampler's address mode determines
+// wrapping behaviour.  A WRAP sampler at uv=1.2 correctly maps to uv=0.2
+// in the feedback map.  Clamping would silently request the wrong tile.
 void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint feedbackIndex, int forcedMip)
 {
     if (feedbackIndex != 0)
