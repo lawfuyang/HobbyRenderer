@@ -1,16 +1,10 @@
 #pragma once
 
-#include <unordered_set>
-
 #include "FeedbackTexture.h"
 #include "FeedbackTextureSet.h"
-#include <rtxts-ttm/TiledTextureManager.h>
-#include "../Utilities.h"
+#include "Utilities.h"
 
-// D3D12 tile size constant (64 KB)
-#ifndef D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES
-#define D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES 65536u
-#endif
+#include <rtxts-ttm/TiledTextureManager.h>
 
 namespace nvfeedback
 {
@@ -31,7 +25,7 @@ namespace nvfeedback
 
     struct FeedbackTextureUpdate
     {
-        FeedbackTexture* m_Texture = nullptr;
+        uint32_t m_TextureIdx = UINT32_MAX;
         std::vector<uint32_t> m_TileIndices;
     };
 
@@ -95,6 +89,10 @@ namespace nvfeedback
 
         const FeedbackManagerStats& GetStats() const;
 
+        // Resolve an index (from FeedbackTextureUpdate::m_TextureIdx) to the actual FeedbackTexture pointer.
+        // External code uses this after receiving a FeedbackTextureCollection from BeginFrame.
+        FeedbackTexture* GetTextureByIndex(uint32_t idx) { return m_Textures.at(idx).get(); }
+
         // Internal helpers called by FeedbackTexture
         // Called to destroy a texture — cleans up ringbuffer/readback references and releases ownership.
         // Not called from ~FeedbackTexture (FeedbackManager owns the unique_ptrs); external code calls this
@@ -115,9 +113,6 @@ namespace nvfeedback
         std::vector<uint32_t>                         m_TexturesRingbuffer;
         uint32_t                                      m_RingbufferCursor = 0;
         std::vector<uint32_t>                         m_TexturesToReadback[kNumFramesInFlight];
-
-        // Helpers to resolve index → pointer
-        FeedbackTexture* GetTextureByIndex(uint32_t idx) { return m_Textures.at(idx).get(); }
 
         FeedbackManagerStats m_StatsLastFrame{};
 

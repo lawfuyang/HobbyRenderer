@@ -768,7 +768,7 @@ void Renderer::UpdateStreamingPreRender()
         {
             if (submitted >= submitBudget) break;
 
-            nvfeedback::FeedbackTexture* feedbackTex = texUpdate.m_Texture;
+            nvfeedback::FeedbackTexture* feedbackTex = m_FeedbackManager->GetTextureByIndex(texUpdate.m_TextureIdx);
             Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
             SDL_assert(st.m_ReservedTexture && st.m_SourceData);
 

@@ -1,5 +1,7 @@
 #include "FeedbackManager.h"
-#include "../Renderer.h"
+#include "Renderer.h"
+
+#include "d3d12.h"
 
 namespace nvfeedback
 {
@@ -306,7 +308,7 @@ namespace nvfeedback
             if (!tilesRequestedNew.empty())
             {
                 FeedbackTextureUpdate update;
-                update.m_Texture = feedbackTexture;
+                update.m_TextureIdx = texIdx;
                 for (uint32_t tileIndex : tilesRequestedNew)
                 {
                     if (feedbackTexture->IsTilePacked(tileIndex))
@@ -332,8 +334,8 @@ namespace nvfeedback
 
         for (FeedbackTextureUpdate& texUpdate : tilesReady.m_Textures)
         {
-            FeedbackTexture* texture = texUpdate.m_Texture;
-            m_MinMipDirtyTextures.insert(texture->GetManagerIndex());
+            FeedbackTexture* texture = GetTextureByIndex(texUpdate.m_TextureIdx);
+            m_MinMipDirtyTextures.insert(texUpdate.m_TextureIdx);
 
             uint32_t tiledTextureId = texture->GetTiledTextureId();
             m_TiledTextureManager->UpdateTilesMapping(tiledTextureId, texUpdate.m_TileIndices);
