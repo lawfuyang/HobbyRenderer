@@ -265,7 +265,7 @@ float3 GetStreamingMipDebugColor(uint minMipIndex, float2 uv)
 
     Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
     SamplerState maxReductionSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX)];
-    uint minResidentMip = minMipTex.SampleLevel(maxReductionSam, uv, 0);
+    uint minResidentMip = minMipTex.Sample(maxReductionSam, uv);
     int mipLevel = int(minResidentMip);
 
     // LUT from SamplerFeedbackStreaming GetLodVisualizationColor.h
