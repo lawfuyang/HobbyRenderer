@@ -538,8 +538,11 @@ void ImGuiLayer::UpdateFrame()
             const nvfeedback::FeedbackManagerStats& stats = g_Renderer.m_FeedbackManager->GetStats();
 
             ImGui::SeparatorText("Memory");
-            ImGui::Text("Heap Allocated:  %.1f MB",
-                static_cast<double>(stats.m_HeapAllocationInBytes) / (1024.0 * 1024.0));
+            ImGui::Text("Heaps:           %u (TTM: %u, Packed-Mip: %u)",
+                        stats.m_NumHeaps,
+                        stats.m_NumTTMHeaps,
+                        stats.m_NumHeaps - stats.m_NumTTMHeaps);
+            ImGui::Text("Heap Allocated:  %.1f MB", BYTES_TO_MB(stats.m_HeapAllocationInBytes));
             ImGui::Text("Heap Free Tiles: %u", stats.m_HeapTilesFree);
             ImGui::Text("Tiles Total:     %u", stats.m_TilesTotal);
 

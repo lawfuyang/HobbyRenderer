@@ -455,7 +455,7 @@ void RenderGraph::RenderDebugUI()
                             ImGui::TableNextColumn();
                             ImGui::Text("%llu", block.m_Offset);
                             ImGui::TableNextColumn();
-                            ImGui::Text("%.2f KB", block.m_Size / 1024.0);
+                            ImGui::Text("%.2f KB", BYTES_TO_KB(block.m_Size));
                             ImGui::TableNextColumn();
                             ImGui::Text("%s", block.m_IsFree ? "Free" : "Allocated");
                             ImGui::TableNextColumn();
@@ -563,7 +563,7 @@ std::string RenderGraph::ExportToString() const
                     for (const TransientBuffer& buf : m_Buffers) if (buf.m_HeapIndex == (uint32_t)i && buf.m_Offset == block.m_Offset) { resourceName = buf.m_Desc.m_NvrhiDesc.debugName.c_str(); break; }
                 }
             }
-            ss << "- Offset " << block.m_Offset << ": " << block.m_Size / 1024.0 << " KB - " << resourceName << "\n";
+            ss << "- Offset " << block.m_Offset << ": " << BYTES_TO_KB(block.m_Size) << " KB - " << resourceName << "\n";
         }
     }
 

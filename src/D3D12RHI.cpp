@@ -427,7 +427,7 @@ public:
             DXGI_QUERY_VIDEO_MEMORY_INFO info;
             if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
             {
-                return static_cast<float>(info.CurrentUsage) / 1024.0f / 1024.0f;
+                return static_cast<float>(BYTES_TO_MB(info.CurrentUsage));
             }
         }
         return 0.0f;

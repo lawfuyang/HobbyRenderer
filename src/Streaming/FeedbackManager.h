@@ -13,6 +13,8 @@ namespace nvfeedback
     struct FeedbackManagerStats
     {
         uint64_t m_HeapAllocationInBytes = 0;
+        uint32_t m_NumHeaps      = 0;
+        uint32_t m_NumTTMHeaps   = 0;
         uint32_t m_HeapTilesFree = 0;
         uint32_t m_TilesTotal = 0;
         uint32_t m_TilesAllocated = 0;
@@ -122,6 +124,19 @@ namespace nvfeedback
         std::unique_ptr<HeapAllocator>              m_HeapAllocator;
         std::unique_ptr<rtxts::TiledTextureManager> m_TiledTextureManager;
         std::unordered_set<uint32_t>                m_MinMipDirtyTextures;
+
+        // Running cursor for packed-mip tile suballocation.
+        // Packed mips fill tiles sequentially across dedicated heaps
+        // (heapId = cursor / kHeapSizeInTiles, localTile = cursor % kHeapSizeInTiles).
+        // These heaps are allocated via AllocateHeap but NOT registered with TTM
+        // (no AddHeap), because TTM has no concept of externally-mapped tiles and
+        // would otherwise allocate streaming tiles into packed-mip physical slots.
+        uint32_t m_PackedMipTileCursor = 0;
+
+        // Number of heaps registered with TiledTextureManager via AddHeap.
+        // This is the count used in BeginFrame's heap management comparison
+        // against GetNumDesiredHeaps(). It excludes packed-mip-only heaps.
+        uint32_t m_NumTTMHeaps = 0;
     };
 
 } // namespace nvfeedback

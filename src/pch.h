@@ -79,6 +79,9 @@ using Frustum = DirectX::BoundingFrustum;
 #define PROFILE_SCOPED(NAME) MICROPROFILE_SCOPE_CSTR(NAME);
 #define PROFILE_FUNCTION() MICROPROFILE_SCOPEI("", __FUNCTION__, MP_AUTO);
 
+#define BYTES_TO_KB(bytes) ((double)(bytes) / 1024.0)
+#define BYTES_TO_MB(bytes) (BYTES_TO_KB(bytes) / 1024.0)
+
 #define SingletonFunctionsCommon(ClassName)          \
     ClassName(const ClassName&)            = delete; \
     ClassName(ClassName&&)                 = delete; \

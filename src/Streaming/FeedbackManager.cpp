@@ -6,6 +6,7 @@
 namespace nvfeedback
 {
     const uint64_t kHeapSizeInBytes = kHeapSizeInTiles * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+    static constexpr bool kStreamingDebugLog = false;
 
     // ─── HeapAllocator ───────────────────────────────────────────────────────
     uint32_t HeapAllocator::AllocateHeap()
@@ -32,6 +33,12 @@ namespace nvfeedback
             heapId = (uint32_t)m_Heaps.size();
             m_Heaps.push_back(heap);
             m_Buffers.push_back(buffer);
+
+            if constexpr (kStreamingDebugLog)
+            {
+                SDL_Log("[Streaming][Heap] AllocateHeap: new slot %u (total heaps: %u, VRAM: %.2f MB)",
+                        heapId, m_NumHeaps + 1, BYTES_TO_MB(m_TotalAllocatedBytes + kHeapSizeInBytes));
+            }
         }
         else
         {
@@ -39,6 +46,12 @@ namespace nvfeedback
             m_FreeHeapIds.pop_back();
             m_Heaps[heapId] = heap;
             m_Buffers[heapId] = buffer;
+
+            if constexpr (kStreamingDebugLog)
+            {
+                SDL_Log("[Streaming][Heap] AllocateHeap: reuse slot %u from free list (total heaps: %u, VRAM: %.2f MB)",
+                        heapId, m_NumHeaps + 1, BYTES_TO_MB(m_TotalAllocatedBytes + kHeapSizeInBytes));
+            }
         }
 
         m_TotalAllocatedBytes += kHeapSizeInBytes;
@@ -49,6 +62,16 @@ namespace nvfeedback
 
     void HeapAllocator::ReleaseHeap(uint32_t heapId, uint32_t frameIndex)
     {
+        if constexpr (kStreamingDebugLog)
+        {
+            SDL_Log("[Streaming][Heap] ReleaseHeap: heapId=%u frameIndex=%u bucket=%u "
+                    "(old Heaps[%u]=%p, VRAM before: %.2f MB) — deferred destroy, "
+                    "WARNING: if any tiles are still mapped to this heap the GPU will TDR!",
+                    heapId, frameIndex, frameIndex % kNumFramesInFlight,
+                    heapId, (void*)m_Heaps[heapId].Get(),
+                    BYTES_TO_MB(m_TotalAllocatedBytes));
+        }
+
         m_FreeHeapIds.push_back(heapId);
 
         // Defer actual destruction
@@ -61,11 +84,39 @@ namespace nvfeedback
 
         m_TotalAllocatedBytes -= kHeapSizeInBytes;
         m_NumHeaps--;
+
+        if constexpr (kStreamingDebugLog)
+        {
+            SDL_Log("[Streaming][Heap] ReleaseHeap: heapId=%u done (VRAM after: %.2f MB, in-use heaps: %u)",
+                    heapId, BYTES_TO_MB(m_TotalAllocatedBytes), m_NumHeaps);
+        }
     }
 
     void HeapAllocator::DrainReleaseQueue(uint32_t frameIndex)
     {
         uint32_t bucket = frameIndex % kNumFramesInFlight;
+        size_t numHeaps = m_HeapsToRelease[bucket].size();
+
+        if (numHeaps > 0)
+        {
+            if constexpr (kStreamingDebugLog)
+            {
+                SDL_Log("[Streaming][Heap] DrainReleaseQueue: frameIndex=%u bucket=%u — destroying %zu deferred heap(s) "
+                        "(these were released %u frames ago, GPU should be done with them)",
+                        frameIndex, bucket, numHeaps, kNumFramesInFlight);
+            }
+
+            for (size_t i = 0; i < numHeaps; ++i)
+            {
+                if constexpr (kStreamingDebugLog)
+                {
+                    SDL_Log("[Streaming][Heap] DrainReleaseQueue:   heap handle=%p buffer handle=%p",
+                            (void*)m_HeapsToRelease[bucket][i].Get(),
+                            (void*)m_BuffersToRelease[bucket][i].Get());
+                }
+            }
+        }
+
         m_HeapsToRelease[bucket].clear();
         m_BuffersToRelease[bucket].clear();
     }
@@ -235,22 +286,60 @@ namespace nvfeedback
 
         // ── Step 4: Heap management ──
         uint32_t numRequiredHeaps = m_TiledTextureManager->GetNumDesiredHeaps();
-        if (numRequiredHeaps > m_HeapAllocator->GetNumHeaps())
+
+        if constexpr (kStreamingDebugLog)
         {
-            while (m_HeapAllocator->GetNumHeaps() < numRequiredHeaps)
+            SDL_Log("[Streaming][Heap] BeginFrame heap check: required=%u TTMRegistered=%u totalHeaps=%u packedMipCursor=%u",
+                    numRequiredHeaps, m_NumTTMHeaps, m_HeapAllocator->GetNumHeaps(),
+                    m_PackedMipTileCursor);
+        }
+
+        if (numRequiredHeaps > m_NumTTMHeaps)
+        {
+            if constexpr (kStreamingDebugLog)
+            {
+                SDL_Log("[Streaming][Heap] BeginFrame: need %u more TTM heap(s) (required=%u > registered=%u)",
+                        numRequiredHeaps - m_NumTTMHeaps, numRequiredHeaps, m_NumTTMHeaps);
+            }
+
+            while (m_NumTTMHeaps < numRequiredHeaps)
             {
                 uint32_t heapId = m_HeapAllocator->AllocateHeap();
                 m_TiledTextureManager->AddHeap(heapId);
+                m_NumTTMHeaps++;
+
+                if constexpr (kStreamingDebugLog)
+                {
+                    SDL_Log("[Streaming][Heap] BeginFrame: added heapId=%u to TTM (TTM-registered=%u, total=%u)",
+                            heapId, m_NumTTMHeaps, m_HeapAllocator->GetNumHeaps());
+                }
             }
         }
         else
         {
             std::vector<uint32_t> emptyHeaps;
             m_TiledTextureManager->GetEmptyHeaps(emptyHeaps);
+
+            if (!emptyHeaps.empty())
+            {
+                if constexpr (kStreamingDebugLog)
+                {
+                    SDL_Log("[Streaming][Heap] BeginFrame: TTM reports %zu empty heap(s) — releasing:",
+                            emptyHeaps.size());
+                }
+            }
+
             for (uint32_t heapId : emptyHeaps)
             {
+                if constexpr (kStreamingDebugLog)
+                {
+                    SDL_Log("[Streaming][Heap] BeginFrame: releasing empty TTM heapId=%u "
+                            "(only TTM-registered heaps appear here; packed-mip heaps are invisible to TTM)",
+                            heapId);
+                }
                 m_TiledTextureManager->RemoveHeap(heapId);
                 m_HeapAllocator->ReleaseHeap(heapId, m_FrameIndex);
+                m_NumTTMHeaps--;
             }
         }
 
@@ -350,6 +439,13 @@ namespace nvfeedback
             for (auto& [heap, heapTiles] : heapTilesMapping)
             {
                 uint32_t numTiles = (uint32_t)heapTiles.size();
+
+                if constexpr (kStreamingDebugLog)
+                {
+                    SDL_Log("[Streaming][Heap] UpdateTileMappings: textureIdx=%u mapping %u tiles to heap=%p "
+                            "(verify heap is not in release queue!)",
+                            texUpdate.m_TextureIdx, numTiles, (void*)heap.Get());
+                }
 
                 std::vector<nvrhi::TiledTextureCoordinate> tiledTextureCoordinates;
                 std::vector<nvrhi::TiledTextureRegion>     tiledTextureRegions;
@@ -508,6 +604,8 @@ namespace nvfeedback
 
         // Update stats
         m_StatsLastFrame.m_HeapAllocationInBytes = m_HeapAllocator->GetTotalAllocatedBytes();
+        m_StatsLastFrame.m_NumHeaps    = m_HeapAllocator->GetNumHeaps();
+        m_StatsLastFrame.m_NumTTMHeaps = m_NumTTMHeaps;
         m_StatsLastFrame.m_CpuTimeBeginFrame = m_BeginFrameCPUTime;
         m_StatsLastFrame.m_CpuTimeUpdateTileMappings = m_UpdateTileMappingsCPUTime;
         m_StatsLastFrame.m_CpuTimeResolve = m_ResolveCPUTime;
@@ -517,6 +615,19 @@ namespace nvfeedback
         m_StatsLastFrame.m_TilesTotal     = stats.totalTilesNum;
         m_StatsLastFrame.m_HeapTilesFree  = stats.heapFreeTilesNum;
         m_StatsLastFrame.m_TilesStandby   = stats.standbyTilesNum;
+
+        if constexpr (kStreamingDebugLog)
+        {
+            SDL_Log("[Streaming][Heap] EndFrame summary: totalHeaps=%u TTMHeaps=%u VRAM=%.2fMB tiles(alloc=%u total=%u free=%u stby=%u) packedMipCursor=%u",
+                    m_HeapAllocator->GetNumHeaps(),
+                    m_NumTTMHeaps,
+                    BYTES_TO_MB(m_HeapAllocator->GetTotalAllocatedBytes()),
+                    stats.allocatedTilesNum,
+                    stats.totalTilesNum,
+                    stats.heapFreeTilesNum,
+                    stats.standbyTilesNum,
+                    m_PackedMipTileCursor);
+        }
     }
 
     const FeedbackManagerStats& FeedbackManager::GetStats() const
@@ -534,12 +645,60 @@ namespace nvfeedback
         const uint32_t numPackedTiles = packedMipDesc.numTilesForPackedMips;
         const uint32_t firstSubresource = packedMipDesc.numStandardMips;
 
-        // Ensure we have at least one heap with enough free tiles
-        if (m_HeapAllocator->GetNumHeaps() == 0)
-            m_HeapAllocator->AllocateHeap();
+        if constexpr (kStreamingDebugLog)
+        {
+            SDL_Log("[Streaming][Heap] MapPackedMips: textureIdx=%u needs %u packed tile(s) "
+                    "(cursor before=%u, current heaps=%u)",
+                    textureIdx, numPackedTiles, m_PackedMipTileCursor,
+                    m_HeapAllocator->GetNumHeaps());
+        }
 
-        // Map packed mips as a single contiguous tile region starting at the first packed subresource.
-        // In nvrhi, TiledTextureCoordinate::mipLevel maps to D3D12's Subresource index.
+        // Ensure enough heaps are allocated for these packed mips.
+        // These heaps are NOT registered with TTM (no AddHeap) because TTM
+        // would otherwise allocate streaming tiles into packed-mip physical
+        // slots via AllocateRequestedTiles().  Packed mips use their own
+        // dedicated heaps managed purely through updateTextureTileMappings.
+        {
+            const uint32_t totalNeeded = m_PackedMipTileCursor + numPackedTiles;
+            const uint32_t heapsNeeded = (totalNeeded + kHeapSizeInTiles - 1) / kHeapSizeInTiles;
+
+            if constexpr (kStreamingDebugLog)
+            {
+                SDL_Log("[Streaming][Heap] MapPackedMips: cursor after=%u, heapsNeeded=%u, currentHeaps=%u",
+                        totalNeeded, heapsNeeded, m_HeapAllocator->GetNumHeaps());
+            }
+
+            while (m_HeapAllocator->GetNumHeaps() < heapsNeeded)
+            {
+                uint32_t heapId = m_HeapAllocator->AllocateHeap();
+                // Intentionally NOT calling AddHeap — packed-mip heaps are
+                // invisible to TTM so GetEmptyHeaps() never reports them.
+                if constexpr (kStreamingDebugLog)
+                {
+                    SDL_Log("[Streaming][Heap] MapPackedMips: allocated heapId=%u for packed mips "
+                            "(NOT added to TTM, total heaps=%u)",
+                            heapId, m_HeapAllocator->GetNumHeaps());
+                }
+            }
+        }
+
+        // Suballocate these packed mip tiles from the shared heap pool.
+        const uint32_t startHeapId    = m_PackedMipTileCursor / kHeapSizeInTiles;
+        const uint32_t startLocalTile = m_PackedMipTileCursor % kHeapSizeInTiles;
+
+        if constexpr (kStreamingDebugLog)
+        {
+            SDL_Log("[Streaming][Heap] MapPackedMips: suballocating %u tiles at heapId=%u localTile=%u "
+                    "(heaps total=%u, TTM-registered=%u)",
+                    numPackedTiles, startHeapId, startLocalTile,
+                    m_HeapAllocator->GetNumHeaps(), m_NumTTMHeaps);
+        }
+
+        m_PackedMipTileCursor += numPackedTiles;
+
+        // Map packed mips as a single contiguous tile region starting at the first
+        // packed subresource.  In nvrhi, TiledTextureCoordinate::mipLevel maps to
+        // D3D12's Subresource index.
         nvrhi::TiledTextureCoordinate startCoord{};
         startCoord.mipLevel   = static_cast<uint16_t>(firstSubresource);
         startCoord.arrayLevel = 0;
@@ -552,20 +711,25 @@ namespace nvfeedback
 
         std::vector<uint64_t> byteOffsets(numPackedTiles);
         for (uint32_t i = 0; i < numPackedTiles; ++i)
-            byteOffsets[i] = static_cast<uint64_t>(i) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES; // 64KB per tile
+            byteOffsets[i] = static_cast<uint64_t>(startLocalTile + i) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
 
         nvrhi::TextureTilesMapping mapping{};
         mapping.numTextureRegions       = 1;
         mapping.tiledTextureCoordinates = &startCoord;
         mapping.tiledTextureRegions     = &region;
         mapping.byteOffsets             = byteOffsets.data();
-        mapping.heap                    = m_HeapAllocator->GetHeapHandle(0);
+        mapping.heap                    = m_HeapAllocator->GetHeapHandle(startHeapId);
 
         g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(texture->GetReservedTexture(), &mapping, 1);
 
-        SDL_Log("[Streaming] MapPackedMips: mapped %u packed mip tile(s) for subresources %u-%u",
-                numPackedTiles, firstSubresource,
-                firstSubresource + packedMipDesc.numPackedMips - 1);
+        if constexpr (kStreamingDebugLog)
+        {
+            SDL_Log("[Streaming] MapPackedMips: mapped %u packed mip tile(s) for subresources %u-%u "
+                    "onto heap %u at local tile %u",
+                    numPackedTiles, firstSubresource,
+                    firstSubresource + packedMipDesc.numPackedMips - 1,
+                    startHeapId, startLocalTile);
+        }
     }
 
 } // namespace nvfeedback
