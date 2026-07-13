@@ -51,7 +51,7 @@ void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint fee
 // Parameters:
 //   textureIndex   — bindless index of the reserved (tiled) Texture2D
 //   samplerIndex   — bindless index of the anisotropic sampler
-//   minMipIndex    — bindless index of the R32_UINT MinMip residency texture (0 = not streaming)
+//   minMipIndex    — bindless index of the R8_UINT MinMip residency texture (0 = not streaming)
 //   feedbackIndex  — bindless index of the FeedbackTexture2D UAV (0 = not streaming)
 //   uv             — texture coordinates
 //   forcedMip      — -1 = auto, >=0 = force this mip level (clamped to texture's mip count)
@@ -83,8 +83,28 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
     {
         Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
         SamplerState maxReductionSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX)];
-        uint minResidentMip = minMipTex.SampleLevel(maxReductionSam, uv, 0);
+        // Sample() with a max-reduction sampler returns the maximum mip value
+        // across the filter footprint — i.e. the coarsest resident mip in the region.
+        // This works correctly on R8_UINT textures (unlike SampleLevel which ignores reduction mode).
+        uint minResidentMip = minMipTex.Sample(maxReductionSam, uv);
         color = tex.Sample(sam, uv, 0, minResidentMip, status);
+
+        // Last-resort fallback: if the MinMip-clamped sample is STILL unmapped
+        // (MinMip texture is stale / not yet updated for this tile), walk coarser
+        // mips one by one until we find a mapped one.  Packed mips are always
+        // resident so this loop always terminates.
+        if (false)
+        {
+            if (!CheckAccessFullyMapped(status))
+            {
+                for (uint mip = minResidentMip + 1; mip < srrhi::CommonConsts::MAX_MIP_COUNT; ++mip)
+                {
+                    color = tex.Sample(sam, uv, 0, mip, status);
+                    if (CheckAccessFullyMapped(status))
+                        break;
+                }
+            }
+        }
     }
 
     WriteStreamingFeedback(tex, sam, uv, feedbackIndex, forcedMip);

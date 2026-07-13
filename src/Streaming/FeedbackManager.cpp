@@ -466,9 +466,7 @@ namespace nvfeedback
                     region.tilesNum = 1;
                     tiledTextureRegions.push_back(region);
 
-                    byteOffsets.push_back(
-                        static_cast<uint64_t>(tileAllocations[tileIndex].heapTileIndex) *
-                        D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES);
+                    byteOffsets.push_back(static_cast<uint64_t>(tileAllocations[tileIndex].heapTileIndex) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES);
                 }
 
                 nvrhi::TextureTilesMapping textureTilesMapping{};
@@ -491,9 +489,9 @@ namespace nvfeedback
             if (!bUseAutomaticBarriers)
             {
                 for (uint32_t texIdx : m_MinMipDirtyTextures)
-                    commandList->setTextureState(GetTextureByIndex(texIdx)->GetMinMipTexture(),
-                                                 nvrhi::AllSubresources,
-                                                 nvrhi::ResourceStates::CopyDest);
+                {
+                    commandList->setTextureState(GetTextureByIndex(texIdx)->GetMinMipTexture(), nvrhi::AllSubresources, nvrhi::ResourceStates::CopyDest);
+                }
             }
 
             std::vector<uint8_t> minMipData;
@@ -502,35 +500,24 @@ namespace nvfeedback
             for (uint32_t texIdx : m_MinMipDirtyTextures)
             {
                 FeedbackTexture* texture = GetTextureByIndex(texIdx);
-                rtxts::TextureDesc desc = m_TiledTextureManager->GetTextureDesc(
-                    texture->GetTiledTextureId(), rtxts::TextureTypes::eMinMipTexture);
+                rtxts::TextureDesc desc = m_TiledTextureManager->GetTextureDesc(texture->GetTiledTextureId(), rtxts::TextureTypes::eMinMipTexture);
 
-                // Size scratch buffers for this texture's MinMip dimensions
+                // R8_UINT: 1 byte per texel, rowPitch = width (no padding needed for writeTexture)
                 uint32_t numElements = desc.textureOrMipRegionWidth * desc.textureOrMipRegionHeight;
-                uint32_t rowPitch = (desc.textureOrMipRegionWidth * sizeof(uint32_t) + 0xFF) & ~0xFF;
+                uint32_t rowPitch = desc.textureOrMipRegionWidth;
                 minMipData.resize(numElements);
-                uploadData.resize(rowPitch * desc.textureOrMipRegionHeight);
 
                 m_TiledTextureManager->WriteMinMipData(texture->GetTiledTextureId(), minMipData.data());
 
-                uint8_t* pUploadData = uploadData.data();
-                for (uint32_t y = 0; y < desc.textureOrMipRegionHeight; ++y)
-                {
-                    uint32_t* pDataUint = reinterpret_cast<uint32_t*>(pUploadData);
-                    for (uint32_t x = 0; x < desc.textureOrMipRegionWidth; ++x)
-                        pDataUint[x] = static_cast<uint32_t>(minMipData[y * desc.textureOrMipRegionWidth + x]);
-                    pUploadData += rowPitch;
-                }
-
-                commandList->writeTexture(texture->GetMinMipTexture(), 0, 0, uploadData.data(), rowPitch);
+                commandList->writeTexture(texture->GetMinMipTexture(), 0, 0, minMipData.data(), rowPitch);
             }
 
             if (!bUseAutomaticBarriers)
             {
                 for (uint32_t texIdx : m_MinMipDirtyTextures)
-                    commandList->setTextureState(GetTextureByIndex(texIdx)->GetMinMipTexture(),
-                                                 nvrhi::AllSubresources,
-                                                 nvrhi::ResourceStates::ShaderResource);
+                {
+                    commandList->setTextureState(GetTextureByIndex(texIdx)->GetMinMipTexture(), nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+                }
             }
 
             m_MinMipDirtyTextures.clear();
