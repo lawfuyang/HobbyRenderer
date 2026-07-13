@@ -269,7 +269,7 @@ float3 GetStreamingMipDebugColor(uint minMipIndex, float2 uv)
     int mipLevel = int(minResidentMip);
 
     // LUT from SamplerFeedbackStreaming GetLodVisualizationColor.h
-    float3 lut[16] = {
+    float3 lut[srrhi::CommonConsts::MAX_MIP_COUNT] = {
         float3(1.0f, 1.0f, 1.0f),          // 0: white
         float3(1.0f, 0.25f, 0.25f),         // 1: light red
         float3(0.25f, 1.0f, 0.25f),         // 2: light green
