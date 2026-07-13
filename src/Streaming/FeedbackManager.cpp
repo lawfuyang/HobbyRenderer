@@ -73,7 +73,6 @@ namespace nvfeedback
     // ─── FeedbackManager ─────────────────────────────────────────────────────
 
     FeedbackManager::FeedbackManager()
-        : m_FrameIndex(0)
     {
         m_HeapAllocator = std::make_unique<HeapAllocator>();
 
@@ -92,11 +91,6 @@ namespace nvfeedback
         m_Textures.push_back(std::move(feedbackTexture));
         m_TexturesRingbuffer.push_back(idx);
         return rawPtr;
-    }
-
-    std::unique_ptr<FeedbackTextureSet> FeedbackManager::CreateTextureSet()
-    {
-        return std::make_unique<FeedbackTextureSet>();
     }
 
     void FeedbackManager::UnregisterTexture(uint32_t textureIdx)

@@ -78,7 +78,6 @@ namespace nvfeedback
         FeedbackManager();
 
         FeedbackTexture* CreateTexture(const nvrhi::TextureDesc& desc);
-        std::unique_ptr<FeedbackTextureSet> CreateTextureSet();
 
         void BeginFrame(nvrhi::ICommandList* commandList, FeedbackTextureCollection& results);
 

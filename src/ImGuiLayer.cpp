@@ -564,14 +564,23 @@ void ImGuiLayer::UpdateFrame()
                 for (const auto& tex : g_Renderer.m_StreamingUpdatedTextures.m_Textures)
                     tilesSubmitted += (uint32_t)tex.m_TileIndices.size();
 
-                // Compute bandwidth: tiles * 64KB / seconds / 1MB
+                // Accumulate time and tiles, push a sample at 30 Hz regardless of I/O activity
+                static float s_TimeAccum = 0.0f;
+                static uint32_t s_TileAccum = 0;
+                constexpr float kSampleInterval = 1.0f / 30.0f;
                 float dt = ImGui::GetIO().DeltaTime;
-                if (dt > 0.0f && tilesSubmitted > 0)
+                s_TimeAccum += dt;
+                s_TileAccum += tilesSubmitted;
+
+                if (s_TimeAccum >= kSampleInterval)
                 {
-                    float mbps = (float)(tilesSubmitted * 64u * 1024u) / (dt * 1000.0f * 1000.0f);
+                    float mbps = (float)(s_TileAccum * 64u * 1024u)
+                               / (s_TimeAccum * 1000.0f * 1000.0f);
                     uint32_t idx = g_Renderer.m_StreamingBandwidthHistoryIndex;
                     g_Renderer.m_StreamingBandwidthHistory[idx] = mbps;
                     g_Renderer.m_StreamingBandwidthHistoryIndex = (idx + 1) % (uint32_t)g_Renderer.m_StreamingBandwidthHistory.size();
+                    s_TimeAccum = 0.0f;
+                    s_TileAccum = 0;
                 }
 
                 // Build draw buffer in order (oldest first)

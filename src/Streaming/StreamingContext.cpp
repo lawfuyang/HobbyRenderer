@@ -28,7 +28,7 @@ namespace nvfeedback
             FeedbackTexture* primaryFt = it->second;
 
             // ── Create the set ──
-            auto texSet = g_Renderer.m_FeedbackManager->CreateTextureSet();
+            std::unique_ptr<FeedbackTextureSet> texSet = std::make_unique<FeedbackTextureSet>();
 
             // Helper: add texture if it's a registered FeedbackTexture
             auto tryAdd = [&](int texIdx) {
