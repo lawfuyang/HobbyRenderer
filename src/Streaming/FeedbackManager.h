@@ -80,11 +80,8 @@ namespace nvfeedback
         FeedbackManager();
 
         FeedbackTexture* CreateTexture(const nvrhi::TextureDesc& desc);
-
         void BeginFrame(nvrhi::ICommandList* commandList, FeedbackTextureCollection& results);
-
         void UpdateTileMappings(nvrhi::ICommandList* commandList, FeedbackTextureCollection& tilesReady);
-
         void ResolveFeedback(nvrhi::ICommandList* commandList);
         void EndFrame();
 

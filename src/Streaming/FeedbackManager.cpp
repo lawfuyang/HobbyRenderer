@@ -135,7 +135,7 @@ namespace nvfeedback
 
     FeedbackTexture* FeedbackManager::CreateTexture(const nvrhi::TextureDesc& desc)
     {
-        auto feedbackTexture = std::make_unique<FeedbackTexture>(desc, m_TiledTextureManager.get());
+        std::unique_ptr<FeedbackTexture> feedbackTexture = std::make_unique<FeedbackTexture>(desc, m_TiledTextureManager.get());
         FeedbackTexture* rawPtr = feedbackTexture.get();
         uint32_t idx = (uint32_t)m_Textures.size();
         rawPtr->SetManagerIndex(idx);
@@ -147,7 +147,7 @@ namespace nvfeedback
     void FeedbackManager::UnregisterTexture(uint32_t textureIdx)
     {
         // Remove from readback slots
-        for (auto& vec : m_TexturesToReadback)
+        for (std::vector<uint32_t>& vec : m_TexturesToReadback)
         {
             auto it = std::find(vec.begin(), vec.end(), textureIdx);
             if (it != vec.end()) vec.erase(it);
@@ -199,9 +199,7 @@ namespace nvfeedback
         }
     }
 
-    void FeedbackManager::BeginFrame(
-        nvrhi::ICommandList* commandList,
-        FeedbackTextureCollection& results)
+    void FeedbackManager::BeginFrame(nvrhi::ICommandList* commandList, FeedbackTextureCollection& results)
     {
         SimpleTimer timer;
 
@@ -409,9 +407,7 @@ namespace nvfeedback
         m_BeginFrameCPUTime = timer.LapSeconds();
     }
 
-    void FeedbackManager::UpdateTileMappings(
-        nvrhi::ICommandList* commandList,
-        FeedbackTextureCollection& tilesReady)
+    void FeedbackManager::UpdateTileMappings(nvrhi::ICommandList* commandList, FeedbackTextureCollection& tilesReady)
     {
         SimpleTimer timer;
 
