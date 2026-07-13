@@ -556,10 +556,12 @@ void ImGuiLayer::UpdateFrame()
             ImGui::SeparatorText("Bandwidth (MB/s)");
             {
                 // Lazily initialize ring buffer
-                if (g_Renderer.m_StreamingBandwidthHistory.empty())
+                static std::vector<float> s_BandwidthHistory;
+                static uint32_t s_BandwidthHistoryIndex = 0;
+                if (s_BandwidthHistory.empty())
                 {
-                    g_Renderer.m_StreamingBandwidthHistory.resize(128, 0.0f);
-                    g_Renderer.m_StreamingBandwidthHistoryIndex = 0;
+                    s_BandwidthHistory.resize(128, 0.0f);
+                    s_BandwidthHistoryIndex = 0;
                 }
 
                 // Count tiles submitted this frame
@@ -579,16 +581,16 @@ void ImGuiLayer::UpdateFrame()
                 {
                     float mbps = (float)(s_TileAccum * 64u * 1024u)
                                / (s_TimeAccum * 1000.0f * 1000.0f);
-                    uint32_t idx = g_Renderer.m_StreamingBandwidthHistoryIndex;
-                    g_Renderer.m_StreamingBandwidthHistory[idx] = mbps;
-                    g_Renderer.m_StreamingBandwidthHistoryIndex = (idx + 1) % (uint32_t)g_Renderer.m_StreamingBandwidthHistory.size();
+                    uint32_t idx = s_BandwidthHistoryIndex;
+                    s_BandwidthHistory[idx] = mbps;
+                    s_BandwidthHistoryIndex = (idx + 1) % (uint32_t)s_BandwidthHistory.size();
                     s_TimeAccum = 0.0f;
                     s_TileAccum = 0;
                 }
 
                 // Build draw buffer in order (oldest first)
-                auto& hist = g_Renderer.m_StreamingBandwidthHistory;
-                uint32_t head = g_Renderer.m_StreamingBandwidthHistoryIndex;
+                auto& hist = s_BandwidthHistory;
+                uint32_t head = s_BandwidthHistoryIndex;
                 std::vector<float> drawBuffer;
                 drawBuffer.reserve(hist.size());
                 drawBuffer.insert(drawBuffer.end(), hist.begin() + head, hist.end());

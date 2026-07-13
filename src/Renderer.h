@@ -311,9 +311,6 @@ struct Renderer
     // Tiles collected by BeginFrame() — consumed by UpdateStreamingPostRender() via UpdateTileMappings().
     nvfeedback::FeedbackTextureCollection m_StreamingUpdatedTextures;
 
-    // Bandwidth tracking for ImGui debug graph
-    std::vector<float> m_StreamingBandwidthHistory;
-    uint32_t m_StreamingBandwidthHistoryIndex = 0;
     int m_TileResidencyDebugTextureIdx = -1; // -1 = disabled, 0..N = selected feedback texture index
 
     // Initialise the FeedbackManager and call BuildTextureSets after scene load.
