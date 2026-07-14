@@ -6,7 +6,6 @@
 namespace nvfeedback
 {
     const uint64_t kHeapSizeInBytes = kHeapSizeInTiles * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
-    static constexpr bool kStreamingDebugLog = false;
 
     // ─── HeapAllocator ───────────────────────────────────────────────────────
     uint32_t HeapAllocator::AllocateHeap()

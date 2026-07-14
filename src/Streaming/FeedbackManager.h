@@ -36,6 +36,7 @@ namespace nvfeedback
         std::vector<FeedbackTextureUpdate> m_Textures;
     };
 
+    static constexpr bool kStreamingDebugLog = false;
     static constexpr uint32_t kNumFramesInFlight = 3;
     static constexpr uint32_t kHeapSizeInTiles   = 256;
 

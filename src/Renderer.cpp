@@ -723,17 +723,52 @@ void Renderer::UpdateStreamingPreRender()
 {
     PROFILE_FUNCTION();
 
-    // -- Phase B2+A: Flush completed async tile uploads + BeginFrame --
-    // Merged into one command list; executed before Phase C because
-    // UpdateTileMappings() calls updateTextureTileMappings() which is an
-    // immediate GPU queue op that must follow the tile upload commands.
+    // -- Phase B2+A+C: Flush completed async tile uploads + UpdateTileMappings + BeginFrame --
+    //
+    // ORDERING IS CRITICAL for correctness:
+    //   Phase B2: Flush() uploads tile *data* for tiles submitted last frame.
+    //   Phase C:  UpdateTileMappings() maps those tiles and writes the MinMip texture.
+    //             This MUST happen after Flush() so that when MinMip says "mip N is
+    //             resident", the tile data is already on the GPU.  Doing it in the
+    //             same frame as Submit() (old behaviour) caused the MinMip to advertise
+    //             tiles as resident one frame before their data arrived, producing black
+    //             or wrong-mip samples for one frame whenever new tiles streamed in.
+    //   Phase A:  BeginFrame() reads back sampler feedback and queues new tile requests.
+    //
+    // All three are merged into one command list so that updateTextureTileMappings
+    // (an immediate GPU queue op) follows the writeTexture calls from Flush().
     {
-        PROFILE_SCOPED("Streaming TileFlush+BeginFrame");
+        PROFILE_SCOPED("Streaming TileFlush+UpdateMappings+BeginFrame");
         nvrhi::CommandListHandle cmd = AcquireCommandList();
-        ScopedCommandList scopedCmd{ cmd, "Streaming TileFlush+BeginFrame" };
+        ScopedCommandList scopedCmd{ cmd, "Streaming TileFlush+UpdateMappings+BeginFrame" };
 
-        // Phase B2: Flush completed async tile uploads from previous frame
-        m_AsyncTileIO->Flush(cmd);
+        // Phase B2: Flush completed async tile uploads from previous frame.
+        // After this call, all tile data submitted last frame is on the GPU.
+        const uint32_t flushedCount = m_AsyncTileIO->Flush(cmd);
+
+        if constexpr (nvfeedback::kStreamingDebugLog)
+        {
+            if (flushedCount > 0)
+                SDL_Log("[Streaming][PreRender] Phase B2: flushed %u tile write(s) to GPU", flushedCount);
+        }
+
+        // Phase C: UpdateTileMappings for tiles whose data was just flushed above.
+        // m_PendingMappings holds the tiles submitted last frame — their data is now
+        // on the GPU, so it is safe to map them and update the MinMip texture.
+        if (!m_PendingMappings.m_Textures.empty())
+        {
+            if constexpr (nvfeedback::kStreamingDebugLog)
+            {
+                uint32_t totalTiles = 0;
+                for (auto& u : m_PendingMappings.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
+                SDL_Log("[Streaming][PreRender] Phase C: UpdateTileMappings for %zu texture(s), %u tile(s) "
+                        "(data was flushed this frame — MinMip update is now safe)",
+                        m_PendingMappings.m_Textures.size(), totalTiles);
+            }
+
+            m_FeedbackManager->UpdateTileMappings(cmd, m_PendingMappings);
+            m_PendingMappings.m_Textures.clear();
+        }
 
         // Phase A: BeginFrame — collect new tile requests and append to the persistent queue.
         // The queue is NOT cleared across frames (Approach A — Append + Consume):
@@ -749,7 +784,7 @@ void Renderer::UpdateStreamingPreRender()
             std::make_move_iterator(newEntries.m_Textures.end()));
     }
 
-    // Execute merged B2+A commands before tile submits and Phase C
+    // Execute merged B2+C+A commands before tile submits
     ExecutePendingCommandLists();
 
     // -- Phase B: Submit tile requests (queue-based, front-to-back) --
@@ -889,13 +924,42 @@ void Renderer::UpdateStreamingPreRender()
 
     m_TilesSubmittedThisFrame = tilesSubmitted;
 
-    // -- Phase C: UpdateTileMappings (only for tiles actually submitted this frame) --
+    // -- Phase B3: Stash submitted tiles into m_PendingMappings --
+    // Do NOT call UpdateTileMappings here. The tile data for these tiles is being
+    // loaded asynchronously and will be flushed to the GPU in Phase B2 of the
+    // NEXT frame. Only then is it safe to map the tiles and update the MinMip
+    // texture. Calling UpdateTileMappings now (before the data arrives) would
+    // cause the MinMip to advertise tiles as resident while they still contain
+    // uninitialized data, producing black or wrong-mip samples for one frame.
     if (!submittedThisFrame.m_Textures.empty())
     {
-        PROFILE_SCOPED("Streaming UpdateMappings");
-        nvrhi::CommandListHandle cmd = AcquireCommandList();
-        ScopedCommandList scopedCmd{ cmd, "Streaming UpdateTileMappings" };
-        m_FeedbackManager->UpdateTileMappings(cmd, submittedThisFrame);
+        if constexpr (nvfeedback::kStreamingDebugLog)
+        {
+            uint32_t totalTiles = 0;
+            for (auto& u : submittedThisFrame.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
+            SDL_Log("[Streaming][PreRender] Phase B3: stashing %zu texture(s), %u tile(s) into "
+                    "m_PendingMappings — UpdateTileMappings deferred to next frame after Flush()",
+                    submittedThisFrame.m_Textures.size(), totalTiles);
+        }
+
+        // Merge into m_PendingMappings (may already have entries if budget was hit last frame)
+        for (nvfeedback::FeedbackTextureUpdate& update : submittedThisFrame.m_Textures)
+        {
+            // Check if there's already an entry for this texture index
+            auto it = std::find_if(m_PendingMappings.m_Textures.begin(), m_PendingMappings.m_Textures.end(),
+                [&](const nvfeedback::FeedbackTextureUpdate& existing) {
+                    return existing.m_TextureIdx == update.m_TextureIdx;
+                });
+            if (it != m_PendingMappings.m_Textures.end())
+            {
+                it->m_TileIndices.insert(it->m_TileIndices.end(),
+                    update.m_TileIndices.begin(), update.m_TileIndices.end());
+            }
+            else
+            {
+                m_PendingMappings.m_Textures.push_back(std::move(update));
+            }
+        }
     }
 }
 

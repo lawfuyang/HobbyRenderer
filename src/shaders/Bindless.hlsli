@@ -77,34 +77,35 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
         return tex.Sample(sam, uv);
     }
 
-    // Streaming path: opportunistic sample, fall back via MinMip on miss
+    // Streaming path: read minMip FIRST and use it as MinLODClamp on the initial
+    // sample.  This prevents the hardware from ever fetching an unmapped tile.
+    Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
+
+    // Load() reads the exact MinMip tile value at the integer coordinate
+    // corresponding to uv — no sampler needed, avoids R8_UINT sampler quirks.
+    // Apply frac() to handle tiling/repeating UVs (uv > 1.0), matching the
+    // WRAP sampler behaviour used when sampling the streaming texture.
+    float2 wrappedUV = frac(uv);
+    uint2 mcoord = uint2(wrappedUV * float2(minMipDims));
+    mcoord = min(mcoord, minMipDims - 1);  // clamp for uv == 1.0
+    uint minResidentMip = minMipTex.Load(uint3(mcoord, 0));
+
+    // Sample with minResidentMip as the MinLODClamp — the hardware will never
+    // pick a finer mip than what is resident, so the result is always mapped.
     uint status;
-    float4 color = tex.Sample(sam, uv, 0, 0, status);
+    float4 color = tex.Sample(sam, uv, 0, minResidentMip, status);
+
+    // Last-resort fallback: if the sample is STILL unmapped (minMip texture is
+    // transiently stale — e.g. the very first frame before any minMip upload),
+    // walk coarser mips until we find a mapped one.  Packed mips are always
+    // resident so this loop always terminates.
     if (!CheckAccessFullyMapped(status))
     {
-        Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-        // Load() reads the exact MinMip tile value at the integer coordinate
-        // corresponding to uv — no sampler needed, avoids R8_UINT sampler quirks.
-        uint2 mcoord = uint2(uv * float2(minMipDims));
-        mcoord = min(mcoord, minMipDims - 1);  // clamp for uv == 1.0
-        uint minResidentMip = minMipTex.Load(uint3(mcoord, 0));
-        color = tex.Sample(sam, uv, 0, minResidentMip, status);
-
-        // Last-resort fallback: if the MinMip-clamped sample is STILL unmapped
-        // (MinMip texture is stale / not yet updated for this tile), walk coarser
-        // mips one by one until we find a mapped one.  Packed mips are always
-        // resident so this loop always terminates.
-        if (false)
+        for (uint mip = minResidentMip + 1; mip < srrhi::CommonConsts::MAX_MIP_COUNT; ++mip)
         {
-            if (!CheckAccessFullyMapped(status))
-            {
-                for (uint mip = minResidentMip + 1; mip < srrhi::CommonConsts::MAX_MIP_COUNT; ++mip)
-                {
-                    color = tex.Sample(sam, uv, 0, mip, status);
-                    if (CheckAccessFullyMapped(status))
-                        break;
-                }
-            }
+            color = tex.Sample(sam, uv, 0, mip, status);
+            if (CheckAccessFullyMapped(status))
+                break;
         }
     }
 

@@ -316,6 +316,12 @@ struct Renderer
     // Count of tile indices actually submitted to AsyncTileIO this frame (for UI/debug display).
     uint32_t m_TilesSubmittedThisFrame = 0;
 
+    // Tiles submitted to AsyncTileIO this frame but whose GPU data hasn't been uploaded yet.
+    // UpdateTileMappings (and minMip writes) must be deferred until the NEXT frame's Phase B2
+    // (AsyncTileIO::Flush) so that the minMip texture only reflects tiles with valid GPU data.
+    // This prevents the base pass from sampling mapped-but-empty tiles and getting black/garbage.
+    nvfeedback::FeedbackTextureCollection m_PendingMappings;
+
     int m_TileResidencyDebugTextureIdx = -1; // -1 = disabled, 0..N = selected feedback texture index
 
     // Initialise the FeedbackManager and call BuildTextureSets after scene load.
