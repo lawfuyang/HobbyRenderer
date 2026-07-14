@@ -215,7 +215,13 @@ namespace nvfeedback
 
         // Update TTM config
         rtxts::TiledTextureManagerConfig ttmConfig{};
-        ttmConfig.numExtraStandbyTiles = 0;
+        // Standby tiles buffer: up to 64 tiles can be in standby before
+        // TrimStandbyTiles() starts freeing the oldest.  This is necessary
+        // for hysteresis (kTileHysteresisSeconds) to work — with 0, standby
+        // tiles would be freed immediately and re-requested tiles would have
+        // to go through the full allocate+submit+pending+mapping cycle.
+        // 64 tiles ≈ 4 MB of VRAM headroom for hysteresis.
+        ttmConfig.numExtraStandbyTiles = 64;
         m_TiledTextureManager->SetConfig(ttmConfig);
 
         // ── Step 1: Read back feedback from N frames ago ──
@@ -236,7 +242,7 @@ namespace nvfeedback
                     readbackTexture->GetTiledTextureId(),
                     samplerFeedbackDesc,
                     timeStamp,
-                    0.0f);
+                    kTileHysteresisSeconds);
 
                 g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex));
 
@@ -255,7 +261,7 @@ namespace nvfeedback
                                 readbackTexture->GetTiledTextureId(),
                                 follower->GetTiledTextureId(),
                                 timeStamp,
-                                0.0f);
+                                kTileHysteresisSeconds);
                         }
                     }
                 }

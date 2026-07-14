@@ -41,6 +41,13 @@ namespace nvfeedback
     static constexpr uint32_t kHeapSizeInTiles   = 256;
     static constexpr uint32_t kFeedbackTexturesToResolvePerFrame = 10;
 
+    // Hysteresis timeout: a tile stays mapped for this many seconds after
+    // the last time sampler feedback requested it.  At 60 FPS this is ~3 frames.
+    // TTM transitions Mapped→Standby (not Free) when the timeout expires;
+    // Standby tiles are only freed when the standby queue overflows
+    // (controlled via TiledTextureManagerConfig::numExtraStandbyTiles).
+    static constexpr float kTileHysteresisSeconds = 3.0f / 60.0f;  // ~3 frames @ 60 Hz
+
     // ─── HeapAllocator ───────────────────────────────────────────────────────
     //
     // Manages D3D12 heap + virtual buffer pairs used as tile pools for tiled
