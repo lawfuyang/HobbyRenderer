@@ -13,7 +13,7 @@ struct MaterialConstants
     uint   m_NormalSamplerIndex;
     uint   m_RoughnessSamplerIndex;
     uint   m_EmissiveSamplerIndex;
-    // Streaming: bindless indices for MinMip residency textures (R32_FLOAT, tile-count dims).
+    // Streaming: bindless indices for MinMip residency textures (R8_UINT, tile-count dims).
     // Set to DEFAULT_TEXTURE_BLACK (0) when streaming is disabled for this texture.
     uint   m_AlbedoMinMipIndex;
     uint   m_NormalMinMipIndex;
@@ -25,6 +25,10 @@ struct MaterialConstants
     uint   m_NormalFeedbackIndex;
     uint   m_RoughnessFeedbackIndex;
     uint   m_EmissiveFeedbackIndex;
+    // Streaming: dimensions of the MinMip texture (tile grid width/height in texels).
+    // Shared by all streaming texture slots in this material (same primary = same dims).
+    uint   m_MinMipDimsX;
+    uint   m_MinMipDimsY;
     uint   m_AlphaMode;
     float  m_AlphaCutoff;
     float  m_IOR;

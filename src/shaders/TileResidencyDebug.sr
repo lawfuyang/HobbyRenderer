@@ -1,4 +1,5 @@
 srinput TileResidencyDebugInputs
 {
-    Texture2D<float4> SrcTexture;  // t0
+    Texture2D<float4> SrcTexture;     // t0
+    Texture2D<uint>   MinMipTexture;  // t1
 };

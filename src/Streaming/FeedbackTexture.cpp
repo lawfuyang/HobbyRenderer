@@ -80,10 +80,10 @@ namespace nvfeedback
         }
 
         // Create MinMip texture (R8_UINT, one byte per feedback tile).
-        // R8_UINT is the canonical format per the D3D12 sampler-feedback spec:
-        // each texel stores the minimum resident mip index (0–15) for that tile region.
-        // A point max-reduction sampler can be used with Sample() on R8_UINT to obtain
-        // the coarsest-resident mip across the sample footprint.
+        // DXGI_FORMAT_R8_UINT is the canonical format per the D3D12 sampler-feedback
+        // spec: decodeSamplerFeedback outputs R8_UINT for MinMipOpaque.
+        // Each texel stores the minimum resident mip index (0–15) for that tile region.
+        // Use Load() in shaders to read exact tile values — no sampler/reduction needed.
         {
             rtxts::TextureDesc minMipDesc = tiledTextureManager->GetTextureDesc(m_TiledTextureId, rtxts::eMinMipTexture);
 

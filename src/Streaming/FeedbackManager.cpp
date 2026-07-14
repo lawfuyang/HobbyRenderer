@@ -141,6 +141,11 @@ namespace nvfeedback
         rawPtr->SetManagerIndex(idx);
         m_Textures.push_back(std::move(feedbackTexture));
         m_TexturesRingbuffer.push_back(idx);
+
+        // Mark for initial MinMip upload so the texture has valid data from the first frame,
+        // rather than reading uninitialized GPU memory.
+        m_MinMipDirtyTextures.insert(idx);
+
         return rawPtr;
     }
 
@@ -495,14 +500,15 @@ namespace nvfeedback
             }
 
             std::vector<uint8_t> minMipData;
-            std::vector<uint8_t> uploadData;
 
             for (uint32_t texIdx : m_MinMipDirtyTextures)
             {
                 FeedbackTexture* texture = GetTextureByIndex(texIdx);
                 rtxts::TextureDesc desc = m_TiledTextureManager->GetTextureDesc(texture->GetTiledTextureId(), rtxts::TextureTypes::eMinMipTexture);
 
-                // R8_UINT: 1 byte per texel, rowPitch = width (no padding needed for writeTexture)
+                // R8_UINT: 1 byte per texel. nvrhi's writeTexture calls GetCopyableFootprints
+                // internally to compute the D3D12-required destination row pitch (256-byte aligned),
+                // so the source rowPitch just needs to be the logical stride.
                 uint32_t numElements = desc.textureOrMipRegionWidth * desc.textureOrMipRegionHeight;
                 uint32_t rowPitch = desc.textureOrMipRegionWidth;
                 minMipData.resize(numElements);

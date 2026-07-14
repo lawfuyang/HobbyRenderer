@@ -3,6 +3,7 @@
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
 #include "MeshCommon.hlsli"
+#include "StreamingMipLUT.hlsli"
 
 #include "srrhi/hlsl/BasePass.hlsli"
 
@@ -256,42 +257,23 @@ float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIn
 }
 
 // Mip color LUT from SamplerFeedbackStreaming reference (GetLodVisualizationColor.h)
-float3 GetStreamingMipDebugColor(uint minMipIndex, float2 uv)
+float3 GetStreamingMipDebugColor(uint minMipIndex, uint2 minMipDims, float2 uv)
 {
     if (minMipIndex == 0)
     {
-        return float3(0.3f, 0.3f, 0.3f);       // Gray: not a streaming texture
+        return float3(0.3f, 0.3f, 0.3f); // Gray: not a streaming texture
     }
 
     Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-    SamplerState maxReductionSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX)];
-    uint minResidentMip = minMipTex.Sample(maxReductionSam, uv);
+    // Apply frac() to handle tiling/repeating UVs (uv > 1.0), matching the WRAP
+    // sampler behavior used when actually sampling the streaming texture.
+    float2 wrappedUV = frac(uv);
+    uint2 coord = uint2(wrappedUV * float2(minMipDims));
+    coord = min(coord, minMipDims - 1);  // clamp for uv == 1.0
+    uint minResidentMip = minMipTex.Load(uint3(coord, 0));
     int mipLevel = int(minResidentMip);
 
-    // LUT from SamplerFeedbackStreaming GetLodVisualizationColor.h
-    float3 lut[srrhi::CommonConsts::MAX_MIP_COUNT] = {
-        float3(1.0f, 1.0f, 1.0f),          // 0: white
-        float3(1.0f, 0.25f, 0.25f),         // 1: light red
-        float3(0.25f, 1.0f, 0.25f),         // 2: light green
-        float3(0.25f, 0.25f, 1.0f),         // 3: light blue
-        float3(1.0f, 0.25f, 1.0f),          // 4: light magenta
-        float3(1.0f, 1.0f, 0.25f),          // 5: light yellow
-        float3(0.25f, 1.0f, 1.0f),          // 6: light cyan
-        float3(0.9f, 0.5f, 0.2f),           // 7: orange
-        float3(0.59f, 0.48f, 0.8f),         // 8: dark magenta
-        float3(0.53f, 0.25f, 0.11f),        // 9
-        float3(0.8f, 0.48f, 0.53f),         // 10
-        float3(0.64f, 0.8f, 0.48f),         // 11
-        float3(0.48f, 0.75f, 0.8f),         // 12
-        float3(0.5f, 0.25f, 0.75f),         // 13
-        float3(0.99f, 0.68f, 0.42f),        // 14
-        float3(0.4f, 0.5f, 0.6f),           // 15
-    };
-
-    if (mipLevel > 15)
-        return float3(0.3f, 0.4f, 0.2f);    // olive-ish green
-    else
-        return lut[max(mipLevel, 0)];
+    return GetStreamingMipLUTColor(mipLevel);
 }
 
 // Direction of refracted light.
@@ -334,7 +316,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
     float4 albedoSample = hasAlbedo
         ? SampleBindlessStreamedTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
                                         mat.m_AlbedoMinMipIndex, mat.m_AlbedoFeedbackIndex, input.uv,
-                                        g_PerFrame.m_ForcedTextureMip)
+                                        g_PerFrame.m_ForcedTextureMip, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY))
         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
     // Alpha test (discard) as early as possible
@@ -351,21 +333,21 @@ GBufferOut GBuffer_PSMain(VSOut input)
     float4 ormSample = hasORM
         ? SampleBindlessStreamedTexture(mat.m_RoughnessMetallicTextureIndex, mat.m_RoughnessSamplerIndex,
                                         mat.m_RoughnessMinMipIndex, mat.m_RoughnessFeedbackIndex, input.uv,
-                                        g_PerFrame.m_ForcedTextureMip)
+                                        g_PerFrame.m_ForcedTextureMip, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY))
         : float4(mat.m_RoughnessMetallic.x, mat.m_RoughnessMetallic.y, 1.0f, 0.0f); // R=occ, G=rough, B=metal
 
     bool hasNormal = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_NORMAL) != 0;
     float4 nmSample = hasNormal
         ? SampleBindlessStreamedTexture(mat.m_NormalTextureIndex, mat.m_NormalSamplerIndex,
                                         mat.m_NormalMinMipIndex, mat.m_NormalFeedbackIndex, input.uv,
-                                        g_PerFrame.m_ForcedTextureMip)
+                                        g_PerFrame.m_ForcedTextureMip, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY))
         : float4(0.5f, 0.5f, 1.0f, 0.0f);
 
     bool hasEmissive = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_EMISSIVE) != 0;
     float4 emissiveSample = hasEmissive
         ? SampleBindlessStreamedTexture(mat.m_EmissiveTextureIndex, mat.m_EmissiveSamplerIndex,
                                         mat.m_EmissiveMinMipIndex, mat.m_EmissiveFeedbackIndex, input.uv,
-                                        g_PerFrame.m_ForcedTextureMip)
+                                        g_PerFrame.m_ForcedTextureMip, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY))
         : float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Normal (from normal map when available)
@@ -531,7 +513,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_EMISSIVE)
             color = emissive;
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_STREAMING_MIP)
-            color = GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, input.uv);
+            color = GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY), input.uv);
     }
 
     return float4(color, alpha);
@@ -564,7 +546,7 @@ GBufferOut GBuffer_PSMain(VSOut input)
             output.Albedo = float4(0,0,0,0);
             output.Normal = float2(0.5f, 0.5f);
             output.ORM = float2(0.5f, 0.0f);
-            output.Emissive = float4(GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, input.uv), alpha);
+            output.Emissive = float4(GetStreamingMipDebugColor(mat.m_AlbedoMinMipIndex, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY), input.uv), 1.0f);
         }
     }
     

@@ -55,6 +55,7 @@ public:
             // Build srrhi inputs: texture SRV at t0 + point-clamp sampler at s0
             srrhi::TileResidencyDebugInputs tdInputs;
             tdInputs.SetSrcTexture(reservedTex, (int32_t)mip, 1);
+            tdInputs.SetMinMipTexture(feedbackTex->GetMinMipTexture());
 
             nvrhi::BindingSetDesc bindingSetDesc = Renderer::CreateBindingSetDesc(tdInputs);
             bindingSetDesc.addItem(nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().PointClamp));
@@ -92,6 +93,56 @@ public:
 
             x += size + margin;
             size /= 2.0f;
+        }
+
+        // Render MinMip texture overlay — visualizes per‑tile minimum resident mip
+        {
+            nvrhi::TextureHandle minMipTex = feedbackTex->GetMinMipTexture();
+            if (minMipTex)
+            {
+                srrhi::TileResidencyDebugInputs mmInputs;
+                mmInputs.SetMinMipTexture(minMipTex);
+                mmInputs.SetSrcTexture(CommonResources::GetInstance().DefaultTextureBlack); // dummy to not ass\ert
+
+                nvrhi::BindingSetDesc mmBindingSetDesc = Renderer::CreateBindingSetDesc(mmInputs);
+                mmBindingSetDesc.addItem(nvrhi::BindingSetItem::Sampler(0, CommonResources::GetInstance().PointClamp));
+
+                const nvrhi::BindingLayoutHandle mmLayout = g_Renderer.GetOrCreateBindingLayoutFromBindingSetDesc(mmBindingSetDesc, 0);
+                const nvrhi::BindingSetHandle mmBindingSet = g_Renderer.m_RHI->m_NvrhiDevice->createBindingSet(mmBindingSetDesc, mmLayout);
+
+                nvrhi::MeshletPipelineDesc mmPipelineDesc;
+                mmPipelineDesc.MS = g_Renderer.GetShaderHandle(ShaderID::FULLSCREEN_MSMAIN);
+                mmPipelineDesc.PS = g_Renderer.GetShaderHandle(ShaderID::TILERESIDENCYDEBUG_MINMIPPSMAIN);
+                mmPipelineDesc.bindingLayouts = { mmLayout };
+                mmPipelineDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+                mmPipelineDesc.renderState.depthStencilState = CommonResources::GetInstance().DepthDisabled;
+
+                nvrhi::MeshletPipelineHandle mmPipeline = g_Renderer.GetOrCreateMeshletPipeline(mmPipelineDesc, framebuffer->getFramebufferInfo());
+
+                // Place the MinMip overlay above the mip row at the same starting position
+                const float minMipSize = 400.0f;
+                const float mmX = margin;
+                const float mmY = bbHeight - minMipSize * 2.0f - margin * 2.0f;
+
+                nvrhi::Viewport mmViewport(
+                    mmX, mmX + minMipSize,
+                    mmY, mmY + minMipSize,
+                    0.0f, 1.0f);
+
+                nvrhi::Rect mmScissorRect(
+                    (int)mmX, (int)(mmX + minMipSize),
+                    (int)mmY, (int)(mmY + minMipSize));
+
+                nvrhi::MeshletState mmState;
+                mmState.pipeline    = mmPipeline;
+                mmState.framebuffer = framebuffer;
+                mmState.bindings    = { mmBindingSet };
+                mmState.viewport.viewports.push_back(mmViewport);
+                mmState.viewport.scissorRects.push_back(mmScissorRect);
+
+                commandList->setMeshletState(mmState);
+                commandList->dispatchMesh(1, 1, 1);
+            }
         }
     }
 

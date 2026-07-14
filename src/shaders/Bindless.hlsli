@@ -55,9 +55,10 @@ void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint fee
 //   feedbackIndex  — bindless index of the FeedbackTexture2D UAV (0 = not streaming)
 //   uv             — texture coordinates
 //   forcedMip      — -1 = auto, >=0 = force this mip level (clamped to texture's mip count)
+//   minMipDims     — (width, height) of the MinMip texture in texels, from MaterialConstants
 //
 // Requires [earlydepthstencil] on the pixel shader entry point.
-float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint minMipIndex, uint feedbackIndex, float2 uv, int forcedMip)
+float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint minMipIndex, uint feedbackIndex, float2 uv, int forcedMip, uint2 minMipDims)
 {
     Texture2D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
     SamplerState sam = SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
@@ -82,11 +83,11 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
     if (!CheckAccessFullyMapped(status))
     {
         Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-        SamplerState maxReductionSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX)];
-        // Sample() with a max-reduction sampler returns the maximum mip value
-        // across the filter footprint — i.e. the coarsest resident mip in the region.
-        // This works correctly on R8_UINT textures (unlike SampleLevel which ignores reduction mode).
-        uint minResidentMip = minMipTex.Sample(maxReductionSam, uv);
+        // Load() reads the exact MinMip tile value at the integer coordinate
+        // corresponding to uv — no sampler needed, avoids R8_UINT sampler quirks.
+        uint2 mcoord = uint2(uv * float2(minMipDims));
+        mcoord = min(mcoord, minMipDims - 1);  // clamp for uv == 1.0
+        uint minResidentMip = minMipTex.Load(uint3(mcoord, 0));
         color = tex.Sample(sam, uv, 0, minResidentMip, status);
 
         // Last-resort fallback: if the MinMip-clamped sample is STILL unmapped
