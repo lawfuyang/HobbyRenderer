@@ -86,24 +86,10 @@ void ImGuiLayer::UpdateFrame()
             int currentMode = static_cast<int>(g_Renderer.m_Mode);
             if (ImGui::Combo("Rendering Mode", &currentMode, kRenderingModes, IM_ARRAYSIZE(kRenderingModes)))
             {
-                const RenderingMode newMode = static_cast<RenderingMode>(currentMode);
-                const RenderingMode oldMode = g_Renderer.m_Mode;
-
-                // If switching from NormalBasic to a mode that requires BLAS/TLAS, assert that they are built.
-                // IBL does NOT require BLAS/TLAS (uses ComputeIBL from environment maps only).
-                if (oldMode == RenderingMode::NormalBasic)
-                {
-                    if (newMode == RenderingMode::Normal || newMode == RenderingMode::ReferencePathTracer)
-                    {
-                        SDL_assert(g_Renderer.m_Scene.m_TLAS && "Switching from NormalBasic to a mode that requires BLAS/TLAS, but TLAS is not built. "
-                                   "Restart without --normalbasic or reload the scene.");
-                    }
-                }
-
-                g_Renderer.m_Mode = newMode;
+                g_Renderer.m_Mode = static_cast<RenderingMode>(currentMode);
 
                 // When entering NormalBasic, disable all RT-dependent features
-                if (newMode == RenderingMode::NormalBasic)
+                if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
                 {
                     g_Renderer.m_EnableRTShadows = false;
                     g_Renderer.m_EnableReSTIRDI = false;

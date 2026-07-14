@@ -112,14 +112,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_EnableRenderGraphAliasing = false;
             SDL_Log("[Config] Render graph aliasing disabled via command line");
         }
-        else if (std::strcmp(arg, "--normalbasic") == 0)
-        {
-            g_Renderer.m_Mode = RenderingMode::NormalBasic;
-            g_Renderer.m_EnableRTShadows = false;
-            g_Renderer.m_EnableReSTIRDI = false;
-            g_Renderer.m_IndirectLightingTechnique = 0;
-            SDL_Log("[Config] NormalBasic rendering mode enabled via command line (RT features disabled, no BLAS/TLAS)");
-        }
         else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0)
         {
             SDL_Log("Agentic Renderer - Command Line Options:");

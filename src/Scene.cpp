@@ -54,21 +54,7 @@ void Scene::LoadScene()
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
 	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
-	if (g_Renderer.m_Mode != RenderingMode::NormalBasic)
-	{
-		BuildAccelerationStructures();
-	}
-	else
-	{
-		// NormalBasic: create an empty TLAS so that shader bindings don't fail,
-		// but skip BLAS building entirely (no RT features are used).
-		nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
-		nvrhi::rt::AccelStructDesc tlasDesc;
-		tlasDesc.topLevelMaxInstances = 1;
-		tlasDesc.debugName = "Scene TLAS (NormalBasic — empty)";
-		tlasDesc.isTopLevel = true;
-		m_TLAS = device->createAccelStruct(tlasDesc);
-	}
+	BuildAccelerationStructures();
 
 	if (!m_Cameras.empty())
 	{

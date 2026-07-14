@@ -797,10 +797,6 @@ public:
 
     void PostSceneLoad() override
     {
-        // NormalBasic mode skips all RT features — no BLAS/TLAS/RTXDI resources needed.
-        if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
-            return;
-
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         // ---- TLAS History (for temporal effects) -------------------
