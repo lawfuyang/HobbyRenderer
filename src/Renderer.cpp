@@ -784,9 +784,6 @@ void Renderer::UpdateStreamingPreRender()
             std::make_move_iterator(newEntries.m_Textures.end()));
     }
 
-    // Execute merged B2+C+A commands before tile submits
-    ExecutePendingCommandLists();
-
     // -- Phase B: Submit tile requests (queue-based, front-to-back) --
     // Consume entries from the front of the persistent queue. When an entry's
     // tiles are fully submitted it is removed; if the budget is exhausted
@@ -1127,7 +1124,7 @@ void Renderer::ScheduleAndRunAllRenderers()
     }
     else if (m_Mode == RenderingMode::NormalBasic)
     {
-        // NormalBasic: raster-only pipeline � no TLAS, no RTXDI, no SHARC, no RT shadows
+        // NormalBasic: raster-only pipeline: no TLAS, no RTXDI, no SHARC, no RT shadows
         m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);
         m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
         m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
