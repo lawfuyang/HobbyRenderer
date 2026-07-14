@@ -564,10 +564,8 @@ void ImGuiLayer::UpdateFrame()
                     s_BandwidthHistoryIndex = 0;
                 }
 
-                // Count tiles submitted this frame
-                uint32_t tilesSubmitted = 0;
-                for (const auto& tex : g_Renderer.m_StreamingUpdatedTextures.m_Textures)
-                    tilesSubmitted += (uint32_t)tex.m_TileIndices.size();
+                // Count tiles submitted this frame (set by UpdateStreamingPreRender)
+                uint32_t tilesSubmitted = g_Renderer.m_TilesSubmittedThisFrame;
 
                 // Accumulate time and tiles, push a sample at 30 Hz regardless of I/O activity
                 static float s_TimeAccum = 0.0f;

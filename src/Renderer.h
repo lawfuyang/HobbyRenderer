@@ -308,8 +308,13 @@ struct Renderer
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
     nvfeedback::StreamingContext m_StreamingCtx;
     std::unique_ptr<nvfeedback::AsyncTileIO> m_AsyncTileIO; // Async tile I/O thread pool
-    // Tiles collected by BeginFrame() — consumed by UpdateStreamingPostRender() via UpdateTileMappings().
+    // Tiles collected by BeginFrame() — consumed by UpdateStreamingPreRender() via UpdateTileMappings().
+    // Approach A (Append + Consume): this is a persistent queue; entries are appended by BeginFrame
+    // and consumed from the front each frame, not cleared.
     nvfeedback::FeedbackTextureCollection m_StreamingUpdatedTextures;
+
+    // Count of tile indices actually submitted to AsyncTileIO this frame (for UI/debug display).
+    uint32_t m_TilesSubmittedThisFrame = 0;
 
     int m_TileResidencyDebugTextureIdx = -1; // -1 = disabled, 0..N = selected feedback texture index
 

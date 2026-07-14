@@ -735,22 +735,37 @@ void Renderer::UpdateStreamingPreRender()
         // Phase B2: Flush completed async tile uploads from previous frame
         m_AsyncTileIO->Flush(cmd);
 
-        // Phase A: BeginFrame
-        m_StreamingUpdatedTextures.m_Textures.clear();
+        // Phase A: BeginFrame — collect new tile requests and append to the persistent queue.
+        // The queue is NOT cleared across frames (Approach A — Append + Consume):
+        // entries persist until their tiles are fully submitted and mapped.
+        // This prevents starvation of later textures when an earlier texture
+        // has many pending tiles consuming the submit budget every frame.
+        nvfeedback::FeedbackTextureCollection newEntries;
+        m_FeedbackManager->BeginFrame(cmd, newEntries);
 
-        m_FeedbackManager->BeginFrame(cmd, m_StreamingUpdatedTextures);
+        m_StreamingUpdatedTextures.m_Textures.insert(
+            m_StreamingUpdatedTextures.m_Textures.end(),
+            std::make_move_iterator(newEntries.m_Textures.begin()),
+            std::make_move_iterator(newEntries.m_Textures.end()));
     }
 
     // Execute merged B2+A commands before tile submits and Phase C
     ExecutePendingCommandLists();
 
-    // -- Phase B: Submit new tile requests (async or sync) --
+    // -- Phase B: Submit tile requests (queue-based, front-to-back) --
+    // Consume entries from the front of the persistent queue. When an entry's
+    // tiles are fully submitted it is removed; if the budget is exhausted
+    // mid-entry, the remaining tiles stay for the next frame.
+    nvfeedback::FeedbackTextureCollection submittedThisFrame;
+    uint32_t tilesSubmitted = 0;
+
     if (!m_StreamingUpdatedTextures.m_Textures.empty())
     {
         PROFILE_SCOPED("Streaming TileSubmit");
 
-        const uint32_t submitBudget = UINT32_MAX;
+        const uint32_t kSubmitBudget = 32;
         uint32_t submitted = 0;
+        size_t consumedCount = 0;
 
         // Helper: resolve a FeedbackTexture back to its StreamingTexture via
         // the user index set at texture creation time (O(1) direct-index lookup).
@@ -762,11 +777,10 @@ void Renderer::UpdateStreamingPreRender()
             return st.m_ReservedTexture ? &st : nullptr;
         };
 
-        // -- Async path: submit tile-extraction work to the thread pool --
-        // Uploads are flushed next frame (Phase B2) via the completion callback.
-        for (const nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
+        for (nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
         {
-            if (submitted >= submitBudget) break;
+            if (submitted >= kSubmitBudget)
+                break;
 
             nvfeedback::FeedbackTexture* feedbackTex = m_FeedbackManager->GetTextureByIndex(texUpdate.m_TextureIdx);
             Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
@@ -776,19 +790,33 @@ void Renderer::UpdateStreamingPreRender()
             const nvrhi::TextureDesc& texDesc = reservedTex->getDesc();
             const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
 
+            std::vector<uint32_t> submittedTilesThisEntry;
+            std::vector<uint32_t> remainingTiles;
+
             for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
-                if (submitted >= submitBudget) break;
+                if (submitted >= kSubmitBudget)
+                {
+                    remainingTiles.push_back(tileIndex);
+                    continue;
+                }
 
                 SDL_assert(!feedbackTex->IsTilePacked(tileIndex));
 
                 std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
                 feedbackTex->GetTileInfo(tileIndex, tileInfos);
 
+                // Pre-check: only submit if enough budget remains for all tileInfos
+                // of this tile. Tile submissions are atomic per tileIndex to avoid
+                // partial TileRequest sets that can't be cleaned up correctly.
+                if (submitted + tileInfos.size() > kSubmitBudget)
+                {
+                    remainingTiles.push_back(tileIndex);
+                    continue;
+                }
+
                 for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
                 {
-                    if (submitted >= submitBudget) break;
-
                     nvfeedback::TileRequest req;
                     req.m_SourceData         = st.m_SourceData;
                     req.m_ReservedTexture    = st.m_ReservedTexture;
@@ -829,16 +857,45 @@ void Renderer::UpdateStreamingPreRender()
                     m_AsyncTileIO->Submit(std::move(req));
                     submitted++;
                 }
+
+                submittedTilesThisEntry.push_back(tileIndex);
+                tilesSubmitted++;
             }
+
+            // Record submitted tiles for Phase C update
+            if (!submittedTilesThisEntry.empty())
+            {
+                nvfeedback::FeedbackTextureUpdate submittedUpdate;
+                submittedUpdate.m_TextureIdx = texUpdate.m_TextureIdx;
+                submittedUpdate.m_TileIndices = std::move(submittedTilesThisEntry);
+                submittedThisFrame.m_Textures.push_back(std::move(submittedUpdate));
+            }
+
+            // Update the entry to only contain remaining (unsubmitted) tiles
+            texUpdate.m_TileIndices.swap(remainingTiles);
+
+            if (texUpdate.m_TileIndices.empty())
+                consumedCount++;
+            else
+                break; // budget exhausted mid-entry; keep for next frame
         }
+
+        // Remove fully-consumed entries from the front of the persistent queue
+        if (consumedCount > 0)
+            m_StreamingUpdatedTextures.m_Textures.erase(
+                m_StreamingUpdatedTextures.m_Textures.begin(),
+                m_StreamingUpdatedTextures.m_Textures.begin() + consumedCount);
     }
 
-    // -- Phase C: UpdateTileMappings --
+    m_TilesSubmittedThisFrame = tilesSubmitted;
+
+    // -- Phase C: UpdateTileMappings (only for tiles actually submitted this frame) --
+    if (!submittedThisFrame.m_Textures.empty())
     {
         PROFILE_SCOPED("Streaming UpdateMappings");
         nvrhi::CommandListHandle cmd = AcquireCommandList();
         ScopedCommandList scopedCmd{ cmd, "Streaming UpdateTileMappings" };
-        m_FeedbackManager->UpdateTileMappings(cmd, m_StreamingUpdatedTextures);
+        m_FeedbackManager->UpdateTileMappings(cmd, submittedThisFrame);
     }
 }
 
