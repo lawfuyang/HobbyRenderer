@@ -562,13 +562,18 @@ void Renderer::Run()
             scopedCmd->beginTimerQuery(m_GPUQueries[writeIndex]);
         }
 
-        // Update texture streaming � pre-render phase:
+        // Update texture streaming -> pre-render phase:
         // flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
-        UpdateStreamingPreRender();
+        m_TaskScheduler->ScheduleTask([this]() { UpdateStreamingPreRender(); });
 
         ScheduleAndRunAllRenderers();
 
-        // Update texture streaming � post-render phase:
+        // Wait for all render passes to finish recording
+        m_TaskScheduler->ExecuteAllScheduledTasks();
+
+        m_RenderGraph.PostRender();
+
+        // Update texture streaming -> post-render phase:
         // ResolveFeedback (reads sampler feedback written by GBuffer pass) + EndFrame.
         UpdateStreamingPostRender();
 
@@ -723,97 +728,71 @@ void Renderer::UpdateStreamingPreRender()
 {
     PROFILE_FUNCTION();
 
-    // -- Phase B2+A+C: Flush completed async tile uploads + UpdateTileMappings + BeginFrame --
+    // -- Phase 1+2+3: Flush + UpdateTileMappings + BeginFrame --
     //
     // ORDERING IS CRITICAL for correctness:
-    //   Phase B2: Flush() uploads tile *data* for tiles submitted last frame.
-    //   Phase C:  UpdateTileMappings() maps those tiles and writes the MinMip texture.
-    //             This MUST happen after Flush() so that when MinMip says "mip N is
-    //             resident", the tile data is already on the GPU.  Doing it in the
-    //             same frame as Submit() (old behaviour) caused the MinMip to advertise
-    //             tiles as resident one frame before their data arrived, producing black
-    //             or wrong-mip samples for one frame whenever new tiles streamed in.
-    //   Phase A:  BeginFrame() reads back sampler feedback and queues new tile requests.
+    //   Phase 1: Flush() uploads tile *data* for tiles submitted last frame.
+    //   Phase 2: UpdateTileMappings() maps those tiles and writes the MinMip texture.
+    //            This MUST happen after Flush() so that when MinMip says "mip N is
+    //            resident", the tile data is already on the GPU.
+    //   Phase 3: BeginFrame() reads back sampler feedback and queues new tile requests
+    //            (limited to kFeedbackTexturesToResolvePerFrame textures per frame).
     //
     // All three are merged into one command list so that updateTextureTileMappings
     // (an immediate GPU queue op) follows the writeTexture calls from Flush().
+
+    nvfeedback::FeedbackTextureCollection newEntries;
+
     {
         PROFILE_SCOPED("Streaming TileFlush+UpdateMappings+BeginFrame");
         nvrhi::CommandListHandle cmd = AcquireCommandList();
         ScopedCommandList scopedCmd{ cmd, "Streaming TileFlush+UpdateMappings+BeginFrame" };
 
-        // Phase B2: Flush completed async tile uploads from previous frame.
+        // Phase 1: Flush completed async tile uploads from previous frame.
         // After this call, all tile data submitted last frame is on the GPU.
         const uint32_t flushedCount = m_AsyncTileIO->Flush(cmd);
 
         if constexpr (nvfeedback::kStreamingDebugLog)
         {
             if (flushedCount > 0)
-                SDL_Log("[Streaming][PreRender] Phase B2: flushed %u tile write(s) to GPU", flushedCount);
+                SDL_Log("[Streaming][PreRender] Phase 1: flushed %u tile write(s) to GPU", flushedCount);
         }
 
-        // Phase C: UpdateTileMappings for tiles whose data was just flushed above.
-        // m_PendingMappings holds the tiles submitted last frame — their data is now
-        // on the GPU, so it is safe to map them and update the MinMip texture.
-        if (!m_PendingMappings.m_Textures.empty())
+        // Phase 2: UpdateTileMappings for tiles whose data was just flushed above.
+        // m_SubmittedTilesPendingMapping holds the tiles submitted last frame — their
+        // data is now on the GPU, so it is safe to map them and update the MinMip texture.
+        if (!m_SubmittedTilesPendingMapping.m_Textures.empty())
         {
             if constexpr (nvfeedback::kStreamingDebugLog)
             {
                 uint32_t totalTiles = 0;
-                for (auto& u : m_PendingMappings.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
-                SDL_Log("[Streaming][PreRender] Phase C: UpdateTileMappings for %zu texture(s), %u tile(s) "
-                        "(data was flushed this frame — MinMip update is now safe)",
-                        m_PendingMappings.m_Textures.size(), totalTiles);
+                for (auto& u : m_SubmittedTilesPendingMapping.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
+                SDL_Log("[Streaming][PreRender] Phase 2: UpdateTileMappings for %zu texture(s), %u tile(s) "
+                        "(data was flushed this frame)",
+                        m_SubmittedTilesPendingMapping.m_Textures.size(), totalTiles);
             }
 
-            m_FeedbackManager->UpdateTileMappings(cmd, m_PendingMappings);
-            m_PendingMappings.m_Textures.clear();
+            m_FeedbackManager->UpdateTileMappings(cmd, m_SubmittedTilesPendingMapping);
+            m_SubmittedTilesPendingMapping.m_Textures.clear();
         }
 
-        // Phase A: BeginFrame — collect new tile requests and append to the persistent queue.
-        // The queue is NOT cleared across frames (Approach A — Append + Consume):
-        // entries persist until their tiles are fully submitted and mapped.
-        // This prevents starvation of later textures when an earlier texture
-        // has many pending tiles consuming the submit budget every frame.
-        nvfeedback::FeedbackTextureCollection newEntries;
+        // Phase 3: BeginFrame — collect new tile requests.
+        // kFeedbackTexturesToResolvePerFrame (10) textures are resolved per frame (round-robin),
         m_FeedbackManager->BeginFrame(cmd, newEntries);
-
-        m_StreamingUpdatedTextures.m_Textures.insert(
-            m_StreamingUpdatedTextures.m_Textures.end(),
-            std::make_move_iterator(newEntries.m_Textures.begin()),
-            std::make_move_iterator(newEntries.m_Textures.end()));
     }
 
-    // -- Phase B: Submit tile requests (queue-based, front-to-back) --
-    // Consume entries from the front of the persistent queue. When an entry's
-    // tiles are fully submitted it is removed; if the budget is exhausted
-    // mid-entry, the remaining tiles stay for the next frame.
+    // -- Phase 4+5: Submit all new tile requests (unlimited budget) --
+    // All tiles requested by TTM are submitted immediately.  No per-frame tile submit
+    // budget: the TTM heap pool (GetNumDesiredHeaps) is the only backpressure.
     nvfeedback::FeedbackTextureCollection submittedThisFrame;
     uint32_t tilesSubmitted = 0;
 
-    if (!m_StreamingUpdatedTextures.m_Textures.empty())
+    if (!newEntries.m_Textures.empty())
     {
         PROFILE_SCOPED("Streaming TileSubmit");
 
-        const uint32_t kSubmitBudget = 32;
-        uint32_t submitted = 0;
-        size_t consumedCount = 0;
-
-        // Helper: resolve a FeedbackTexture back to its StreamingTexture via
-        // the user index set at texture creation time (O(1) direct-index lookup).
-        auto FindStreamingTex = [this](nvfeedback::FeedbackTexture* feedbackTex) -> Scene::StreamingTexture*
+        for (nvfeedback::FeedbackTextureUpdate& texUpdate : newEntries.m_Textures)
         {
-            int idx = feedbackTex->GetUserIndex();
-            SDL_assert(idx >= 0 && idx < (int)m_Scene.m_StreamingTextures.size());
-            Scene::StreamingTexture& st = m_Scene.m_StreamingTextures[idx];
-            return st.m_ReservedTexture ? &st : nullptr;
-        };
-
-        for (nvfeedback::FeedbackTextureUpdate& texUpdate : m_StreamingUpdatedTextures.m_Textures)
-        {
-            if (submitted >= kSubmitBudget)
-                break;
-
             nvfeedback::FeedbackTexture* feedbackTex = m_FeedbackManager->GetTextureByIndex(texUpdate.m_TextureIdx);
             Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
             SDL_assert(st.m_ReservedTexture && st.m_SourceData);
@@ -823,29 +802,13 @@ void Renderer::UpdateStreamingPreRender()
             const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
 
             std::vector<uint32_t> submittedTilesThisEntry;
-            std::vector<uint32_t> remainingTiles;
 
             for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
-                if (submitted >= kSubmitBudget)
-                {
-                    remainingTiles.push_back(tileIndex);
-                    continue;
-                }
-
                 SDL_assert(!feedbackTex->IsTilePacked(tileIndex));
 
                 std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
                 feedbackTex->GetTileInfo(tileIndex, tileInfos);
-
-                // Pre-check: only submit if enough budget remains for all tileInfos
-                // of this tile. Tile submissions are atomic per tileIndex to avoid
-                // partial TileRequest sets that can't be cleaned up correctly.
-                if (submitted + tileInfos.size() > kSubmitBudget)
-                {
-                    remainingTiles.push_back(tileIndex);
-                    continue;
-                }
 
                 for (const nvfeedback::FeedbackTextureTileInfo& tileInfo : tileInfos)
                 {
@@ -887,14 +850,13 @@ void Renderer::UpdateStreamingPreRender()
                     };
 
                     m_AsyncTileIO->Submit(std::move(req));
-                    submitted++;
                 }
 
                 submittedTilesThisEntry.push_back(tileIndex);
                 tilesSubmitted++;
             }
 
-            // Record submitted tiles for Phase C update
+            // Record submitted tiles for Phase 2 (next frame)
             if (!submittedTilesThisEntry.empty())
             {
                 nvfeedback::FeedbackTextureUpdate submittedUpdate;
@@ -902,61 +864,29 @@ void Renderer::UpdateStreamingPreRender()
                 submittedUpdate.m_TileIndices = std::move(submittedTilesThisEntry);
                 submittedThisFrame.m_Textures.push_back(std::move(submittedUpdate));
             }
-
-            // Update the entry to only contain remaining (unsubmitted) tiles
-            texUpdate.m_TileIndices.swap(remainingTiles);
-
-            if (texUpdate.m_TileIndices.empty())
-                consumedCount++;
-            else
-                break; // budget exhausted mid-entry; keep for next frame
         }
-
-        // Remove fully-consumed entries from the front of the persistent queue
-        if (consumedCount > 0)
-            m_StreamingUpdatedTextures.m_Textures.erase(
-                m_StreamingUpdatedTextures.m_Textures.begin(),
-                m_StreamingUpdatedTextures.m_Textures.begin() + consumedCount);
     }
 
     m_TilesSubmittedThisFrame = tilesSubmitted;
 
-    // -- Phase B3: Stash submitted tiles into m_PendingMappings --
-    // Do NOT call UpdateTileMappings here. The tile data for these tiles is being
-    // loaded asynchronously and will be flushed to the GPU in Phase B2 of the
-    // NEXT frame. Only then is it safe to map the tiles and update the MinMip
-    // texture. Calling UpdateTileMappings now (before the data arrives) would
-    // cause the MinMip to advertise tiles as resident while they still contain
-    // uninitialized data, producing black or wrong-mip samples for one frame.
+    // -- Phase 5: Stash submitted tiles for next frame's UpdateTileMappings --
+    // Do NOT call UpdateTileMappings here. The tile data is being loaded asynchronously
+    // and will be flushed to the GPU in Phase 1 of the NEXT frame. Only then is it safe
+    // to map the tiles and update the MinMip texture. Calling UpdateTileMappings now
+    // (before the data arrives) would cause the MinMip to advertise tiles as resident
+    // while they still contain uninitialized data, producing wrong-mip samples.
     if (!submittedThisFrame.m_Textures.empty())
     {
         if constexpr (nvfeedback::kStreamingDebugLog)
         {
             uint32_t totalTiles = 0;
             for (auto& u : submittedThisFrame.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
-            SDL_Log("[Streaming][PreRender] Phase B3: stashing %zu texture(s), %u tile(s) into "
-                    "m_PendingMappings — UpdateTileMappings deferred to next frame after Flush()",
+            SDL_Log("[Streaming][PreRender] Phase 5: stashing %zu texture(s), %u tile(s) — "
+                    "UpdateTileMappings deferred to next frame after Flush()",
                     submittedThisFrame.m_Textures.size(), totalTiles);
         }
 
-        // Merge into m_PendingMappings (may already have entries if budget was hit last frame)
-        for (nvfeedback::FeedbackTextureUpdate& update : submittedThisFrame.m_Textures)
-        {
-            // Check if there's already an entry for this texture index
-            auto it = std::find_if(m_PendingMappings.m_Textures.begin(), m_PendingMappings.m_Textures.end(),
-                [&](const nvfeedback::FeedbackTextureUpdate& existing) {
-                    return existing.m_TextureIdx == update.m_TextureIdx;
-                });
-            if (it != m_PendingMappings.m_Textures.end())
-            {
-                it->m_TileIndices.insert(it->m_TileIndices.end(),
-                    update.m_TileIndices.begin(), update.m_TileIndices.end());
-            }
-            else
-            {
-                m_PendingMappings.m_Textures.push_back(std::move(update));
-            }
-        }
+        m_SubmittedTilesPendingMapping = std::move(submittedThisFrame);
     }
 }
 
@@ -1090,6 +1020,8 @@ void Renderer::UploadDirtyMaterialConstants()
 
 void Renderer::ScheduleAndRunAllRenderers()
 {
+    PROFILE_FUNCTION();
+    
     for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
     {
         renderer->m_bPassEnabled = false;
@@ -1157,11 +1089,6 @@ void Renderer::ScheduleAndRunAllRenderers()
 
     // Compile render graph: compute lifetimes and allocate resources
     m_RenderGraph.Compile();
-
-    // Wait for all render passes to finish recording
-    m_TaskScheduler->ExecuteAllScheduledTasks();
-
-    m_RenderGraph.PostRender();
 }
 
 void Renderer::SetCameraFromSceneCamera(const Scene::Camera& sceneCam)

@@ -270,7 +270,7 @@ namespace nvfeedback
             nextReadbackTextures.clear();
             if (!m_TexturesRingbuffer.empty())
             {
-                uint32_t updatesLeft = UINT32_MAX;
+                uint32_t updatesLeft = kFeedbackTexturesToResolvePerFrame;
                 const uint32_t count = (uint32_t)m_TexturesRingbuffer.size();
                 for (uint32_t i = 0; i < count && updatesLeft > 0; ++i)
                 {
@@ -582,12 +582,11 @@ namespace nvfeedback
     void FeedbackManager::EndFrame()
     {
         // Advance ring buffer cursor by the number of textures processed this frame
-        if (!m_TexturesRingbuffer.empty() && UINT32_MAX > 0)
+        if (!m_TexturesRingbuffer.empty() && kFeedbackTexturesToResolvePerFrame > 0)
         {
             const uint32_t count = (uint32_t)m_TexturesRingbuffer.size();
-            // Clamp to count; use 64-bit arithmetic to safely handle UINT32_MAX
-            const uint64_t advance = std::min<uint64_t>(UINT32_MAX, count);
-            m_RingbufferCursor = (uint32_t)(((uint64_t)m_RingbufferCursor + advance) % count);
+            const uint32_t advance = std::min(kFeedbackTexturesToResolvePerFrame, count);
+            m_RingbufferCursor = (m_RingbufferCursor + advance) % count;
         }
 
         // Update stats

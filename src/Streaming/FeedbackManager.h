@@ -39,6 +39,7 @@ namespace nvfeedback
     static constexpr bool kStreamingDebugLog = false;
     static constexpr uint32_t kNumFramesInFlight = 3;
     static constexpr uint32_t kHeapSizeInTiles   = 256;
+    static constexpr uint32_t kFeedbackTexturesToResolvePerFrame = 10;
 
     // ─── HeapAllocator ───────────────────────────────────────────────────────
     //
