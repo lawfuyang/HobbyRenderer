@@ -855,7 +855,7 @@ public:
                     continue; // no material — skip
 
                 const Scene::Material& cpuMat = scene.m_Materials[inst.m_MaterialIndex];
-                const Vector3& emissive = cpuMat.m_EmissiveFactor;
+                const Vector4& emissive = cpuMat.m_GPU.m_EmissiveFactor;
                 const bool hasEmissiveTexture = (cpuMat.m_EmissiveTexture >= 0);
                 const bool isEmissive = hasEmissiveTexture ||
                     (emissive.x > 0.f || emissive.y > 0.f || emissive.z > 0.f);

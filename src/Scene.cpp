@@ -149,7 +149,7 @@ void Scene::BuildAccelerationStructures()
     {
 		const srrhi::PerInstanceData& instData = m_InstanceData[instanceID];
 		Primitive* primitive = meshDataToPrimitive.at(instData.m_MeshDataIndex);
-		const uint32_t alphaMode = primitive->m_MaterialIndex != -1 ? m_Materials.at(primitive->m_MaterialIndex).m_AlphaMode : srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
+		const uint32_t alphaMode = primitive->m_MaterialIndex != -1 ? m_Materials.at(primitive->m_MaterialIndex).m_GPU.m_AlphaMode : srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
 
         nvrhi::rt::InstanceDesc& instanceDesc = m_RTInstanceDescs.emplace_back();
 
@@ -308,7 +308,7 @@ void Scene::FinalizeLoadedScene()
             inst.m_Center = node.m_Center;
             inst.m_Radius = node.m_Radius;
 
-            uint32_t alphaMode = prim.m_MaterialIndex >= 0 ? m_Materials[prim.m_MaterialIndex].m_AlphaMode : srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
+            uint32_t alphaMode = prim.m_MaterialIndex >= 0 ? m_Materials[prim.m_MaterialIndex].m_GPU.m_AlphaMode : srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
             bool isDynamic = node.m_IsDynamic;
 
             if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) {
@@ -468,10 +468,11 @@ void Scene::Update(float deltaTime)
 					const int matIdx = channel.m_MaterialIndices[mi];
 					if (matIdx < 0 || matIdx >= (int)m_Materials.size()) continue;
 					const Vector3& base = channel.m_BaseEmissiveFactor[mi];
-					m_Materials[matIdx].m_EmissiveFactor = Vector3{
+					m_Materials[matIdx].m_GPU.m_EmissiveFactor = Vector4{
 						base.x * intensity,
 						base.y * intensity,
-						base.z * intensity
+						base.z * intensity,
+						1.0f
 					};
 					// Track dirty range using the position of matIdx in m_DynamicMaterialIndices
 					const auto it = std::lower_bound(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end(), matIdx);
