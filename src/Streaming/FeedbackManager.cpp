@@ -300,12 +300,28 @@ namespace nvfeedback
         m_TiledTextureManager->TrimStandbyTiles();
 
         // ── Step 4: Heap management ──
-        uint32_t numRequiredHeaps = m_TiledTextureManager->GetNumDesiredHeaps();
+        //
+        // TTM's GetNumDesiredHeaps() sums requestedTilesNum for every texture.
+        // UpdateWithSamplerFeedback resets requestedTilesNum = packedTilesNum at the
+        // start of every call, so the returned value always includes ALL packed mip
+        // tiles even though packed mips are never allocated through TTM's heap pool
+        // (they live on dedicated packed-mip heaps not registered with TTM).
+        //
+        // Without correction this causes us to allocate N heaps just to satisfy the
+        // packed-mip tile count, leaving those heaps permanently full (heapFreeTilesNum=0)
+        // because the packed-mip "requested" tiles are never actually allocated into them.
+        //
+        // Fix: subtract the packed-mip heap count from TTM's desired heap count so that
+        // we only allocate heaps for actual streaming tiles.
+        const uint32_t packedMipHeapCount = (m_PackedMipTileCursor + kHeapSizeInTiles - 1) / kHeapSizeInTiles;
+        const uint32_t ttmDesiredHeaps    = m_TiledTextureManager->GetNumDesiredHeaps();
+        const uint32_t numRequiredHeaps   = (ttmDesiredHeaps > packedMipHeapCount)
+                                          ? (ttmDesiredHeaps - packedMipHeapCount) : 0;
 
         if constexpr (kStreamingDebugLog)
         {
-            SDL_Log("[Streaming][Heap] BeginFrame heap check: required=%u TTMRegistered=%u totalHeaps=%u packedMipCursor=%u",
-                    numRequiredHeaps, m_NumTTMHeaps, m_HeapAllocator->GetNumHeaps(),
+            SDL_Log("[Streaming][Heap] BeginFrame heap check: ttmDesired=%u packedMipHeaps=%u corrected=%u TTMRegistered=%u totalHeaps=%u packedMipCursor=%u",
+                    ttmDesiredHeaps, packedMipHeapCount, numRequiredHeaps, m_NumTTMHeaps, m_HeapAllocator->GetNumHeaps(),
                     m_PackedMipTileCursor);
         }
 
