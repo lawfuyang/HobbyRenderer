@@ -4,9 +4,6 @@
 
 namespace nvfeedback
 {
-    // Forward declaration for circular dependency
-    class FeedbackTextureSet;
-
     struct FeedbackTextureTileInfo
     {
         uint32_t m_Mip;
@@ -29,26 +26,20 @@ namespace nvfeedback
     class FeedbackTexture
     {
     public:
-        FeedbackTexture(
-            const nvrhi::TextureDesc& desc,
-            rtxts::TiledTextureManager* tiledTextureManager);
-        ~FeedbackTexture();
+        FeedbackTexture(const nvrhi::TextureDesc& desc, rtxts::TiledTextureManager* tiledTextureManager);
 
-        nvrhi::TextureHandle GetReservedTexture()                  { return m_ReservedTexture; }
+        nvrhi::TextureHandle GetReservedTexture()                       { return m_ReservedTexture; }
         nvrhi::SamplerFeedbackTextureHandle GetSamplerFeedbackTexture() { return m_FeedbackTexture; }
-        nvrhi::TextureHandle GetMinMipTexture()                    { return m_MinMipTexture; }
-        bool IsTilePacked(uint32_t tileIndex);
+        nvrhi::TextureHandle GetMinMipTexture()                         { return m_MinMipTexture; }
+        bool IsTilePacked(uint32_t tileIndex) { return tileIndex >= m_PackedMipDesc.startTileIndexInOverallResource; }
         void GetTileInfo(uint32_t tileIndex, std::vector<FeedbackTextureTileInfo>& tiles);
-
-        uint32_t GetNumTextureSets() const { return (uint32_t)m_TextureSets.size(); }
-        class FeedbackTextureSet* GetTextureSet(uint32_t index) const;
 
         // Accessors used by FeedbackManager
         nvrhi::BufferHandle GetFeedbackResolveBuffer(uint32_t frameIndex) { return m_FeedbackResolveBuffers[frameIndex]; }
-        uint32_t GetNumTiles() const                { return m_NumTiles; }
-        const nvrhi::TileShape& GetTileShape() const       { return m_TileShape; }
+        uint32_t GetNumTiles() const                     { return m_NumTiles; }
+        const nvrhi::TileShape& GetTileShape() const     { return m_TileShape; }
         const nvrhi::PackedMipDesc& GetPackedMipInfo() const { return m_PackedMipDesc; }
-        uint32_t GetTiledTextureId() const           { return m_TiledTextureId; }
+        uint32_t GetTiledTextureId() const               { return m_TiledTextureId; }
 
         // CPU-side cache of the last successfully resolved feedback data for this texture.
         // FeedbackManager re-submits this to TTM every frame for textures that are not in
@@ -64,15 +55,6 @@ namespace nvfeedback
         uint32_t GetManagerIndex() const       { return m_ManagerIndex; }
         void     SetManagerIndex(uint32_t idx) { m_ManagerIndex = idx; }
 
-        // Texture set membership management
-        bool AddToTextureSet(FeedbackTextureSet* textureSet);
-        bool RemoveFromTextureSet(FeedbackTextureSet* textureSet);
-        void UpdateTextureSets();
-
-        bool IsPrimaryTexture() const;
-        const std::vector<FeedbackTextureSet*>& GetTextureSets() const        { return m_TextureSets; }
-        const std::vector<FeedbackTextureSet*>& GetPrimaryTextureSets() const { return m_PrimaryTextureSets; }
-
     private:
         nvrhi::TextureHandle m_ReservedTexture;
         nvrhi::SamplerFeedbackTextureHandle m_FeedbackTexture;
@@ -86,9 +68,6 @@ namespace nvfeedback
         uint32_t m_TiledTextureId = 0;
         int m_UserIndex = -1;
         uint32_t m_ManagerIndex = UINT32_MAX;
-
-        std::vector<FeedbackTextureSet*> m_TextureSets;
-        std::vector<FeedbackTextureSet*> m_PrimaryTextureSets;
     };
 
 } // namespace nvfeedback

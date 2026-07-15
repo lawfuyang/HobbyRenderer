@@ -1,7 +1,6 @@
 #pragma once
 
 #include "FeedbackTexture.h"
-#include "FeedbackTextureSet.h"
 #include "Utilities.h"
 
 #include <rtxts-ttm/TiledTextureManager.h>
@@ -31,15 +30,10 @@ namespace nvfeedback
         std::vector<uint32_t> m_TileIndices;
     };
 
-    struct FeedbackTextureCollection
-    {
-        std::vector<FeedbackTextureUpdate> m_Textures;
-    };
-
     static constexpr bool kStreamingDebugLog = false;
     static constexpr uint32_t kNumFramesInFlight = 3;
     static constexpr uint32_t kHeapSizeInTiles   = 256;
-    static constexpr uint32_t kFeedbackTexturesToResolvePerFrame = 10;
+    static constexpr uint32_t kFeedbackTexturesToResolvePerFrame = 30;
 
     // Hysteresis timeout: a tile stays mapped for this many seconds after the
     // last time sampler feedback requested it.  TTM transitions Mapped→Standby
@@ -94,15 +88,15 @@ namespace nvfeedback
         FeedbackManager();
 
         FeedbackTexture* CreateTexture(const nvrhi::TextureDesc& desc);
-        void BeginFrame(nvrhi::ICommandList* commandList, FeedbackTextureCollection& results);
-        void UpdateTileMappings(nvrhi::ICommandList* commandList, FeedbackTextureCollection& tilesReady);
+        void BeginFrame(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& results);
+        void UpdateTileMappings(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& tilesReady);
         void ResolveFeedback(nvrhi::ICommandList* commandList);
         void EndFrame();
 
         const FeedbackManagerStats& GetStats() const;
 
         // Resolve an index (from FeedbackTextureUpdate::m_TextureIdx) to the actual FeedbackTexture pointer.
-        // External code uses this after receiving a FeedbackTextureCollection from BeginFrame.
+        // External code uses this after receiving results from BeginFrame.
         FeedbackTexture* GetTextureByIndex(uint32_t idx) { return m_Textures.at(idx).get(); }
         uint32_t GetNumTextures() const { return (uint32_t)m_Textures.size(); }
 
@@ -111,7 +105,6 @@ namespace nvfeedback
         // Not called from ~FeedbackTexture (FeedbackManager owns the unique_ptrs); external code calls this
         // when a texture should be removed (e.g., scene unload / resource teardown).
         void UnregisterTexture(uint32_t textureIdx);
-        void UpdateTextureRingBufferState(uint32_t textureIdx, bool bIncludeInRingBuffer);
 
         // Map packed mips permanently (called once at scene load before uploading packed mip data).
         // Must be called after CreateTexture and before writing packed mip data via writeTexture.

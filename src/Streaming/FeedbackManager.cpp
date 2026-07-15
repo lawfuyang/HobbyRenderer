@@ -183,27 +183,7 @@ namespace nvfeedback
             m_Textures[i]->SetManagerIndex(i);
     }
 
-    void FeedbackManager::UpdateTextureRingBufferState(uint32_t textureIdx, bool bIncludeInRingBuffer)
-    {
-        auto it = std::find(m_TexturesRingbuffer.begin(), m_TexturesRingbuffer.end(), textureIdx);
-        if (bIncludeInRingBuffer && it == m_TexturesRingbuffer.end())
-        {
-            m_TexturesRingbuffer.push_back(textureIdx);
-        }
-        else if (!bIncludeInRingBuffer && it != m_TexturesRingbuffer.end())
-        {
-            const size_t pos = it - m_TexturesRingbuffer.begin();
-            m_TexturesRingbuffer.erase(it);
-            if (pos < m_RingbufferCursor && m_RingbufferCursor > 0)
-                --m_RingbufferCursor;
-            if (!m_TexturesRingbuffer.empty())
-                m_RingbufferCursor %= (uint32_t)m_TexturesRingbuffer.size();
-            else
-                m_RingbufferCursor = 0;
-        }
-    }
-
-    void FeedbackManager::BeginFrame(nvrhi::ICommandList* commandList, FeedbackTextureCollection& results)
+    void FeedbackManager::BeginFrame(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& results)
     {
         PROFILE_FUNCTION();
         SimpleTimer timer;
@@ -257,26 +237,6 @@ namespace nvfeedback
                     kTileHysteresisSeconds);
 
                 g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex));
-
-                // Propagate to follower textures in the same set
-                if (readbackTexture->IsPrimaryTexture())
-                {
-                    for (FeedbackTextureSet* textureSet : readbackTexture->GetPrimaryTextureSets())
-                    {
-                        uint32_t numTextures = textureSet->GetNumTextures();
-                        uint32_t primaryIdx  = textureSet->GetPrimaryTextureIndex();
-                        for (uint32_t i = 0; i < numTextures; ++i)
-                        {
-                            if (i == primaryIdx) continue;
-                            FeedbackTexture* follower = textureSet->GetTexture(i);
-                            m_TiledTextureManager->MatchPrimaryTexture(
-                                readbackTexture->GetTiledTextureId(),
-                                follower->GetTiledTextureId(),
-                                timeStamp,
-                                kTileHysteresisSeconds);
-                        }
-                    }
-                }
             }
         }
 
@@ -299,8 +259,6 @@ namespace nvfeedback
                 FeedbackTexture* tex = GetTextureByIndex(texIdx);
                 if (tex->m_CachedFeedbackData.empty()) continue; // never been read back yet — skip
 
-                PROFILE_SCOPED("UpdateWithSamplerFeedback");
-
                 rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
                 samplerFeedbackDesc.pMinMipData = tex->m_CachedFeedbackData.data();
                 m_TiledTextureManager->UpdateWithSamplerFeedback(
@@ -308,30 +266,8 @@ namespace nvfeedback
                     samplerFeedbackDesc,
                     timeStamp,
                     kTileHysteresisSeconds);
-
-                // Propagate to followers
-                if (tex->IsPrimaryTexture())
-                {
-                    PROFILE_SCOPED("Match Primary Textures");
-
-                    for (FeedbackTextureSet* textureSet : tex->GetPrimaryTextureSets())
-                    {
-                        uint32_t numTextures = textureSet->GetNumTextures();
-                        uint32_t primaryIdx = textureSet->GetPrimaryTextureIndex();
-                        for (uint32_t i = 0; i < numTextures; ++i)
-                        {
-                            if (i == primaryIdx) continue;
-                            FeedbackTexture* follower = textureSet->GetTexture(i);
-                            m_TiledTextureManager->MatchPrimaryTexture(
-                                tex->GetTiledTextureId(),
-                                follower->GetTiledTextureId(),
-                                timeStamp,
-                                kTileHysteresisSeconds);
-                        }
-                    }
-                }
             }
-    }
+        }
 
         // ── Step 2: Collect textures to read back NEXT frame ──
         // Assign to the NEXT slot so that the following frame's Step 1 reads from the
@@ -477,7 +413,7 @@ namespace nvfeedback
                         update.m_TileIndices.push_back(tileIndex);
                     }
                     if (!update.m_TileIndices.empty())
-                        results.m_Textures.push_back(update);
+                        results.push_back(update);
                 }
             }
         }
@@ -488,11 +424,11 @@ namespace nvfeedback
         m_BeginFrameCPUTime = timer.LapSeconds();
     }
 
-    void FeedbackManager::UpdateTileMappings(nvrhi::ICommandList* commandList, FeedbackTextureCollection& tilesReady)
+    void FeedbackManager::UpdateTileMappings(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& tilesReady)
     {
         SimpleTimer timer;
 
-        for (FeedbackTextureUpdate& texUpdate : tilesReady.m_Textures)
+        for (FeedbackTextureUpdate& texUpdate : tilesReady)
         {
             FeedbackTexture* texture = GetTextureByIndex(texUpdate.m_TextureIdx);
             m_MinMipDirtyTextures.insert(texUpdate.m_TextureIdx);

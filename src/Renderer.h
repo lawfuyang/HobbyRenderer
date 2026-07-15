@@ -12,7 +12,6 @@
 
 // Streaming
 #include "Streaming/FeedbackManager.h"
-#include "Streaming/StreamingContext.h"
 #include "Streaming/AsyncTileIO.h"
 
 class IRenderer
@@ -306,19 +305,20 @@ struct Renderer
     std::string m_BRDFLutTexture = "brdf_lut.dds";
 
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
-    nvfeedback::StreamingContext m_StreamingCtx;
+    
     std::unique_ptr<nvfeedback::AsyncTileIO> m_AsyncTileIO; // Async tile I/O thread pool
+
     // Tiles submitted to AsyncTileIO this frame — their UpdateTileMappings and MinMip
     // update is deferred to the NEXT frame, after Flush() confirms the tile data has
     // been written to the GPU.  No per-frame budget: all requested tiles are submitted immediately
-    nvfeedback::FeedbackTextureCollection m_SubmittedTilesPendingMapping;
+    std::vector<nvfeedback::FeedbackTextureUpdate> m_SubmittedTilesPendingMapping;
 
     // Count of tile indices actually submitted to AsyncTileIO this frame (for UI/debug).
     uint32_t m_TilesSubmittedThisFrame = 0;
 
     int m_TileResidencyDebugTextureIdx = -1; // -1 = disabled, 0..N = selected feedback texture index
 
-    // Initialise the FeedbackManager and call BuildTextureSets after scene load.
+    // Initialise the FeedbackManager after scene load.
     void InitStreaming();
     // Shutdown streaming resources.
     void ShutdownStreaming();

@@ -400,9 +400,6 @@ void Renderer::Initialize()
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
-    // Build texture sets now that all FeedbackTextures are registered
-    m_StreamingCtx.BuildTextureSets(m_Scene);
-
     // Restore saved camera state (overrides GLTF camera if present)
     {
         const std::string& scenePath = Config::Get().m_ScenePath;
@@ -727,7 +724,6 @@ void Renderer::ShutdownStreaming()
     m_AsyncTileIO->Flush(nullptr); // discard completed callbacks (resources about to be freed)
     m_AsyncTileIO.reset();
 
-    m_StreamingCtx.Clear();
     m_FeedbackManager.reset();
     SDL_Log("[Streaming] Shutdown complete.");
 }
@@ -749,7 +745,7 @@ void Renderer::UpdateStreamingPreRender()
     // All three are merged into one command list so that updateTextureTileMappings
     // (an immediate GPU queue op) follows the writeTexture calls from Flush().
 
-    nvfeedback::FeedbackTextureCollection newEntries;
+    std::vector<nvfeedback::FeedbackTextureUpdate> newEntries;
 
     {
         PROFILE_SCOPED("Streaming TileFlush+UpdateMappings+BeginFrame");
@@ -769,19 +765,19 @@ void Renderer::UpdateStreamingPreRender()
         // Phase 2: UpdateTileMappings for tiles whose data was just flushed above.
         // m_SubmittedTilesPendingMapping holds the tiles submitted last frame — their
         // data is now on the GPU, so it is safe to map them and update the MinMip texture.
-        if (!m_SubmittedTilesPendingMapping.m_Textures.empty())
+        if (!m_SubmittedTilesPendingMapping.empty())
         {
             if constexpr (nvfeedback::kStreamingDebugLog)
             {
                 uint32_t totalTiles = 0;
-                for (auto& u : m_SubmittedTilesPendingMapping.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
+                for (auto& u : m_SubmittedTilesPendingMapping) totalTiles += (uint32_t)u.m_TileIndices.size();
                 SDL_Log("[Streaming][PreRender] Phase 2: UpdateTileMappings for %zu texture(s), %u tile(s) "
                         "(data was flushed this frame)",
-                        m_SubmittedTilesPendingMapping.m_Textures.size(), totalTiles);
+                        m_SubmittedTilesPendingMapping.size(), totalTiles);
             }
 
             m_FeedbackManager->UpdateTileMappings(cmd, m_SubmittedTilesPendingMapping);
-            m_SubmittedTilesPendingMapping.m_Textures.clear();
+            m_SubmittedTilesPendingMapping.clear();
         }
 
         // Phase 3: BeginFrame — collect new tile requests.
@@ -792,14 +788,14 @@ void Renderer::UpdateStreamingPreRender()
     // -- Phase 4+5: Submit all new tile requests (unlimited budget) --
     // All tiles requested by TTM are submitted immediately.  No per-frame tile submit
     // budget: the TTM heap pool (GetNumDesiredHeaps) is the only backpressure.
-    nvfeedback::FeedbackTextureCollection submittedThisFrame;
+    std::vector<nvfeedback::FeedbackTextureUpdate> submittedThisFrame;
     uint32_t tilesSubmitted = 0;
 
-    if (!newEntries.m_Textures.empty())
+    if (!newEntries.empty())
     {
         PROFILE_SCOPED("Streaming TileSubmit");
 
-        for (nvfeedback::FeedbackTextureUpdate& texUpdate : newEntries.m_Textures)
+        for (nvfeedback::FeedbackTextureUpdate& texUpdate : newEntries)
         {
             nvfeedback::FeedbackTexture* feedbackTex = m_FeedbackManager->GetTextureByIndex(texUpdate.m_TextureIdx);
             Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
@@ -870,7 +866,7 @@ void Renderer::UpdateStreamingPreRender()
                 nvfeedback::FeedbackTextureUpdate submittedUpdate;
                 submittedUpdate.m_TextureIdx = texUpdate.m_TextureIdx;
                 submittedUpdate.m_TileIndices = std::move(submittedTilesThisEntry);
-                submittedThisFrame.m_Textures.push_back(std::move(submittedUpdate));
+                submittedThisFrame.push_back(std::move(submittedUpdate));
             }
         }
     }
@@ -883,15 +879,15 @@ void Renderer::UpdateStreamingPreRender()
     // to map the tiles and update the MinMip texture. Calling UpdateTileMappings now
     // (before the data arrives) would cause the MinMip to advertise tiles as resident
     // while they still contain uninitialized data, producing wrong-mip samples.
-    if (!submittedThisFrame.m_Textures.empty())
+    if (!submittedThisFrame.empty())
     {
         if constexpr (nvfeedback::kStreamingDebugLog)
         {
             uint32_t totalTiles = 0;
-            for (auto& u : submittedThisFrame.m_Textures) totalTiles += (uint32_t)u.m_TileIndices.size();
+            for (auto& u : submittedThisFrame) totalTiles += (uint32_t)u.m_TileIndices.size();
             SDL_Log("[Streaming][PreRender] Phase 5: stashing %zu texture(s), %u tile(s) — "
                     "UpdateTileMappings deferred to next frame after Flush()",
-                    submittedThisFrame.m_Textures.size(), totalTiles);
+                    submittedThisFrame.size(), totalTiles);
         }
 
         m_SubmittedTilesPendingMapping = std::move(submittedThisFrame);

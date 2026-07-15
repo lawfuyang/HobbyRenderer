@@ -1,12 +1,9 @@
 #include "FeedbackTexture.h"
-#include "FeedbackTextureSet.h"
 #include "../Renderer.h"
 
 namespace nvfeedback
 {
-    FeedbackTexture::FeedbackTexture(
-        const nvrhi::TextureDesc& desc,
-        rtxts::TiledTextureManager* tiledTextureManager)
+    FeedbackTexture::FeedbackTexture(const nvrhi::TextureDesc& desc, rtxts::TiledTextureManager* tiledTextureManager)
     {
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
@@ -98,21 +95,6 @@ namespace nvfeedback
         }
     }
 
-    FeedbackTexture::~FeedbackTexture()
-    {
-        // Remove from all texture sets first
-        std::vector<FeedbackTextureSet*> textureSets = m_TextureSets;
-        for (FeedbackTextureSet* textureSet : textureSets)
-        {
-            RemoveFromTextureSet(textureSet);
-        }
-    }
-
-    bool FeedbackTexture::IsTilePacked(uint32_t tileIndex)
-    {
-        return tileIndex >= m_PackedMipDesc.startTileIndexInOverallResource;
-    }
-
     void FeedbackTexture::GetTileInfo(uint32_t tileIndex, std::vector<FeedbackTextureTileInfo>& tiles)
     {
         tiles.clear();
@@ -181,50 +163,6 @@ namespace nvfeedback
             tile.m_HeightInTexels = height;
             tiles.push_back(tile);
         }
-    }
-
-    FeedbackTextureSet* FeedbackTexture::GetTextureSet(uint32_t index) const
-    {
-        return m_TextureSets[index];
-    }
-
-    bool FeedbackTexture::AddToTextureSet(FeedbackTextureSet* textureSet)
-    {
-        if (!textureSet) return false;
-        auto it = std::find(m_TextureSets.begin(), m_TextureSets.end(), textureSet);
-        if (it == m_TextureSets.end())
-            m_TextureSets.push_back(textureSet);
-        UpdateTextureSets();
-        return true;
-    }
-
-    bool FeedbackTexture::RemoveFromTextureSet(FeedbackTextureSet* textureSet)
-    {
-        if (!textureSet) return false;
-        auto it = std::find(m_TextureSets.begin(), m_TextureSets.end(), textureSet);
-        if (it == m_TextureSets.end()) return false;
-        m_TextureSets.erase(it);
-        UpdateTextureSets();
-        return true;
-    }
-
-    void FeedbackTexture::UpdateTextureSets()
-    {
-        m_PrimaryTextureSets.clear();
-        for (FeedbackTextureSet* textureSet : m_TextureSets)
-        {
-            if (textureSet->GetPrimaryTexture() == this)
-                m_PrimaryTextureSets.push_back(textureSet);
-        }
-
-        // Only include in ring buffer if not in any set, or if we are the primary
-        bool bNeedsRingBuffer = m_TextureSets.empty() || IsPrimaryTexture();
-        g_Renderer.m_FeedbackManager->UpdateTextureRingBufferState(m_ManagerIndex, bNeedsRingBuffer);
-    }
-
-    bool FeedbackTexture::IsPrimaryTexture() const
-    {
-        return !m_PrimaryTextureSets.empty();
     }
 
 } // namespace nvfeedback
