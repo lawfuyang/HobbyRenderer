@@ -89,22 +89,88 @@ rtxdi::ReGIRDynamicParameters g_ReGIR_DynamicParams{};
 bool g_ReGIR_VisualizeRegirCells = false;
 
 // ------------------------------------------------------------------
-// Quality mode presets
+// Quality mode presets (unified: controls both ReSTIR DI and ReSTIR GI)
 // ------------------------------------------------------------------
-enum class ReSTIRDI_QualityMode { HighPerformance, HighQuality };
+enum class ReSTIR_QualityMode { Balanced, HighPerformance, HighQuality };
 
-static ReSTIRDI_QualityMode g_ReSTIRDI_QualityMode = ReSTIRDI_QualityMode::HighPerformance;
+static ReSTIR_QualityMode g_ReSTIR_QualityMode = ReSTIR_QualityMode::Balanced;
 static rtxdi::CheckerboardMode g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
 
-// ------------------------------------------------------------------
-// ReSTIR GI quality mode presets
-// ------------------------------------------------------------------
-enum class ReSTIRGI_QualityMode { HighPerformance, HighQuality };
-
-static ReSTIRGI_QualityMode g_ReSTIRGI_QualityMode = ReSTIRGI_QualityMode::HighPerformance;
-
-static void ApplyHighPerfGIPreset()
+// Balanced — based on reference QualityPreset::Medium.
+// ReSTIR DI: ReGIR RIS, 8 samples, raytraced temporal BC, basic spatial BC.
+// ReSTIR GI: moderate history, boiling filter on, no MIS.
+static void ApplyBalancedPreset()
 {
+    // ---- ReSTIR DI ----
+    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
+    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 8;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
+    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightReGIRRISSamples;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
+    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
+    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
+    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
+    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
+    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Basic;
+    g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
+    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
+    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
+
+    // ---- ReSTIR GI ----
+    g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+
+    g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
+    g_ReSTIRGI_TemporalParams.maxHistoryLength              = 8;
+    g_ReSTIRGI_TemporalParams.maxReservoirAge               = 30;
+    g_ReSTIRGI_TemporalParams.enableFallbackSampling        = 1u;
+    g_ReSTIRGI_TemporalParams.enablePermutationSampling     = 0u;
+    g_ReSTIRGI_TemporalParams.biasCorrectionMode            = RTXDI_GIBiasCorrectionMode::Basic;
+    g_ReSTIRGI_TemporalParams.depthThreshold                = 0.1f;
+    g_ReSTIRGI_TemporalParams.normalThreshold               = 0.6f;
+
+    g_ReSTIRGI_BoilingParams.enableBoilingFilter            = 1u;
+    g_ReSTIRGI_BoilingParams.boilingFilterStrength          = 0.2f;
+
+    g_ReSTIRGI_SpatialParams = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
+    g_ReSTIRGI_SpatialParams.numSamples                     = 1;
+    g_ReSTIRGI_SpatialParams.samplingRadius                 = 32.0f;
+    g_ReSTIRGI_SpatialParams.biasCorrectionMode             = RTXDI_GIBiasCorrectionMode::Basic;
+    g_ReSTIRGI_SpatialParams.depthThreshold                 = 0.1f;
+    g_ReSTIRGI_SpatialParams.normalThreshold                = 0.6f;
+
+    g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
+    g_ReSTIRGI_FinalShadingParams.enableFinalMIS            = 0u;
+    g_ReSTIRGI_FinalShadingParams.enableFinalVisibility     = 1u;
+}
+
+static void ApplyHighPerfPreset()
+{
+    // ---- ReSTIR DI ----
+    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
+    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 4;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 4;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 4;
+    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightPowerRISSamples;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 0;
+    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
+    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
+    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
+    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Off;
+    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Off;
+    g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
+    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
+    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
+
+    // ---- ReSTIR GI ----
     g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
 
     g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
@@ -131,8 +197,29 @@ static void ApplyHighPerfGIPreset()
     g_ReSTIRGI_FinalShadingParams.enableFinalVisibility     = 1u;
 }
 
-static void ApplyHighQualityGIPreset()
+static void ApplyHighQualityPreset()
 {
+    // ---- ReSTIR DI ----
+    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
+    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
+    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 16;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 16;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 16;
+    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightReGIRRISSamples;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
+    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 0u;
+    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 0u;
+    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.0f;
+    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
+    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
+    g_ReSTIRDI_SpatialResamplingParams.numSamples = 4;
+    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 16;
+    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 0u;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
+
+    // ---- ReSTIR GI ----
     g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
 
     g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
@@ -159,64 +246,22 @@ static void ApplyHighQualityGIPreset()
     g_ReSTIRGI_FinalShadingParams.enableFinalVisibility     = 1u;
 }
 
-static void ApplyHighPerfPreset()
-{
-    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
-    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::Power_RIS;
-    g_ReSTIRDI_NumLocalLightUniformSamples = 4;
-    g_ReSTIRDI_NumLocalLightPowerRISSamples = 4;
-    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 4;
-    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightPowerRISSamples;
-    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 0;
-    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
-    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
-    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
-    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
-    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Off;
-    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Off;
-    g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
-    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
-    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
-}
-
-static void ApplyHighQualityPreset()
-{
-    g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-    g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
-    g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-    g_ReSTIRDI_NumLocalLightUniformSamples = 16;
-    g_ReSTIRDI_NumLocalLightPowerRISSamples = 16;
-    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 16;
-    g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightReGIRRISSamples;
-    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
-    g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
-    g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 0u;
-    g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 0u;
-    g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.0f;
-    g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
-    g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
-    g_ReSTIRDI_SpatialResamplingParams.numSamples = 4;
-    g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 16;
-    g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 0u;
-    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
-}
-
 void RTXDIIMGUISettings()
 {
     ImGui::Indent();
 
     // ---- Quality mode preset ---------------------------------------------------
-    if (ImGui::Combo("Quality Mode", reinterpret_cast<int*>(&g_ReSTIRDI_QualityMode),
+    if (ImGui::Combo("Quality Mode", reinterpret_cast<int*>(&g_ReSTIR_QualityMode),
+            "Balanced\0"
             "High Performance\0"
             "High Quality\0"))
     {
-        // Apply preset on combo change
-        if (g_ReSTIRDI_QualityMode == ReSTIRDI_QualityMode::HighPerformance)
-            ApplyHighPerfPreset();
-        else
-            ApplyHighQualityPreset();
+        switch (g_ReSTIR_QualityMode)
+        {
+        case ReSTIR_QualityMode::Balanced:        ApplyBalancedPreset();     break;
+        case ReSTIR_QualityMode::HighPerformance: ApplyHighPerfPreset();     break;
+        case ReSTIR_QualityMode::HighQuality:     ApplyHighQualityPreset();  break;
+        }
     }
     ImGui::Separator();
 
@@ -420,16 +465,8 @@ void RTXDIIMGUISettings()
 
         if (g_ReSTIRGI_Enabled)
         {
-            // ---- GI Quality mode preset ----------------------------------------
-            if (ImGui::Combo("GI Quality Mode", reinterpret_cast<int*>(&g_ReSTIRGI_QualityMode),
-                    "High Performance\0"
-                    "High Quality\0"))
-            {
-                if (g_ReSTIRGI_QualityMode == ReSTIRGI_QualityMode::HighPerformance)
-                    ApplyHighPerfGIPreset();
-                else
-                    ApplyHighQualityGIPreset();
-            }
+            // ---- GI Quality mode (mirrors the top-level Quality Mode combo) ----
+            ImGui::TextDisabled("  Quality preset is shared with ReSTIR DI (see 'Quality Mode' above).");
             ImGui::Separator();
 
             // Resampling mode combo (FusedSpatiotemporal excluded)
@@ -770,14 +807,6 @@ public:
         g_ReSTIRDI_SpatialResamplingParams = rtxdi::GetDefaultReSTIRDISpatialResamplingParams();
         g_ReSTIRDI_ShadingParams           = rtxdi::GetDefaultReSTIRDIShadingParams();
 
-        // Apply default "High Performance" preset
-        g_ReSTIRDI_QualityMode = ReSTIRDI_QualityMode::HighPerformance;
-        ApplyHighPerfPreset();
-
-        g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
-
-        CreateRTXDIContext();
-
         // Initialize ReSTIR GI parameter structs to library defaults
         g_ReSTIRGI_ResamplingMode    = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
         g_ReSTIRGI_TemporalParams    = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
@@ -785,9 +814,9 @@ public:
         g_ReSTIRGI_SpatialParams     = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
         g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
 
-        // Apply default "High Performance" GI preset
-        g_ReSTIRGI_QualityMode = ReSTIRGI_QualityMode::HighPerformance;
-        ApplyHighPerfGIPreset();
+        CreateRTXDIContext();
+        ApplyBalancedPreset();
+        g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
 
         m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
@@ -1373,7 +1402,7 @@ public:
 
         // ReGIR is only used in HighQuality mode.
         // HighPerformance uses REGIR_DISABLED shader variants and skips the ReGIR build pass.
-        const bool useReGIR = (g_ReSTIRDI_QualityMode == ReSTIRDI_QualityMode::HighQuality);
+        const bool useReGIR = (g_ReSTIR_QualityMode == ReSTIR_QualityMode::HighQuality);
 
         // Rebuild analytical light buffer params only when any light node is dirty
         // (includes sun orientation/pitch changes tracked via m_LightsDirty, and
