@@ -55,6 +55,14 @@ namespace nvfeedback
         uint32_t GetManagerIndex() const       { return m_ManagerIndex; }
         void     SetManagerIndex(uint32_t idx) { m_ManagerIndex = idx; }
 
+        // Tracks how many non-packed (standard) tiles are currently mapped for this texture.
+        // Used by FeedbackManager::BeginFrame Step 1b to skip UpdateWithSamplerFeedback for
+        // textures that have never had a standard tile allocated — avoiding the O(regularTilesNum)
+        // scan inside TTM::UpdateTiledTexture for the ~3000 textures that are still at packed-mip-only
+        // residency during the initial burst period.
+        uint32_t m_AllocatedStandardTileCount = 0;
+        bool HasAllocatedStandardTiles() const { return m_AllocatedStandardTileCount > 0; }
+
     private:
         nvrhi::TextureHandle m_ReservedTexture;
         nvrhi::SamplerFeedbackTextureHandle m_FeedbackTexture;

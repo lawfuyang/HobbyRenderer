@@ -255,6 +255,14 @@ namespace nvfeedback
                 FeedbackTexture* tex = GetTextureByIndex(texIdx);
                 if (tex->m_CachedFeedbackData.empty()) continue; // never been read back yet — skip
 
+                // Skip textures that have no standard tiles allocated yet.
+                // TTM::UpdateTiledTexture does an O(regularTilesNum) scan once any tile is
+                // allocated; for textures still at packed-mip-only residency the scan is
+                // skipped internally, but we still pay the call overhead + BitArray construction
+                // for every one of the ~3000 textures.  Checking our own O(1) counter avoids
+                // that cost entirely during the initial burst period.
+                if (!tex->HasAllocatedStandardTiles()) continue;
+
                 rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
                 samplerFeedbackDesc.pMinMipData = tex->m_CachedFeedbackData.data();
                 m_TiledTextureManager->UpdateWithSamplerFeedback(
@@ -383,6 +391,14 @@ namespace nvfeedback
                     uint32_t tilesProcessedNum = 0;
                     for (uint32_t tileIndex : tilesToUnmap)
                     {
+                        // Decrement the allocated standard tile counter so Step 1b can skip
+                        // this texture once all its standard tiles have been evicted.
+                        if (!feedbackTexture->IsTilePacked(tileIndex))
+                        {
+                            SDL_assert(feedbackTexture->m_AllocatedStandardTileCount > 0);
+                            feedbackTexture->m_AllocatedStandardTileCount--;
+                        }
+
                         nvrhi::TiledTextureCoordinate& coord = tiledTextureCoordinates[tilesProcessedNum];
                         coord.mipLevel = tileCoords[tileIndex].mipLevel;
                         coord.arrayLevel = 0;
@@ -431,6 +447,14 @@ namespace nvfeedback
 
             uint32_t tiledTextureId = texture->GetTiledTextureId();
             m_TiledTextureManager->UpdateTilesMapping(tiledTextureId, texUpdate.m_TileIndices);
+
+            // Increment the allocated standard tile counter for each non-packed tile that
+            // was just mapped.  This enables the Step 1b fast-skip path.
+            for (uint32_t tileIndex : texUpdate.m_TileIndices)
+            {
+                if (!texture->IsTilePacked(tileIndex))
+                    texture->m_AllocatedStandardTileCount++;
+            }
 
             const std::vector<rtxts::TileCoord>& tileCoords     = m_TiledTextureManager->GetTileCoordinates(tiledTextureId);
             const std::vector<rtxts::TileAllocation>& tileAllocations = m_TiledTextureManager->GetTileAllocations(tiledTextureId);
