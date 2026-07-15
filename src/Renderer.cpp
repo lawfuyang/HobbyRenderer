@@ -387,6 +387,14 @@ void Renderer::Initialize()
 
     m_CameraStateManager.Initialize();
 
+    // When entering NormalBasic, disable all RT-dependent features
+    if (m_Mode == RenderingMode::NormalBasic)
+    {
+        m_EnableRTShadows = false;
+        m_EnableReSTIRDI = false;
+        m_IndirectLightingTechnique = 0;
+    }
+
     InitStreaming();
 
     // Load scene (if configured) after all renderer resources are ready
