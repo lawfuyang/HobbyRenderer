@@ -50,6 +50,12 @@ namespace nvfeedback
         const nvrhi::PackedMipDesc& GetPackedMipInfo() const { return m_PackedMipDesc; }
         uint32_t GetTiledTextureId() const           { return m_TiledTextureId; }
 
+        // CPU-side cache of the last successfully resolved feedback data for this texture.
+        // FeedbackManager re-submits this to TTM every frame for textures that are not in
+        // the current readback batch, keeping lastRequestedTime fresh and preventing tiles
+        // from timing out between ringbuffer cycles.  Empty until the first readback.
+        std::vector<uint8_t> m_CachedFeedbackData;
+
         // User-defined index for O(1) lookup into external data structures (e.g., Scene::m_StreamingTextures)
         int  GetUserIndex() const              { return m_UserIndex; }
         void SetUserIndex(int index)           { m_UserIndex = index; }

@@ -41,12 +41,17 @@ namespace nvfeedback
     static constexpr uint32_t kHeapSizeInTiles   = 256;
     static constexpr uint32_t kFeedbackTexturesToResolvePerFrame = 10;
 
-    // Hysteresis timeout: a tile stays mapped for this many seconds after
-    // the last time sampler feedback requested it.  At 60 FPS this is ~3 frames.
-    // TTM transitions Mapped→Standby (not Free) when the timeout expires;
-    // Standby tiles are only freed when the standby queue overflows
-    // (controlled via TiledTextureManagerConfig::numExtraStandbyTiles).
-    static constexpr float kTileHysteresisSeconds = 3.0f / 60.0f;  // ~3 frames @ 60 Hz
+    // Hysteresis timeout: a tile stays mapped for this many seconds after the
+    // last time sampler feedback requested it.  TTM transitions Mapped→Standby
+    // (not Free) when the timeout expires; Standby tiles are only freed when
+    // the standby queue overflows (numExtraStandbyTiles).
+    //
+    // This value is intentionally short — it is the time after a tile genuinely
+    // disappears from the camera's view before it is evicted.  It is independent
+    // of the ringbuffer cycle time because every texture is re-submitted to TTM
+    // every frame using its cached feedback data (see m_CachedFeedbackData in
+    // FeedbackTexture), so lastRequestedTime is always kept fresh.
+    static constexpr float kTileHysteresisSeconds = 1.0f;
 
     // ─── HeapAllocator ───────────────────────────────────────────────────────
     //

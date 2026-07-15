@@ -205,6 +205,7 @@ namespace nvfeedback
 
     void FeedbackManager::BeginFrame(nvrhi::ICommandList* commandList, FeedbackTextureCollection& results)
     {
+        PROFILE_FUNCTION();
         SimpleTimer timer;
 
         m_FrameIndex = g_Renderer.m_FrameNumber % kNumFramesInFlight;
@@ -226,15 +227,26 @@ namespace nvfeedback
 
         // ── Step 1: Read back feedback from N frames ago ──
         std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[m_FrameIndex];
+        float timeStamp = static_cast<float>(GetTickCount64()) / 1000.0f;
+
+        // Build a fast lookup set of which textures are being read back this frame
+        // so we can skip them in the re-submission loop below.
+        std::unordered_set<uint32_t> readbackSet(readbackTextures.begin(), readbackTextures.end());
+
         if (!readbackTextures.empty())
         {
-            float timeStamp = static_cast<float>(GetTickCount64()) / 1000.0f;
+            PROFILE_SCOPED("Resolve feedback");
             for (uint32_t texIdx : readbackTextures)
             {
                 FeedbackTexture* readbackTexture = GetTextureByIndex(texIdx);
                 uint8_t* pReadbackData = static_cast<uint8_t*>(
                     g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
                                         nvrhi::CpuAccessMode::Read));
+
+                // Cache the fresh feedback data so we can re-submit it every frame
+                // for frames where this texture is not in the readback batch.
+                const nvrhi::BufferDesc& bufDesc = readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex)->getDesc();
+                readbackTexture->m_CachedFeedbackData.assign(pReadbackData, pReadbackData + bufDesc.byteSize);
 
                 rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
                 samplerFeedbackDesc.pMinMipData = pReadbackData;
@@ -268,10 +280,65 @@ namespace nvfeedback
             }
         }
 
+        // ── Step 1b: Re-submit cached feedback for all textures NOT in the readback batch ──
+        // TTM's timeout is measured from the last time UpdateWithSamplerFeedback was called
+        // for a texture.  With a ringbuffer of N textures and only K resolved per frame,
+        // each texture is only read back once every N/K frames.  Without re-submission,
+        // tiles for non-readback textures would time out after kTileHysteresisSeconds even
+        // though the scene is completely static.
+        // Re-submitting the cached data refreshes lastRequestedTime for all currently-mapped
+        // tiles without changing which tiles are requested, so the hysteresis timeout only
+        // fires when a tile genuinely disappears from the feedback across multiple readback cycles.
+        {
+            PROFILE_SCOPED("Re-submit cached feedback");
+
+            for (uint32_t texIdx = 0; texIdx < (uint32_t)m_Textures.size(); ++texIdx)
+            {
+                if (readbackSet.count(texIdx)) continue; // already processed above with fresh data
+
+                FeedbackTexture* tex = GetTextureByIndex(texIdx);
+                if (tex->m_CachedFeedbackData.empty()) continue; // never been read back yet — skip
+
+                PROFILE_SCOPED("UpdateWithSamplerFeedback");
+
+                rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
+                samplerFeedbackDesc.pMinMipData = tex->m_CachedFeedbackData.data();
+                m_TiledTextureManager->UpdateWithSamplerFeedback(
+                    tex->GetTiledTextureId(),
+                    samplerFeedbackDesc,
+                    timeStamp,
+                    kTileHysteresisSeconds);
+
+                // Propagate to followers
+                if (tex->IsPrimaryTexture())
+                {
+                    PROFILE_SCOPED("Match Primary Textures");
+
+                    for (FeedbackTextureSet* textureSet : tex->GetPrimaryTextureSets())
+                    {
+                        uint32_t numTextures = textureSet->GetNumTextures();
+                        uint32_t primaryIdx = textureSet->GetPrimaryTextureIndex();
+                        for (uint32_t i = 0; i < numTextures; ++i)
+                        {
+                            if (i == primaryIdx) continue;
+                            FeedbackTexture* follower = textureSet->GetTexture(i);
+                            m_TiledTextureManager->MatchPrimaryTexture(
+                                tex->GetTiledTextureId(),
+                                follower->GetTiledTextureId(),
+                                timeStamp,
+                                kTileHysteresisSeconds);
+                        }
+                    }
+                }
+            }
+    }
+
         // ── Step 2: Collect textures to read back NEXT frame ──
         // Assign to the NEXT slot so that the following frame's Step 1 reads from the
         // correct index (ResolveFeedback also decodes into this next slot).
         {
+            PROFILE_SCOPED("Collect textures to read back next frame");
+
             std::vector<uint32_t>& nextReadbackTextures = m_TexturesToReadback[(m_FrameIndex + 1) % kNumFramesInFlight];
             nextReadbackTextures.clear();
             if (!m_TexturesRingbuffer.empty())
@@ -358,56 +425,60 @@ namespace nvfeedback
         std::vector<uint32_t> tilesRequestedNew;
         std::vector<uint32_t> tilesToUnmap;
 
-        for (uint32_t texIdx = 0; texIdx < (uint32_t)m_Textures.size(); ++texIdx)
         {
-            FeedbackTexture* feedbackTexture = m_Textures.at(texIdx).get();
-            // Unmap tiles
-            m_TiledTextureManager->GetTilesToUnmap(feedbackTexture->GetTiledTextureId(), tilesToUnmap);
-            if (!tilesToUnmap.empty())
+            PROFILE_SCOPED("Collect tiles to unmap/map");
+
+            for (uint32_t texIdx = 0; texIdx < (uint32_t)m_Textures.size(); ++texIdx)
             {
-                const std::vector<rtxts::TileCoord>& tileCoords = m_TiledTextureManager->GetTileCoordinates(feedbackTexture->GetTiledTextureId());
-                uint32_t tileToUnmapNum = (uint32_t)tilesToUnmap.size();
-
-                nvrhi::TiledTextureRegion tiledTextureRegion{};
-                tiledTextureRegion.tilesNum = 1;
-
-                nvrhi::TextureTilesMapping textureTilesMapping{};
-                textureTilesMapping.numTextureRegions = tileToUnmapNum;
-                std::vector<nvrhi::TiledTextureCoordinate> tiledTextureCoordinates(tileToUnmapNum);
-                std::vector<nvrhi::TiledTextureRegion> tiledTextureRegions(tileToUnmapNum, tiledTextureRegion);
-                textureTilesMapping.tiledTextureCoordinates = tiledTextureCoordinates.data();
-                textureTilesMapping.tiledTextureRegions = tiledTextureRegions.data();
-
-                uint32_t tilesProcessedNum = 0;
-                for (uint32_t tileIndex : tilesToUnmap)
+                FeedbackTexture* feedbackTexture = m_Textures.at(texIdx).get();
+                // Unmap tiles
+                m_TiledTextureManager->GetTilesToUnmap(feedbackTexture->GetTiledTextureId(), tilesToUnmap);
+                if (!tilesToUnmap.empty())
                 {
-                    nvrhi::TiledTextureCoordinate& coord = tiledTextureCoordinates[tilesProcessedNum];
-                    coord.mipLevel = tileCoords[tileIndex].mipLevel;
-                    coord.arrayLevel = 0;
-                    coord.x = tileCoords[tileIndex].x;
-                    coord.y = tileCoords[tileIndex].y;
-                    coord.z = 0;
-                    tilesProcessedNum++;
+                    const std::vector<rtxts::TileCoord>& tileCoords = m_TiledTextureManager->GetTileCoordinates(feedbackTexture->GetTiledTextureId());
+                    uint32_t tileToUnmapNum = (uint32_t)tilesToUnmap.size();
+
+                    nvrhi::TiledTextureRegion tiledTextureRegion{};
+                    tiledTextureRegion.tilesNum = 1;
+
+                    nvrhi::TextureTilesMapping textureTilesMapping{};
+                    textureTilesMapping.numTextureRegions = tileToUnmapNum;
+                    std::vector<nvrhi::TiledTextureCoordinate> tiledTextureCoordinates(tileToUnmapNum);
+                    std::vector<nvrhi::TiledTextureRegion> tiledTextureRegions(tileToUnmapNum, tiledTextureRegion);
+                    textureTilesMapping.tiledTextureCoordinates = tiledTextureCoordinates.data();
+                    textureTilesMapping.tiledTextureRegions = tiledTextureRegions.data();
+
+                    uint32_t tilesProcessedNum = 0;
+                    for (uint32_t tileIndex : tilesToUnmap)
+                    {
+                        nvrhi::TiledTextureCoordinate& coord = tiledTextureCoordinates[tilesProcessedNum];
+                        coord.mipLevel = tileCoords[tileIndex].mipLevel;
+                        coord.arrayLevel = 0;
+                        coord.x = tileCoords[tileIndex].x;
+                        coord.y = tileCoords[tileIndex].y;
+                        coord.z = 0;
+                        tilesProcessedNum++;
+                    }
+
+                    g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(feedbackTexture->GetReservedTexture(), &textureTilesMapping, 1);
+                    m_MinMipDirtyTextures.insert(texIdx);
                 }
 
-                g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(feedbackTexture->GetReservedTexture(), &textureTilesMapping, 1);
-                m_MinMipDirtyTextures.insert(texIdx);
-            }
-
-            // Collect new tiles to stream in (skip packed mips — handled at scene load)
-            m_TiledTextureManager->GetTilesToMap(feedbackTexture->GetTiledTextureId(), tilesRequestedNew);
-            if (!tilesRequestedNew.empty())
-            {
-                FeedbackTextureUpdate update;
-                update.m_TextureIdx = texIdx;
-                for (uint32_t tileIndex : tilesRequestedNew)
+                // Collect new tiles to stream in (skip packed mips — handled at scene load)
+                m_TiledTextureManager->GetTilesToMap(feedbackTexture->GetTiledTextureId(), tilesRequestedNew);
+                if (!tilesRequestedNew.empty())
                 {
-                    if (feedbackTexture->IsTilePacked(tileIndex))
-                        continue; // packed mips are permanently mapped at scene load
-                    update.m_TileIndices.push_back(tileIndex);
+                    FeedbackTextureUpdate update;
+                    update.m_TextureIdx = texIdx;
+                    for (uint32_t tileIndex : tilesRequestedNew)
+                    {
+                        if (feedbackTexture->IsTilePacked(tileIndex))
+                            continue; // packed mips are permanently mapped at scene load
+                        update.m_TileIndices.push_back(tileIndex);
+                    }
+                    if (!update.m_TileIndices.empty())
+                        results.m_Textures.push_back(update);
                 }
-                if (!update.m_TileIndices.empty())
-                    results.m_Textures.push_back(update);
             }
         }
 
