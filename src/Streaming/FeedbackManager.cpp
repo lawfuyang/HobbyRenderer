@@ -141,10 +141,6 @@ namespace nvfeedback
         m_Textures.push_back(std::move(feedbackTexture));
         m_TexturesRingbuffer.push_back(idx);
 
-        // Mark for initial MinMip upload so the texture has valid data from the first frame,
-        // rather than reading uninitialized GPU memory.
-        m_MinMipDirtyTextures.insert(idx);
-
         return rawPtr;
     }
 
