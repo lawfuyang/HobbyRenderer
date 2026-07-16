@@ -421,7 +421,94 @@ The vertex/mesh shader outputs `SV_Position` and UV coordinates (same as the exi
 
 ---
 
-### 4.12 Shadow Mask (Screen-Space R8 Texture)
+### 4.12 Shadow Bias Strategy
+
+Shadow bias is the single most important tuning parameter for CSM quality. Too little bias → shadow acne (speckled dark spots on lit surfaces). Too much bias → Peter Panning (shadows detach from their casters).
+
+**Decision: Normal-offset bias is the sole bias strategy.** This technique, introduced by Daniel Holbert (GDC 2011, "Saying Goodbye to Shadow Acne"), pushes the sample position outward along the surface normal before transforming to light space. It is now standard in Unreal Engine's VSM and traditional CSM paths. Unlike slope-scaled depth bias, the normal offset is inherently bounded (maximum = `normalBias × texelSize`) and does not explode at grazing angles.
+
+#### 4.12.1 Implementation
+
+Applied in `ComputeCSMShadow()` in `CommonShadow.hlsli`:
+
+```hlsl
+float ComputeCSMShadow(
+    float3 worldPos, float3 worldNormal, float viewDepth,
+    Texture2DArray<float> shadowMap, SamplerComparisonState shadowSampler,
+    float4x4 shadowViewProj[4], float4 cascadeSplits,
+    float normalBias,      // Default: 3.0 texels
+    float texelSize)       // 1.0 / shadowMapResolution
+{
+    uint cascadeIndex = SelectCascade(viewDepth, cascadeSplits);
+
+    // Push sample outward along world-space normal
+    float3 offsetWorldPos = worldPos + worldNormal * normalBias * texelSize;
+    float4 lightSpacePos = mul(float4(offsetWorldPos, 1.0f), shadowViewProj[cascadeIndex]);
+    float3 shadowUV = lightSpacePos.xyz / lightSpacePos.w;
+    shadowUV.xy = shadowUV.xy * float2(0.5f, -0.5f) + 0.5f;
+
+    if (any(shadowUV.xy < 0.0f) || any(shadowUV.xy > 1.0f))
+        return 1.0f;
+
+    return Compute3x3PCF(shadowMap, shadowSampler,
+        float3(shadowUV.xy, (float)cascadeIndex), shadowUV.z, texelSize);
+}
+```
+
+**Why this works:**
+- The normal offset naturally scales per cascade — the same world-space displacement maps to proportionally more texels in distant cascades. No per-cascade bias table needed.
+- Maximum offset is bounded: `normalBias × texelSize`. No explosion at grazing angles.
+- When `N·L ≈ 1.0` (light perpendicular to surface): normal points toward light → the offset moves the sample slightly forward in light space → effectively zero bias.
+- When `N·L ≈ 0.0` (light parallel to surface): normal is orthogonal to light → maximum offset → prevents acne on steep slopes.
+
+#### 4.12.2 Default Values & Tuning
+
+| Parameter | Default | Range | When to Increase |
+|---|---|---|---|
+| **Normal Bias** | **3.0** texels | 0.5–10.0 | Speckled dark pixels on any surface type |
+
+**Tuning methodology:**
+```
+1. Start: Normal Bias = 3.0.
+2. Enable Debug Mode 6 (Depth Compare) — red=shadowed, green=lit.
+3. Red speckles in green areas → increase Normal Bias by 1.0.
+4. Shadows detached from casters (Peter Panning) → decrease Normal Bias by 0.5.
+5. Repeat until clean.
+```
+
+#### 4.12.3 Rasterizer-Level Depth Bias (Hardware)
+
+A small hardware bias is applied during shadow map rendering to prevent coplanar z-fighting:
+
+```cpp
+pipelineDesc.renderState.rasterState.depthBias            = 100;
+pipelineDesc.renderState.rasterState.slopeScaledDepthBias = 1.5f;
+pipelineDesc.renderState.rasterState.depthBiasClamp       = 0.0f;
+```
+
+This is independent of the shader-level normal-offset bias above.
+
+#### 4.12.4 Constant Buffer Layout
+
+```hlsl
+cbuffer ShadowMaskCB
+{
+    // ... view-proj matrices, cascade splits, output size ...
+    float m_NormalBias;   // Normal-offset in shadow-map texels (default: 3.0)
+    float m_Padding[3];
+};
+```
+
+#### 4.12.5 Summary
+
+| What | Where | Default |
+|---|---|---|
+| **Normal-offset bias** | `CommonShadow.hlsli` — `ComputeCSMShadow()` | **3.0** texels, always active |
+| Rasterizer bias (hardware) | PSO for shadow depth pass | 100 / 1.5 (fixed, not user-exposed) |
+
+---
+
+### 4.13 Shadow Mask (Screen-Space R8 Texture)
 
 For the NormalBasic implementation with **1 directional light**, shadows are computed via a **screen-space shadow mask** — a separate fullscreen pass that evaluates CSM and writes per-pixel visibility to an `R8_UNORM` render target. The deferred lighting shader then reads this precomputed value with a single texture load.
 
@@ -432,8 +519,10 @@ Frame:
   1. ShadowRenderer → writes CSM depth array (4 × 2048², D32_FLOAT)
   2. ShadowMaskRenderer → fullscreen compute/pixel pass:
        for each pixel:
-         - read depth from GBuffer, reconstruct world pos
+         - read depth + GBuffer normal from GBuffer
+         - reconstruct world position
          - select cascade by view-space depth
+         - apply normal-offset bias per §4.12
          - SampleCmpLevelZero() with PCF kernel (3×3 = 9 taps)
          - write shadow factor (0..1) to R8_UNORM RT
   3. DeferredRenderer → fullscreen PS:
@@ -452,6 +541,7 @@ class ShadowMaskRenderer : public IRenderer
     {
         renderGraph.ReadTexture(g_RG_CSMShadowMap);   // CSM depth array
         renderGraph.ReadTexture(g_RG_DepthTexture);   // reconstruct world pos
+        renderGraph.ReadTexture(g_RG_GBufferNormals); // for normal-offset bias
         renderGraph.WriteTexture(m_ShadowMask);       // output shadow factor
         return true;
     }
@@ -475,16 +565,21 @@ void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
         return;
     }
     
-    // Reconstruct world position
+    // Reconstruct world position + normal
     float2 uv = (float2(uvInt) + 0.5f) / g_Constants.m_OutputSize;
     float4 clipPos = float4(uv.x * 2.0f - 1.0f, (1.0f - uv.y) * 2.0f - 1.0f, depth, 1.0f);
     float4 worldPos4 = mul(clipPos, g_Constants.m_ClipToWorld);
     float3 worldPos = worldPos4.xyz / worldPos4.w;
     
-    // Cascade selection + shadow evaluation
-    float shadow = ComputeCSMShadow(worldPos, worldPosViewZ,
+    // Decode world-space normal from GBuffer (for normal-offset bias, §4.12)
+    float3 normal = DecodeNormal(g_GBufferNormals.Load(uint3(uvInt, 0)));
+    
+    // Cascade selection + shadow evaluation (bias applied internally)
+    float shadow = ComputeCSMShadow(
+        worldPos, normal, viewDepth,
         g_CSMShadowMap, g_ShadowSampler,
-        g_Constants.m_ShadowViewProj, g_Constants.m_CascadeSplits);
+        g_Constants.m_ShadowViewProj, g_Constants.m_CascadeSplits,
+        g_ShadowBias);
     
     g_RWShadowMask[uvInt] = shadow;
 }
@@ -523,17 +618,25 @@ Shadow Mask Constants CB:
 The CSM shadow evaluation logic lives in a shared HLSL header [CommonShadow.hlsli](../src/shaders/CommonShadow.hlsli) (new file), used by both `ShadowMask_CS` and any future passes that need CSM access:
 
 ```hlsl
-// In CommonShadow.hlsli (new file)
+// In CommonShadow.hlsli (new file) — shared CSM evaluation with normal-offset bias
 float ComputeCSMShadow(
     float3 worldPos,
-    float viewDepth,
+    float3 normalWS,          // world-space normal for normal-offset bias
+    float  viewDepth,
     Texture2DArray<float> shadowMap,
     SamplerComparisonState shadowSampler,
     float4x4 shadowViewProj[4],
-    float4 cascadeSplits)
+    float4   cascadeSplits,
+    float    normalBias,      // Normal-offset in shadow-map texels (default: 3.0)
+    float    texelSize)       // 1.0 / shadowMapResolution
 {
     uint cascadeIndex = SelectCascade(viewDepth, cascadeSplits);
-    float4 lightSpacePos = mul(float4(worldPos, 1.0f), shadowViewProj[cascadeIndex]);
+
+    // ── Normal-offset bias ──
+    // Push sample position along world-space normal before transforming to light space
+    float3 offsetPos = worldPos + normalWS * normalBias * texelSize;
+
+    float4 lightSpacePos = mul(float4(offsetPos, 1.0f), shadowViewProj[cascadeIndex]);
     float3 shadowUV = lightSpacePos.xyz / lightSpacePos.w;
     shadowUV.xy = shadowUV.xy * 0.5f + 0.5f;
     shadowUV.y = 1.0f - shadowUV.y;
@@ -542,19 +645,21 @@ float ComputeCSMShadow(
     if (any(shadowUV.xy < 0.0f) || any(shadowUV.xy > 1.0f))
         return 1.0f;
 
-    // 3×3 PCF
+    // ── 3×3 PCF (each tap is hardware-accelerated 4-tap bilinear comparison) ──
     float shadow = 0.0f;
-    float2 texelSize = 1.0f / 2048.0f;
+    float2 texelSize2D = 1.0f / 2048.0f;
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
             shadow += shadowMap.SampleCmpLevelZero(
                 shadowSampler,
-                float3(shadowUV.xy + float2(x, y) * texelSize, cascadeIndex),
-                shadowUV.z - SHADOW_BIAS);
+                float3(shadowUV.xy + float2(x, y) * texelSize2D, cascadeIndex),
+                shadowUV.z);
     return shadow / 9.0f;
 }
+```
 
-### 4.13 CSM Debug View Modes
+For a detailed explanation of the bias strategy, constants layout, and tuning guide, see [§4.12 Shadow Bias Strategy](#412-shadow-bias-strategy).
+### 4.14 CSM Debug View Modes
 
 Debug visualization is **critical** for CSM development. Shadow artifacts are notoriously hard to diagnose without visual feedback. All debug modes should be wired to an ImGui dropdown (`CSM Debug View` combo) and implemented **early** — ideally right after the skeleton renderer produces its first shadow map.
 
@@ -659,7 +764,7 @@ float3 color = depthSM < 0.5f
 return float4(color, 1.0f);
 ```
 
-**Diagnoses:** Shadow acne (speckled red in lit areas), Peter Panning (green gaps at contact points), depth bias calibration, false shadowing from out-of-frustum casters.
+**Diagnoses:** Shadow acne (speckled red in lit areas), Peter Panning (green gaps at contact points), normal bias calibration, false shadowing from out-of-frustum casters.
 
 ---
 
@@ -984,7 +1089,7 @@ float3 color = directDiffuse + indirectGI;
 | [ShadowRenderer.h](../src/ShadowRenderer.h) | **NEW** — CSM depth-only raster renderer per cascade |
 | [ShadowMaskRenderer.h](../src/ShadowMaskRenderer.h) | **NEW** — fullscreen compute: CSM evaluation → R8 shadow mask |
 | [CSMDebugRenderer.h](../src/CSMDebugRenderer.h) | **NEW** — CSM debug visualization overlay (8 modes) |
-| [CommonShadow.hlsli](../src/shaders/CommonShadow.hlsli) | **NEW** — shared CSM evaluation: cascade selection + PCF |
+| [CommonShadow.hlsli](../src/shaders/CommonShadow.hlsli) | **NEW** — shared CSM evaluation: cascade selection + normal-offset bias (§4.12) + 3×3 PCF |
 | [ShadowMask.hlsl](../src/shaders/ShadowMask.hlsl) | **NEW** — compute shader for R8 shadow mask |
 | [CSMDebug.hlsli](../src/shaders/CSMDebug.hlsli) | **NEW** — 8 debug visualization modes for CSM |
 
@@ -999,6 +1104,7 @@ float3 color = directDiffuse + indirectGI;
 | Shadow sampling | Shadow mask (R8_UNORM screen-space RT) | Separate pass: CSM → shadow mask compute → deferred lighting reads R8; modular, filterable, debuggable |
 | Shadow filtering | Hardware PCF (4-tap bilinear) + 3×3 PCF (default) | Free on hardware comparison samplers; 9-tap PCF for smooth edges |
 | Shadow stability | Texel snapping (quantize VP matrix) | Essential for temporal stability |
+| Shadow bias | Normal-offset bias (shader) + rasterizer-level (PSO) | Normal-offset pushes sample along surface normal; bounded max offset prevents Peter Panning; standard in Unreal VSM; see §4.12 |
 | Indirect GI | DDGI (next phase) | Baked or live probe-based GI; separate document |
 | Transparent lighting | Simplified forward (sun + DDGI indirect, no TLV) | TLV depends on ReSTIR + SHARC which are disabled |
 | TLAS | Not needed for CSM phase | CSM is pure raster; TLAS only needed later for DDGI probe rays |
