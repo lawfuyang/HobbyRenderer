@@ -6,8 +6,8 @@ The biggest win is **not raw SSD bandwidth**—it's reducing CPU overhead while 
 
 Microsoft maintains everything here:
 
-* [DirectStorage GitHub](https://github.com/microsoft/DirectStorage?utm_source=chatgpt.com)
-* [DirectStorage landing page (Microsoft)](https://devblogs.microsoft.com/directx/directstorage-api-downloads/?utm_source=chatgpt.com)
+* [DirectStorage GitHub](https://github.com/microsoft/DirectStorage)
+* [DirectStorage landing page (Microsoft)](https://devblogs.microsoft.com/directx/directstorage-api-downloads)
 
 The GitHub repo includes:
 
@@ -450,7 +450,7 @@ For a feedback-based texture streamer:
 
 The official repository should be your first stop:
 
-* [DirectStorage GitHub](https://github.com/microsoft/DirectStorage?utm_source=chatgpt.com)
+* [DirectStorage GitHub](https://github.com/microsoft/DirectStorage)
 
 Interesting samples include:
 
@@ -466,7 +466,7 @@ Interesting samples include:
 
 You're already using:
 
-* [RTXTS-TTM](https://github.com/NVIDIA-RTX/RTXTS-TTM?utm_source=chatgpt.com)
+* [RTXTS-TTM](https://github.com/NVIDIA-RTX/RTXTS-TTM)
 
 DirectStorage fits almost exactly between RTXTS's tile request generation and its residency updates.
 
