@@ -557,12 +557,12 @@ Your G-buffer formats, BRDF, material system, shadows, and post-processing can a
 
 These are some of the best implementations and learning resources:
 
-* [pezcode/Cluster (bgfx, supports DX11/DX12/Vulkan, forward + deferred + clustered)](https://git.hubp.de/pezcode/Cluster?utm_source=chatgpt.com) — One of the clearest complete implementations, with compute-based cluster generation and light culling. ([GitHub][3])
+* [pezcode/Cluster (bgfx, supports DX11/DX12/Vulkan, forward + deferred + clustered)](https://git.hubp.de/pezcode/Cluster) — One of the clearest complete implementations, with compute-based cluster generation and light culling. ([GitHub][3])
 * [Humus Clustered Shading demo](https://humus.name/index.php?ID=90&page=3D&utm_source=chatgpt.com) — Emil Persson's classic Direct3D 11 sample that demonstrates the technique and influenced many production engines. ([humus.name][2])
-* [Original clustered forward demo (Olsson et al.)](https://gitlab.com/efficient_shading/clustered_forward_demo?utm_source=chatgpt.com) — The reference implementation accompanying the SIGGRAPH 2012 work on tiled and clustered shading. ([GitLab][4])
-* [Graphics Study: Clustered Shading walkthrough](https://mmzala.github.io/blog/clustered-shading.html?utm_source=chatgpt.com) — A thorough implementation guide that walks through building clusters, culling, and shading with compute shaders. ([mmzala.github.io][1])
-* [DaveH355 clustered shading tutorial and sample](https://github.com/DaveH355/clustered-shading?utm_source=chatgpt.com) — A compact educational implementation frequently recommended by graphics programmers. ([Reddit][5])
-* [Microsoft DirectX Graphics Samples](https://github.com/microsoft/DirectX-Graphics-Samples?utm_source=chatgpt.com) — While it doesn't contain clustered lighting directly, it's an excellent reference for modern D3D12 resource management, compute pipelines, barriers, and descriptor handling you'll need for integrating clustered shading. ([GitHub][6])
+* [Original clustered forward demo (Olsson et al.)](https://gitlab.com/efficient_shading/clustered_forward_demo) — The reference implementation accompanying the SIGGRAPH 2012 work on tiled and clustered shading. ([GitLab][4])
+* [Graphics Study: Clustered Shading walkthrough](https://mmzala.github.io/blog/clustered-shading.html) — A thorough implementation guide that walks through building clusters, culling, and shading with compute shaders. ([mmzala.github.io][1])
+* [DaveH355 clustered shading tutorial and sample](https://github.com/DaveH355/clustered-shading) — A compact educational implementation frequently recommended by graphics programmers. ([Reddit][5])
+* [Microsoft DirectX Graphics Samples](https://github.com/microsoft/DirectX-Graphics-Samples) — While it doesn't contain clustered lighting directly, it's an excellent reference for modern D3D12 resource management, compute pipelines, barriers, and descriptor handling you'll need for integrating clustered shading. ([GitHub][6])
 
 If you're specifically targeting **modern D3D12**, I'd recommend implementing it in this order:
 
@@ -571,9 +571,9 @@ If you're specifically targeting **modern D3D12**, I'd recommend implementing it
 3. Modify your deferred lighting shader to fetch the cluster and iterate only its light list.
 4. Add a debug visualization that colors clusters by light count—it makes validating the implementation much easier before optimizing.
 
-[1]: https://mmzala.github.io/blog/clustered-shading.html?utm_source=chatgpt.com "Clustered Shading - Graphics Study | A Programmer’s Blog"
+[1]: https://mmzala.github.io/blog/clustered-shading.html "Clustered Shading - Graphics Study | A Programmer’s Blog"
 [2]: https://humus.name/index.php?ID=90&page=3D&utm_source=chatgpt.com "Humus - 3D"
-[3]: https://git.hubp.de/pezcode/Cluster?utm_source=chatgpt.com "GitHub - pezcode/Cluster: Clustered shading implementation with bgfx · GitHub"
-[4]: https://gitlab.com/efficient_shading/clustered_forward_demo?utm_source=chatgpt.com "efficient_shading / clustered_forward_demo · GitLab"
-[5]: https://www.reddit.com/r/opengl/comments/1bvptj6/i_wrote_a_tutorial_on_clustered_shading_a/?utm_source=chatgpt.com "I wrote a tutorial on clustered shading: a technique for rendering thousands of dynamic lights!"
-[6]: https://github.com/microsoft/DirectX-Graphics-Samples?utm_source=chatgpt.com "GitHub - microsoft/DirectX-Graphics-Samples: This repo contains the DirectX Graphics samples that demonstrate how to build graphics intensive applications on Windows. · GitHub"
+[3]: https://git.hubp.de/pezcode/Cluster "GitHub - pezcode/Cluster: Clustered shading implementation with bgfx · GitHub"
+[4]: https://gitlab.com/efficient_shading/clustered_forward_demo "efficient_shading / clustered_forward_demo · GitLab"
+[5]: https://www.reddit.com/r/opengl/comments/1bvptj6/i_wrote_a_tutorial_on_clustered_shading_a/ "I wrote a tutorial on clustered shading: a technique for rendering thousands of dynamic lights!"
+[6]: https://github.com/microsoft/DirectX-Graphics-Samples "GitHub - microsoft/DirectX-Graphics-Samples: This repo contains the DirectX Graphics samples that demonstrate how to build graphics intensive applications on Windows. · GitHub"
