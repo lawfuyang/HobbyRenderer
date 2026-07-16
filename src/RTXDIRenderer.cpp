@@ -1293,9 +1293,13 @@ public:
         const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled &&
             (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI ||
              g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC));
+        const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
+            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
 
-        // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing
-        if (bDoReSTIRGI)
+        // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing.
+        // In combined mode (RESTIR_GI_SHARC), BrdfRayTracing is skipped entirely, so
+        // this buffer is never written and can be omitted to save ~47 MB at 1080p.
+        if (bDoReSTIRGI && !bCombinedMode)
         {
             RGBufferDesc bd;
             bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(width) * height * sizeof(srrhi::SecondaryGBufferData);
@@ -1304,14 +1308,13 @@ public:
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.debugName    = "RTXDISecondaryGBuffer";
             renderGraph.DeclareBuffer(bd, m_RG_SecondaryGBuffer);
-        }
 
-        // GI reservoir buffer (persistent — 2 frames of RTXDI_PackedGIReservoir per pixel)
-        if (bDoReSTIRGI)
-        {
+            // GI reservoir buffer (persistent — 2 frames of RTXDI_PackedGIReservoir per pixel).
+            // In combined mode (RESTIR_GI_SHARC), no GI resampling passes run, so the
+            // reservoir buffer is never used and can be omitted to save ~16 MB at 1080p.
             const RTXDI_ReservoirBufferParameters giRbp = m_ReSTIRGIContext->GetReservoirBufferParameters();
             const uint64_t totalGIReservoirs = static_cast<uint64_t>(giRbp.reservoirArrayPitch) * rtxdi::c_NumReSTIRGIReservoirBuffers;
-            RGBufferDesc bd;
+            
             bd.m_NvrhiDesc.byteSize     = totalGIReservoirs * sizeof(RTXDI_PackedGIReservoir);
             bd.m_NvrhiDesc.structStride = sizeof(RTXDI_PackedGIReservoir);
             bd.m_NvrhiDesc.canHaveUAVs  = true;
@@ -1319,9 +1322,6 @@ public:
             bd.m_NvrhiDesc.debugName    = "RTXDI_GIReservoirBuffer";
             renderGraph.DeclarePersistentBuffer(bd, m_RG_GIReservoirBuffer);
         }
-
-        const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
-            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
         if (bCombinedMode)
         {
             renderGraph.ReadBuffer(g_RG_SHARCHashEntries);
@@ -1687,11 +1687,13 @@ public:
 
         nvrhi::BufferHandle  prepareLightsTaskBuf= renderGraph.GetBuffer(m_RG_PrepareLightsTasks,    RGResourceAccessMode::Write);
         nvrhi::BufferHandle  primitiveLightBuf   = renderGraph.GetBuffer(m_RG_PrimitiveLightBuffer,   RGResourceAccessMode::Write);
-        // GI buffers — resolved from render graph when GI is enabled, otherwise fall back to dummies
-        nvrhi::BufferHandle  giReservoirBuf    = bDoReSTIRGI
+        // GI buffers — resolved from render graph when GI is enabled, otherwise fall back to dummies.
+        // In combined mode (RESTIR_GI_SHARC), these buffers are not allocated (BrdfRayTracing and
+        // GI resampling are skipped), so always use dummy buffers for the binding set.
+        nvrhi::BufferHandle  giReservoirBuf    = (bDoReSTIRGI && !bCombinedMode)
             ? renderGraph.GetBuffer(m_RG_GIReservoirBuffer,  RGResourceAccessMode::Write)
             : cr.DummyUAVStructuredBuffer;
-        nvrhi::BufferHandle  secondaryGBufBuf  = bDoReSTIRGI
+        nvrhi::BufferHandle  secondaryGBufBuf  = (bDoReSTIRGI && !bCombinedMode)
             ? renderGraph.GetBuffer(m_RG_SecondaryGBuffer,   RGResourceAccessMode::Write)
             : cr.DummyUAVStructuredBuffer;
 
@@ -2182,12 +2184,19 @@ public:
         // ------------------------------------------------------------------
         if (bDoReSTIRGI)
         {
-            // 1. BrdfRayTracing — traces BRDF rays and fills the secondary GBuffer
+            if (bCombinedMode)
             {
-                PROFILE_SCOPED("GI BrdfRayTracing");
+                // ---- Combined mode: SHARC cache query replaces the full GI pipeline ----
+                // SHARC Update + Resolve already ran in SHARCRenderer (before RTXDIRenderer).
+                // This single pass traces a diffuse walk, queries the resolved cache, and
+                // writes demodulated diffuse into u_DiffuseLighting (additive with DI).
+                // NRD then denoises the combined DI + SHARC diffuse signal.
+                // BrdfRayTracing, ShadeSecondarySurfaces, GI resampling, and FinalShading
+                // are all skipped — SHARC provides the indirect GI contribution.
+                PROFILE_SCOPED("GI SharcIndirectQuery (combined mode)");
                 g_Renderer.AddComputePass({
                     .commandList    = commandList,
-                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_BRDFRAYTRACING_MAIN,
+                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_SHARCINDIRECTQUERY_SHARCINDIRECTQUERY_CSMAIN,
                     .bindingSetDesc = bset,
                     .bIncludeBindlessResources = true,
                     .dispatchParams = {
@@ -2197,82 +2206,102 @@ public:
                     }
                 });
             }
+            else
+            {
+                // ---- Pure ReSTIR GI mode: full pipeline (UNCHANGED) ----
 
-            // 2. ShadeSecondarySurfaces — shades secondary GBuffer hits and seeds GI reservoirs
-            {
-                PROFILE_SCOPED("GI ShadeSecondarySurfaces");
-                g_Renderer.AddComputePass({
-                    .commandList    = commandList,
-                    .shaderID       = useReGIR
-                        ? ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION
-                        : ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_DISABLED,
-                    .bindingSetDesc = bset,
-                    .bIncludeBindlessResources = true,
-                    .dispatchParams = {
-                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .z = 1u
-                    }
-                });
-            }
+                // 1. BrdfRayTracing — traces BRDF rays and fills the secondary GBuffer
+                {
+                    PROFILE_SCOPED("GI BrdfRayTracing");
+                    g_Renderer.AddComputePass({
+                        .commandList = commandList,
+                        .shaderID = ShaderID::RTXDI_LIGHTINGPASSES_BRDFRAYTRACING_MAIN,
+                        .bindingSetDesc = bset,
+                        .bIncludeBindlessResources = true,
+                        .dispatchParams = {
+                            .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .z = 1u
+                        }
+                        });
+                }
 
-            // 3. GI Temporal Resampling (conditional on mode)
-            const bool giHasTemporal =
-                (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Temporal ||
-                 g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
-            if (giHasTemporal)
-            {
-                PROFILE_SCOPED("GI Temporal Resampling");
-                g_Renderer.AddComputePass({
-                    .commandList    = commandList,
-                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_TEMPORALRESAMPLING_MAIN,
-                    .bindingSetDesc = bset,
-                    .bIncludeBindlessResources = true,
-                    .dispatchParams = {
-                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .z = 1u
-                    }
-                });
-            }
+                // 2. ShadeSecondarySurfaces — shades secondary GBuffer hits and seeds GI reservoirs
+                {
+                    PROFILE_SCOPED("GI ShadeSecondarySurfaces");
+                    g_Renderer.AddComputePass({
+                        .commandList = commandList,
+                        .shaderID = useReGIR
+                            ? ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_ONION
+                            : ShaderID::RTXDI_LIGHTINGPASSES_SHADESECONDARYSURFACES_MAIN_RTXDI_REGIR_MODE_RTXDI_REGIR_DISABLED,
+                        .bindingSetDesc = bset,
+                        .bIncludeBindlessResources = true,
+                        .dispatchParams = {
+                            .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .z = 1u
+                        }
+                        });
+                }
 
-            // 4. GI Spatial Resampling (conditional on mode)
-            const bool giHasSpatial =
-                (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Spatial ||
-                 g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
-            if (giHasSpatial)
-            {
-                PROFILE_SCOPED("GI Spatial Resampling");
-                g_Renderer.AddComputePass({
-                    .commandList    = commandList,
-                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_SPATIALRESAMPLING_MAIN,
-                    .bindingSetDesc = bset,
-                    .bIncludeBindlessResources = true,
-                    .dispatchParams = {
-                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .z = 1u
-                    }
-                });
-            }
+                // 3. GI Temporal Resampling (conditional on mode)
+                const bool giHasTemporal =
+                    (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Temporal ||
+                        g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
+                if (giHasTemporal)
+                {
+                    PROFILE_SCOPED("GI Temporal Resampling");
+                    g_Renderer.AddComputePass({
+                        .commandList = commandList,
+                        .shaderID = ShaderID::RTXDI_LIGHTINGPASSES_GI_TEMPORALRESAMPLING_MAIN,
+                        .bindingSetDesc = bset,
+                        .bIncludeBindlessResources = true,
+                        .dispatchParams = {
+                            .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .z = 1u
+                        }
+                        });
+                }
 
-            // 5. GI Final Shading — additively blends GI into u_DiffuseLighting / u_SpecularLighting
-            //    isLastPass=true (hardcoded in shader): writes NRD-packed signal when denoising is on
-            {
-                PROFILE_SCOPED("GI Final Shading");
-                g_Renderer.AddComputePass({
-                    .commandList    = commandList,
-                    .shaderID       = ShaderID::RTXDI_LIGHTINGPASSES_GI_FINALSHADING_MAIN,
-                    .bindingSetDesc = bset,
-                    .bIncludeBindlessResources = true,
-                    .dispatchParams = {
-                        .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                        .z = 1u
-                    }
-                });
-            }
-        }
+                // 4. GI Spatial Resampling (conditional on mode)
+                const bool giHasSpatial =
+                    (g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Spatial ||
+                        g_ReSTIRGI_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
+                if (giHasSpatial)
+                {
+                    PROFILE_SCOPED("GI Spatial Resampling");
+                    g_Renderer.AddComputePass({
+                        .commandList = commandList,
+                        .shaderID = ShaderID::RTXDI_LIGHTINGPASSES_GI_SPATIALRESAMPLING_MAIN,
+                        .bindingSetDesc = bset,
+                        .bIncludeBindlessResources = true,
+                        .dispatchParams = {
+                            .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .z = 1u
+                        }
+                        });
+                }
+
+                // 5. GI Final Shading — additively blends GI into u_DiffuseLighting / u_SpecularLighting
+                //    isLastPass=true (hardcoded in shader): writes NRD-packed signal when denoising is on
+                {
+                    PROFILE_SCOPED("GI Final Shading");
+                    g_Renderer.AddComputePass({
+                        .commandList = commandList,
+                        .shaderID = ShaderID::RTXDI_LIGHTINGPASSES_GI_FINALSHADING_MAIN,
+                        .bindingSetDesc = bset,
+                        .bIncludeBindlessResources = true,
+                        .dispatchParams = {
+                            .x = DivideAndRoundUp(dispatchWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                            .z = 1u
+                        }
+                        });
+                }
+            } // end else (pure ReSTIR GI)
+        } // end if (bDoReSTIRGI)
 
         // ------------------------------------------------------------------
         // REBLUR denoising
