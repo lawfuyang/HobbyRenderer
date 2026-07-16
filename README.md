@@ -1,7 +1,7 @@
 # HobbyRenderer
 
 A 3D rendering engine built in C++, featuring modern graphics techniques and supporting Direct3D 12 API.
-<img width="`1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
+<img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/d8f3c499-4f13-4549-8c5e-dd43b4b3b963" />
 ## Features
 
@@ -10,7 +10,7 @@ A 3D rendering engine built in C++, featuring modern graphics techniques and sup
 - **Reference Path Tracer**: Unbiased Monte Carlo path tracing with next event estimation, Russian roulette termination, and BRDF importance sampling
 - **Physically-Based Rendering (PBR)**: Full PBR material support with metallic/roughness workflow, including transmission, thickness, and Fresnel-Schlick approximation
 - **Transparency**: Forward rendering for transparent objects with transmission, IOR, spectral attenuation, and volumetric absorption
-- **HDR Rendering**: High dynamic range pipeline with histogram-based automatic exposure adaptation (EV100) and physically-based tone mapping
+- **HDR Rendering**: High dynamic range pipeline with histogram-based automatic exposure adaptation (EV100), PBR Neutral tone mapping for SDR output, and scRGB HDR display support with Reinhard rolloff for wide-gamut displays
 - **Ray-Traced Shadows**: Hardware-accelerated ray tracing for directional light shadows with inline ray queries
 - **ReSTIR DI (Direct Illumination)**: Advanced stochastic light sampling with initial sampling modes (uniform, Power-RIS, ReGIR-RIS), temporal and spatial resampling, and boiling filter for variance reduction
 - **ReSTIR GI (Global Illumination)**: Indirect lighting via RTXDI's ReSTIR GI framework with temporal & spatial resampling, final visibility rays, MIS, and additive BRDF blending
@@ -30,6 +30,7 @@ A 3D rendering engine built in C++, featuring modern graphics techniques and sup
   - **TLASPatch Synchronization**: Compute shader for updating BLAS addresses across LOD levels
   - **LOD-Aware Ray Tracing**: Automatic or manual LOD selection for ray tracing operations
 - **Bindless Textures & Samplers**: Descriptor indexing for unlimited texture and sampler access without binding changes
+- **Virtual Texture Streaming**: Sampler feedback-driven tiled resource streaming with NVIDIA RTX Tiled Texture Manager (rtxts-ttm), hysteresis-based tile eviction, asynchronous tile I/O, minmip residency tracking, and packed-mip prefetching — supports thousands of textures with on-demand streaming at scale
 - **Hierarchical Z-Buffer (HZB)**: Multi-level depth buffer for efficient occlusion culling using AMD Single Pass Downsampler (SPD) with min reduction
 - **Advanced GPU Culling**: 
   - **Phase 1**: Frustum culling combined with occlusion culling using HZB
@@ -60,14 +61,15 @@ A 3D rendering engine built in C++, featuring modern graphics techniques and sup
   - Isolated bloom debug view
   - TAA debug view (FSR3 native debug overlay)
   - SHARC cache debug overlay (heatmap)
-- **Flexible Configuration**: Runtime adjustable parameters for culling (frustum, occlusion, cone), rendering mode, meshlet toggling, LOD forcing, post-processing (auto exposure, adaptation speed, bloom, tone mapping), and lighting (sky, RT shadows)
+  - Tile residency debug overlay (texture streaming heatmap)
+- **Flexible Configuration**: Runtime adjustable parameters for culling (frustum, occlusion, cone), rendering mode, meshlet toggling, LOD forcing, texture mip forcing, post-processing (auto exposure, adaptation speed, bloom, tone mapping), and lighting (sky, RT shadows)
 - **ReSTIR DI/GI Tuning**: Advanced/standard settings panels with per-pass parameter control — initial sampling (BRDF, light, environment counts), temporal/spatial resampling thresholds, boiling filter strength, bias correction modes, and GI final visibility/MIS
 - **ReGIR Configuration**: Runtime cell size, grid build samples, sampling jitter, presampling and fallback mode selection
 - **NRD Denoising Toggle**: RELAX diffuse+specular denoising with anti-firefly filtering
-- **Scene Statistics**: Real-time display of instance counts (opaque, masked, transparent), VRAM usage, pipeline statistics, and render graph memory breakdown
+- **Scene Statistics**: Real-time display of instance counts (opaque, masked, transparent), VRAM usage (including streaming tile heaps), pipeline statistics, texture streaming residency metrics, and render graph memory breakdown
 - **Modern C++**: C++20 features with clean, maintainable architecture and automatic dependency management via CMake
 - **Shader Hot Reloading**: Runtime shader recompilation and seamless reloading without engine restart
-- **D3D12 Debug & Validation**: Configurable debug layer, GPU-based validation, and stable power state for consistent profiling results
+- **D3D12 Debug & Validation**: Configurable debug layer, GPU-based validation, stable power state for consistent profiling results, and scRGB HDR display output support
 - **Camera State Persistence**: Automatic camera state save/restore across scene loads via `CameraStateManager`
 - **Command Line Configuration**: Scene path and validation flags configurable via command line arguments
 - **Screenshot Capture**: One-click backbuffer screenshot saving at runtime
@@ -119,6 +121,8 @@ The project automatically downloads and builds the following dependencies:
 - **[stb_image](https://github.com/nothings/stb)**: Image loading
 - **[RTXDI](https://github.com/NVIDIA-RTX/RTXDI)**: ReSTIR Direct Illumination framework and light sampling utilities
 - **[NRD](https://github.com/NVIDIAGameWorks/RayTracingDenoiser)**: NVIDIA Real-time Denoiser (RELAX for diffuse + specular)
+- **[RTXGI-DDGI](https://github.com/NVIDIAGameWorks/RTXGI)**: Dynamic Diffuse Global Illumination with probe-based irradiance caching
+- **[rtxts-ttm](https://github.com/NVIDIA-RTX/rtxts-ttm)**: Tiled Texture Manager for sampler-feedback-driven virtual texture streaming
 - **[AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)**: FSR3 temporal anti-aliasing and Single Pass Downsampler (SPD)
 - **[SHARC](https://github.com/NVIDIAGameWorks/SHARC)**: Spatial Hash Radiance Cache for real-time indirect lighting
 - **[Agility SDK](https://github.com/microsoft/DirectX-Headers)**: Direct3D 12 core headers and runtime support
@@ -128,7 +132,8 @@ The project automatically downloads and builds the following dependencies:
 
 The engine supports multiple rendering modes, selectable via the ImGui UI or at runtime:
 
-- **Normal Mode**: Standard deferred rendering with real-time performance focus
+- **Normal Mode**: Standard deferred rendering with real-time performance focus, featuring ReSTIR DI/GI, SHARC indirect lighting, hardware ray-traced shadows, and full RTXDI pipeline
+- **NormalBasic Mode**: Classic rasterizer pipeline with Cascaded Shadow Maps (CSM), DDGI (RTXGI Dynamic Diffuse Global Illumination), and simplified forward transparency — zero per-pixel RT dependency for maximum compatibility
 - **IBL Mode**: Image-based lighting dominant, useful for controlled lighting conditions
 - **Reference Path Tracer**: Unbiased Monte Carlo path tracing for reference-quality rendering with progressive refinement
 
