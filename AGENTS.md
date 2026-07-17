@@ -97,3 +97,28 @@ and `build_shaderids → exe`.
 - Max line length: 140 columns
 - Prefer `std::string_view` over `const std::string&`
 - Use `const char*` for guaranteed hardcoded string inputs
+
+### Type Aliases (from `pch.h`)
+
+Use the following typedefs from `pch.h` instead of raw `DirectX::` namespace types:
+
+| Typedef | DirectX Type |
+|---|---|
+| `Vector` | `DirectX::XMVECTOR` |
+| `Matrix` | `DirectX::XMFLOAT4X4` |
+| `Vector2` | `DirectX::XMFLOAT2` |
+| `Vector3` | `DirectX::XMFLOAT3` |
+| `Vector4` | `DirectX::XMFLOAT4` |
+| `Quaternion` | `DirectX::XMFLOAT4` |
+| `Vector3A` | `DirectX::XMFLOAT3A` |
+| `Vector4A` | `DirectX::XMFLOAT4A` |
+| `Vector2U` | `DirectX::XMUINT2` |
+| `Vector2I` | `DirectX::XMINT2` |
+| `Vector3U` | `DirectX::XMUINT3` |
+| `Vector3I` | `DirectX::XMINT3` |
+| `Sphere` | `DirectX::BoundingSphere` |
+| `AABB` | `DirectX::BoundingBox` |
+| `OBB` | `DirectX::BoundingOrientedBox` |
+| `Frustum` | `DirectX::BoundingFrustum` |
+
+**Always use the typedefs.** Never write `DirectX::XMFLOAT3`, `DirectX::XMVECTOR`, etc. directly in code.
