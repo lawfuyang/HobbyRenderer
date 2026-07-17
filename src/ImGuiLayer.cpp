@@ -101,6 +101,40 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Checkbox("Enable RT Shadows", &g_Renderer.m_EnableRTShadows);
             ImGui::Checkbox("Enable Sky", &g_Renderer.m_EnableSky);
 
+            // ── CSM Settings (NormalBasic only) ─────────────────────────────
+            if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
+            {
+                ImGui::Separator();
+                if (ImGui::TreeNodeEx("CSM (Cascaded Shadow Maps)", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    ImGui::Checkbox("Enable CSM Shadows", &g_Renderer.m_EnableCSMShadows);
+
+                    if (g_Renderer.m_EnableCSMShadows)
+                    {
+                        ImGui::Separator();
+                        static const char* kCSMDebugModes[] = {
+                            "Off", "Cascade Splits", "Shadow Map Array", "Raw Shadow Mask",
+                            "PCF Footprint", "Alpha-Masked Overlay", "Depth Compare",
+                            "Frustum Wireframe", "Blend Zone"
+                        };
+                        ImGui::Combo("CSM Debug", (int*)&g_Renderer.m_CSMDebugMode,
+                            kCSMDebugModes, IM_ARRAYSIZE(kCSMDebugModes));
+                        ImGui::SliderFloat("CSM Lambda", &g_Renderer.m_CSMCascadeLambda, 0.3f, 1.0f, "%.2f");
+
+                        ImGui::SeparatorText("Shadow Bias");
+                        ImGui::SliderFloat("Normal Bias", &g_Renderer.m_CSMNormalBias, 0.5f, 10.0f, "%.1f texels");
+                        ImGui::SliderFloat("Cascade Bias Scale", &g_Renderer.m_CSMCascadeBiasScale, 0.0f, 1.0f, "%.2f");
+
+                        ImGui::SeparatorText("Quality");
+                        ImGui::Checkbox("PCSS", &g_Renderer.m_EnablePCSS);
+                        ImGui::SameLine();
+                        ImGui::Checkbox("Cascade Blend", &g_Renderer.m_EnableCascadeBlend);
+
+                    } // if (m_EnableCSMShadows)
+                    ImGui::TreePop();
+                }
+            }
+
             static const char* kDebugModes[] = {
                 "None",
                 "Instances",

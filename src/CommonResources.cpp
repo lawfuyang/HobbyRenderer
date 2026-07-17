@@ -96,6 +96,15 @@ void CommonResources::Initialize()
         desc.reductionType = nvrhi::SamplerReductionType::Maximum;
         PointMaxReductionWrap = createSampler("PointMaxReductionWrap", desc);
     }
+    {
+        // Shadow comparison sampler — linear PCF, clamp-to-border white (fully lit outside shadow map)
+        nvrhi::SamplerDesc desc;
+        desc.setAllFilters(true);
+        desc.setAllAddressModes(nvrhi::SamplerAddressMode::Border);
+        desc.borderColor = nvrhi::Color(1.0f, 1.0f, 1.0f, 1.0f);
+        desc.reductionType = nvrhi::SamplerReductionType::Comparison;
+        ShadowComparison = createSampler("ShadowComparison", desc);
+    }
 
     // Register common samplers with global sampler descriptor heap
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_CLAMP_INDEX, AnisotropicClamp);
@@ -109,6 +118,7 @@ void CommonResources::Initialize()
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX, LinearClampBorderWhite);
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX, PointMaxReductionClamp);
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_POINT_MAX_REDUCTION_WRAP_INDEX, PointMaxReductionWrap);
+    g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_SHADOW_COMPARISON_INDEX, ShadowComparison);
 
     // Initialize common raster states
     // Solid, no cull

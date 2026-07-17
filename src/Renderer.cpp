@@ -571,6 +571,8 @@ void Renderer::Run()
         // flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
         m_TaskScheduler->ScheduleTask([this]() { UpdateStreamingPreRender(); });
 
+        ComputeCSMCascadeSplits();
+        ComputeCascadeViewProj();
         ScheduleAndRunAllRenderers();
 
         // Wait for all render passes to finish recording
@@ -1022,6 +1024,148 @@ void Renderer::UploadDirtyMaterialConstants()
         "UploadDirtyMaterialConstants: dirty range was not cleared after upload");
 }
 
+void Renderer::ComputeCSMCascadeSplits()
+{
+    if (m_Mode != RenderingMode::NormalBasic || !m_EnableCSMShadows)
+        return;
+
+    const float nearZ  = m_Scene.m_Camera.GetProjection().nearZ;
+    const float farZ   = 2.0f * m_Scene.GetSceneBoundingRadius();
+    const float lambda = m_CSMCascadeLambda;
+    const uint32_t N   = m_NumCSMCascades;
+
+    m_CSMCascadeSplits[0] = nearZ;
+    for (uint32_t i = 1; i <= N; i++)
+    {
+        const float p            = (float)i / (float)N;
+        const float logSplit     = nearZ * std::pow(farZ / nearZ, p);
+        const float uniformSplit = nearZ + (farZ - nearZ) * p;
+        m_CSMCascadeSplits[i]    = lambda * logSplit + (1.0f - lambda) * uniformSplit;
+    }
+
+    for (uint32_t i = 0; i < N; i++)
+    {
+        m_CSMCascades[i].m_SplitNear = m_CSMCascadeSplits[i];
+        m_CSMCascades[i].m_SplitFar  = m_CSMCascadeSplits[i + 1];
+    }
+}
+
+void Renderer::ComputeCascadeViewProj()
+{
+    using namespace DirectX;
+
+    for (uint32_t cascadeIndex = 0; cascadeIndex < m_NumCSMCascades; cascadeIndex++)
+    {
+        const float splitNear = m_CSMCascades[cascadeIndex].m_SplitNear;
+        const float splitFar  = m_CSMCascades[cascadeIndex].m_SplitFar;
+
+        // --- 1. Extract 8 frustum corners in world space ---
+        const Matrix& invViewProj = m_Scene.m_View.m_MatClipToWorld;
+        const Matrix& proj        = m_Scene.m_View.m_MatViewToClip;
+
+        // Convert view-space split depths to NDC Z (reversed-Z: ndcZ = proj._33 + proj._43 / viewZ)
+        auto ViewDepthToNDCZ = [&](float viewZ) -> float {
+            return proj._33 + proj._43 / viewZ;
+        };
+
+        const float ndcNear = ViewDepthToNDCZ(splitNear);
+        const float ndcFar  = ViewDepthToNDCZ(splitFar);
+
+        Vector3 ndcCorners[8] = {
+            { -1.0f,  1.0f, ndcNear }, {  1.0f,  1.0f, ndcNear },
+            {  1.0f, -1.0f, ndcNear }, { -1.0f, -1.0f, ndcNear },
+            { -1.0f,  1.0f, ndcFar  }, {  1.0f,  1.0f, ndcFar  },
+            {  1.0f, -1.0f, ndcFar  }, { -1.0f, -1.0f, ndcFar  },
+        };
+
+        XMMATRIX clipToWorld = XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(&invViewProj));
+        Vector3 worldCorners[8];
+        for (int i = 0; i < 8; i++)
+        {
+            Vector  clip   = XMVectorSet(ndcCorners[i].x, ndcCorners[i].y, ndcCorners[i].z, 1.0f);
+            Vector  world4 = XMVector4Transform(clip, clipToWorld);
+            Vector4 w4;
+            XMStoreFloat4(&w4, world4);
+            worldCorners[i] = { w4.x / w4.w, w4.y / w4.w, w4.z / w4.w };
+        }
+
+        // --- 2. Build light-space view matrix ---
+        const Vector3 sunDirV3 = m_Scene.GetSunDirection();
+        Vector  sunDir      = XMVector3Normalize(XMLoadFloat3(&sunDirV3));
+        const float sceneRadius = m_Scene.GetSceneBoundingRadius();
+        Vector  lightTarget = XMVectorZero();
+        Vector  lightPos    = XMVectorScale(sunDir, 2.0f * sceneRadius);
+        Vector  up          = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+        Vector3 sunDirF;
+        XMStoreFloat3(&sunDirF, sunDir);
+        if (std::abs(sunDirF.y) > 0.99f)
+            up = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+
+        XMMATRIX lightView = XMMatrixLookAtLH(lightPos, lightTarget, up);
+
+        // --- 3. Compute AABB of frustum corners in light space ---
+        Vector3 minLS = {  FLT_MAX,  FLT_MAX,  FLT_MAX };
+        Vector3 maxLS = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+
+        for (int i = 0; i < 8; i++)
+        {
+            Vector  wc  = XMLoadFloat3(&worldCorners[i]);
+            Vector  lc  = XMVector3TransformCoord(wc, lightView);
+            Vector3 lcF;
+            XMStoreFloat3(&lcF, lc);
+
+            minLS.x = std::min(minLS.x, lcF.x);
+            minLS.y = std::min(minLS.y, lcF.y);
+            minLS.z = std::min(minLS.z, lcF.z);
+            maxLS.x = std::max(maxLS.x, lcF.x);
+            maxLS.y = std::max(maxLS.y, lcF.y);
+            maxLS.z = std::max(maxLS.z, lcF.z);
+        }
+
+        // --- 4. Expand Z to capture shadow casters behind the frustum ---
+        const float kShadowCasterEnlarge = sceneRadius;
+        minLS.z -= kShadowCasterEnlarge;
+        maxLS.z += kShadowCasterEnlarge;
+
+        // --- 5. Build orthographic projection ---
+        XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(
+            minLS.x, maxLS.x,
+            minLS.y, maxLS.y,
+            minLS.z, maxLS.z);
+
+        XMMATRIX lightViewProj = lightView * lightProj;
+
+        // --- 6. Texel snapping for temporal stability ---
+        const float shadowMapSize = (float)srrhi::CommonConsts::kShadowMapResolution;
+
+        Vector  origin       = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+        Vector  shadowOrigin = XMVector4Transform(origin, lightViewProj);
+        shadowOrigin         = XMVectorScale(shadowOrigin, shadowMapSize * 0.5f);
+
+        Vector4 soF;
+        XMStoreFloat4(&soF, shadowOrigin);
+
+        Vector4 roundOffset = {
+            (std::round(soF.x) - soF.x) * (2.0f / shadowMapSize),
+            (std::round(soF.y) - soF.y) * (2.0f / shadowMapSize),
+            0.0f, 0.0f
+        };
+
+        Matrix lightProjF;
+        XMStoreFloat4x4(&lightProjF, lightProj);
+        lightProjF._41 += roundOffset.x;
+        lightProjF._42 += roundOffset.y;
+        lightProj = XMLoadFloat4x4(&lightProjF);
+
+        lightViewProj = lightView * lightProj;
+
+        // --- 7. Store result ---
+        XMStoreFloat4x4(&m_CSMCascades[cascadeIndex].m_ViewProj, lightViewProj);
+        XMStoreFloat4x4(&m_CSMCascades[cascadeIndex].m_View,     lightView);
+    }
+}
+
 void Renderer::ScheduleAndRunAllRenderers()
 {
     PROFILE_FUNCTION();
@@ -1049,6 +1193,9 @@ void Renderer::ScheduleAndRunAllRenderers()
     extern IRenderer* g_ImGuiRenderer;
     extern IRenderer* g_PathTracerRenderer;
     extern IRenderer* g_SHARCRenderer;
+    extern IRenderer* g_ShadowRenderer;
+    extern IRenderer* g_ShadowMaskRenderer;
+    extern IRenderer* g_CSMDebugRenderer;
 
     m_RenderGraph.BeginSetup();
 
@@ -1064,6 +1211,9 @@ void Renderer::ScheduleAndRunAllRenderers()
         m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);
         m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
         m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
+        m_RenderGraph.ScheduleRenderer(g_ShadowRenderer);       // CSM depth array (4 × 2048²)
+        m_RenderGraph.ScheduleRenderer(g_ShadowMaskRenderer);   // fullscreen compute → R8 shadow mask
+        m_RenderGraph.ScheduleRenderer(g_CSMDebugRenderer);     // debug overlay (skips when mode == Off)
         m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
         m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
         m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);

@@ -124,6 +124,7 @@ srinput CommonConsts
     static const int SAMPLER_LINEAR_CLAMP_BORDER_WHITE_INDEX = 8;
     static const int SAMPLER_POINT_MAX_REDUCTION_CLAMP_INDEX = 9;
     static const int SAMPLER_POINT_MAX_REDUCTION_WRAP_INDEX = 10;
+    static const int SAMPLER_SHADOW_COMPARISON_INDEX = 11;  // Comparison linear, clamp-to-border white
 
     // Alpha modes
     static const int ALPHA_MODE_OPAQUE = 0;
@@ -138,6 +139,9 @@ srinput CommonConsts
     // Depth values (reversed-Z: near=1, far=0)
     static const float DEPTH_NEAR = 1.0f;
     static const float DEPTH_FAR = 0.0f;
+
+    // Shadow map resolution (per-cascade, square)
+    static const uint kShadowMapResolution = 2048;
 };
 
 // ---------------------------------------------------------------------------
@@ -163,4 +167,21 @@ srinput SHARCDebugMode
     static const uint SHARC_DEBUG_VOXEL_COLOR           = 1;  // Hash-based color per voxel
     static const uint SHARC_DEBUG_ACCUMULATED_RADIANCE  = 2;  // Raw SHARC output before BRDF modulation
     static const uint SHARC_DEBUG_CACHE_HEATMAP         = 3;  // Green=cache hit (found data), Red=cache miss (no data yet)
+};
+
+// ---------------------------------------------------------------------------
+// CSM debug overlay modes — passed via CSMDebugCB::m_DebugMode.
+// Off (0) skips the CSMDebugRenderer pass entirely.
+// ---------------------------------------------------------------------------
+srinput CSMDebugMode
+{
+    static const uint CSM_DEBUG_OFF             = 0;
+    static const uint CSM_DEBUG_CASCADE_SPLITS  = 1;  // Cascade color overlay blended with albedo
+    static const uint CSM_DEBUG_SHADOW_MAP_VIZ  = 2;  // 4-quad strip of linearized shadow map slices
+    static const uint CSM_DEBUG_SHADOW_MASK     = 3;  // Raw R8 shadow mask (grayscale)
+    static const uint CSM_DEBUG_PCF_FOOTPRINT   = 4;  // PCF tap positions visualized
+    static const uint CSM_DEBUG_ALPHA_MASKED    = 5;  // Alpha-masked geometry overlay
+    static const uint CSM_DEBUG_DEPTH_COMPARE   = 6;  // Red=shadowed, Green=lit
+    static const uint CSM_DEBUG_FRUSTUM_WIRE    = 7;  // Cascade frustum wireframe
+    static const uint CSM_DEBUG_BLEND_ZONE      = 8;  // Cascade blend band visualization
 };

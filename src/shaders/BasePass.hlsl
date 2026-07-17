@@ -23,13 +23,8 @@ static const StructuredBuffer<uint>                     g_Indices          = srr
 static const Texture2D<float4>                          g_OpaqueColor      = srrhi::BasePassInputs::GetOpaqueColor();
 static const StructuredBuffer<srrhi::GPULight>          g_Lights           = srrhi::BasePassInputs::GetLights();
 
-void UnpackMeshletBV(srrhi::Meshlet m, out float3 center, out float radius)
-{
-    center.x = f16tof32(m.m_CenterRadius[0] & 0xFFFF);
-    center.y = f16tof32(m.m_CenterRadius[0] >> 16);
-    center.z = f16tof32(m.m_CenterRadius[1] & 0xFFFF);
-    radius   = f16tof32(m.m_CenterRadius[1] >> 16);
-}
+
+
 
 struct VSOut
 {
@@ -92,47 +87,30 @@ void ASMain(
     uint groupIndex : SV_GroupIndex
 )
 {
-    srrhi::MeshletJob job = g_MeshletJobs[g_DrawID];
-    uint instanceIndex = job.m_InstanceIndex;
-    uint lodIndex = job.m_LODIndex;
-    uint meshletOffset = groupId.x * srrhi::CommonConsts::kThreadsPerGroup;
+    srrhi::MeshletJob      job = g_MeshletJobs[g_DrawID];
+    uint instanceIndex, lodIndex, meshletIndex, absoluteMeshletIndex;
+    srrhi::PerInstanceData inst;
+    srrhi::Meshlet         meshlet;
 
-    if (groupThreadID.x == 0)
+    AS_WritePayloadHeader(s_Payload, job.m_InstanceIndex, job.m_LODIndex, groupThreadID);
+
+    bool bVisible = AS_DecodeMeshletIndex(
+        job, g_Instances, g_MeshData, groupThreadID, groupId,
+        instanceIndex, lodIndex, meshletIndex, absoluteMeshletIndex,
+        inst, meshlet, g_Meshlets);
+
+    if (bVisible)
     {
-        s_Payload.m_InstanceIndex = instanceIndex;
-        s_Payload.m_LODIndex = lodIndex;
-    }
-
-    bool bVisible = false;
-
-    uint meshletIndex = meshletOffset + groupThreadID.x;
-    srrhi::PerInstanceData inst = g_Instances[instanceIndex];
-    srrhi::MeshData mesh = g_MeshData[inst.m_MeshDataIndex];
-
-    if (meshletIndex < mesh.m_MeshletCounts[lodIndex])
-    {
-        uint absoluteMeshletIndex = mesh.m_MeshletOffsets[lodIndex] + meshletIndex;
-        srrhi::Meshlet m = g_Meshlets[absoluteMeshletIndex];
-
         float3 meshletCenter;
-        float meshletRadius;
-        UnpackMeshletBV(m, meshletCenter, meshletRadius);
+        float  meshletRadius;
+        UnpackMeshletBV(meshlet, meshletCenter, meshletRadius);
 
-        // Transform meshlet sphere to world space, then to view space
         float4 worldCenter = MatrixMultiply(float4(meshletCenter, 1.0f), inst.m_World);
-        float3 viewCenter = MatrixMultiply(worldCenter, g_PerFrame.m_View.m_MatWorldToView).xyz;
-
-        // Approximate world-space radius using max scale from world matrix
-        float worldRadius = meshletRadius * GetMaxScale(inst.m_World);
+        float3 viewCenter  = MatrixMultiply(worldCenter, g_PerFrame.m_View.m_MatWorldToView).xyz;
+        float  worldRadius = meshletRadius * GetMaxScale(inst.m_World);
 
         if (g_PerFrame.m_EnableFrustumCulling)
-        {
             bVisible = FrustumSphereTest(viewCenter, worldRadius, g_PerFrame.m_FrustumPlanes);
-        }
-        else
-        {
-            bVisible = true;
-        }
 
         if (bVisible && g_PerFrame.m_EnableOcclusionCulling)
         {
@@ -142,7 +120,7 @@ void ASMain(
 
         if (bVisible && g_PerFrame.m_EnableConeCulling)
         {
-            uint packedCone = m.m_ConeAxisAndCutoff;
+            uint   packedCone = meshlet.m_ConeAxisAndCutoff;
             float3 coneAxis;
             coneAxis.x = (float(packedCone & 0xFF) / 255.0f) * 2.0f - 1.0f;
             coneAxis.y = (float((packedCone >> 8) & 0xFF) / 255.0f) * 2.0f - 1.0f;
@@ -151,23 +129,12 @@ void ASMain(
 
             float3 worldConeAxis = TransformNormal(coneAxis, inst.m_World);
             float3 dir = worldCenter.xyz - g_PerFrame.m_CullingCameraPos.xyz;
-            float d = length(dir);
-
-            if (dot(worldConeAxis, dir) >= coneCutoff * d + worldRadius)
-            {
+            if (dot(worldConeAxis, dir) >= coneCutoff * length(dir) + worldRadius)
                 bVisible = false;
-            }
-        }
-
-        if (bVisible)
-        {
-            uint payloadIdx = WavePrefixCountBits(bVisible);
-            s_Payload.m_MeshletIndices[payloadIdx] = absoluteMeshletIndex;
         }
     }
 
-    uint numVisible = WaveActiveCountBits(bVisible);
-    DispatchMesh(numVisible, 1, 1, s_Payload);
+    AS_CompactAndDispatch(s_Payload, bVisible, absoluteMeshletIndex);
 }
 
 [numthreads(srrhi::CommonConsts::kMaxMeshletTriangles, 1, 1)]
@@ -200,10 +167,7 @@ void MSMain(
     }
     
     if (outputIdx < m.m_TriangleCount)
-    {
-        uint packedTri = g_MeshletTriangles[m.m_TriangleOffset + outputIdx];
-        triangles[outputIdx] = uint3(packedTri & 0xFF, (packedTri >> 8) & 0xFF, (packedTri >> 16) & 0xFF);
-    }
+        triangles[outputIdx] = UnpackTriangle(g_MeshletTriangles[m.m_TriangleOffset + outputIdx]);
 }
 
 float3 HashColor(uint id)

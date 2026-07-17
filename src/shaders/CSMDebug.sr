@@ -1,0 +1,23 @@
+#include "Common.sr"
+
+cbuffer CSMDebugConstants
+{
+    float4x4 m_ShadowViewProj[4];   // Per-cascade light-space VP matrices
+    float4x4 m_ClipToView;          // Inverse projection for view-space depth reconstruction
+    float4x4 m_ClipToWorld;         // Inverse view-proj for world pos reconstruction
+    float4   m_CascadeSplits;       // View-space far depths of cascades 0-3
+    float2   m_OutputSize;          // Screen resolution (width, height)
+    uint     m_DebugMode;           // CSMDebugMode enum value
+};
+
+srinput CSMDebugInputs
+{
+    CSMDebugConstants m_CSMDebugCB;
+
+    Texture2D<float>      Depth;          // t0 — scene depth
+    Texture2D<float4>     GBufferAlbedo;  // t1 — albedo for overlay blending
+    Texture2DArray<float> CSMShadowMap;   // t2 — 4-slice CSM depth array
+    Texture2D<float>      ShadowMask;     // t3 — R8_UNORM screen-space shadow mask
+
+    SamplerState PointSampler;            // s0 — point clamp for shadow map viz
+};

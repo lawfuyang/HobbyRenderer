@@ -120,6 +120,11 @@ struct Renderer
     // is null (no-op).  Called explicitly by RenderFrame() (main loop).
     void UploadDirtyMaterialConstants();
 
+    // Computes m_CSMCascadeSplits and m_CSMCascades[i].m_SplitNear/Far for the current frame.
+    // Called once per frame before ScheduleAndRunAllRenderers() so all renderers see up-to-date splits.
+    void ComputeCSMCascadeSplits();
+    void ComputeCascadeViewProj();
+
     // Command List Management
     nvrhi::CommandListHandle AcquireCommandList(bool bImmediatelyQueue = true);
     void ExecutePendingCommandLists();
@@ -253,7 +258,7 @@ struct Renderer
     bool m_EnableOcclusionCulling = true;
 
     // Rendering mode
-    RenderingMode m_Mode = RenderingMode::Normal;
+    RenderingMode m_Mode = RenderingMode::NormalBasic;
 
     // Rendering options
     bool m_UseMeshletRendering = true;
@@ -279,6 +284,30 @@ struct Renderer
 
     // SHARC debug overlay (SHARCDebugMode enum value; 0 = off)
     uint32_t m_SHARCDebugMode = 0;
+
+    // ── CSM cascade data — written by ShadowRenderer, read by ShadowMaskRenderer / CSMDebugRenderer ──
+    struct CSMCascadeData
+    {
+        Matrix m_ViewProj;   // Light-space view-proj (texel-snapped)
+        Matrix m_View;       // Light-space view matrix (for GPU culling)
+        float  m_SplitNear;  // View-space near depth for this cascade
+        float  m_SplitFar;   // View-space far depth for this cascade
+    };
+    CSMCascadeData m_CSMCascades[4];
+    float          m_CSMCascadeSplits[5]; // [0..4] view-space split depths
+
+    // ── CSM settings (NormalBasic mode) ──────────────────────────────────────
+    bool     m_EnableCSMShadows    = true;    // Master toggle — disables all CSM passes when off
+    uint32_t m_CSMDebugMode        = 0;       // CSMDebugMode enum value; 0 = off
+    uint32_t m_NumCSMCascades      = 4;       // Fixed at 4 for now
+    float    m_CSMCascadeLambda    = 0.75f;   // λ blend factor (log vs uniform splits)
+
+    // Shadow bias — normal-offset only
+    float    m_CSMNormalBias       = 3.0f;    // Normal-offset bias in shadow-map texels
+    float    m_CSMCascadeBiasScale = 1.0f;    // Per-cascade bias scale (0=uniform, 1=proportional)
+
+    bool     m_EnablePCSS          = false;   // PCSS soft shadows (disabled by default; expensive)
+    bool     m_EnableCascadeBlend  = false;   // Blend adjacent cascades at boundaries
 
     // bloom
     float m_BloomKnee = 0.1f;

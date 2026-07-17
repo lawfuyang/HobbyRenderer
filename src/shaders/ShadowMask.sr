@@ -1,0 +1,26 @@
+#include "Common.sr"
+
+cbuffer ShadowMaskConstants
+{
+    float4x4 m_ShadowViewProj[4];   // Per-cascade light-space VP matrices (256 bytes)
+    float4x4 m_ClipToWorld;         // Inverse view-proj for world pos reconstruction (64 bytes)
+    float4x4 m_WorldToView;         // For view-space depth (cascade selection) (64 bytes)
+    float4   m_CascadeSplits;       // View-space far depths of cascades 0-3 (16 bytes)
+    float2   m_OutputSize;          // Screen resolution (width, height) (8 bytes)
+    float    m_NormalBias;          // Normal-offset bias in shadow-map texels (default: 3.0) (4 bytes)
+    uint     m_EnableCascadeBlend;  // 0 = off, 1 = blend adjacent cascades at boundaries (4 bytes)
+};
+
+srinput ShadowMaskInputs
+{
+    ShadowMaskConstants m_CB;
+
+    Texture2D<float>   Depth;           // t0 — scene depth (reversed-Z)
+    Texture2D<float2>  GBufferNormals;  // t1 — RG16_FLOAT octahedral-encoded world normals
+    Texture2DArray<float> CSMShadowMap; // t2 — 4-slice D32_FLOAT shadow map array
+
+    RWTexture2D<float> RWShadowMask;    // u0 — R8_UNORM output shadow mask
+
+    SamplerComparisonState ShadowSampler; // s0 — comparison linear, clamp-to-border white
+    SamplerState           PointSampler;  // s1 — point clamp (PCSS blocker search)
+};

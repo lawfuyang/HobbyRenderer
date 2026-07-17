@@ -38,4 +38,5 @@ srinput DeferredLightingInputs
     StructuredBuffer<MeshData> MeshData;                  // t12
     StructuredBuffer<uint> Indices;                       // t13
     Texture2D<float4> SHARCIndirect;                      // t14
+    Texture2D<float>  ShadowMask;                         // t15 — R8_UNORM screen-space shadow mask (NormalBasic only; white = fully lit in other modes)
 };

@@ -12,6 +12,7 @@ extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_RTXDIDIComposited;   // CompositingPass output — final DI + emissive composite
 extern RGTextureHandle g_RG_SHARCIndirect;       // SHARCQuery output — screen-space indirect radiance
+extern RGTextureHandle g_RG_ShadowMask;          // ShadowMaskRenderer output — R8_UNORM screen-space shadow mask (NormalBasic only)
 
 
 
@@ -20,8 +21,6 @@ class DeferredRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        
-
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.ReadTexture(g_RG_GBufferAlbedo);
         renderGraph.ReadTexture(g_RG_GBufferNormals);
@@ -38,6 +37,10 @@ public:
         // Conditionally read the SHARC indirect output when SHARC is the selected technique
         if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
             renderGraph.ReadTexture(g_RG_SHARCIndirect);
+
+        // Conditionally read the CSM shadow mask in NormalBasic mode
+        if (g_Renderer.m_Mode == RenderingMode::NormalBasic && g_Renderer.m_EnableCSMShadows)
+            renderGraph.ReadTexture(g_RG_ShadowMask);
 
         return true;
     }
@@ -72,7 +75,8 @@ public:
         dcb.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
         dcb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
         dcb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
-        dcb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
+        // Disable RT shadows in NormalBasic — shadows come from the CSM shadow mask instead
+        dcb.SetEnableRTShadows((g_Renderer.m_Mode != RenderingMode::NormalBasic) && g_Renderer.m_EnableRTShadows ? 1 : 0);
         dcb.SetDebugMode(g_Renderer.m_DebugMode);
         dcb.SetUseReSTIRDI(g_Renderer.m_EnableReSTIRDI ? 1u : 0u);
         dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
@@ -107,6 +111,14 @@ public:
         dlInputs.SetIndices(g_Renderer.m_Scene.m_IndexBuffer);
         dlInputs.SetRTXDIDIComposited(rtxdiComposited);
         dlInputs.SetSHARCIndirect(sharcIndirect);
+
+        // t15: CSM shadow mask (R8_UNORM; white = fully lit fallback when not in NormalBasic)
+        nvrhi::TextureHandle shadowMask =
+            (g_Renderer.m_Mode == RenderingMode::NormalBasic && g_Renderer.m_EnableCSMShadows)
+            ? renderGraph.GetTexture(g_RG_ShadowMask, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DefaultTextureWhite;
+        dlInputs.SetShadowMask(shadowMask);
+
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(dlInputs);
 
         nvrhi::FramebufferDesc fbDesc;

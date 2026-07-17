@@ -1,0 +1,23 @@
+#include "Common.sr"
+#include "Instance.sr"
+#include "Mesh.sr"
+
+cbuffer ShadowDepthConstants
+{
+    float4x4 m_ShadowViewProj;   // Current cascade light-space view-proj matrix
+    uint     m_CascadeIndex;     // Which cascade slice to write (0-3)
+};
+
+srinput ShadowDepthInputs
+{
+    ShadowDepthConstants m_ShadowDepthCB;
+
+    StructuredBuffer<PerInstanceData>  Instances;         // t0
+    StructuredBuffer<MaterialConstants> Materials;        // t1
+    StructuredBuffer<VertexQuantized>  Vertices;          // t2
+    StructuredBuffer<Meshlet>          Meshlets;          // t3
+    StructuredBuffer<uint>             MeshletVertices;   // t4
+    StructuredBuffer<uint>             MeshletTriangles;  // t5
+    StructuredBuffer<MeshletJob>       MeshletJobs;       // t6
+    StructuredBuffer<MeshData>         MeshData;          // t7
+};

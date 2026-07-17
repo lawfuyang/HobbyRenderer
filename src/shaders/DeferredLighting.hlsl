@@ -24,6 +24,7 @@ static const StructuredBuffer<uint>                     g_Indices            = s
 static const StructuredBuffer<srrhi::GPULight>          g_Lights             = srrhi::DeferredLightingInputs::GetLights();
 static const Texture2D<float4>                          g_RTXDIDIComposited  = srrhi::DeferredLightingInputs::GetRTXDIDIComposited();
 static const Texture2D<float4>                          g_SHARCIndirect      = srrhi::DeferredLightingInputs::GetSHARCIndirect();
+static const Texture2D<float>                           g_ShadowMask         = srrhi::DeferredLightingInputs::GetShadowMask();
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -100,7 +101,16 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
             {
                 // Use solar_irradiance * transmittance as the direct sun radiance at surface
                 lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity);
-                lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+
+                if (g_Deferred.m_RenderingMode == srrhi::CommonConsts::RENDERING_MODE_NORMAL_BASIC)
+                {
+                    // NormalBasic: shadow precomputed by ShadowMaskRenderer — single R8 load, no RT query
+                    lightingInputs.sunShadow = g_ShadowMask.Load(uint3(uvInt, 0));
+                }
+                else
+                {
+                    lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+                }
                 lightingInputs.useSunRadiance = true;
             }
 
