@@ -40,7 +40,7 @@ public:
         shadowMapDesc.m_NvrhiDesc.debugName  = "CSMShadowMap_RG";
         shadowMapDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::DepthWrite;
         shadowMapDesc.m_NvrhiDesc.keepInitialState = true;
-        shadowMapDesc.m_NvrhiDesc.setClearValue(nvrhi::Color{ Renderer::DEPTH_FAR, 0.0f, 0.0f, 0.0f });
+        shadowMapDesc.m_NvrhiDesc.setClearValue(nvrhi::Color{ 1.0f, 0.0f, 0.0f, 0.0f }); // standard depth: far=1.0
         renderGraph.DeclareTexture(shadowMapDesc, g_RG_CSMShadowMap);
 
         // Declare GPU culling buffers for opaque and masked buckets
@@ -54,6 +54,8 @@ public:
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         nvrhi::TextureHandle shadowMap = renderGraph.GetTexture(g_RG_CSMShadowMap, RGResourceAccessMode::Write);
+
+        commandList->clearDepthStencilTexture(shadowMap, nvrhi::AllSubresources, true, 1.0f, false, 0); // standard depth: clear to far
 
         // Resolve RG buffer handles once for both buckets — reused across all cascade iterations
         BucketHandles opaque = ResolveWrite(renderGraph, m_OpaqueResources);
@@ -113,33 +115,18 @@ private:
         cb.SetCascadeIndex(cascadeIndex);
         commandList->writeBuffer(shadowDepthCB, &cb, sizeof(cb), 0);
 
-        // Compute view-space frustum planes from the light projection matrix.
-        // Matches BasePass ComputeFrustumPlanes convention: planes are in light view space,
-        // so GPU culling can transform sphere centers with the light view matrix and test correctly.
+        // Compute axis-aligned frustum planes in light view space from the cascade AABB.
+        // These planes have inward-facing normals, matching FrustumSphereTest convention.
         using namespace DirectX;
-        const Matrix& lightProjF = g_Renderer.m_CSMCascades[cascadeIndex].m_ViewProj; // reuse stored VP temporarily
-        // Derive the light projection matrix: VP = V * P, so P = V^-1 * VP.
-        // Simpler: re-derive planes directly from the stored VP and V.
-        // Extract the ortho projection parameters from the VP and V matrices.
-        // For an ortho projection: P00 = 2/(r-l), P11 = 2/(t-b), nearZ = -minZ*P22+P32
-        // Instead, use the same formula as BasePass: planes from projection matrix columns.
-        // We stored m_View per cascade — extract the light projection matrix as P = V^-1 * VP.
-        XMMATRIX lightV  = XMLoadFloat4x4(&g_Renderer.m_CSMCascades[cascadeIndex].m_View);
-        XMMATRIX lightVP = XMLoadFloat4x4(&g_Renderer.m_CSMCascades[cascadeIndex].m_ViewProj);
-        XMMATRIX lightP  = XMMatrixMultiply(XMMatrixInverse(nullptr, lightV), lightVP);
-        Matrix lightProjOnly;
-        XMStoreFloat4x4(&lightProjOnly, lightP);
+        const Vector3& aabbMin = g_Renderer.m_CSMCascades[cascadeIndex].m_LightAABBMin;
+        const Vector3& aabbMax = g_Renderer.m_CSMCascades[cascadeIndex].m_LightAABBMax;
 
-        // View-space frustum planes from the ortho projection matrix (same as BasePass)
-        const float xScale = std::abs(lightProjOnly._11);
-        const float yScale = std::abs(lightProjOnly._22);
-        const float nearZ  = lightProjOnly._43;
         Vector4 frustumPlanes[5];
-        XMStoreFloat4(&frustumPlanes[0], XMPlaneNormalize(XMVectorSet(-1.0f,  0.0f, 1.0f / xScale, 0.0f))); // Left
-        XMStoreFloat4(&frustumPlanes[1], XMPlaneNormalize(XMVectorSet( 1.0f,  0.0f, 1.0f / xScale, 0.0f))); // Right
-        XMStoreFloat4(&frustumPlanes[2], XMPlaneNormalize(XMVectorSet( 0.0f, -1.0f, 1.0f / yScale, 0.0f))); // Bottom
-        XMStoreFloat4(&frustumPlanes[3], XMPlaneNormalize(XMVectorSet( 0.0f,  1.0f, 1.0f / yScale, 0.0f))); // Top
-        XMStoreFloat4(&frustumPlanes[4], XMPlaneNormalize(XMVectorSet( 0.0f,  0.0f, 1.0f,          nearZ))); // Near
+        XMStoreFloat4(&frustumPlanes[0], XMVectorSet( 1.0f,  0.0f,  0.0f, -aabbMin.x)); // Left:  x >= min
+        XMStoreFloat4(&frustumPlanes[1], XMVectorSet(-1.0f,  0.0f,  0.0f,  aabbMax.x)); // Right: x <= max
+        XMStoreFloat4(&frustumPlanes[2], XMVectorSet( 0.0f,  1.0f,  0.0f, -aabbMin.y)); // Bottom: y >= min
+        XMStoreFloat4(&frustumPlanes[3], XMVectorSet( 0.0f, -1.0f,  0.0f,  aabbMax.y)); // Top: y <= max
+        XMStoreFloat4(&frustumPlanes[4], XMVectorSet( 0.0f,  0.0f,  1.0f, -aabbMin.z)); // Near: z >= min
 
         // Cull and draw both buckets
         CullAndDraw(cascadeIndex, commandList, shadowMap, shadowDepthCB, frustumPlanes, opaque, /*bAlphaTest=*/false);
@@ -275,11 +262,11 @@ private:
         const nvrhi::BindingLayoutHandle layout = g_Renderer.GetOrCreateBindingLayoutFromBindingSetDesc(bset);
         const nvrhi::BindingSetHandle bindingSet = device->createBindingSet(bset, layout);
 
-        // Pipeline state — depth-only, reversed-Z, back-face cull
+        // Pipeline state — depth-only, standard depth, back-face cull
         nvrhi::RenderState renderState;
         renderState.rasterState       = CommonResources::GetInstance().RasterCullBack;
         renderState.depthStencilState = CommonResources::GetInstance().DepthReadWrite;
-        renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::GreaterOrEqual; // reversed-Z
+        renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::LessOrEqual; // standard depth: keep closest
 
         const uint32_t msID = bAlphaTest
             ? ShaderID::SHADOWDEPTH_SHADOWDEPTH_MSMAIN_ALPHATEST_SHADOW_ALPHA_TEST_1

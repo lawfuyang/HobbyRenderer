@@ -569,7 +569,10 @@ void Renderer::Run()
 
         // Update texture streaming -> pre-render phase:
         // flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
-        m_TaskScheduler->ScheduleTask([this]() { UpdateStreamingPreRender(); });
+        {
+            nvrhi::CommandListHandle cmd = AcquireCommandList();
+            m_TaskScheduler->ScheduleTask([this, cmd]() { UpdateStreamingPreRender(cmd); });
+        }
 
         ComputeCSMCascadeSplits();
         ComputeCascadeViewProj();
@@ -730,7 +733,7 @@ void Renderer::ShutdownStreaming()
     SDL_Log("[Streaming] Shutdown complete.");
 }
 
-void Renderer::UpdateStreamingPreRender()
+void Renderer::UpdateStreamingPreRender(nvrhi::CommandListHandle cmd)
 {
     PROFILE_FUNCTION();
 
@@ -751,7 +754,6 @@ void Renderer::UpdateStreamingPreRender()
 
     {
         PROFILE_SCOPED("Streaming TileFlush+UpdateMappings+BeginFrame");
-        nvrhi::CommandListHandle cmd = AcquireCommandList();
         ScopedCommandList scopedCmd{ cmd, "Streaming TileFlush+UpdateMappings+BeginFrame" };
 
         // Phase 1: Flush completed async tile uploads from previous frame.
@@ -1128,7 +1130,8 @@ void Renderer::ComputeCascadeViewProj()
         minLS.z -= kShadowCasterEnlarge;
         maxLS.z += kShadowCasterEnlarge;
 
-        // --- 5. Build orthographic projection ---
+        // --- 5. Build standard orthographic projection ---
+        // Standard depth: near maps to 0.0, far maps to 1.0.
         XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(
             minLS.x, maxLS.x,
             minLS.y, maxLS.y,
@@ -1152,6 +1155,7 @@ void Renderer::ComputeCascadeViewProj()
             0.0f, 0.0f
         };
 
+        // Re-read lightProjF in case lightProj was modified by texel snapping above
         Matrix lightProjF;
         XMStoreFloat4x4(&lightProjF, lightProj);
         lightProjF._41 += roundOffset.x;
@@ -1163,6 +1167,8 @@ void Renderer::ComputeCascadeViewProj()
         // --- 7. Store result ---
         XMStoreFloat4x4(&m_CSMCascades[cascadeIndex].m_ViewProj, lightViewProj);
         XMStoreFloat4x4(&m_CSMCascades[cascadeIndex].m_View,     lightView);
+        m_CSMCascades[cascadeIndex].m_LightAABBMin = minLS;
+        m_CSMCascades[cascadeIndex].m_LightAABBMax = maxLS;
     }
 }
 

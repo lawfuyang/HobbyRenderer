@@ -97,7 +97,8 @@ void CommonResources::Initialize()
         PointMaxReductionWrap = createSampler("PointMaxReductionWrap", desc);
     }
     {
-        // Shadow comparison sampler — linear PCF, clamp-to-border white (fully lit outside shadow map)
+        // Shadow comparison sampler — linear PCF, clamp-to-border white (fully lit outside shadow map).
+        // Standard depth (near=0, far=1): LESS comparison means compareDepth < shadowMapDepth → lit.
         nvrhi::SamplerDesc desc;
         desc.setAllFilters(true);
         desc.setAllAddressModes(nvrhi::SamplerAddressMode::Border);

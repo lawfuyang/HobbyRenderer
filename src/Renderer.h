@@ -288,10 +288,12 @@ struct Renderer
     // ── CSM cascade data — written by ShadowRenderer, read by ShadowMaskRenderer / CSMDebugRenderer ──
     struct CSMCascadeData
     {
-        Matrix m_ViewProj;   // Light-space view-proj (texel-snapped)
-        Matrix m_View;       // Light-space view matrix (for GPU culling)
-        float  m_SplitNear;  // View-space near depth for this cascade
-        float  m_SplitFar;   // View-space far depth for this cascade
+        Matrix  m_ViewProj;   // Light-space view-proj (texel-snapped, reversed-Z ortho)
+        Matrix  m_View;       // Light-space view matrix (for GPU culling)
+        float   m_SplitNear;  // View-space near depth for this cascade
+        float   m_SplitFar;   // View-space far depth for this cascade
+        Vector3 m_LightAABBMin; // Light-view-space AABB min (for frustum planes)
+        Vector3 m_LightAABBMax; // Light-view-space AABB max (for frustum planes)
     };
     CSMCascadeData m_CSMCascades[4];
     float          m_CSMCascadeSplits[5]; // [0..4] view-space split depths
@@ -353,7 +355,7 @@ struct Renderer
     void ShutdownStreaming();
     // Pre-render streaming update: flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
     // Call BEFORE ScheduleAndRunAllRenderers().
-    void UpdateStreamingPreRender();
+    void UpdateStreamingPreRender(nvrhi::CommandListHandle cmd);
     // Post-render streaming update: ResolveFeedback + EndFrame.
     // Call AFTER ScheduleAndRunAllRenderers() so the GBuffer pass has written sampler feedback.
     void UpdateStreamingPostRender();

@@ -5,9 +5,9 @@
 // Pushes the sample position outward along the surface normal before transforming to light space.
 // This "thickens" the receiver uniformly in world space and is bounded at all angles.
 //
-// Reversed-Z convention: DEPTH_NEAR = 1.0, DEPTH_FAR = 0.0
-//   - Shadow map depth comparison: GreaterOrEqual
-//   - Sky/background: depth == 0.0
+// Standard depth convention: near = 0.0, far = 1.0
+//   - Shadow map depth comparison: Less (hardware default)
+//   - Sky/background: depth == 1.0 (far clear value)
 
 #ifndef COMMON_SHADOW_HLSLI
 #define COMMON_SHADOW_HLSLI
@@ -79,11 +79,12 @@ static const float SHADOW_NEAR_PLANE = 0.1f;
 // texels that are in front of the receiver (potential blockers), or -1 if none.
 //
 // Reversed-Z: a texel is a blocker when sampleDepth < receiverDepth
-// (closer to light = larger depth value in reversed-Z, so blocker < receiver).
+// (closer to light = smaller depth value in standard depth).
 float BlockerSearch(
     Texture2DArray<float> shadowMap,
     SamplerState          pointSampler,  // non-comparison point sampler
-    float3                shadowUV,      // .xy = UV, .z = array slice; .z also used as receiver depth
+    float3                shadowUV,      // .xy = UV, .z = array slice
+    float                 receiverDepth, // receiver depth in light-space NDC
     float                 searchRadius,  // in texels
     float                 texelSize)     // 1.0 / shadowMapResolution
 {
@@ -99,8 +100,8 @@ float BlockerSearch(
             float3(shadowUV.xy + offset, shadowUV.z),
             0).r;
 
-        // Reversed-Z: blocker is closer to the light → smaller depth value
-        if (sampleDepth < shadowUV.z)
+        // Standard depth: blocker is closer to the light → smaller depth value
+        if (sampleDepth < receiverDepth)
         {
             blockerSum += sampleDepth;
             ++blockerCount;
@@ -115,9 +116,10 @@ float BlockerSearch(
 float VariableKernelPCF(
     Texture2DArray<float>  shadowMap,
     SamplerComparisonState shadowSampler,
-    float3                 shadowUV,       // .xy = UV, .z = compare depth
-    float                  penumbraWidth,  // in texels
-    float                  texelSize)      // 1.0 / shadowMapResolution
+    float3                 shadowUV,      // .xy = UV, .z = array slice
+    float                  compareDepth,  // depth to compare (bias already applied)
+    float                  penumbraWidth, // in texels
+    float                  texelSize)     // 1.0 / shadowMapResolution
 {
     float shadow = 0.0f;
 
@@ -128,7 +130,7 @@ float VariableKernelPCF(
         shadow += shadowMap.SampleCmpLevelZero(
             shadowSampler,
             float3(shadowUV.xy + offset, shadowUV.z),
-            shadowUV.z);
+            compareDepth);
     }
 
     return shadow / 16.0f;
@@ -140,22 +142,23 @@ float ComputePCSSShadow(
     Texture2DArray<float>  shadowMap,
     SamplerState           pointSampler,
     SamplerComparisonState shadowSampler,
-    float3                 shadowUV,   // .xy = UV, .z = compare depth (bias already applied)
-    float                  texelSize)  // 1.0 / shadowMapResolution
+    float3                 shadowUV,      // .xy = UV, .z = array slice
+    float                  compareDepth,  // receiver depth in light-space NDC
+    float                  texelSize)     // 1.0 / shadowMapResolution
 {
     // 1. Blocker search — radius scales with light size and receiver distance
-    float searchRadius    = LIGHT_SIZE_UV * (shadowUV.z - SHADOW_NEAR_PLANE) / max(shadowUV.z, 1e-5f);
-    float avgBlockerDepth = BlockerSearch(shadowMap, pointSampler, shadowUV, searchRadius, texelSize);
+    float searchRadius    = LIGHT_SIZE_UV * (compareDepth - SHADOW_NEAR_PLANE) / max(compareDepth, 1e-5f);
+    float avgBlockerDepth = BlockerSearch(shadowMap, pointSampler, shadowUV, compareDepth, searchRadius, texelSize);
 
     // No blockers found → fully lit
     if (avgBlockerDepth < 0.0f)
         return 1.0f;
 
     // 2. Penumbra estimation (in texels)
-    float penumbraWidth = (shadowUV.z - avgBlockerDepth) * LIGHT_SIZE_UV / max(avgBlockerDepth, 1e-5f);
+    float penumbraWidth = (compareDepth - avgBlockerDepth) * LIGHT_SIZE_UV / max(avgBlockerDepth, 1e-5f);
 
     // 3. Variable-width PCF
-    return VariableKernelPCF(shadowMap, shadowSampler, shadowUV, penumbraWidth, texelSize);
+    return VariableKernelPCF(shadowMap, shadowSampler, shadowUV, compareDepth, penumbraWidth, texelSize);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +208,8 @@ float ComputeCSMShadow(
 #if PCSS
     float shadow = ComputePCSSShadow(
         shadowMap, pointSampler, shadowSampler,
-        float3(shadowUV.xy, (float)cascadeIndex), texelSize);
+        float3(shadowUV.xy, (float)cascadeIndex),
+        compareDepth, texelSize);
 #else
     float shadow = Compute3x3PCF(
         shadowMap, shadowSampler,
@@ -234,7 +238,8 @@ float ComputeCSMShadow(
 #if PCSS
                 float shadow1 = ComputePCSSShadow(
                     shadowMap, pointSampler, shadowSampler,
-                    float3(uv1.xy, (float)(cascadeIndex + 1u)), texelSize);
+                    float3(uv1.xy, (float)(cascadeIndex + 1u)),
+                    uv1.z, texelSize);
 #else
                 float shadow1 = Compute3x3PCF(
                     shadowMap, shadowSampler,
