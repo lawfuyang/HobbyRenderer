@@ -122,7 +122,7 @@ void ImGuiLayer::UpdateFrame()
                         ImGui::SliderFloat("CSM Lambda", &g_Renderer.m_CSMCascadeLambda, 0.3f, 1.0f, "%.2f");
 
                         ImGui::SeparatorText("Shadow Bias");
-                        ImGui::SliderFloat("Normal Bias", &g_Renderer.m_CSMNormalBias, 0.5f, 10.0f, "%.1f texels");
+                        ImGui::SliderFloat("Normal Bias", &g_Renderer.m_CSMNormalBias, 0.5f, 50.0f, "%.1f texels");
                         ImGui::SliderFloat("Cascade Bias Scale", &g_Renderer.m_CSMCascadeBiasScale, 0.0f, 1.0f, "%.2f");
 
                         ImGui::SeparatorText("Quality");

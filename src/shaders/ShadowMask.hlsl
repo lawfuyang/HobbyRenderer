@@ -40,10 +40,10 @@ void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
     float2 encodedNormal = g_GBufferNormals.Load(uint3(uvInt, 0)).rg;
     float3 worldNormal = DecodeNormal(encodedNormal);
 
-    // Reconstruct view-space depth for cascade selection
-    // View space: camera looks down -Z, so negate the Z component
+    // Reconstruct view-space depth for cascade selection.
+    // Camera uses XMMatrixLookToLH: +Z = forward in view space.
     float4 viewPos4 = mul(float4(worldPos, 1.0f), g_CB.m_WorldToView);
-    float viewDepth = -viewPos4.z;
+    float viewDepth = viewPos4.z;
 
     float texelSize = 1.0f / (float)srrhi::CommonConsts::kShadowMapResolution;
 

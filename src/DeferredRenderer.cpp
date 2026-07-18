@@ -39,7 +39,7 @@ public:
             renderGraph.ReadTexture(g_RG_SHARCIndirect);
 
         // Conditionally read the CSM shadow mask in NormalBasic mode
-        if (g_Renderer.m_Mode == RenderingMode::NormalBasic && g_Renderer.m_EnableCSMShadows)
+        if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
             renderGraph.ReadTexture(g_RG_ShadowMask);
 
         return true;
@@ -114,7 +114,7 @@ public:
 
         // t15: CSM shadow mask (R8_UNORM; white = fully lit fallback when not in NormalBasic)
         nvrhi::TextureHandle shadowMask =
-            (g_Renderer.m_Mode == RenderingMode::NormalBasic && g_Renderer.m_EnableCSMShadows)
+            (g_Renderer.m_Mode == RenderingMode::NormalBasic)
             ? renderGraph.GetTexture(g_RG_ShadowMask, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureWhite;
         dlInputs.SetShadowMask(shadowMask);

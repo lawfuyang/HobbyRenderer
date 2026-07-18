@@ -12,6 +12,8 @@
 #ifndef COMMON_SHADOW_HLSLI
 #define COMMON_SHADOW_HLSLI
 
+#include "srrhi/hlsl/Common.hlsli"
+
 // ---------------------------------------------------------------------------
 // Cascade selection
 // ---------------------------------------------------------------------------
@@ -166,9 +168,8 @@ float ComputePCSSShadow(
 // ---------------------------------------------------------------------------
 // Cascade selection + normal-offset bias + 3x3 PCF (or PCSS when PCSS=1).
 //
-// normalBias: offset in shadow-map texels (default 3.0). Automatically scales
-//             per cascade since the same world-space displacement maps to
-//             proportionally more texels in distant cascades.
+// normalBias: offset in shadow-map texels (default 3.0). Multiplied by the
+//             per-cascade world-space texel size derived from the shadow VP matrix.
 //
 // When CASCADE_BLEND=1, pixels near a cascade boundary are blended between
 // the current and next cascade to eliminate hard seams.
@@ -189,9 +190,13 @@ float ComputeCSMShadow(
     uint cascadeIndex = SelectCascade(viewDepth, cascadeSplits);
 
     // Normal-offset bias: push sample position outward along world-space normal
-    // before transforming to light space. Offset is in shadow-map texels —
-    // automatically adapts to cascade resolution.
-    float3 offsetWorldPos = worldPos + worldNormal * normalBias * texelSize;
+    // before transforming to light space.
+    // Compute world-space texel size from the ortho shadow VP matrix:
+    // VP row 0 magnitude = 2 / worldWidth, and 1 texel = 2 / resolution in clip space.
+    // => worldTexelSize = worldWidth / resolution = 2 / (resolution * |VP_row0|)
+    float3 vpRow0 = float3(shadowViewProj[cascadeIndex]._11, shadowViewProj[cascadeIndex]._21, shadowViewProj[cascadeIndex]._31);
+    float   worldTexelSize = 2.0f / (srrhi::CommonConsts::kShadowMapResolution * max(length(vpRow0), 1e-10f));
+    float3  offsetWorldPos = worldPos + worldNormal * normalBias * worldTexelSize;
 
     float4 lightSpacePos = mul(float4(offsetWorldPos, 1.0f), shadowViewProj[cascadeIndex]);
     float3 shadowUV      = lightSpacePos.xyz / lightSpacePos.w;

@@ -47,7 +47,6 @@ public:
         m_OpaqueResources.DeclareResources(renderGraph, "Shadow_Opaque");
         m_MaskedResources.DeclareResources(renderGraph, "Shadow_Masked");
 
-        renderGraph.WriteTexture(g_RG_CSMShadowMap);
         return true;
     }
 

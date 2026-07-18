@@ -19,7 +19,7 @@ class ShadowMaskRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        if (g_Renderer.m_Mode != RenderingMode::NormalBasic || !g_Renderer.m_EnableCSMShadows)
+        if (g_Renderer.m_Mode != RenderingMode::NormalBasic)
             return false;
 
         // Declare the R8_UNORM shadow mask at screen resolution
@@ -35,10 +35,15 @@ public:
         maskDesc.m_NvrhiDesc.keepInitialState = true;
         renderGraph.DeclareTexture(maskDesc, g_RG_ShadowMask);
 
+        // if CSM shadows are disabled, we will only clear the shadow mask to white (fully lit) in Render(), so no need to read any other resources
+        if (!g_Renderer.m_EnableCSMShadows)
+        {
+            return true;
+        }
+
         renderGraph.ReadTexture(g_RG_CSMShadowMap);
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.ReadTexture(g_RG_GBufferNormals);
-        renderGraph.WriteTexture(g_RG_ShadowMask);
         return true;
     }
 
@@ -48,6 +53,15 @@ public:
         PROFILE_GPU_SCOPED("ShadowMaskRenderer", commandList);
 
         nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+        nvrhi::TextureHandle shadowMask = renderGraph.GetTexture(g_RG_ShadowMask, RGResourceAccessMode::Write);
+
+        // If CSM shadows are disabled, just clear the shadow mask to white (fully lit) and return early
+        if (!g_Renderer.m_EnableCSMShadows)
+        {
+            commandList->clearTextureFloat(shadowMask, nvrhi::AllSubresources, nvrhi::Color{ 1.0f }); // white = fully lit
+            return;
+        }
 
         // Build ShadowMaskCB
         const nvrhi::BufferDesc cbDesc = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::ShadowMaskConstants), "ShadowMaskCB", 1);
@@ -82,7 +96,6 @@ public:
         nvrhi::TextureHandle depth      = renderGraph.GetTexture(g_RG_DepthTexture,    RGResourceAccessMode::Read);
         nvrhi::TextureHandle normals    = renderGraph.GetTexture(g_RG_GBufferNormals,  RGResourceAccessMode::Read);
         nvrhi::TextureHandle shadowMap  = renderGraph.GetTexture(g_RG_CSMShadowMap,    RGResourceAccessMode::Read);
-        nvrhi::TextureHandle shadowMask = renderGraph.GetTexture(g_RG_ShadowMask,      RGResourceAccessMode::Write);
 
         // Build binding set
         srrhi::ShadowMaskInputs inputs;

@@ -98,7 +98,7 @@ float4 CSMDebug_PSMain(FullScreenVertexOut input) : SV_Target
     // Reconstruct view-space depth for cascade selection
     float4 clipPos   = float4(UVToClipXY(uv), depth, 1.0f);
     float4 viewPos4  = MatrixMultiply(clipPos, g_CB.m_ClipToView);
-    float  viewDepth = -viewPos4.z / viewPos4.w;  // negate: view-space Z is negative in front
+    float  viewDepth = viewPos4.z / viewPos4.w;   // Camera uses LookToLH: +Z = forward
 
     uint cascadeIndex = SelectCascade(viewDepth, g_CB.m_CascadeSplits);
 
