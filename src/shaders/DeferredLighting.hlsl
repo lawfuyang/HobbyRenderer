@@ -25,6 +25,7 @@ static const StructuredBuffer<srrhi::GPULight>          g_Lights             = s
 static const Texture2D<float4>                          g_RTXDIDIComposited  = srrhi::DeferredLightingInputs::GetRTXDIDIComposited();
 static const Texture2D<float4>                          g_SHARCIndirect      = srrhi::DeferredLightingInputs::GetSHARCIndirect();
 static const Texture2D<float>                           g_ShadowMask         = srrhi::DeferredLightingInputs::GetShadowMask();
+static const Texture2D<float4>                          g_CSMDebugOutput     = srrhi::DeferredLightingInputs::GetCSMDebugOutput();
 
 float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 {
@@ -149,6 +150,17 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
             {
                 color = baseColor;
             }
+    }
+
+    // ── CSM debug overlay ──────────────────────────────────────────────────
+    // CSM debug modes write to a separate texture (CSMDebugOutput).
+    // Overlay independently of the general debug mode — works even when
+    // m_DebugMode == DEBUG_MODE_NONE.
+    if (g_Deferred.m_CSMDebugMode != 0)
+    {
+        float4 csmDebug = g_CSMDebugOutput.Load(uint3(uvInt, 0));
+        color = csmDebug.rgb;
+        alpha = csmDebug.a;
     }
 
     return float4(color, alpha);

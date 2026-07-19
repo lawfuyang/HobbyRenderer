@@ -10,7 +10,7 @@ extern RGTextureHandle g_RG_DepthTexture;
 extern RGTextureHandle g_RG_GBufferAlbedo;
 extern RGTextureHandle g_RG_CSMShadowMap;
 extern RGTextureHandle g_RG_ShadowMask;
-extern RGTextureHandle g_RG_HDRColor;
+RGTextureHandle        g_RG_CSMDebugOutput;   // RGBA16_FLOAT — CSM debug overlay, sampled by DeferredLighting
 
 // ---------------------------------------------------------------------------
 // CSMDebugRenderer — fullscreen PS debug overlay (skips when mode == Off)
@@ -20,21 +20,43 @@ class CSMDebugRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        // Skip entirely when debug is off — render graph won't allocate any resources
+        // Always declare the CSMDebugOutput texture so DeferredLighting can read it.
+        // When CSM debug is off, the texture will be cleared to black and skipped during overlay.
+        auto [width, height] = g_Renderer.SwapchainSize();
+
+        RGTextureDesc debugOutDesc;
+        debugOutDesc.m_NvrhiDesc.width        = width;
+        debugOutDesc.m_NvrhiDesc.height       = height;
+        debugOutDesc.m_NvrhiDesc.format       = nvrhi::Format::RGBA16_FLOAT;
+        debugOutDesc.m_NvrhiDesc.isRenderTarget = true;
+        debugOutDesc.m_NvrhiDesc.debugName    = "CSMDebugOutput_RG";
+        debugOutDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::RenderTarget;
+        debugOutDesc.m_NvrhiDesc.keepInitialState = true;
+        renderGraph.DeclareTexture(debugOutDesc, g_RG_CSMDebugOutput);
+
+        // Skip the rest when debug is off — just clear to black
         if (g_Renderer.m_CSMDebugMode == 0 || !g_Renderer.m_EnableCSMShadows)
-            return false;
+            return true;
 
         renderGraph.ReadTexture(g_RG_DepthTexture);
         renderGraph.ReadTexture(g_RG_GBufferAlbedo);
         renderGraph.ReadTexture(g_RG_CSMShadowMap);
         renderGraph.ReadTexture(g_RG_ShadowMask);
-        renderGraph.WriteTexture(g_RG_HDRColor);  // composites debug output into HDR color
         return true;
     }
 
     void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override
     {
         nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
+
+        nvrhi::TextureHandle debugOutput = renderGraph.GetTexture(g_RG_CSMDebugOutput, RGResourceAccessMode::Write);
+
+        // When CSM debug is off, clear to black and skip rendering
+        if (g_Renderer.m_CSMDebugMode == 0 || !g_Renderer.m_EnableCSMShadows)
+        {
+            commandList->clearTextureFloat(debugOutput, nvrhi::AllSubresources, nvrhi::Color{ 0.0f, 0.0f, 0.0f, 0.0f });
+            return;
+        }
 
         // Build CSMDebugCB
         const nvrhi::BufferDesc cbDesc = nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(srrhi::CSMDebugConstants), "CSMDebugCB", 1);
@@ -68,7 +90,6 @@ public:
         nvrhi::TextureHandle albedo     = renderGraph.GetTexture(g_RG_GBufferAlbedo,  RGResourceAccessMode::Read);
         nvrhi::TextureHandle shadowMap  = renderGraph.GetTexture(g_RG_CSMShadowMap,   RGResourceAccessMode::Read);
         nvrhi::TextureHandle shadowMask = renderGraph.GetTexture(g_RG_ShadowMask,     RGResourceAccessMode::Read);
-        nvrhi::TextureHandle hdrColor   = renderGraph.GetTexture(g_RG_HDRColor,       RGResourceAccessMode::Write);
 
         // Build binding set
         srrhi::CSMDebugInputs inputs;
@@ -81,20 +102,16 @@ public:
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
-        // Framebuffer: write into HDR color (no depth write — overlay only)
+        // Framebuffer: write into CSM debug output texture
         nvrhi::FramebufferDesc fbDesc;
-        fbDesc.addColorAttachment(hdrColor);
+        fbDesc.addColorAttachment(debugOutput);
         nvrhi::FramebufferHandle framebuffer = device->createFramebuffer(fbDesc);
-
-        // Additive blend — overlay debug colors on top of existing HDR content
-        nvrhi::BlendState::RenderTarget blendAdditive = CommonResources::GetInstance().BlendTargetAdditive;
 
         Renderer::RenderPassParams params;
         params.commandList    = commandList;
         params.shaderID       = ShaderID::CSMDEBUG_CSMDEBUG_PSMAIN;
         params.bindingSetDesc = bset;
         params.framebuffer    = framebuffer;
-        params.blendState     = &blendAdditive;
         g_Renderer.AddFullScreenPass(params);
     }
 

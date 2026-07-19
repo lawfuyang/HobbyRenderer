@@ -17,6 +17,7 @@ cbuffer DeferredLightingConstants
     uint m_UseReSTIRDI;
     uint m_UseReSTIRDIDenoised;
     uint m_IndirectLightingMode;  // 0 = None, 1 = ReSTIR GI, 2 = SHARC
+    uint m_CSMDebugMode;          // CSMDebugMode enum value; 0 = off, overlays CSMDebugOutput when non-zero
 };
 
 srinput DeferredLightingInputs
@@ -39,4 +40,5 @@ srinput DeferredLightingInputs
     StructuredBuffer<uint> Indices;                       // t13
     Texture2D<float4> SHARCIndirect;                      // t14
     Texture2D<float>  ShadowMask;                         // t15 — R8_UNORM screen-space shadow mask (NormalBasic only; white = fully lit in other modes)
+    Texture2D<float4> CSMDebugOutput;                     // t16 — CSM debug overlay (black when off)
 };

@@ -13,6 +13,7 @@ extern RGTextureHandle g_RG_HDRColor;
 extern RGTextureHandle g_RG_RTXDIDIComposited;   // CompositingPass output — final DI + emissive composite
 extern RGTextureHandle g_RG_SHARCIndirect;       // SHARCQuery output — screen-space indirect radiance
 extern RGTextureHandle g_RG_ShadowMask;          // ShadowMaskRenderer output — R8_UNORM screen-space shadow mask (NormalBasic only)
+extern RGTextureHandle g_RG_CSMDebugOutput;       // CSMDebugRenderer output — CSM debug overlay (RGBA16_FLOAT; black when off)
 
 
 
@@ -41,6 +42,10 @@ public:
         // Conditionally read the CSM shadow mask in NormalBasic mode
         if (g_Renderer.m_Mode == RenderingMode::NormalBasic)
             renderGraph.ReadTexture(g_RG_ShadowMask);
+
+        // Conditionally read the CSM debug overlay when CSM debug mode is active
+        if (g_Renderer.m_CSMDebugMode != 0 && g_Renderer.m_EnableCSMShadows)
+            renderGraph.ReadTexture(g_RG_CSMDebugOutput);
 
         return true;
     }
@@ -81,6 +86,7 @@ public:
         dcb.SetUseReSTIRDI(g_Renderer.m_EnableReSTIRDI ? 1u : 0u);
         dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
         dcb.SetIndirectLightingMode(g_Renderer.m_IndirectLightingTechnique);
+        dcb.SetCSMDebugMode(g_Renderer.m_CSMDebugMode);
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
         // t8: RTXDI composited output (DI + emissive, already remodulated by CompositingPass)
@@ -118,6 +124,13 @@ public:
             ? renderGraph.GetTexture(g_RG_ShadowMask, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureWhite;
         dlInputs.SetShadowMask(shadowMask);
+
+        // t16: CSM debug overlay (RGBA16_FLOAT; black fallback when CSM debug is off)
+        nvrhi::TextureHandle csmDebugOutput =
+            (g_Renderer.m_CSMDebugMode != 0 && g_Renderer.m_EnableCSMShadows)
+            ? renderGraph.GetTexture(g_RG_CSMDebugOutput, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DefaultTextureBlack;
+        dlInputs.SetCSMDebugOutput(csmDebugOutput);
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(dlInputs);
 

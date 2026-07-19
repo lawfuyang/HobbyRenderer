@@ -342,7 +342,7 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_ImGuiLayer.Initialize();
 
     // Initialize renderers now that shaders and device are ready
-    for (const RendererRegistry::Creator& creator : RendererRegistry::GetCreators())
+    for (const auto& [name, creator] : RendererRegistry::GetCreators())
     {
         std::shared_ptr<IRenderer> renderer = creator();
         renderer->Initialize();
@@ -1183,67 +1183,47 @@ void Renderer::ScheduleAndRunAllRenderers()
 
     m_RenderGraph.Reset();
 
-    extern IRenderer* g_TLASRenderer;
-    extern IRenderer* g_ClearRenderer;
-    extern IRenderer* g_OpaqueRenderer;
-    extern IRenderer* g_MaskedPassRenderer;
-    extern IRenderer* g_HZBGeneratorPhase2;
-    extern IRenderer* g_RTXDIRenderer;
-    extern IRenderer* g_DeferredRenderer;
-    extern IRenderer* g_SkyRenderer;
-    extern IRenderer* g_TransparentPassRenderer;
-    extern IRenderer* g_BloomRenderer;
-    extern IRenderer* g_TAARenderer;
-    extern IRenderer* g_HDRRenderer;
-    extern IRenderer* g_TileResidencyDebugRenderer;
-    extern IRenderer* g_ImGuiRenderer;
-    extern IRenderer* g_PathTracerRenderer;
-    extern IRenderer* g_SHARCRenderer;
-    extern IRenderer* g_ShadowRenderer;
-    extern IRenderer* g_ShadowMaskRenderer;
-    extern IRenderer* g_CSMDebugRenderer;
-
     m_RenderGraph.BeginSetup();
 
-    m_RenderGraph.ScheduleRenderer(g_ClearRenderer);
+    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
 
     if (m_Mode == RenderingMode::ReferencePathTracer)
     {
-        m_RenderGraph.ScheduleRenderer(g_PathTracerRenderer);
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("PathTracerRenderer"));
     }
     else if (m_Mode == RenderingMode::NormalBasic)
     {
         // NormalBasic: raster-only pipeline: no TLAS, no RTXDI, no SHARC, no RT shadows
-        m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);
-        m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
-        m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
-        m_RenderGraph.ScheduleRenderer(g_ShadowRenderer);       // CSM depth array (4 × 2048²)
-        m_RenderGraph.ScheduleRenderer(g_ShadowMaskRenderer);   // fullscreen compute → R8 shadow mask
-        m_RenderGraph.ScheduleRenderer(g_CSMDebugRenderer);     // debug overlay (skips when mode == Off)
-        m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
-        m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
-        m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);
-        m_RenderGraph.ScheduleRenderer(g_TAARenderer);
-        m_RenderGraph.ScheduleRenderer(g_BloomRenderer);
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OpaqueRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("MaskedPassRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HZBGeneratorPhase2"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ShadowRenderer"));        // CSM depth array (4 × 2048²)
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ShadowMaskRenderer"));    // fullscreen compute → R8 shadow mask
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("CSMDebugRenderer"));      // debug overlay (skips when mode == Off)
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("DeferredRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("SkyRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TransparentPassRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TAARenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("BloomRenderer"));
     }
     else
     {
-        m_RenderGraph.ScheduleRenderer(g_OpaqueRenderer);
-        m_RenderGraph.ScheduleRenderer(g_MaskedPassRenderer);
-        m_RenderGraph.ScheduleRenderer(g_HZBGeneratorPhase2);
-        m_RenderGraph.ScheduleRenderer(g_TLASRenderer);
-        m_RenderGraph.ScheduleRenderer(g_SHARCRenderer);
-        m_RenderGraph.ScheduleRenderer(g_RTXDIRenderer);
-        m_RenderGraph.ScheduleRenderer(g_DeferredRenderer);
-        m_RenderGraph.ScheduleRenderer(g_SkyRenderer);
-        m_RenderGraph.ScheduleRenderer(g_TransparentPassRenderer);
-        m_RenderGraph.ScheduleRenderer(g_TAARenderer);
-        m_RenderGraph.ScheduleRenderer(g_BloomRenderer);
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OpaqueRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("MaskedPassRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HZBGeneratorPhase2"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TLASRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("SHARCRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("RTXDIRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("DeferredRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("SkyRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TransparentPassRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TAARenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("BloomRenderer"));
     }
 
-    m_RenderGraph.ScheduleRenderer(g_HDRRenderer);
-    m_RenderGraph.ScheduleRenderer(g_TileResidencyDebugRenderer);
-    m_RenderGraph.ScheduleRenderer(g_ImGuiRenderer);
+    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HDRRenderer"));
+    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TileResidencyDebugRenderer"));
+    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ImGuiRenderer"));
 
     m_RenderGraph.EndSetup();
 

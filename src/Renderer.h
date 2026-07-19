@@ -42,29 +42,44 @@ class RendererRegistry
 public:
     using Creator = std::function<std::shared_ptr<IRenderer>()>;
 
-    static void RegisterRenderer(Creator creator)
+    static void RegisterRenderer(const char* name, Creator creator)
     {
-        s_Creators.push_back(creator);
+        s_Creators.push_back({ name, creator });
     }
 
-    static const std::vector<Creator>& GetCreators()
+    static const std::vector<std::pair<const char*, Creator>>& GetCreators()
     {
         return s_Creators;
     }
 
+    // Thread-safe after static init: renderers are created during InitializeGPUStack
+    // and looked up during ScheduleAndRunAllRenderers (both on main thread).
+    static IRenderer* GetRenderer(const char* name)
+    {
+        return s_Renderers.at(name); // Throws if not found
+    }
+
+    static void SetRenderer(const char* name, IRenderer* renderer)
+    {
+        SDL_assert(s_Renderers.contains(name) == false && "Renderer already registered");
+        s_Renderers[name] = renderer;
+    }
+
 private:
-    inline static std::vector<Creator> s_Creators;
+    inline static std::vector<std::pair<const char*, Creator>> s_Creators;
+    inline static std::unordered_map<std::string, IRenderer*>  s_Renderers;
 };
 
-// Macro to register a renderer class
+// Macro to register a renderer class.
+// No longer creates cross-TU global pointers — renderers are stored in
+// RendererRegistry and looked up by name.  This eliminates incremental-linker
+// crashes where extern pointer relocations would go stale after a partial rebuild.
 #define REGISTER_RENDERER(ClassName) \
-IRenderer* g_##ClassName = nullptr; \
 static bool s_##ClassName##Registered = []() { \
-    RendererRegistry::RegisterRenderer([]() { \
+    RendererRegistry::RegisterRenderer(#ClassName, []() { \
         auto renderer = std::make_shared<ClassName>(); \
         SDL_assert(renderer && "Failed to initialize renderer: " #ClassName ); \
-        g_##ClassName = renderer.get(); \
-        SDL_assert(g_##ClassName && "Failed to assign global renderer pointer: " #ClassName ); \
+        RendererRegistry::SetRenderer(#ClassName, renderer.get()); \
         return renderer; \
     }); \
     return true; \
