@@ -31,6 +31,7 @@ public:
         debugOutDesc.m_NvrhiDesc.isRenderTarget = true;
         debugOutDesc.m_NvrhiDesc.debugName    = "CSMDebugOutput_RG";
         debugOutDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::RenderTarget;
+        debugOutDesc.m_NvrhiDesc.setClearValue(nvrhi::Color{ 0.0f, 0.0f, 0.0f, 0.0f });
         debugOutDesc.m_NvrhiDesc.keepInitialState = true;
         renderGraph.DeclareTexture(debugOutDesc, g_RG_CSMDebugOutput);
 
