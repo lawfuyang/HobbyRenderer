@@ -110,9 +110,12 @@ dependencies (the render graph resolves the rest):
 | `OpaqueRenderer` | Base pass: GPU culling + mesh/meshlet raster → G-Buffer |
 | `MaskedPassRenderer` | Alpha-tested geometry (2nd culling phase) |
 | `HZBGeneratorPhase2` | Generates hierarchical Z-buffer for occlusion culling |
+| `ShadowRenderer` | CSM depth-only pass: 4-cascade D32 array (4 × 2048²) via mesh shaders (NormalBasic only) |
+| `ShadowMaskRenderer` | Fullscreen compute: CSM evaluation → R8 shadow mask (NormalBasic only) |
+| `CSMDebugRenderer` | CSM debug overlay with 8 visualization modes (NormalBasic only) |
 | `RTXDIRenderer` | ReSTIR DI + GI sampling & resampling |
 | `SHARCRenderer` | SHARC cache-based indirect lighting |
-| `DeferredRenderer` | Deferred lighting: combines G-Buffer + RTXDI/SHARC + IBL |
+| `DeferredRenderer` | Deferred lighting: combines G-Buffer + shadow mask (NormalBasic) or RTXDI/SHARC (Normal) + IBL |
 | `SkyRenderer` | Atmospheric sky or IBL environment background |
 | `TransparentPassRenderer` | Forward transparent rendering |
 | `TAARenderer` | Temporal anti-aliasing (FSR3) |

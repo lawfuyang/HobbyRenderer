@@ -2,7 +2,7 @@
 
 > **Phase:** SS Shadows (Screen-Space Contact Shadows) — complement to CSM
 > **Goal:** Add compute-shader-based screen-space ray marching shadows to recover small-scale contact details lost by CSM bias/resolution
-> **Prerequisite:** CSM Phase (NormalBasic mode must already be running with CSM shadow mask)
+> **Prerequisite:** CSM Phase (NormalBasic mode is running with CSM shadow mask — **implemented**)
 > **Constraint:** No HWRT — compute shaders only
 
 ---
@@ -50,8 +50,8 @@ Screen-space shadows (SS shadows, also called **contact shadows**) are a compute
 | **Sun direction** | `DeferredLightingConstants.m_SunDirection` | N/A (CB) | ✅ Available in deferred lighting CB |
 | **Compute pass infra** | `AddComputePass()` | N/A | ✅ Proven pattern (SHARC, RTXDI, etc.) |
 | **Bindless textures** | Global descriptor tables | N/A | ✅ Available to any shader |
-| **CSM shadow map** | `g_RG_CSMShadowMap` (planned) | `D32_FLOAT` array | ⚠️ **Planned** — CSM must be implemented first |
-| **Shadow mask** | `g_RG_ShadowMask` (planned) | `R8_UNORM` | ⚠️ **Planned** — CSM must be implemented first |
+| **CSM shadow map** | `g_RG_CSMShadowMap` | `D32_FLOAT` array | ✅ **Implemented** — `ShadowRenderer` renders 4-cascade depth array (4 × 2048²) |
+| **Shadow mask** | `g_RG_ShadowMask` | `R8_UNORM` | ✅ **Implemented** — `ShadowMaskRenderer` fullscreen compute evaluates CSM → R8 mask |
 | **NormalBasic mode** | `RenderingMode::NormalBasic` | N/A | ✅ **Implemented** — available via `--normalbasic` CLI flag or ImGui combo |
 
 ### 2.2 What Does NOT Yet Exist (CSM Phase Must Deliver First)
@@ -60,9 +60,9 @@ SS shadows depend on the CSM phase being completed:
 
 1. ✅ `RenderingMode::NormalBasic` enum value — **DONE** (in [Renderer.h](../src/Renderer.h) and [Common.sr](../src/shaders/Common.sr))
 2. ✅ `NormalBasic` branch in `ScheduleAndRunAllRenderers()` — **DONE** ([Renderer.cpp](../src/Renderer.cpp))
-3. ❌ CSM shadow map array (`g_RG_CSMShadowMap`) — depth-only raster pass (still pending)
-4. ❌ Shadow mask RT (`g_RG_ShadowMask`) — `R8_UNORM`, screen resolution, written by `ShadowMaskRenderer` (still pending)
-5. ❌ Deferred lighting shader reading `g_ShadowMask` instead of firing inline ray queries (still pending)
+3. ✅ CSM shadow map array (`g_RG_CSMShadowMap`) — depth-only raster pass **DONE** (`ShadowRenderer` renders 4×2048² D32 array via mesh shaders)
+4. ✅ Shadow mask RT (`g_RG_ShadowMask`) — `R8_UNORM`, screen resolution, written by `ShadowMaskRenderer` **DONE** (fullscreen compute evaluates CSM → shadow mask)
+5. ✅ Deferred lighting shader reading `g_ShadowMask` instead of firing inline ray queries **DONE** (`DeferredRenderer` reads `g_RG_ShadowMask` for CSM; `DeferredLighting.hlsl` uses `g_ShadowMask.Load()`)
 
 ### 2.3 Current Render Pass Order (Normal Mode)
 
@@ -73,12 +73,12 @@ ClearRenderer → TLASRenderer → OpaqueRenderer → MaskedPassRenderer
 → TAARenderer → BloomRenderer → HDRRenderer → ImGuiRenderer
 ```
 
-### 2.4 Planned Render Pass Order (NormalBasic Mode — CSM Phase)
+### 2.4 Current Render Pass Order (NormalBasic Mode)
 
 ```
 ClearRenderer → OpaqueRenderer → MaskedPassRenderer
-→ ShadowRenderer → ShadowMaskRenderer
-→ DDGIRenderer → DeferredRenderer → SkyRenderer
+→ HZBGeneratorPhase2 → ShadowRenderer → ShadowMaskRenderer
+→ CSMDebugRenderer → DeferredRenderer → SkyRenderer
 → TransparentPassRenderer → TAARenderer → BloomRenderer
 → HDRRenderer → ImGuiRenderer
 ```
@@ -488,7 +488,7 @@ All prerequisites exist or are planned:
 | [DeferredLighting.sr](../src/shaders/DeferredLighting.sr) | Resource bindings for deferred lighting |
 | [shaders.cfg](../src/shaders/shaders.cfg) | Shader compilation config — add SSShadow entry |
 | [docs/raymarch.hlsl](raymarch.hlsl) | Reference depth-buffer ray marcher by Tomasz Stachowiak |
-| [docs/CSM_Analysis.md](CSM_Analysis.md) | CSM implementation plan — prerequisite phase |
+| [docs/PCSS_Analysis.md](PCSS_Analysis.md) | CSM + PCSS implementation details — implemented phase |
 
 ### New Files to Create
 
