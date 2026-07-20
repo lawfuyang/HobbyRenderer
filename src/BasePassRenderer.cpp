@@ -147,7 +147,7 @@ protected:
     struct BasePassRenderingArgs
     {
         uint32_t m_InstanceBaseIndex;
-        const Vector4* m_FrustumPlanes;
+        const Vector4* m_FrustumPlanes; // [6] planes
         Matrix m_View;
         Matrix m_ViewProj;
         uint32_t m_NumInstances;
@@ -157,7 +157,7 @@ protected:
         bool m_BackFaceCull = false;
     };
 
-    void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[5])
+    void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[6])
     {
         const float xScale = fabs(proj._11);
         const float yScale = fabs(proj._22);
@@ -174,6 +174,9 @@ protected:
         for (int i = 0; i < 5; ++i) {
             DirectX::XMStoreFloat4(&frustumPlanes[i], planes[i]);
         }
+        // Infinite far plane: reversed-Z infinite perspective has no finite far clip.
+        // Use a degenerate plane (zero normal, +INF offset) that never culls anything.
+        frustumPlanes[5] = { 0.0f, 0.0f, 0.0f, std::numeric_limits<float>::infinity() };
     }
 
     void PerformOcclusionCulling(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args, const ResourceHandles& handles)
@@ -465,7 +468,7 @@ protected:
         }
     }
 
-    void PrepareRenderingData(Matrix& outView, Matrix& outViewProjForCulling, Vector4 outFrustumPlanes[5])
+    void PrepareRenderingData(Matrix& outView, Matrix& outViewProjForCulling, Vector4 outFrustumPlanes[6])
     {
         
         Camera* cam = &g_Renderer.m_Scene.m_Camera;
@@ -551,7 +554,7 @@ public:
         if (numOpaque == 0) return;
 
         Matrix view, viewProjForCulling;
-        Vector4 frustumPlanes[5];
+        Vector4 frustumPlanes[6];
         PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
         ResourceHandles handles;
@@ -647,7 +650,7 @@ public:
         if (numMasked == 0) return;
 
         Matrix view, viewProjForCulling;
-        Vector4 frustumPlanes[5];
+        Vector4 frustumPlanes[6];
         PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
         ResourceHandles handles;
@@ -785,7 +788,7 @@ public:
         g_Renderer.GenerateMipsUsingSPD(handles.opaque, spdAtomicCounter, commandList, "Generate Mips for Opaque Color", srrhi::CommonConsts::SPD_REDUCTION_AVERAGE);
 
         Matrix view, viewProjForCulling;
-        Vector4 frustumPlanes[5];
+        Vector4 frustumPlanes[6];
         PrepareRenderingData(view, viewProjForCulling, frustumPlanes);
 
         ClearAllCounters(commandList, handles);

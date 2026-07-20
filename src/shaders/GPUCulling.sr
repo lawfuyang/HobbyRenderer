@@ -4,7 +4,7 @@
 
 cbuffer CullingConstants
 {
-    float4 m_FrustumPlanes[5];
+    float4 m_FrustumPlanes[6];
     float4x4 m_View;
     float4x4 m_ViewProj;
     uint m_NumPrimitives;

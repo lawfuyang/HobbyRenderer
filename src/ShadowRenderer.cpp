@@ -120,12 +120,13 @@ private:
         const Vector3& aabbMin = g_Renderer.m_CSMCascades[cascadeIndex].m_LightAABBMin;
         const Vector3& aabbMax = g_Renderer.m_CSMCascades[cascadeIndex].m_LightAABBMax;
 
-        Vector4 frustumPlanes[5];
+        Vector4 frustumPlanes[6];
         XMStoreFloat4(&frustumPlanes[0], XMVectorSet( 1.0f,  0.0f,  0.0f, -aabbMin.x)); // Left:  x >= min
         XMStoreFloat4(&frustumPlanes[1], XMVectorSet(-1.0f,  0.0f,  0.0f,  aabbMax.x)); // Right: x <= max
         XMStoreFloat4(&frustumPlanes[2], XMVectorSet( 0.0f,  1.0f,  0.0f, -aabbMin.y)); // Bottom: y >= min
         XMStoreFloat4(&frustumPlanes[3], XMVectorSet( 0.0f, -1.0f,  0.0f,  aabbMax.y)); // Top: y <= max
         XMStoreFloat4(&frustumPlanes[4], XMVectorSet( 0.0f,  0.0f,  1.0f, -aabbMin.z)); // Near: z >= min
+        XMStoreFloat4(&frustumPlanes[5], XMVectorSet( 0.0f,  0.0f, -1.0f,  aabbMax.z)); // Far:  z <= max
 
         // Cull and draw both buckets
         CullAndDraw(cascadeIndex, commandList, shadowMap, shadowDepthCB, frustumPlanes, opaque, /*bAlphaTest=*/false);
@@ -139,7 +140,7 @@ private:
                      nvrhi::CommandListHandle commandList,
                      nvrhi::TextureHandle shadowMap,
                      nvrhi::BufferHandle shadowDepthCB,
-                     const Vector4 frustumPlanes[5],
+                     const Vector4 frustumPlanes[6],
                      const BucketHandles& h,
                      bool bAlphaTest)
     {
@@ -170,7 +171,7 @@ private:
         // P00/P11 are not used (occlusion culling is disabled for shadows), set to 0.
         cullData.SetP00(0.0f);
         cullData.SetP11(0.0f);
-        cullData.SetForcedLOD(g_Renderer.m_ForcedLOD);
+        cullData.SetForcedLOD(0); // Always use LOD 0 for shadows — auto LOD introduces silhouette error
         cullData.SetInstanceBaseIndex(0);
         commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 

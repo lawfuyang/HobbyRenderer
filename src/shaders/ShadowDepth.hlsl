@@ -65,10 +65,11 @@ void ShadowDepth_ASMain(
         float  radius;
         UnpackMeshletBV(meshlet, center, radius);
 
-        float4 worldCenter = MatrixMultiply(float4(center, 1.0f), inst.m_World);
-        float4 lightClip   = MatrixMultiply(worldCenter, g_CB.m_ShadowViewProj);
+        float4 worldCenter  = MatrixMultiply(float4(center, 1.0f), inst.m_World);
+        float4 lightClip    = MatrixMultiply(worldCenter, g_CB.m_ShadowViewProj);
+        float  worldRadius  = radius * GetMaxScale(inst.m_World);
 
-        float w = abs(lightClip.w) + radius;
+        float w = abs(lightClip.w) + worldRadius;
         bVisible = (abs(lightClip.x) <= w) && (abs(lightClip.y) <= w)
                 && (lightClip.z >= -w)      && (lightClip.z <= w);
     }

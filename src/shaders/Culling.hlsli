@@ -4,12 +4,12 @@
 bool FrustumSphereTest(
     float3 centerVS,
     float radius,
-    float4 planes[5]   // view-space frustum planes
+    float4 planes[6]   // view-space frustum planes
 )
 {
     // Test against each frustum plane
     [unroll]
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 6; i++)
     {
         float3 n = planes[i].xyz;
         float d  = planes[i].w;
