@@ -356,8 +356,12 @@ struct Renderer
 
     // Tiles submitted to AsyncTileIO this frame — their UpdateTileMappings and MinMip
     // update is deferred to the NEXT frame, after Flush() confirms the tile data has
-    // been written to the GPU.  No per-frame budget: all requested tiles are submitted immediately
+    // been written to the GPU.
     std::vector<nvfeedback::FeedbackTextureUpdate> m_SubmittedTilesPendingMapping;
+
+    // Tile requests that exceeded the per-frame budget (kMaxTilesPerFrame) and were
+    // deferred to the next frame.  Drained before new requests each frame.
+    std::vector<nvfeedback::FeedbackTextureUpdate> m_PendingTileRequests;
 
     // Count of tile indices actually submitted to AsyncTileIO this frame (for UI/debug).
     uint32_t m_TilesSubmittedThisFrame = 0;

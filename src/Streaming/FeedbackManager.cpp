@@ -179,7 +179,7 @@ namespace nvfeedback
             m_Textures[i]->SetManagerIndex(i);
     }
 
-    void FeedbackManager::BeginFrame(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& results)
+    void FeedbackManager::BeginFrame(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& results, bool allowHeapRelease)
     {
         PROFILE_FUNCTION();
         SimpleTimer timer;
@@ -205,10 +205,6 @@ namespace nvfeedback
         std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[m_FrameIndex];
         float timeStamp = static_cast<float>(GetTickCount64()) / 1000.0f;
 
-        // Build a fast lookup set of which textures are being read back this frame
-        // so we can skip them in the re-submission loop below.
-        std::unordered_set<uint32_t> readbackSet(readbackTextures.begin(), readbackTextures.end());
-
         if (!readbackTextures.empty())
         {
             PROFILE_SCOPED("Resolve feedback");
@@ -218,11 +214,6 @@ namespace nvfeedback
                 uint8_t* pReadbackData = static_cast<uint8_t*>(
                     g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
                                         nvrhi::CpuAccessMode::Read));
-
-                // Cache the fresh feedback data so we can re-submit it every frame
-                // for frames where this texture is not in the readback batch.
-                const nvrhi::BufferDesc& bufDesc = readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex)->getDesc();
-                readbackTexture->m_CachedFeedbackData.assign(pReadbackData, pReadbackData + bufDesc.byteSize);
 
                 rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
                 samplerFeedbackDesc.pMinMipData = pReadbackData;
@@ -236,42 +227,15 @@ namespace nvfeedback
             }
         }
 
-        // ── Step 1b: Re-submit cached feedback for all textures NOT in the readback batch ──
-        // TTM's timeout is measured from the last time UpdateWithSamplerFeedback was called
-        // for a texture.  With a ringbuffer of N textures and only K resolved per frame,
-        // each texture is only read back once every N/K frames.  Without re-submission,
-        // tiles for non-readback textures would time out after kTileHysteresisSeconds even
-        // though the scene is completely static.
-        // Re-submitting the cached data refreshes lastRequestedTime for all currently-mapped
-        // tiles without changing which tiles are requested, so the hysteresis timeout only
-        // fires when a tile genuinely disappears from the feedback across multiple readback cycles.
-        {
-            PROFILE_SCOPED("Re-submit cached feedback");
-
-            for (uint32_t texIdx = 0; texIdx < (uint32_t)m_Textures.size(); ++texIdx)
-            {
-                if (readbackSet.count(texIdx)) continue; // already processed above with fresh data
-
-                FeedbackTexture* tex = GetTextureByIndex(texIdx);
-                if (tex->m_CachedFeedbackData.empty()) continue; // never been read back yet — skip
-
-                // Skip textures that have no standard tiles allocated yet.
-                // TTM::UpdateTiledTexture does an O(regularTilesNum) scan once any tile is
-                // allocated; for textures still at packed-mip-only residency the scan is
-                // skipped internally, but we still pay the call overhead + BitArray construction
-                // for every one of the ~3000 textures.  Checking our own O(1) counter avoids
-                // that cost entirely during the initial burst period.
-                if (!tex->HasAllocatedStandardTiles()) continue;
-
-                rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
-                samplerFeedbackDesc.pMinMipData = tex->m_CachedFeedbackData.data();
-                m_TiledTextureManager->UpdateWithSamplerFeedback(
-                    tex->GetTiledTextureId(),
-                    samplerFeedbackDesc,
-                    timeStamp,
-                    kTileHysteresisSeconds);
-            }
-        }
+        // NOTE: No re-submission of cached feedback for non-readback textures.
+        // The reference implementations (RTXTS, ToyRenderer) only call UpdateWithSamplerFeedback
+        // for the textures in the current readback batch — never for all textures every frame.
+        // Re-submitting cached feedback for all textures every frame causes GetNumDesiredHeaps()
+        // to reflect the full tile demand of ALL textures simultaneously, driving a burst to
+        // 34 heaps instead of the gradual growth to 11 that the references exhibit.
+        // Without re-submission, tiles time out after kTileHysteresisSeconds (1s).
+        // With 307 textures at 30/frame the ringbuffer cycle is ~10 frames (~167ms at 60fps),
+        // giving 6 full cycles of margin before any tile times out.
 
         // ── Step 2: Collect textures to read back NEXT frame ──
         // Assign to the NEXT slot so that the following frame's Step 1 reads from the
@@ -301,29 +265,12 @@ namespace nvfeedback
 
         // ── Step 4: Heap management ──
         //
-        // TTM's GetNumDesiredHeaps() sums requestedTilesNum for every texture.
-        // UpdateWithSamplerFeedback resets requestedTilesNum = packedTilesNum at the
-        // start of every call, so the returned value always includes ALL packed mip
-        // tiles even though packed mips are never allocated through TTM's heap pool
-        // (they live on dedicated packed-mip heaps not registered with TTM).
-        //
-        // Without correction this causes us to allocate N heaps just to satisfy the
-        // packed-mip tile count, leaving those heaps permanently full (heapFreeTilesNum=0)
-        // because the packed-mip "requested" tiles are never actually allocated into them.
-        //
-        // Fix: subtract the packed-mip heap count from TTM's desired heap count so that
-        // we only allocate heaps for actual streaming tiles.
-        const uint32_t packedMipHeapCount = (m_PackedMipTileCursor + kHeapSizeInTiles - 1) / kHeapSizeInTiles;
-        const uint32_t ttmDesiredHeaps    = m_TiledTextureManager->GetNumDesiredHeaps();
-        const uint32_t numRequiredHeaps   = (ttmDesiredHeaps > packedMipHeapCount)
-                                          ? (ttmDesiredHeaps - packedMipHeapCount) : 0;
-
-        if constexpr (kStreamingDebugLog)
-        {
-            SDL_Log("[Streaming][Heap] BeginFrame heap check: ttmDesired=%u packedMipHeaps=%u corrected=%u TTMRegistered=%u totalHeaps=%u packedMipCursor=%u",
-                    ttmDesiredHeaps, packedMipHeapCount, numRequiredHeaps, m_NumTTMHeaps, m_HeapAllocator->GetNumHeaps(),
-                    m_PackedMipTileCursor);
-        }
+        // GetNumDesiredHeaps() sums requestedTilesNum for every texture (packed + standard).
+        // Packed-mip heaps are registered with TTM via MapPackedMips, so they are already
+        // counted.  We only add heaps here; we never release them during normal operation.
+        // Releasing empty heaps causes a burst-and-shrink pattern (the reference only
+        // releases heaps when "compactMemory" is explicitly requested by the user).
+        const uint32_t numRequiredHeaps = m_TiledTextureManager->GetNumDesiredHeaps();
 
         if (numRequiredHeaps > m_NumTTMHeaps)
         {
@@ -346,28 +293,18 @@ namespace nvfeedback
                 }
             }
         }
-        else
+        else if (allowHeapRelease)
         {
+            // Only release empty heaps when there are no pending tile uploads.
+            // While m_PendingTileRequests is non-empty, TTM has already allocated
+            // heap slots for those tiles; releasing an empty heap now and
+            // re-allocating it next frame produces the grow-shrink pattern.
             std::vector<uint32_t> emptyHeaps;
             m_TiledTextureManager->GetEmptyHeaps(emptyHeaps);
-
-            if (!emptyHeaps.empty())
-            {
-                if constexpr (kStreamingDebugLog)
-                {
-                    SDL_Log("[Streaming][Heap] BeginFrame: TTM reports %zu empty heap(s) — releasing:",
-                            emptyHeaps.size());
-                }
-            }
-
             for (uint32_t heapId : emptyHeaps)
             {
                 if constexpr (kStreamingDebugLog)
-                {
-                    SDL_Log("[Streaming][Heap] BeginFrame: releasing empty TTM heapId=%u "
-                            "(only TTM-registered heaps appear here; packed-mip heaps are invisible to TTM)",
-                            heapId);
-                }
+                    SDL_Log("[Streaming][Heap] BeginFrame: releasing empty TTM heapId=%u", heapId);
                 m_TiledTextureManager->RemoveHeap(heapId);
                 m_HeapAllocator->ReleaseHeap(heapId, m_FrameIndex);
                 m_NumTTMHeaps--;
@@ -407,14 +344,6 @@ namespace nvfeedback
                     uint32_t tilesProcessedNum = 0;
                     for (uint32_t tileIndex : tilesToUnmap)
                     {
-                        // Decrement the allocated standard tile counter so Step 1b can skip
-                        // this texture once all its standard tiles have been evicted.
-                        if (!feedbackTexture->IsTilePacked(tileIndex))
-                        {
-                            SDL_assert(feedbackTexture->m_AllocatedStandardTileCount > 0);
-                            feedbackTexture->m_AllocatedStandardTileCount--;
-                        }
-
                         nvrhi::TiledTextureCoordinate& coord = tiledTextureCoordinates[tilesProcessedNum];
                         coord.mipLevel = tileCoords[tileIndex].mipLevel;
                         coord.arrayLevel = 0;
@@ -428,18 +357,16 @@ namespace nvfeedback
                     m_MinMipDirtyTextures.insert(texIdx);
                 }
 
-                // Collect new tiles to stream in (skip packed mips — handled at scene load)
+                // Collect new standard tiles to stream in.
+                // Packed tiles are already mapped by MapPackedMips at scene load and
+                // will not appear here during normal operation.
                 m_TiledTextureManager->GetTilesToMap(feedbackTexture->GetTiledTextureId(), tilesRequestedNew);
                 if (!tilesRequestedNew.empty())
                 {
                     FeedbackTextureUpdate update;
                     update.m_TextureIdx = texIdx;
                     for (uint32_t tileIndex : tilesRequestedNew)
-                    {
-                        if (feedbackTexture->IsTilePacked(tileIndex))
-                            continue; // packed mips are permanently mapped at scene load
                         update.m_TileIndices.push_back(tileIndex);
-                    }
                     if (!update.m_TileIndices.empty())
                         results.push_back(update);
                 }
@@ -447,7 +374,8 @@ namespace nvfeedback
         }
 
         // ── Step 7: Defragmentation ──
-        m_TiledTextureManager->DefragmentTiles(16);
+        // NOTE: cause slight visual "stuttering" when tiles are moved, so disable for now
+        //m_TiledTextureManager->DefragmentTiles(16);
 
         m_BeginFrameCPUTime = timer.LapSeconds();
     }
@@ -464,14 +392,6 @@ namespace nvfeedback
             uint32_t tiledTextureId = texture->GetTiledTextureId();
             m_TiledTextureManager->UpdateTilesMapping(tiledTextureId, texUpdate.m_TileIndices);
 
-            // Increment the allocated standard tile counter for each non-packed tile that
-            // was just mapped.  This enables the Step 1b fast-skip path.
-            for (uint32_t tileIndex : texUpdate.m_TileIndices)
-            {
-                if (!texture->IsTilePacked(tileIndex))
-                    texture->m_AllocatedStandardTileCount++;
-            }
-
             const std::vector<rtxts::TileCoord>& tileCoords     = m_TiledTextureManager->GetTileCoordinates(tiledTextureId);
             const std::vector<rtxts::TileAllocation>& tileAllocations = m_TiledTextureManager->GetTileAllocations(tiledTextureId);
 
@@ -479,8 +399,6 @@ namespace nvfeedback
             std::map<nvrhi::HeapHandle, std::vector<uint32_t>> heapTilesMapping;
             for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
-                if (texture->IsTilePacked(tileIndex))
-                    continue; // packed mips are permanently mapped at scene load
                 nvrhi::HeapHandle heap = m_HeapAllocator->GetHeapHandle(tileAllocations[tileIndex].heapId);
                 heapTilesMapping[heap].push_back(tileIndex);
             }
@@ -651,19 +569,6 @@ namespace nvfeedback
         m_StatsLastFrame.m_TilesTotal     = stats.totalTilesNum;
         m_StatsLastFrame.m_HeapTilesFree  = stats.heapFreeTilesNum;
         m_StatsLastFrame.m_TilesStandby   = stats.standbyTilesNum;
-
-        if constexpr (kStreamingDebugLog)
-        {
-            SDL_Log("[Streaming][Heap] EndFrame summary: totalHeaps=%u TTMHeaps=%u VRAM=%.2fMB tiles(alloc=%u total=%u free=%u stby=%u) packedMipCursor=%u",
-                    m_HeapAllocator->GetNumHeaps(),
-                    m_NumTTMHeaps,
-                    BYTES_TO_MB(m_HeapAllocator->GetTotalAllocatedBytes()),
-                    stats.allocatedTilesNum,
-                    stats.totalTilesNum,
-                    stats.heapFreeTilesNum,
-                    stats.standbyTilesNum,
-                    m_PackedMipTileCursor);
-        }
     }
 
     const FeedbackManagerStats& FeedbackManager::GetStats() const
@@ -673,98 +578,99 @@ namespace nvfeedback
 
     void FeedbackManager::MapPackedMips(uint32_t textureIdx)
     {
+        // Synchronously allocate packed tiles through TTM and set up the GPU tile mapping.
+        // This must happen at scene load time, before the caller writes packed mip pixel
+        // data via writeTexture — the GPU tile mapping must exist before the copy.
+        //
+        // Packed tiles are queued in TTM's m_requestedQueue by InitTiledTexture (called
+        // from AddTiledTexture).  We ensure TTM has enough heap capacity, then call
+        // AllocateRequestedTiles() to drain them, then map the GPU tiles using TTM's
+        // slot assignments.
+        //
+        // These heaps are permanently occupied (packed tiles are never freed), so
+        // GetEmptyHeaps() will never return them — they are never released.  This is
+        // correct: packed-mip heaps must live for the lifetime of the scene.
+
         FeedbackTexture* texture = m_Textures.at(textureIdx).get();
         const nvrhi::PackedMipDesc& packedMipDesc = texture->GetPackedMipInfo();
         if (packedMipDesc.numPackedMips == 0)
             return;
 
         const uint32_t numPackedTiles = packedMipDesc.numTilesForPackedMips;
-        const uint32_t firstSubresource = packedMipDesc.numStandardMips;
 
-        if constexpr (kStreamingDebugLog)
+        // Ensure TTM has enough free slots for this texture's packed tiles.
         {
-            SDL_Log("[Streaming][Heap] MapPackedMips: textureIdx=%u needs %u packed tile(s) "
-                    "(cursor before=%u, current heaps=%u)",
-                    textureIdx, numPackedTiles, m_PackedMipTileCursor,
-                    m_HeapAllocator->GetNumHeaps());
-        }
-
-        // Ensure enough heaps are allocated for these packed mips.
-        // These heaps are NOT registered with TTM (no AddHeap) because TTM
-        // would otherwise allocate streaming tiles into packed-mip physical
-        // slots via AllocateRequestedTiles().  Packed mips use their own
-        // dedicated heaps managed purely through updateTextureTileMappings.
-        {
-            const uint32_t totalNeeded = m_PackedMipTileCursor + numPackedTiles;
-            const uint32_t heapsNeeded = (totalNeeded + kHeapSizeInTiles - 1) / kHeapSizeInTiles;
-
-            if constexpr (kStreamingDebugLog)
+            const rtxts::Statistics stats = m_TiledTextureManager->GetStatistics();
+            if (stats.heapFreeTilesNum < numPackedTiles)
             {
-                SDL_Log("[Streaming][Heap] MapPackedMips: cursor after=%u, heapsNeeded=%u, currentHeaps=%u",
-                        totalNeeded, heapsNeeded, m_HeapAllocator->GetNumHeaps());
-            }
-
-            while (m_HeapAllocator->GetNumHeaps() < heapsNeeded)
-            {
-                uint32_t heapId = m_HeapAllocator->AllocateHeap();
-                // Intentionally NOT calling AddHeap — packed-mip heaps are
-                // invisible to TTM so GetEmptyHeaps() never reports them.
-                if constexpr (kStreamingDebugLog)
+                const uint32_t deficit = numPackedTiles - stats.heapFreeTilesNum;
+                const uint32_t heapsNeeded = (deficit + kHeapSizeInTiles - 1) / kHeapSizeInTiles;
+                for (uint32_t i = 0; i < heapsNeeded; ++i)
                 {
-                    SDL_Log("[Streaming][Heap] MapPackedMips: allocated heapId=%u for packed mips "
-                            "(NOT added to TTM, total heaps=%u)",
-                            heapId, m_HeapAllocator->GetNumHeaps());
+                    uint32_t heapId = m_HeapAllocator->AllocateHeap();
+                    m_TiledTextureManager->AddHeap(heapId);
+                    m_NumTTMHeaps++;
                 }
             }
         }
 
-        // Suballocate these packed mip tiles from the shared heap pool.
-        const uint32_t startHeapId    = m_PackedMipTileCursor / kHeapSizeInTiles;
-        const uint32_t startLocalTile = m_PackedMipTileCursor % kHeapSizeInTiles;
+        // Allocate packed tiles from the front of m_requestedQueue.
+        m_TiledTextureManager->AllocateRequestedTiles();
 
-        if constexpr (kStreamingDebugLog)
+        // Retrieve the tiles TTM just allocated for this texture.
+        std::vector<uint32_t> tilesToMap;
+        m_TiledTextureManager->GetTilesToMap(texture->GetTiledTextureId(), tilesToMap);
+
+        // Filter to packed tiles only.
+        std::vector<uint32_t> packedTiles;
+        for (uint32_t idx : tilesToMap)
+            if (texture->IsTilePacked(idx))
+                packedTiles.push_back(idx);
+
+        if (packedTiles.empty())
+            return;
+
+        // Tell TTM these tiles are now permanently mapped.
+        m_TiledTextureManager->UpdateTilesMapping(texture->GetTiledTextureId(), packedTiles);
+
+        // Build the GPU tile mapping using TTM's slot assignments.
+        const std::vector<rtxts::TileAllocation>& allocs = m_TiledTextureManager->GetTileAllocations(texture->GetTiledTextureId());
+        const std::vector<rtxts::TileCoord>& coords = m_TiledTextureManager->GetTileCoordinates(texture->GetTiledTextureId());
+
+        std::map<nvrhi::HeapHandle, std::vector<uint32_t>> byHeap;
+        for (uint32_t ti : packedTiles)
+            byHeap[m_HeapAllocator->GetHeapHandle(allocs[ti].heapId)].push_back(ti);
+
+        for (auto& [heap, heapTiles] : byHeap)
         {
-            SDL_Log("[Streaming][Heap] MapPackedMips: suballocating %u tiles at heapId=%u localTile=%u "
-                    "(heaps total=%u, TTM-registered=%u)",
-                    numPackedTiles, startHeapId, startLocalTile,
-                    m_HeapAllocator->GetNumHeaps(), m_NumTTMHeaps);
+            uint32_t n = (uint32_t)heapTiles.size();
+            std::vector<nvrhi::TiledTextureCoordinate> tcoords(n);
+            std::vector<nvrhi::TiledTextureRegion>     regions(n);
+            std::vector<uint64_t>                      offsets(n);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                uint32_t ti = heapTiles[i];
+                tcoords[i].mipLevel   = coords[ti].mipLevel;
+                tcoords[i].arrayLevel = 0;
+                tcoords[i].x          = coords[ti].x;
+                tcoords[i].y          = 0;
+                tcoords[i].z          = 0;
+                regions[i].tilesNum   = 1;
+                offsets[i] = (uint64_t)allocs[ti].heapTileIndex * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+            }
+            nvrhi::TextureTilesMapping mapping{};
+            mapping.numTextureRegions       = n;
+            mapping.tiledTextureCoordinates = tcoords.data();
+            mapping.tiledTextureRegions     = regions.data();
+            mapping.byteOffsets             = offsets.data();
+            mapping.heap                    = heap;
+            g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(texture->GetReservedTexture(), &mapping, 1);
         }
 
-        m_PackedMipTileCursor += numPackedTiles;
-
-        // Map packed mips as a single contiguous tile region starting at the first
-        // packed subresource.  In nvrhi, TiledTextureCoordinate::mipLevel maps to
-        // D3D12's Subresource index.
-        nvrhi::TiledTextureCoordinate startCoord{};
-        startCoord.mipLevel   = static_cast<uint16_t>(firstSubresource);
-        startCoord.arrayLevel = 0;
-        startCoord.x = 0;
-        startCoord.y = 0;
-        startCoord.z = 0;
-
-        nvrhi::TiledTextureRegion region{};
-        region.tilesNum = numPackedTiles;
-
-        std::vector<uint64_t> byteOffsets(numPackedTiles);
-        for (uint32_t i = 0; i < numPackedTiles; ++i)
-            byteOffsets[i] = static_cast<uint64_t>(startLocalTile + i) * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
-
-        nvrhi::TextureTilesMapping mapping{};
-        mapping.numTextureRegions       = 1;
-        mapping.tiledTextureCoordinates = &startCoord;
-        mapping.tiledTextureRegions     = &region;
-        mapping.byteOffsets             = byteOffsets.data();
-        mapping.heap                    = m_HeapAllocator->GetHeapHandle(startHeapId);
-
-        g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(texture->GetReservedTexture(), &mapping, 1);
-
         if constexpr (kStreamingDebugLog)
         {
-            SDL_Log("[Streaming] MapPackedMips: mapped %u packed mip tile(s) for subresources %u-%u "
-                    "onto heap %u at local tile %u",
-                    numPackedTiles, firstSubresource,
-                    firstSubresource + packedMipDesc.numPackedMips - 1,
-                    startHeapId, startLocalTile);
+            SDL_Log("[Streaming][Heap] MapPackedMips: textureIdx=%u mapped %u packed tile(s) (TTM heaps=%u)",
+                    textureIdx, (uint32_t)packedTiles.size(), m_NumTTMHeaps);
         }
     }
 

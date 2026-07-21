@@ -35,16 +35,20 @@ namespace nvfeedback
     static constexpr uint32_t kHeapSizeInTiles   = 256;
     static constexpr uint32_t kFeedbackTexturesToResolvePerFrame = 30;
 
+    // Maximum number of tile indices submitted to AsyncTileIO per frame.
+    // Matches the RTXTS reference's tilesPerFrame budget.  Excess tiles are deferred
+    // to m_PendingTileRequests and submitted in subsequent frames, preventing large
+    // single-frame upload batches (e.g. 1623 tiles = 104 MB in one frame).
+    static constexpr uint32_t kMaxTilesPerFrame = 128;
+
     // Hysteresis timeout: a tile stays mapped for this many seconds after the
     // last time sampler feedback requested it.  TTM transitions Mapped→Standby
     // (not Free) when the timeout expires; Standby tiles are only freed when
     // the standby queue overflows (numExtraStandbyTiles).
     //
-    // This value is intentionally short — it is the time after a tile genuinely
-    // disappears from the camera's view before it is evicted.  It is independent
-    // of the ringbuffer cycle time because every texture is re-submitted to TTM
-    // every frame using its cached feedback data (see m_CachedFeedbackData in
-    // FeedbackTexture), so lastRequestedTime is always kept fresh.
+    // With 307 textures at 30/frame the ringbuffer cycle is ~10 frames (~167ms
+    // at 60fps), so 1 second gives ~6 full cycles of margin before any tile
+    // times out.  No per-frame re-submission of cached feedback is needed.
     static constexpr float kTileHysteresisSeconds = 1.0f;
 
     // ─── HeapAllocator ───────────────────────────────────────────────────────
@@ -88,7 +92,11 @@ namespace nvfeedback
         FeedbackManager();
 
         FeedbackTexture* CreateTexture(const nvrhi::TextureDesc& desc);
-        void BeginFrame(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& results);
+        // allowHeapRelease: pass false while m_PendingTileRequests is non-empty.
+        // Releasing empty heaps while tiles are still pending upload causes churn:
+        // TTM has already allocated heap slots for those tiles; releasing the heap
+        // then re-allocating it next frame produces the grow-shrink pattern.
+        void BeginFrame(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& results, bool allowHeapRelease = true);
         void UpdateTileMappings(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& tilesReady);
         void ResolveFeedback(nvrhi::ICommandList* commandList);
         void EndFrame();
@@ -130,17 +138,9 @@ namespace nvfeedback
         std::unique_ptr<rtxts::TiledTextureManager> m_TiledTextureManager;
         std::unordered_set<uint32_t>                m_MinMipDirtyTextures;
 
-        // Running cursor for packed-mip tile suballocation.
-        // Packed mips fill tiles sequentially across dedicated heaps
-        // (heapId = cursor / kHeapSizeInTiles, localTile = cursor % kHeapSizeInTiles).
-        // These heaps are allocated via AllocateHeap but NOT registered with TTM
-        // (no AddHeap), because TTM has no concept of externally-mapped tiles and
-        // would otherwise allocate streaming tiles into packed-mip physical slots.
-        uint32_t m_PackedMipTileCursor = 0;
-
         // Number of heaps registered with TiledTextureManager via AddHeap.
-        // This is the count used in BeginFrame's heap management comparison
-        // against GetNumDesiredHeaps(). It excludes packed-mip-only heaps.
+        // Includes both packed-mip heaps (allocated in MapPackedMips) and
+        // streaming heaps (allocated in BeginFrame Step 4).
         uint32_t m_NumTTMHeaps = 0;
     };
 

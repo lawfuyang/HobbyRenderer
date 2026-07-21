@@ -785,22 +785,39 @@ void Renderer::UpdateStreamingPreRender(nvrhi::CommandListHandle cmd)
         }
 
         // Phase 3: BeginFrame — collect new tile requests.
-        // kFeedbackTexturesToResolvePerFrame (10) textures are resolved per frame (round-robin),
-        m_FeedbackManager->BeginFrame(cmd, newEntries);
+        // Only release empty heaps when the pending upload queue is empty; releasing
+        // heaps while tiles are still pending causes the grow-shrink churn pattern.
+        const bool allowHeapRelease = m_PendingTileRequests.empty();
+        m_FeedbackManager->BeginFrame(cmd, newEntries, allowHeapRelease);
     }
 
-    // -- Phase 4+5: Submit all new tile requests (unlimited budget) --
-    // All tiles requested by TTM are submitted immediately.  No per-frame tile submit
-    // budget: the TTM heap pool (GetNumDesiredHeaps) is the only backpressure.
+    // -- Phase 4+5: Submit tile requests up to kMaxTilesPerFrame budget --
+    // Drain deferred tiles from previous frames first, then new entries.
+    // Tiles that exceed the budget are kept in m_PendingTileRequests for next frame.
+    // This prevents large single-frame upload batches (e.g. 1623 tiles = 104 MB).
     std::vector<nvfeedback::FeedbackTextureUpdate> submittedThisFrame;
     uint32_t tilesSubmitted = 0;
 
-    if (!newEntries.empty())
+    // Merge new entries into the pending queue (new entries go to the back)
+    for (auto& entry : newEntries)
+        m_PendingTileRequests.push_back(std::move(entry));
+    newEntries.clear();
+
+    if (!m_PendingTileRequests.empty())
     {
         PROFILE_SCOPED("Streaming TileSubmit");
 
-        for (nvfeedback::FeedbackTextureUpdate& texUpdate : newEntries)
+        std::vector<nvfeedback::FeedbackTextureUpdate> stillPending;
+
+        for (nvfeedback::FeedbackTextureUpdate& texUpdate : m_PendingTileRequests)
         {
+            if (tilesSubmitted >= nvfeedback::kMaxTilesPerFrame)
+            {
+                // Budget exhausted — defer remaining tiles
+                stillPending.push_back(std::move(texUpdate));
+                continue;
+            }
+
             nvfeedback::FeedbackTexture* feedbackTex = m_FeedbackManager->GetTextureByIndex(texUpdate.m_TextureIdx);
             Scene::StreamingTexture& st = m_Scene.m_StreamingTextures.at(feedbackTex->GetUserIndex());
             SDL_assert(st.m_ReservedTexture && st.m_SourceData);
@@ -810,9 +827,16 @@ void Renderer::UpdateStreamingPreRender(nvrhi::CommandListHandle cmd)
             const nvrhi::FormatInfo& fmtInfo = nvrhi::getFormatInfo(texDesc.format);
 
             std::vector<uint32_t> submittedTilesThisEntry;
+            std::vector<uint32_t> deferredTilesThisEntry;
 
             for (uint32_t tileIndex : texUpdate.m_TileIndices)
             {
+                if (tilesSubmitted >= nvfeedback::kMaxTilesPerFrame)
+                {
+                    deferredTilesThisEntry.push_back(tileIndex);
+                    continue;
+                }
+
                 SDL_assert(!feedbackTex->IsTilePacked(tileIndex));
 
                 std::vector<nvfeedback::FeedbackTextureTileInfo> tileInfos;
@@ -864,7 +888,6 @@ void Renderer::UpdateStreamingPreRender(nvrhi::CommandListHandle cmd)
                 tilesSubmitted++;
             }
 
-            // Record submitted tiles for Phase 2 (next frame)
             if (!submittedTilesThisEntry.empty())
             {
                 nvfeedback::FeedbackTextureUpdate submittedUpdate;
@@ -872,7 +895,17 @@ void Renderer::UpdateStreamingPreRender(nvrhi::CommandListHandle cmd)
                 submittedUpdate.m_TileIndices = std::move(submittedTilesThisEntry);
                 submittedThisFrame.push_back(std::move(submittedUpdate));
             }
+
+            if (!deferredTilesThisEntry.empty())
+            {
+                nvfeedback::FeedbackTextureUpdate deferred;
+                deferred.m_TextureIdx = texUpdate.m_TextureIdx;
+                deferred.m_TileIndices = std::move(deferredTilesThisEntry);
+                stillPending.push_back(std::move(deferred));
+            }
         }
+
+        m_PendingTileRequests = std::move(stillPending);
     }
 
     m_TilesSubmittedThisFrame = tilesSubmitted;
