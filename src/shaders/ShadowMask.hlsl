@@ -10,7 +10,6 @@ static const Texture2D<float2>          g_GBufferNormals = srrhi::ShadowMaskInpu
 static const Texture2DArray<float>      g_CSMShadowMap  = srrhi::ShadowMaskInputs::GetCSMShadowMap();
 static       RWTexture2D<float>         g_RWShadowMask  = srrhi::ShadowMaskInputs::GetRWShadowMask();
 static const SamplerComparisonState     g_ShadowSampler = srrhi::ShadowMaskInputs::GetShadowSampler();
-static const SamplerState               g_PointSampler  = srrhi::ShadowMaskInputs::GetPointSampler();
 
 [numthreads(8, 8, 1)]
 void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
@@ -53,7 +52,6 @@ void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
         viewDepth,
         g_CSMShadowMap,
         g_ShadowSampler,
-        g_PointSampler,
         g_CB.m_ShadowViewProj,
         g_CB.m_CascadeSplits,
         g_CB.m_NormalBias,

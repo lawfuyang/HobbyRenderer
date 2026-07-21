@@ -105,17 +105,12 @@ public:
         inputs.SetCSMShadowMap(shadowMap);
         inputs.SetRWShadowMask(shadowMask, 0);
         inputs.SetShadowSampler(CommonResources::GetInstance().ShadowComparison);
-        inputs.SetPointSampler(CommonResources::GetInstance().PointClamp);
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
-        // Select shader permutation based on toggles
+        // Select shader permutation based on cascade blend toggle
         uint32_t shaderID;
-        if (g_Renderer.m_EnablePCSS && g_Renderer.m_EnableCascadeBlend)
-            shaderID = ShaderID::SHADOWMASK_SHADOWMASK_CSMAIN_PCSS_BLEND_CASCADE_BLEND_1_PCSS_1;
-        else if (g_Renderer.m_EnablePCSS)
-            shaderID = ShaderID::SHADOWMASK_SHADOWMASK_CSMAIN_PCSS_PCSS_1;
-        else if (g_Renderer.m_EnableCascadeBlend)
+        if (g_Renderer.m_EnableCascadeBlend)
             shaderID = ShaderID::SHADOWMASK_SHADOWMASK_CSMAIN_BLEND_CASCADE_BLEND_1;
         else
             shaderID = ShaderID::SHADOWMASK_SHADOWMASK_CSMAIN;

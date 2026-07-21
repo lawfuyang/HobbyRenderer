@@ -22,5 +22,4 @@ srinput ShadowMaskInputs
     RWTexture2D<float> RWShadowMask;    // u0 — R8_UNORM output shadow mask
 
     SamplerComparisonState ShadowSampler; // s0 — comparison linear, clamp-to-border white
-    SamplerState           PointSampler;  // s1 — point clamp (PCSS blocker search)
 };

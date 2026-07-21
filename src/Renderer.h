@@ -323,7 +323,6 @@ struct Renderer
     float    m_CSMNormalBias       = 3.0f;    // Normal-offset bias in shadow-map texels
     float    m_CSMCascadeBiasScale = 1.0f;    // Per-cascade bias scale (0=uniform, 1=proportional)
 
-    bool     m_EnablePCSS          = false;   // PCSS soft shadows (disabled by default; expensive)
     bool     m_EnableCascadeBlend  = false;   // Blend adjacent cascades at boundaries
 
     // bloom

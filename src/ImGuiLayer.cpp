@@ -126,8 +126,6 @@ void ImGuiLayer::UpdateFrame()
                         ImGui::SliderFloat("Cascade Bias Scale", &g_Renderer.m_CSMCascadeBiasScale, 0.0f, 1.0f, "%.2f");
 
                         ImGui::SeparatorText("Quality");
-                        ImGui::Checkbox("PCSS", &g_Renderer.m_EnablePCSS);
-                        ImGui::SameLine();
                         ImGui::Checkbox("Cascade Blend", &g_Renderer.m_EnableCascadeBlend);
 
                     } // if (m_EnableCSMShadows)
