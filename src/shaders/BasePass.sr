@@ -7,7 +7,7 @@ cbuffer BasePassConstants
 {
     PlanarViewConstants m_View;
     PlanarViewConstants m_PrevView;
-    float4 m_FrustumPlanes[5];
+    float4 m_FrustumPlanes[6];
     float4 m_CameraPos;
     float4 m_CullingCameraPos;
     uint m_LightCount;
