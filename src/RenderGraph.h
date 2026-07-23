@@ -207,7 +207,7 @@ public:
     void RenderDebugUI();
     std::string ExportToString() const;
 
-    static RGBufferDesc GetSPDAtomicCounterDesc(const char* debugName);
+    static RGBufferDesc GetSPDAtomicCounterDesc(const char* debugName, uint32_t numElements = 1);
     
 private:
     // Generic resource allocation helper (avoids code duplication)

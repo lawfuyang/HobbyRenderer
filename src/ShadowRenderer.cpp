@@ -11,6 +11,7 @@
 // CSMDebugRenderer.
 // ---------------------------------------------------------------------------
 RGTextureHandle g_RG_CSMShadowMap;
+RGTextureHandle g_RG_CSMShadowMapMips;
 
 // ---------------------------------------------------------------------------
 // ShadowRenderer — 4-cascade CSM depth array (4 × 2048² D32_FLOAT)
@@ -47,6 +48,33 @@ public:
         m_OpaqueResources.DeclareResources(renderGraph, "Shadow_Opaque");
         m_MaskedResources.DeclareResources(renderGraph, "Shadow_Masked");
 
+        // When PCSS is active, declare a separate R32_FLOAT UAV-capable texture for the
+        // min-reduction mip chain. D32 depth textures cannot be UAV (D3D12 restriction),
+        // so we copy mip 0 into this texture and run SPD on it.
+        if (g_Renderer.m_EnablePCSS && g_Renderer.m_EnablePCSSShadowDepthMips)
+        {
+            uint32_t mips = 1;
+            uint32_t dim  = srrhi::CommonConsts::kShadowMapResolution;
+            while (dim > 1) { dim >>= 1; ++mips; }
+
+            RGTextureDesc mipsDesc;
+            mipsDesc.m_NvrhiDesc.dimension  = nvrhi::TextureDimension::Texture2DArray;
+            mipsDesc.m_NvrhiDesc.width      = srrhi::CommonConsts::kShadowMapResolution;
+            mipsDesc.m_NvrhiDesc.height     = srrhi::CommonConsts::kShadowMapResolution;
+            mipsDesc.m_NvrhiDesc.arraySize  = g_Renderer.m_NumCSMCascades;
+            mipsDesc.m_NvrhiDesc.mipLevels  = mips;
+            mipsDesc.m_NvrhiDesc.format     = nvrhi::Format::R32_FLOAT;
+            mipsDesc.m_NvrhiDesc.isUAV      = true;
+            mipsDesc.m_NvrhiDesc.isShaderResource = true;
+            mipsDesc.m_NvrhiDesc.debugName  = "CSMShadowMapMips_RG";
+            mipsDesc.m_NvrhiDesc.initialState     = nvrhi::ResourceStates::UnorderedAccess;
+            mipsDesc.m_NvrhiDesc.keepInitialState = true;
+            renderGraph.DeclareTexture(mipsDesc, g_RG_CSMShadowMapMips);
+
+            renderGraph.DeclareBuffer(RenderGraph::GetSPDAtomicCounterDesc("ShadowMap SPD Atomic Counter", g_Renderer.m_NumCSMCascades), m_RG_SPDAtomicCounter);
+            renderGraph.WriteBuffer(m_RG_SPDAtomicCounter);
+        }
+
         return true;
     }
 
@@ -64,6 +92,28 @@ public:
         {
             RenderCascade(i, commandList, shadowMap, opaque, masked);
         }
+
+        // Generate min-reduction mip chain for PCSS early-out.
+        // Copy mip 0 of the D32 depth array into the R32_FLOAT UAV texture, then run SPD.
+        if (g_Renderer.m_EnablePCSS && g_Renderer.m_EnablePCSSShadowDepthMips)
+        {
+            nvrhi::TextureHandle mipsTex   = renderGraph.GetTexture(g_RG_CSMShadowMapMips, RGResourceAccessMode::Write);
+            nvrhi::BufferHandle  spdCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
+
+            // Copy each cascade slice mip 0: D32 → R32_FLOAT
+            for (uint32_t slice = 0; slice < g_Renderer.m_NumCSMCascades; ++slice)
+            {
+                nvrhi::TextureSlice src;
+                src.arraySlice = slice;
+                src.mipLevel   = 0;
+                nvrhi::TextureSlice dst;
+                dst.arraySlice = slice;
+                dst.mipLevel   = 0;
+                commandList->copyTexture(mipsTex, dst, shadowMap, src);
+            }
+
+            g_Renderer.GenerateMipsUsingSPD(mipsTex, spdCounter, commandList, "ShadowMap MinReduction Mips", srrhi::CommonConsts::SPD_REDUCTION_MIN);
+        }
     }
 
     const char* GetName() const override { return "Shadow (CSM)"; }
@@ -71,6 +121,7 @@ public:
 private:
     BasePassResources m_OpaqueResources;
     BasePassResources m_MaskedResources;
+    RGBufferHandle    m_RG_SPDAtomicCounter;
 
     struct BucketHandles
     {

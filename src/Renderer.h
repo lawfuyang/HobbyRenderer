@@ -324,6 +324,9 @@ struct Renderer
     float    m_CSMCascadeBiasScale = 1.0f;    // Per-cascade bias scale (0=uniform, 1=proportional)
 
     bool     m_EnableCascadeBlend  = false;   // Blend adjacent cascades at boundaries
+    bool     m_EnablePCSS          = false;   // Enable Percentage-Closer Soft Shadows (cascades 0-2)
+    bool     m_EnablePCSSShadowTemporal = false;    // Enable temporal shadow history resolve (PCSS only)
+    bool     m_EnablePCSSShadowDepthMips = false;   // Enable shadow map min-reduction mip chain (PCSS early-out)
 
     // bloom
     float m_BloomKnee = 0.1f;

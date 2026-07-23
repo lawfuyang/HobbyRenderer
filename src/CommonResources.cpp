@@ -106,6 +106,15 @@ void CommonResources::Initialize()
         desc.reductionType = nvrhi::SamplerReductionType::Comparison;
         ShadowComparison = createSampler("ShadowComparison", desc);
     }
+    {
+        // Point sampler for raw shadow depth fetch (blocker search — no comparison).
+        // Border = white so out-of-bounds samples read as 1.0 (fully lit).
+        nvrhi::SamplerDesc desc;
+        desc.setAllFilters(false);
+        desc.setAllAddressModes(nvrhi::SamplerAddressMode::Border);
+        desc.borderColor = nvrhi::Color(1.0f, 1.0f, 1.0f, 1.0f);
+        ShadowSamplerPoint = createSampler("ShadowSamplerPoint", desc);
+    }
 
     // Register common samplers with global sampler descriptor heap
     g_Renderer.RegisterSamplerAtIndex(srrhi::CommonConsts::SAMPLER_ANISOTROPIC_CLAMP_INDEX, AnisotropicClamp);
@@ -264,7 +273,9 @@ void CommonResources::Initialize()
 
         // Create dummy UAV texture
         DummyUAVTexture = createDefaultTexture("DummyUAV", nvrhi::TextureDimension::Texture2D, nvrhi::Format::R32_FLOAT, true);
+        DummyUAVTextureArray = createDefaultTexture("DummyUAVArray", nvrhi::TextureDimension::Texture2DArray, nvrhi::Format::R32_FLOAT, true);
         DummySRVTexture = createDefaultTexture("DummySRV", nvrhi::TextureDimension::Texture2D, nvrhi::Format::R32_FLOAT, false);
+        DummySRVTextureArray = createDefaultTexture("DummySRVArray", nvrhi::TextureDimension::Texture2DArray, nvrhi::Format::R32_FLOAT, false);
 
         // DummySRVByteAddressBuffer
         {
@@ -369,6 +380,25 @@ void CommonResources::Initialize()
         // Load BRDF LUT
         LoadAndUpload(g_Renderer.m_BRDFLutTexture, "BRDF_LUT", BRDF_LUT);
 
+        // Load blue-noise disc texture for PCSS sampling
+        {
+            const std::filesystem::path bnPath = std::filesystem::path{ basePath }.parent_path().parent_path() / "external" / "LDR_RG01_0.png";
+
+            nvrhi::TextureDesc bnDesc;
+            std::unique_ptr<MemoryMappedDataReader> bnData;
+            if (LoadTexture(bnPath.generic_string(), bnDesc, bnData))
+            {
+                bnDesc.debugName = "BlueNoiseTex";
+                BlueNoiseTex = device->createTexture(bnDesc);
+                SDL_assert(BlueNoiseTex);
+                ::UploadTexture(commandList, BlueNoiseTex, bnDesc, bnData->GetData(), bnData->GetSize());
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to load blue-noise texture", "Failed to load: %s", bnPath.generic_string().c_str());
+            }
+        }
+
         // Load IBL textures
         LoadAndUpload(g_Renderer.m_IrradianceTexturePath, "IrradianceTexture", IrradianceTexture, true);
         LoadAndUpload(g_Renderer.m_RadianceTexturePath, "RadianceTexture", RadianceTexture, true);
@@ -449,6 +479,8 @@ void CommonResources::Initialize()
         uint16_t pbrPixel = 0xFF00; // RGBA(255,0,255,255) in RG8, note: ABGR order in memory - Occlusion=1 (R=255), Metallic=0 (G=0), Roughness=1 (B=255)
         commandList->writeTexture(DefaultTexturePBR, 0, 0, &pbrPixel, sizeof(uint32_t), 0);
 
+        { const float zero = 0.0f; commandList->writeTexture(DummySRVTextureArray, 0, 0, &zero, sizeof(zero)); }
+
         commandList->setPermanentTextureState(DefaultTextureBlack, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(DefaultTextureWhite, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(DefaultTexture3DWhite, nvrhi::ResourceStates::ShaderResource);
@@ -456,10 +488,13 @@ void CommonResources::Initialize()
         commandList->setPermanentTextureState(DefaultTextureNormal, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(DefaultTexturePBR, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(DummyUAVTexture, nvrhi::ResourceStates::UnorderedAccess);
+        commandList->setPermanentTextureState(DummyUAVTextureArray, nvrhi::ResourceStates::UnorderedAccess);
         commandList->setPermanentTextureState(DummySRVTexture, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(DummySRVTextureArray, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BRDF_LUT, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(IrradianceTexture, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(RadianceTexture, nvrhi::ResourceStates::ShaderResource);
+        commandList->setPermanentTextureState(BlueNoiseTex, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BrunetonTransmittance, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BrunetonScattering, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BrunetonIrradiance, nvrhi::ResourceStates::ShaderResource);
@@ -507,7 +542,9 @@ void CommonResources::Shutdown()
     IrradianceTexture = nullptr;
     BRDF_LUT = nullptr;
     DummyUAVTexture = nullptr;
+    DummyUAVTextureArray = nullptr;
     DummySRVTexture = nullptr;
+    DummySRVTextureArray = nullptr;
     DummySRVByteAddressBuffer = nullptr;
     DummyUAVByteAddressBuffer = nullptr;
     DummySRVStructuredBuffer = nullptr;

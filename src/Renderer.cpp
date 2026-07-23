@@ -22,6 +22,7 @@ using FfxUInt32x4 = uint32_t[4];
 #include "shaders/ffx_spd.h"
 
 #include "shaders/srrhi/cpp/SPD.h"
+#include "shaders/srrhi/cpp/SPD_Array.h"
 
 namespace
 {
@@ -1870,41 +1871,112 @@ void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferH
 
     ffxSpdSetup(dispatchThreadGroupCountXY, workGroupOffset, numWorkGroupsAndMips, rectInfo, spdmips);
 
-    srrhi::SpdInputs inputs;
-    inputs.m_SpdConstants.SetMips(numWorkGroupsAndMips[1]);
-    inputs.m_SpdConstants.SetNumWorkGroups(numWorkGroupsAndMips[0]);
-    inputs.m_SpdConstants.SetWorkGroupOffset(Vector2U{ workGroupOffset[0], workGroupOffset[1] });
-    inputs.m_SpdConstants.SetReductionType(reductionType);
-    inputs.SetAtomicCounter(spdAtomicCounter);
-    inputs.SetMip0(texture, 0, 1);
-    inputs.SetOut1(numMips > 1 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 1 ? 1 : 0);
-    inputs.SetOut2(numMips > 2 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 2 ? 2 : 0);
-    inputs.SetOut3(numMips > 3 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 3 ? 3 : 0);
-    inputs.SetOut4(numMips > 4 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 4 ? 4 : 0);
-    inputs.SetOut5(numMips > 5 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 5 ? 5 : 0);
-    inputs.SetOut6(numMips > 6 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 6 ? 6 : 0);
-    inputs.SetOut7(numMips > 7 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 7 ? 7 : 0);
-    inputs.SetOut8(numMips > 8 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 8 ? 8 : 0);
-    inputs.SetOut9(numMips > 9 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 9 ? 9 : 0);
-    inputs.SetOut10(numMips > 10 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 10 ? 10 : 0);
-    inputs.SetOut11(numMips > 11 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 11 ? 11 : 0);
-    inputs.SetOut12(numMips > 12 ? texture : CommonResources::GetInstance().DummyUAVTexture, numMips > 12 ? 12 : 0);
+    const uint32_t arraySize = texture->getDesc().arraySize;
+    const bool bIsArray = (arraySize > 1);
 
-    // Clear atomic counter
+    // For Texture2DArray inputs use the SPD_ARRAY permutation: a single dispatch
+    // processes all slices in a loop inside the shader. Each slice has its own
+    // atomic counter element (buffer must have arraySize elements).
+    // For plain Texture2D inputs use the standard permutation — unchanged behaviour.
+    uint32_t spdShaderID;
+    
+    if (bIsArray)
+    {
+        if (numChannels == 3)
+        {
+            spdShaderID = ShaderID::SPD_SPD_CSMAIN_SPD_ARRAY_1_SPD_NUM_CHANNELS_3;
+        }
+        else
+        {
+            spdShaderID = ShaderID::SPD_SPD_CSMAIN_SPD_ARRAY_1_SPD_NUM_CHANNELS_1;
+        }
+    }
+    else
+    {
+        if (numChannels == 3)
+        {
+            spdShaderID = ShaderID::SPD_SPD_CSMAIN_SPD_ARRAY_0_SPD_NUM_CHANNELS_3;
+        }
+        else
+        {
+            spdShaderID = ShaderID::SPD_SPD_CSMAIN_SPD_ARRAY_0_SPD_NUM_CHANNELS_1;
+        }
+    }
+
     commandList->clearBufferUInt(spdAtomicCounter, 0);
 
-    nvrhi::BindingSetDesc spdBset = CreateBindingSetDesc(inputs);
+    nvrhi::BindingSetDesc bindingSetDesc;
+    uint32_t pushConstantBytes;
 
-    const uint32_t spdShaderID = (numChannels == 3)
-        ? ShaderID::SPD_SPD_CSMAIN_SPD_NUM_CHANNELS_3
-        : ShaderID::SPD_SPD_CSMAIN_SPD_NUM_CHANNELS_1;
+    if (bIsArray)
+    {
+        nvrhi::TextureHandle dummy = CommonResources::GetInstance().DummyUAVTextureArray;
+        srrhi::SpdArrayInputs inputs;
+        inputs.m_SpdConstants.SetMips(numWorkGroupsAndMips[1]);
+        inputs.m_SpdConstants.SetNumWorkGroups(numWorkGroupsAndMips[0]);
+        inputs.m_SpdConstants.SetWorkGroupOffset(Vector2U{ workGroupOffset[0], workGroupOffset[1] });
+        inputs.m_SpdConstants.SetReductionType(reductionType);
+        inputs.m_SpdConstants.SetNumSlices(arraySize);
+        inputs.SetAtomicCounter(spdAtomicCounter);
+        inputs.SetMip0(texture, 0, 1, 0, -1);
+        inputs.SetOut1(numMips > 1 ? texture : dummy, numMips > 1 ? 1 : 0, 0, -1);
+        inputs.SetOut2(numMips > 2 ? texture : dummy, numMips > 2 ? 2 : 0, 0, -1);
+        inputs.SetOut3(numMips > 3 ? texture : dummy, numMips > 3 ? 3 : 0, 0, -1);
+        inputs.SetOut4(numMips > 4 ? texture : dummy, numMips > 4 ? 4 : 0, 0, -1);
+        inputs.SetOut5(numMips > 5 ? texture : dummy, numMips > 5 ? 5 : 0, 0, -1);
+        inputs.SetOut6(numMips > 6 ? texture : dummy, numMips > 6 ? 6 : 0, 0, -1);
+        inputs.SetOut7(numMips > 7 ? texture : dummy, numMips > 7 ? 7 : 0, 0, -1);
+        inputs.SetOut8(numMips > 8 ? texture : dummy, numMips > 8 ? 8 : 0, 0, -1);
+        inputs.SetOut9(numMips > 9 ? texture : dummy, numMips > 9 ? 9 : 0, 0, -1);
+        inputs.SetOut10(numMips > 10 ? texture : dummy, numMips > 10 ? 10 : 0, 0, -1);
+        inputs.SetOut11(numMips > 11 ? texture : dummy, numMips > 11 ? 11 : 0, 0, -1);
+        inputs.SetOut12(numMips > 12 ? texture : dummy, numMips > 12 ? 12 : 0, 0, -1);
+        bindingSetDesc = CreateBindingSetDesc(inputs);
+        pushConstantBytes = srrhi::SpdArrayInputs::PushConstantBytes;
+    }
+    else
+    {
+        nvrhi::TextureHandle dummy = CommonResources::GetInstance().DummyUAVTexture;
+        srrhi::SpdInputs inputs;
+        inputs.m_SpdConstants.SetMips(numWorkGroupsAndMips[1]);
+        inputs.m_SpdConstants.SetNumWorkGroups(numWorkGroupsAndMips[0]);
+        inputs.m_SpdConstants.SetWorkGroupOffset(Vector2U{ workGroupOffset[0], workGroupOffset[1] });
+        inputs.m_SpdConstants.SetReductionType(reductionType);
+        inputs.m_SpdConstants.SetNumSlices(arraySize);
+        inputs.SetAtomicCounter(spdAtomicCounter);
+        inputs.SetMip0(texture, 0, 1);
+        inputs.SetOut1(numMips > 1 ? texture : dummy, numMips > 1 ? 1 : 0);
+        inputs.SetOut2(numMips > 2 ? texture : dummy, numMips > 2 ? 2 : 0);
+        inputs.SetOut3(numMips > 3 ? texture : dummy, numMips > 3 ? 3 : 0);
+        inputs.SetOut4(numMips > 4 ? texture : dummy, numMips > 4 ? 4 : 0);
+        inputs.SetOut5(numMips > 5 ? texture : dummy, numMips > 5 ? 5 : 0);
+        inputs.SetOut6(numMips > 6 ? texture : dummy, numMips > 6 ? 6 : 0);
+        inputs.SetOut7(numMips > 7 ? texture : dummy, numMips > 7 ? 7 : 0);
+        inputs.SetOut8(numMips > 8 ? texture : dummy, numMips > 8 ? 8 : 0);
+        inputs.SetOut9(numMips > 9 ? texture : dummy, numMips > 9 ? 9 : 0);
+        inputs.SetOut10(numMips > 10 ? texture : dummy, numMips > 10 ? 10 : 0);
+        inputs.SetOut11(numMips > 11 ? texture : dummy, numMips > 11 ? 11 : 0);
+        inputs.SetOut12(numMips > 12 ? texture : dummy, numMips > 12 ? 12 : 0);
+        bindingSetDesc = CreateBindingSetDesc(inputs);
+        pushConstantBytes = srrhi::SpdInputs::PushConstantBytes;
+    }
+
+    // pushConstants pointer: both SpdInputs and SpdArrayInputs have the same SpdConstants layout
+    // at the same offset (first member), so we can read it back from the binding set desc indirectly.
+    // Instead, re-build a local constants struct for the push constant pointer.
+    srrhi::SpdConstants pushConsts;
+    pushConsts.SetMips(numWorkGroupsAndMips[1]);
+    pushConsts.SetNumWorkGroups(numWorkGroupsAndMips[0]);
+    pushConsts.SetWorkGroupOffset(Vector2U{ workGroupOffset[0], workGroupOffset[1] });
+    pushConsts.SetReductionType(reductionType);
+    pushConsts.SetNumSlices(arraySize);
 
     Renderer::RenderPassParams params{
         .commandList = commandList,
         .shaderID = spdShaderID,
-        .bindingSetDesc = spdBset,
-        .pushConstants = &inputs.m_SpdConstants,
-        .pushConstantsSize = srrhi::SpdInputs::PushConstantBytes,
+        .bindingSetDesc = bindingSetDesc,
+        .pushConstants = &pushConsts,
+        .pushConstantsSize = pushConstantBytes,
         .dispatchParams = { .x = dispatchThreadGroupCountXY[0], .y = dispatchThreadGroupCountXY[1], .z = 1 }
     };
 

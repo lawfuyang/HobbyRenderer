@@ -1,0 +1,35 @@
+cbuffer SpdArrayConstants
+{
+    uint m_Mips;
+    uint m_NumWorkGroups;
+    uint2 m_WorkGroupOffset;
+    uint m_ReductionType;
+    uint m_NumSlices;
+};
+
+#if SPD_NUM_CHANNELS == 3
+    #define SPD_TYPE float3
+#else
+    #define SPD_TYPE float
+#endif
+
+srinput SpdArrayInputs
+{
+    [push_constant]
+    SpdArrayConstants m_SpdConstants;
+
+    Texture2DArray<SPD_TYPE>    Mip0;
+    RWTexture2DArray<SPD_TYPE>  Out1;
+    RWTexture2DArray<SPD_TYPE>  Out2;
+    RWTexture2DArray<SPD_TYPE>  Out3;
+    RWTexture2DArray<SPD_TYPE>  Out4;
+    RWTexture2DArray<SPD_TYPE>  Out5;
+    RWTexture2DArray<SPD_TYPE>  Out6;
+    RWTexture2DArray<SPD_TYPE>  Out7;
+    RWTexture2DArray<SPD_TYPE>  Out8;
+    RWTexture2DArray<SPD_TYPE>  Out9;
+    RWTexture2DArray<SPD_TYPE>  Out10;
+    RWTexture2DArray<SPD_TYPE>  Out11;
+    RWTexture2DArray<SPD_TYPE>  Out12;
+    RWStructuredBuffer<uint> AtomicCounter;
+};

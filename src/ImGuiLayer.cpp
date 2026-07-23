@@ -126,6 +126,12 @@ void ImGuiLayer::UpdateFrame()
                         ImGui::SliderFloat("Cascade Bias Scale", &g_Renderer.m_CSMCascadeBiasScale, 0.0f, 1.0f, "%.2f");
 
                         ImGui::SeparatorText("Quality");
+                        ImGui::Checkbox("Enable PCSS", &g_Renderer.m_EnablePCSS);
+                        if (g_Renderer.m_EnablePCSS)
+                        {
+                            ImGui::Checkbox("Shadow Depth Mips", &g_Renderer.m_EnablePCSSShadowDepthMips);
+                            ImGui::Checkbox("Shadow Temporal", &g_Renderer.m_EnablePCSSShadowTemporal);
+                        }
                         ImGui::Checkbox("Cascade Blend", &g_Renderer.m_EnableCascadeBlend);
 
                     } // if (m_EnableCSMShadows)

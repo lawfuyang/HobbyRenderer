@@ -37,6 +37,7 @@ public:
     nvrhi::SamplerHandle PointMaxReductionWrap;   // Point + max reduction, wrap
     nvrhi::SamplerHandle LinearClampBorderWhite; // Bilinear filtering, clamp to border (white color)
     nvrhi::SamplerHandle ShadowComparison;       // Comparison sampler for PCF shadow maps (linear, border=white)
+    nvrhi::SamplerHandle ShadowSamplerPoint;     // Point sampler, clamp-to-border white, for raw shadow depth fetch
 
     // Common raster states
     nvrhi::RasterState RasterCullNone;        // Solid fill, no cull
@@ -68,10 +69,13 @@ public:
     nvrhi::TextureHandle DefaultTextureNormal;       // RGBA(0.5,0.5,1,1) - neutral normal map
     nvrhi::TextureHandle DefaultTexturePBR;          // RGB(1, 0,1) - ORM: Occlusion = 1, Metallic=0, Roughness=1
     nvrhi::TextureHandle DummyUAVTexture;            // 1x1 UAV texture for filling slots
+    nvrhi::TextureHandle DummyUAVTextureArray;       // 1x1x1 Texture2DArray UAV for filling array slots
     nvrhi::TextureHandle DummySRVTexture;            // 1x1 SRV texture for filling slots
+    nvrhi::TextureHandle DummySRVTextureArray;       // 1x1x1 Texture2DArray SRV for filling array slots
     nvrhi::TextureHandle BRDF_LUT;                   // BRDF integration LUT for IBL
     nvrhi::TextureHandle IrradianceTexture;          // Irradiance cubemap for IBL
     nvrhi::TextureHandle RadianceTexture;            // Radiance cubemap (filtered environment) for IBL
+    nvrhi::TextureHandle BlueNoiseTex;               // 64x64 R8G8_UNORM blue-noise disc (external/LDR_RG01_0.png)
 
     // Bruneton Atmosphere textures
     nvrhi::TextureHandle BrunetonTransmittance;

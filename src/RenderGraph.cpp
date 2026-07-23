@@ -1618,11 +1618,11 @@ uint16_t RenderGraph::GetPassIndex(const char* passName) const
     return 0; // not found / pass was disabled this frame
 }
 
-RGBufferDesc RenderGraph::GetSPDAtomicCounterDesc(const char* debugName)
+RGBufferDesc RenderGraph::GetSPDAtomicCounterDesc(const char* debugName, uint32_t numElements)
 {
     RGBufferDesc desc;
     desc.m_NvrhiDesc.structStride = sizeof(uint32_t);
-    desc.m_NvrhiDesc.byteSize = sizeof(uint32_t);
+    desc.m_NvrhiDesc.byteSize = sizeof(uint32_t) * numElements;
     desc.m_NvrhiDesc.canHaveUAVs = true;
     desc.m_NvrhiDesc.debugName = debugName;
     desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
