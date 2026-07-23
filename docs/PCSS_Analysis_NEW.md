@@ -667,21 +667,83 @@ Main failure modes and mitigations:
 
 ## 8. DEBUGGING
 
-### Visualization (HIGH PRIORITY)
+### Existing CSM Debug Renderer
 
-The existing `CSMDebugRenderer` should be extended with PCSS-specific debug modes. Proposed additions to `CSMDebugMode`:
+`CSMDebugRenderer` is a fullscreen pixel-shader pass that runs every frame in `NormalBasic` mode. It writes into `g_RG_CSMDebugOutput` (RGBA16_FLOAT), which `DeferredLighting` composites over the final image when `m_CSMDebugMode != 0`. When the mode is `Off` (0), the texture is cleared to black and the overlay is skipped at zero cost.
 
-| Mode | Output | Purpose |
+**Pipeline:**
+
+```
+CSMDebugRenderer::Setup()
+    ├── DeclareTexture(CSMDebugOutput, RGBA16_FLOAT, RenderTarget)  ← always declared
+    └── ReadTexture(Depth, GBufferAlbedo, CSMShadowMap, ShadowMask) ← only when mode != Off
+
+CSMDebugRenderer::Render()
+    ├── if mode == Off → clearTextureFloat(black) → return
+    ├── Build CSMDebugConstants CB (ShadowViewProj[4], ClipToView, ClipToWorld,
+    │       CascadeSplits, OutputSize, DebugMode)
+    └── AddFullScreenPass(CSMDEBUG_CSMDEBUG_PSMAIN)
+            → writes g_RG_CSMDebugOutput
+
+DeferredLighting (DeferredRenderer.cpp)
+    ├── if m_CSMDebugMode != 0 → ReadTexture(g_RG_CSMDebugOutput)
+    ├── SetCSMDebugMode(m_CSMDebugMode) in DeferredLightingConstants
+    └── DeferredLighting.hlsl: if (m_CSMDebugMode != 0) → overlay CSMDebugOutput over lit result
+```
+
+**ImGui control** (`ImGuiLayer.cpp`, CSM tree node):
+
+```cpp
+static const char* kCSMDebugModes[] = {
+    "Off", "Cascade Splits", "Shadow Map Array", "Raw Shadow Mask",
+    "PCF Footprint", "Alpha-Masked Overlay", "Depth Compare",
+    "Frustum Wireframe", "Blend Zone"
+};
+ImGui::Combo("CSM Debug", (int*)&g_Renderer.m_CSMDebugMode,
+    kCSMDebugModes, IM_ARRAYSIZE(kCSMDebugModes));
+```
+
+**Renderer state:** `uint32_t m_CSMDebugMode = 0` in `Renderer.h`.
+
+### Existing Debug Modes (`Common.sr` — `CSMDebugMode`)
+
+| Value | Enum | Description | Implementation |
+|---|---|---|---|
+| 0 | `CSM_DEBUG_OFF` | Disabled — overlay cleared to black | Pass skipped entirely |
+| 1 | `CSM_DEBUG_CASCADE_SPLITS` | Cascade color tint blended 50/50 with albedo | Red=C0, Green=C1, Blue=C2, Yellow=C3 |
+| 2 | `CSM_DEBUG_SHADOW_MAP_VIZ` | Bottom-quarter strip: 4 cascade depth buffers side-by-side | Linearized D32_FLOAT, point-sampled |
+| 3 | `CSM_DEBUG_SHADOW_MASK` | Grayscale display of the R8 shadow mask | Direct `g_ShadowMask.Load()` |
+| 4 | `CSM_DEBUG_PCF_FOOTPRINT` | Checkerboard overlay scaled to shadow-map texel size | Cascade-colored checker blended 30% over albedo |
+| 5 | `CSM_DEBUG_ALPHA_MASKED` | Orange = alpha-masked geometry, normal = opaque | `albedo.a < 0.99` test |
+| 6 | `CSM_DEBUG_DEPTH_COMPARE` | Red = shadowed, Green = lit | `lerp(red, green, shadowFactor)` |
+| 7 | `CSM_DEBUG_FRUSTUM_WIRE` | Scene albedo pass-through (frustum wireframe drawn by ImGui 3D lines) | No shader work; CPU-side ImGui overlay |
+| 8 | `CSM_DEBUG_BLEND_ZONE` | Cascade blend band: white = in blend band, cascade color = outside | 60/40 blend with albedo |
+
+**Shader resources bound for all modes (except Off):**
+
+| Slot | Resource | Type |
 |---|---|---|
-| `CSM_DEBUG_BLOCKER_DEPTH` | Grayscale: avg blocker depth (normalised) | Verify blocker search is finding occluders |
-| `CSM_DEBUG_BLOCKER_COUNT` | Heatmap: 0 (blue) → 48 effective (red) | Identify regions where blocker search is sparse |
-| `CSM_DEBUG_PENUMBRA_RADIUS` | Heatmap: 0 (blue) → kMaxPenumbra (red) | Verify penumbra scaling is correct |
-| `CSM_DEBUG_SEARCH_RADIUS` | Heatmap: search radius in texels | Verify precomputed search radius is correct |
-| `CSM_DEBUG_EARLYOUT` | Binary: green=early-out, red=full search | Measure min-reduction early-out effectiveness |
-| `CSM_DEBUG_TEMPORAL_BLEND` | Grayscale: blend weight α | Identify disocclusion regions |
-| `CSM_DEBUG_RAW_SHADOW` | Raw stochastic output before temporal | Inspect noise level before accumulation |
+| `b0` | `CSMDebugConstants` CB | Volatile CB |
+| `t0` | `Depth` | `Texture2D<float>` |
+| `t1` | `GBufferAlbedo` | `Texture2D<float4>` |
+| `t2` | `CSMShadowMap` | `Texture2DArray<float>` |
+| `t3` | `ShadowMask` | `Texture2D<float>` |
+| `s0` | `PointSampler` | `PointClamp` from `CommonResources` |
 
-**Implementation:** Pass debug values out of `ComputePCSSShadow` via `out` parameters. Write to `g_RWShadowMask` in debug mode (shadow mask is not used for lighting when debug overlay is active).
+### Proposed PCSS Debug Modes (Not Yet Implemented)
+
+The following modes should be added to `CSMDebugMode` in `Common.sr` and handled in `CSMDebug.hlsl` to support PCSS debugging. They require PCSS intermediate values to be written out of `ComputePCSSShadow` via `out` parameters and stored in a debug UAV (or packed into the shadow mask channel when debug is active).
+
+| Proposed Enum | Output | Purpose |
+|---|---|---|
+| `CSM_DEBUG_BLOCKER_DEPTH` | Grayscale: avg blocker depth (normalised to receiver depth) | Verify blocker search is finding occluders |
+| `CSM_DEBUG_BLOCKER_COUNT` | Heatmap: 0 (blue) → 12 taps (red) | Identify regions where blocker search is sparse |
+| `CSM_DEBUG_PENUMBRA_RADIUS` | Heatmap: 0 (blue) → `kMaxPenumbra` texels (red) | Verify penumbra scaling is correct |
+| `CSM_DEBUG_EARLYOUT` | Binary: green = early-out hit, red = full search ran | Measure min-reduction early-out effectiveness |
+| `CSM_DEBUG_RAW_SHADOW` | Raw stochastic output before temporal resolve | Inspect noise level before accumulation |
+| `CSM_DEBUG_TEMPORAL_BLEND` | Grayscale: blend weight α (1.0 = full history, 0.0 = disocclusion) | Identify disocclusion regions |
+
+**Implementation note:** Pass debug values out of `ComputePCSSShadow` via `out float dbgBlockerDepth`, `out float dbgPenumbraUV`, etc. Write to `g_RWShadowMask` in debug mode (shadow mask is not used for lighting when the debug overlay is active). The existing `CSMDebugRenderer` fullscreen pass can then read these values from the shadow mask texture.
 
 ### Logging
 
@@ -700,7 +762,7 @@ The existing `CSMDebugRenderer` should be extended with PCSS-specific debug mode
   - `g_RWShadowMask` after dispatch 1 (raw stochastic noise).
   - `g_RWShadowMask` after dispatch 2 (temporally resolved).
   - `g_RG_ShadowHistory` (should match previous frame's final mask).
-- Check register pressure of the PCSS shader: `blockerDepths[12]` array = 48 bytes; Welford state = 12 bytes; total ~60 bytes of local state. Should not spill on SM 6.x.
+- Check register pressure of the PCSS shader: local state fits comfortably in the register file on SM 6.x.
 
 ### Troubleshooting
 
@@ -715,16 +777,17 @@ The existing `CSMDebugRenderer` should be extended with PCSS-specific debug mode
 | Flickering noise | History not initialised on first frame | Clear `g_RG_ShadowHistory` to 1.0 on `m_ShadowHistoryIsNew` |
 | Black shadows at cascade edges | Border sampler returning 0 | Verify `ShadowComparison` and `ShadowSamplerPoint` use `clamp-to-border-white` |
 | Early-out never fires | Shadow map has no mip chain, or wrong mip level | Verify shadow map is created with `mipLevels > 1`; verify `MinReductionClamp` sampler is bound |
-| Wave reduction incorrect | Wave size < 4 on target hardware | Add `[WaveSize(4)]` attribute or fallback path |
 | Welford rejects all samples | `stddev` near zero with outlier present | Ensure `+ 1e-5f` epsilon in rejection threshold |
 
 **Debug workflow:**
-1. Enable `CSM_DEBUG_EARLYOUT` — verify min-reduction early-out is firing for lit regions.
-2. Enable `CSM_DEBUG_BLOCKER_DEPTH` — verify occluders are detected in shadow regions.
-3. Enable `CSM_DEBUG_PENUMBRA_RADIUS` — verify penumbra scales with distance from caster.
-4. Enable `CSM_DEBUG_RAW_SHADOW` — inspect stochastic noise before temporal resolve.
-5. Disable PCSS (`m_EnablePCSS = false`) — verify 3×3 PCF baseline is unchanged.
-6. Re-enable PCSS — verify temporal resolve converges within 5 frames (static camera).
+1. Set `CSM_DEBUG_SHADOW_MASK` (mode 3) — verify the shadow mask is being written correctly.
+2. Set `CSM_DEBUG_CASCADE_SPLITS` (mode 1) — verify cascade selection is correct per pixel.
+3. Set `CSM_DEBUG_SHADOW_MAP_VIZ` (mode 2) — inspect raw shadow map depth values per cascade.
+4. *(PCSS, once proposed modes are implemented)* Enable `CSM_DEBUG_EARLYOUT` — verify min-reduction early-out is firing for lit regions.
+5. *(PCSS)* Enable `CSM_DEBUG_PENUMBRA_RADIUS` — verify penumbra scales with distance from caster.
+6. *(PCSS)* Enable `CSM_DEBUG_RAW_SHADOW` — inspect stochastic noise before temporal resolve.
+7. Disable PCSS (`m_EnablePCSS = false`) — verify 3×3 PCF baseline is unchanged.
+8. Re-enable PCSS — verify temporal resolve converges within 5 frames (static camera).
 
 ---
 
@@ -877,9 +940,16 @@ Phase 3 — CPU integration
   [ ] Add ImGui checkbox for m_EnablePCSS
 
 Phase 4 — Debug visualization
+  [x] CSMDebugRenderer fullscreen PS pass (CSMDebug.hlsl / CSMDebug.sr)
+  [x] CSMDebugMode enum in Common.sr (Off, Cascade Splits, Shadow Map Array,
+      Raw Shadow Mask, PCF Footprint, Alpha-Masked, Depth Compare,
+      Frustum Wireframe, Blend Zone)
+  [x] ImGui "CSM Debug" combo box in CSM tree node (ImGuiLayer.cpp)
+  [x] DeferredLighting composites g_RG_CSMDebugOutput when mode != Off
   [ ] Add CSM_DEBUG_EARLYOUT, CSM_DEBUG_BLOCKER_DEPTH, CSM_DEBUG_PENUMBRA_RADIUS,
-      CSM_DEBUG_RAW_SHADOW, CSM_DEBUG_TEMPORAL_BLEND modes to CSMDebugMode
-  [ ] Extend CSMDebugRenderer to handle new modes
+      CSM_DEBUG_RAW_SHADOW, CSM_DEBUG_TEMPORAL_BLEND to CSMDebugMode (PCSS-specific)
+  [ ] Extend CSMDebug.hlsl to handle new PCSS debug modes
+  [ ] Pass debug values out of ComputePCSSShadow via out parameters
 
 Phase 5 — Tuning & validation
   [ ] Test in Sponza: verify contact hardening at column bases
