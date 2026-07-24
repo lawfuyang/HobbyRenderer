@@ -184,4 +184,10 @@ srinput CSMDebugMode
     static const uint CSM_DEBUG_DEPTH_COMPARE   = 6;  // Red=shadowed, Green=lit
     static const uint CSM_DEBUG_FRUSTUM_WIRE    = 7;  // Cascade frustum wireframe
     static const uint CSM_DEBUG_BLEND_ZONE      = 8;  // Cascade blend band visualization
+    // PCSS-specific debug modes (require m_EnablePCSS; read from g_DebugOutput UAV)
+    static const uint CSM_DEBUG_BLOCKER_DEPTH   = 9;  // Grayscale: avg blocker depth normalised to receiver depth
+    static const uint CSM_DEBUG_PENUMBRA_RADIUS = 10; // Heatmap: penumbra radius in UV space (blue=0, red=max)
+    static const uint CSM_DEBUG_EARLYOUT        = 11; // Binary: green=early-out hit, red=full search ran
+    static const uint CSM_DEBUG_RAW_SHADOW      = 12; // Raw stochastic shadow before temporal resolve
+    static const uint CSM_DEBUG_TEMPORAL_BLEND  = 13; // Grayscale: temporal blend weight (1=full history, 0=disocclusion)
 };

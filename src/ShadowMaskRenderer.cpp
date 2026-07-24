@@ -12,6 +12,7 @@ extern RGTextureHandle g_RG_GBufferNormals;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_CSMShadowMapMips;
 RGTextureHandle        g_RG_ShadowMask;
+RGTextureHandle        g_RG_ShadowDebugOutput;  // RGBA32_FLOAT PCSS debug data, read by CSMDebugRenderer
 
 // ---------------------------------------------------------------------------
 // ShadowMaskRenderer — fullscreen compute: CSM evaluation → R8_UNORM mask
@@ -40,6 +41,17 @@ public:
         maskDesc.m_NvrhiDesc.initialState     = nvrhi::ResourceStates::UnorderedAccess;
         maskDesc.m_NvrhiDesc.keepInitialState = true;
         renderGraph.DeclareTexture(maskDesc, g_RG_ShadowMask);
+
+        // Declare the RGBA32_FLOAT PCSS debug texture (always declared so CSMDebugRenderer can read it)
+        RGTextureDesc dbgDesc;
+        dbgDesc.m_NvrhiDesc.width            = width;
+        dbgDesc.m_NvrhiDesc.height           = height;
+        dbgDesc.m_NvrhiDesc.format           = nvrhi::Format::RGBA32_FLOAT;
+        dbgDesc.m_NvrhiDesc.isUAV            = true;
+        dbgDesc.m_NvrhiDesc.debugName        = "ShadowDebugOutput_RG";
+        dbgDesc.m_NvrhiDesc.initialState     = nvrhi::ResourceStates::UnorderedAccess;
+        dbgDesc.m_NvrhiDesc.keepInitialState = true;
+        renderGraph.DeclareTexture(dbgDesc, g_RG_ShadowDebugOutput);
 
         // Declare the persistent R8_UNORM shadow history (survives across frames)
         if (g_Renderer.m_EnablePCSSShadowTemporal)
@@ -75,6 +87,7 @@ public:
         nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         nvrhi::TextureHandle shadowMask = renderGraph.GetTexture(g_RG_ShadowMask, RGResourceAccessMode::Write);
+        nvrhi::TextureHandle debugOutput = renderGraph.GetTexture(g_RG_ShadowDebugOutput, RGResourceAccessMode::Write);
 
         // If CSM shadows are disabled, clear to white (fully lit) and return
         if (!g_Renderer.m_EnableCSMShadows)
@@ -138,6 +151,8 @@ public:
             cb.SetFrameIndex(g_Renderer.m_FrameNumber);
         }
 
+        cb.SetCSMDebugMode(g_Renderer.m_CSMDebugMode);
+
         commandList->writeBuffer(shadowMaskCB, &cb, sizeof(cb), 0);
 
         const CommonResources& cr = CommonResources::GetInstance();
@@ -149,7 +164,7 @@ public:
         nvrhi::TextureHandle normals   = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Read);
         nvrhi::TextureHandle shadowMap = renderGraph.GetTexture(g_RG_CSMShadowMap,   RGResourceAccessMode::Read);
         nvrhi::TextureHandle motionVectors = g_Renderer.m_EnablePCSS ? renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Read) : cr.DummySRVTexture;
-        nvrhi::TextureHandle history = g_Renderer.m_EnablePCSSShadowTemporal  ? renderGraph.GetTexture(m_RG_ShadowHistory, RGResourceAccessMode::Write) : cr.DummySRVTexture;
+        nvrhi::TextureHandle history = g_Renderer.m_EnablePCSSShadowTemporal  ? renderGraph.GetTexture(m_RG_ShadowHistory, RGResourceAccessMode::Write) : cr.DummyUAVTexture4;
         nvrhi::TextureHandle shadowMapMips = g_Renderer.m_EnablePCSSShadowDepthMips
             ? renderGraph.GetTexture(g_RG_CSMShadowMapMips, RGResourceAccessMode::Read)
             : cr.DummySRVTextureArray;
@@ -164,6 +179,7 @@ public:
             inputs.SetGBufferNormals(normals);
             inputs.SetCSMShadowMap(shadowMap);
             inputs.SetRWShadowMask(shadowMask, 0);
+            inputs.SetRWShadowMask(shadowMask, 0);
             inputs.SetShadowSampler(cr.ShadowComparison);
             inputs.SetShadowSamplerPoint(cr.ShadowSamplerPoint);
             inputs.SetSamplerMinReduction(cr.MinReductionClamp);
@@ -176,8 +192,8 @@ public:
                 // MotionVectors and ShadowHistory are only consumed by dispatch 2,
                 // but the binding set must be complete — bind dummies for dispatch 1.
                 inputs.SetMotionVectors(motionVectors);
-                inputs.SetShadowHistory(history);
                 inputs.SetRWShadowHistory(history, 0);
+                inputs.SetRWDebugOutput(debugOutput, 0);
             }
             else
             {
@@ -185,8 +201,9 @@ public:
                 inputs.SetCSMShadowMapMips(cr.DummySRVTextureArray);
                 inputs.SetBlueNoiseTex(cr.DummySRVTexture);
                 inputs.SetMotionVectors(cr.DummySRVTexture);
-                inputs.SetShadowHistory(cr.DummySRVTexture);
                 inputs.SetRWShadowHistory(cr.DummyUAVTexture, 0);
+                inputs.SetRWDebugOutput(cr.DummyUAVTexture4, 0);
+                inputs.SetRWDebugOutput(cr.DummyUAVTexture, 0);
             }
 
             // Select PCSS × CASCADE_BLEND permutation
@@ -233,9 +250,9 @@ public:
             inputs.SetCSMShadowMapMips(shadowMapMips);
             inputs.SetBlueNoiseTex(cr.BlueNoiseTex);
             inputs.SetMotionVectors(motionVectors);
-            inputs.SetShadowHistory(history);
             inputs.SetRWShadowMask(shadowMask, 0);
             inputs.SetRWShadowHistory(history, 0);
+            inputs.SetRWDebugOutput(cr.DummyUAVTexture4, 0);
             inputs.SetShadowSampler(cr.ShadowComparison);
             inputs.SetShadowSamplerPoint(cr.ShadowSamplerPoint);
             inputs.SetSamplerMinReduction(cr.MinReductionClamp);

@@ -517,38 +517,7 @@ void Renderer::Run()
         m_Scene.m_Camera.Update();
 
         // Handle debug mode settings
-        if (m_DebugMode != m_ActiveDebugMode)
-        {
-            if (m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE && m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_NONE)
-            {
-                // Entering debug mode: save current state
-                m_DebugBackup.m_EnableBloom = m_EnableBloom;
-                m_DebugBackup.m_EnableAutoExposure = m_EnableAutoExposure;
-                m_DebugBackup.m_ExposureValue = m_Scene.m_Camera.m_ExposureValue;
-                m_DebugBackup.m_ExposureCompensation = m_Scene.m_Camera.m_ExposureCompensation;
-
-                // Set debug defaults
-                m_EnableBloom = false;
-                m_EnableAutoExposure = false;
-            }
-            else if (m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_NONE && m_ActiveDebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE)
-            {
-                // Leaving debug mode: restore state
-                m_EnableBloom = m_DebugBackup.m_EnableBloom;
-                m_EnableAutoExposure = m_DebugBackup.m_EnableAutoExposure;
-                m_Scene.m_Camera.m_ExposureValue = m_DebugBackup.m_ExposureValue;
-                m_Scene.m_Camera.m_ExposureCompensation = m_DebugBackup.m_ExposureCompensation;
-            }
-            m_ActiveDebugMode = m_DebugMode;
-        }
-
-        if (m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE)
-        {
-            // Lock settings in debug mode for consistent raw output
-            m_EnableBloom = false;
-            m_EnableAutoExposure = false;
-            m_Scene.m_Camera.m_Exposure = 1.0f;
-        }
+        HandleDebugModeSettings();
 
         int windowW, windowH;
         SDL_GetWindowSize(m_Window, &windowW, &windowH);
@@ -1058,6 +1027,46 @@ void Renderer::UploadDirtyMaterialConstants()
     // Invariant: the dirty range must be clean immediately after this function.
     SDL_assert(m_Scene.m_MaterialDirtyRange.first > m_Scene.m_MaterialDirtyRange.second &&
         "UploadDirtyMaterialConstants: dirty range was not cleared after upload");
+}
+
+void Renderer::HandleDebugModeSettings()
+{
+    const bool bAnyDebugActive = (m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE || m_CSMDebugMode != 0u);
+
+    auto SaveState = [this]()
+    {
+        m_DebugBackup.m_EnableBloom          = m_EnableBloom;
+        m_DebugBackup.m_EnableAutoExposure   = m_EnableAutoExposure;
+        m_DebugBackup.m_ExposureValue        = m_Scene.m_Camera.m_ExposureValue;
+        m_DebugBackup.m_ExposureCompensation = m_Scene.m_Camera.m_ExposureCompensation;
+    };
+
+    auto RestoreState = [this]()
+    {
+        m_EnableBloom                           = m_DebugBackup.m_EnableBloom;
+        m_EnableAutoExposure                    = m_DebugBackup.m_EnableAutoExposure;
+        m_Scene.m_Camera.m_ExposureValue        = m_DebugBackup.m_ExposureValue;
+        m_Scene.m_Camera.m_ExposureCompensation = m_DebugBackup.m_ExposureCompensation;
+    };
+
+    // Unified transition: save on first entry into any debug mode, restore on full exit.
+    if (bAnyDebugActive != m_bAnyDebugWasActive)
+    {
+        if (bAnyDebugActive) SaveState();
+        else                 RestoreState();
+        m_bAnyDebugWasActive = bAnyDebugActive;
+    }
+
+    // m_ActiveDebugMode is read externally (e.g. RTXDIRenderer), keep it in sync.
+    m_ActiveDebugMode = m_DebugMode;
+
+    // Lock settings every frame while any debug overlay is active.
+    if (bAnyDebugActive)
+    {
+        m_EnableBloom        = false;
+        m_EnableAutoExposure = false;
+        m_Scene.m_Camera.m_Exposure = 1.0f;
+    }
 }
 
 void Renderer::ComputeCSMCascadeSplits()

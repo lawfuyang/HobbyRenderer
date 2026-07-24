@@ -18,6 +18,7 @@ srinput CSMDebugInputs
     Texture2D<float4>     GBufferAlbedo;  // t1 — albedo for overlay blending
     Texture2DArray<float> CSMShadowMap;   // t2 — 4-slice CSM depth array
     Texture2D<float>      ShadowMask;     // t3 — R8_UNORM screen-space shadow mask
+    Texture2D<float4>     DebugOutput;    // t4 — RGBA32_FLOAT PCSS debug data (blocker depth, penumbra, early-out, raw shadow)
 
     SamplerState PointSampler;            // s0 — point clamp for shadow map viz
 };

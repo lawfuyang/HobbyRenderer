@@ -10,6 +10,7 @@ extern RGTextureHandle g_RG_DepthTexture;
 extern RGTextureHandle g_RG_GBufferAlbedo;
 extern RGTextureHandle g_RG_CSMShadowMap;
 extern RGTextureHandle g_RG_ShadowMask;
+extern RGTextureHandle g_RG_ShadowDebugOutput;  // PCSS debug data written by ShadowMaskRenderer
 RGTextureHandle        g_RG_CSMDebugOutput;   // RGBA16_FLOAT — CSM debug overlay, sampled by DeferredLighting
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,8 @@ public:
         renderGraph.ReadTexture(g_RG_GBufferAlbedo);
         renderGraph.ReadTexture(g_RG_CSMShadowMap);
         renderGraph.ReadTexture(g_RG_ShadowMask);
+        if (g_Renderer.m_CSMDebugMode >= 9u)
+            renderGraph.ReadTexture(g_RG_ShadowDebugOutput);
         return true;
     }
 
@@ -91,6 +94,9 @@ public:
         nvrhi::TextureHandle albedo     = renderGraph.GetTexture(g_RG_GBufferAlbedo,  RGResourceAccessMode::Read);
         nvrhi::TextureHandle shadowMap  = renderGraph.GetTexture(g_RG_CSMShadowMap,   RGResourceAccessMode::Read);
         nvrhi::TextureHandle shadowMask = renderGraph.GetTexture(g_RG_ShadowMask,     RGResourceAccessMode::Read);
+        nvrhi::TextureHandle pcssDebug = (g_Renderer.m_CSMDebugMode >= 9u)
+            ? renderGraph.GetTexture(g_RG_ShadowDebugOutput, RGResourceAccessMode::Read)
+            : CommonResources::GetInstance().DummySRVTexture4;
 
         // Build binding set
         srrhi::CSMDebugInputs inputs;
@@ -99,6 +105,7 @@ public:
         inputs.SetGBufferAlbedo(albedo);
         inputs.SetCSMShadowMap(shadowMap);
         inputs.SetShadowMask(shadowMask);
+        inputs.SetDebugOutput(pcssDebug);
         inputs.SetPointSampler(CommonResources::GetInstance().PointClamp);
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);

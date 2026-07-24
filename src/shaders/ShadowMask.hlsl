@@ -11,9 +11,9 @@ static const Texture2DArray<float>      g_CSMShadowMap     = srrhi::ShadowMaskIn
 static const Texture2DArray<float>      g_CSMShadowMapMips = srrhi::ShadowMaskInputs::GetCSMShadowMapMips();
 static const Texture2D<float2>          g_BlueNoiseTex     = srrhi::ShadowMaskInputs::GetBlueNoiseTex();
 static const Texture2D<float4>          g_MotionVectors  = srrhi::ShadowMaskInputs::GetMotionVectors();
-static const Texture2D<float>           g_ShadowHistory  = srrhi::ShadowMaskInputs::GetShadowHistory();
 static       RWTexture2D<float>         g_RWShadowMask   = srrhi::ShadowMaskInputs::GetRWShadowMask();
 static       RWTexture2D<float>         g_RWShadowHistory = srrhi::ShadowMaskInputs::GetRWShadowHistory();
+static       RWTexture2D<float4>        g_RWDebugOutput  = srrhi::ShadowMaskInputs::GetRWDebugOutput();
 static const SamplerComparisonState     g_ShadowSampler       = srrhi::ShadowMaskInputs::GetShadowSampler();
 static const SamplerState               g_ShadowSamplerPoint  = srrhi::ShadowMaskInputs::GetShadowSamplerPoint();
 static const SamplerState               g_SamplerMinReduction = srrhi::ShadowMaskInputs::GetSamplerMinReduction();
@@ -56,6 +56,9 @@ void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
     float texelSize = 1.0f / (float)srrhi::CommonConsts::kShadowMapResolution;
 
     float shadow;
+    float dbgBlockerDepth   = 0.0f;
+    float dbgPenumbraRadius = 0.0f;
+    float dbgEarlyOut       = 0.0f;
 #if PCSS
     shadow = ComputePCSSShadow(
         worldPos,
@@ -75,7 +78,10 @@ void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
         texelSize,
         g_CB.m_FrameIndex,
         uvInt,
-        g_CB.m_EnableCascadeBlend
+        g_CB.m_EnableCascadeBlend,
+        dbgBlockerDepth,
+        dbgPenumbraRadius,
+        dbgEarlyOut
     );
 #else
     shadow = ComputeCSMShadow(
@@ -93,6 +99,10 @@ void ShadowMask_CSMain(uint3 dispatchID : SV_DispatchThreadID)
 #endif
 
     g_RWShadowMask[uvInt] = shadow;
+
+    // Write PCSS debug data when a PCSS debug mode is active
+    if (g_CB.m_CSMDebugMode >= 9u)
+        g_RWDebugOutput[uvInt] = float4(dbgBlockerDepth, dbgPenumbraRadius, dbgEarlyOut, shadow);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +153,7 @@ void ShadowMaskTemporal_CSMain(uint3 dispatchID : SV_DispatchThreadID)
     if (bValidHistory)
     {
         // Sample history with linear clamp
-        float historyVal = g_ShadowHistory.SampleLevel(g_SamplerLinearClamp, prevUV, 0).r;
+        float historyVal = g_RWShadowHistory[uvInt].r;
 
         // Neighbourhood clamp: prevent ghosting from stale history
         historyVal = clamp(historyVal, neighbourMin, neighbourMax);

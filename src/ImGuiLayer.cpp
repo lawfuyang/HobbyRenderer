@@ -115,7 +115,9 @@ void ImGuiLayer::UpdateFrame()
                         static const char* kCSMDebugModes[] = {
                             "Off", "Cascade Splits", "Shadow Map Array", "Raw Shadow Mask",
                             "PCF Footprint", "Alpha-Masked Overlay", "Depth Compare",
-                            "Frustum Wireframe", "Blend Zone"
+                            "Frustum Wireframe", "Blend Zone",
+                            "PCSS: Blocker Depth", "PCSS: Penumbra Radius",
+                            "PCSS: Early-Out", "PCSS: Raw Shadow", "PCSS: Temporal Blend"
                         };
                         ImGui::Combo("CSM Debug", (int*)&g_Renderer.m_CSMDebugMode,
                             kCSMDebugModes, IM_ARRAYSIZE(kCSMDebugModes));

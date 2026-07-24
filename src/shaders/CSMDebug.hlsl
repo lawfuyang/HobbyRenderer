@@ -86,6 +86,7 @@ static const Texture2D<float>         g_Depth       = srrhi::CSMDebugInputs::Get
 static const Texture2D<float4>        g_Albedo      = srrhi::CSMDebugInputs::GetGBufferAlbedo();
 static const Texture2DArray<float>    g_ShadowMap   = srrhi::CSMDebugInputs::GetCSMShadowMap();
 static const Texture2D<float>         g_ShadowMask  = srrhi::CSMDebugInputs::GetShadowMask();
+static const Texture2D<float4>        g_DebugOutput = srrhi::CSMDebugInputs::GetDebugOutput();
 static const SamplerState             g_PointSampler = srrhi::CSMDebugInputs::GetPointSampler();
 
 float4 CSMDebug_PSMain(FullScreenVertexOut input) : SV_Target
@@ -193,6 +194,60 @@ float4 CSMDebug_PSMain(FullScreenVertexOut input) : SV_Target
             // Blend 60/40 with albedo so scene is still readable
             float3 albedo = g_Albedo.Load(uint3(uvInt, 0)).rgb;
             output = output * 0.6f + albedo * 0.4f;
+            break;
+        }
+
+        // ── Mode 9: PCSS Blocker Depth ──────────────────────────────────────
+        // Grayscale: normalised avg blocker depth (0=at receiver surface, 1=no blocker)
+        case srrhi::CSMDebugMode::CSM_DEBUG_BLOCKER_DEPTH:
+        {
+            float v = g_DebugOutput.Load(uint3(uvInt, 0)).r;
+            output = float3(v, v, v);
+            break;
+        }
+
+        // ── Mode 10: PCSS Penumbra Radius ───────────────────────────────────
+        // Heatmap: blue=0 (hard shadow), red=large penumbra
+        case srrhi::CSMDebugMode::CSM_DEBUG_PENUMBRA_RADIUS:
+        {
+            float v = saturate(g_DebugOutput.Load(uint3(uvInt, 0)).g * 200.0f); // scale UV radius to [0,1] range
+            // Blue → Cyan → Green → Yellow → Red heatmap
+            float3 cold = lerp(float3(0,0,1), float3(0,1,1), saturate(v * 4.0f));
+            float3 warm = lerp(float3(0,1,0), float3(1,1,0), saturate((v - 0.25f) * 4.0f));
+            float3 hot  = lerp(float3(1,1,0), float3(1,0,0), saturate((v - 0.5f)  * 4.0f));
+            output = v < 0.25f ? cold : (v < 0.5f ? warm : hot);
+            break;
+        }
+
+        // ── Mode 11: PCSS Early-Out ─────────────────────────────────────────
+        // Green = early-out fired (no blockers), Red = full blocker search ran
+        case srrhi::CSMDebugMode::CSM_DEBUG_EARLYOUT:
+        {
+            float earlyOut = g_DebugOutput.Load(uint3(uvInt, 0)).b;
+            output = earlyOut > 0.5f ? float3(0.1f, 0.9f, 0.1f) : float3(0.9f, 0.1f, 0.1f);
+            break;
+        }
+
+        // ── Mode 12: PCSS Raw Shadow ────────────────────────────────────────
+        // Stochastic shadow value before temporal resolve
+        case srrhi::CSMDebugMode::CSM_DEBUG_RAW_SHADOW:
+        {
+            float v = g_DebugOutput.Load(uint3(uvInt, 0)).a;
+            output = float3(v, v, v);
+            break;
+        }
+
+        // ── Mode 13: PCSS Temporal Blend ────────────────────────────────────
+        // Reads the final resolved shadow mask (post-temporal) and shows blend weight
+        // as grayscale. Since blend weight isn't stored separately, show the resolved
+        // mask vs raw mask difference as a proxy for temporal contribution.
+        case srrhi::CSMDebugMode::CSM_DEBUG_TEMPORAL_BLEND:
+        {
+            float raw      = g_DebugOutput.Load(uint3(uvInt, 0)).a;  // raw stochastic
+            float resolved = g_ShadowMask.Load(uint3(uvInt, 0));     // temporally resolved
+            // Difference: bright = large temporal contribution (stable), dark = disocclusion
+            float diff = 1.0f - abs(resolved - raw);
+            output = float3(diff, diff, diff);
             break;
         }
 

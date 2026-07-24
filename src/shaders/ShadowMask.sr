@@ -12,6 +12,7 @@ cbuffer ShadowMaskConstants
     uint     m_EnableCascadeBlend;  // 0 = off, 1 = blend adjacent cascades at boundaries (4 bytes)
     float    m_LightAngularRadius;  // Sun half-angle in radians (4 bytes) [NEW]
     uint     m_FrameIndex;          // Frame counter for blue-noise tile offset (4 bytes) [NEW]
+    uint     m_CSMDebugMode;        // CSMDebugMode enum value; 0 = off (4 bytes)
 };
 
 srinput ShadowMaskInputs
@@ -24,10 +25,10 @@ srinput ShadowMaskInputs
     Texture2DArray<float> CSMShadowMapMips;   // t3 — 4-slice R32_FLOAT min-reduction mip chain [NEW]
     Texture2D<float2>     BlueNoiseTex;       // t4 — 64x64 R8G8_UNORM blue-noise disc [NEW]
     Texture2D<float4>     MotionVectors;      // t5 — RGBA16_FLOAT GBuffer motion vectors [NEW]
-    Texture2D<float>      ShadowHistory;      // t6 — previous frame R8_UNORM shadow mask [NEW]
 
     RWTexture2D<float>    RWShadowMask;       // u0 — R8_UNORM output shadow mask
     RWTexture2D<float>    RWShadowHistory;    // u1 — R8_UNORM shadow history write [NEW]
+    RWTexture2D<float4>   RWDebugOutput;      // u2 — RGBA32_FLOAT PCSS debug data (blocker depth, penumbra, early-out, raw shadow)
 
     SamplerComparisonState ShadowSampler;       // s0 — comparison linear, clamp-to-border white
     SamplerState           ShadowSamplerPoint;  // s1 — point, clamp-to-border white, raw depth fetch

@@ -70,8 +70,10 @@ public:
     nvrhi::TextureHandle DefaultTexturePBR;          // RGB(1, 0,1) - ORM: Occlusion = 1, Metallic=0, Roughness=1
     nvrhi::TextureHandle DummyUAVTexture;            // 1x1 UAV texture for filling slots
     nvrhi::TextureHandle DummyUAVTextureArray;       // 1x1x1 Texture2DArray UAV for filling array slots
+    nvrhi::TextureHandle DummyUAVTexture4;           // 1x1 RGBA32_FLOAT UAV texture for filling float4 UAV slots
     nvrhi::TextureHandle DummySRVTexture;            // 1x1 SRV texture for filling slots
     nvrhi::TextureHandle DummySRVTextureArray;       // 1x1x1 Texture2DArray SRV for filling array slots
+    nvrhi::TextureHandle DummySRVTexture4;           // 1x1 RGBA32_FLOAT SRV texture for filling float4 SRV slots
     nvrhi::TextureHandle BRDF_LUT;                   // BRDF integration LUT for IBL
     nvrhi::TextureHandle IrradianceTexture;          // Irradiance cubemap for IBL
     nvrhi::TextureHandle RadianceTexture;            // Radiance cubemap (filtered environment) for IBL

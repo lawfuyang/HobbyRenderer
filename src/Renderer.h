@@ -139,6 +139,7 @@ struct Renderer
     // Called once per frame before ScheduleAndRunAllRenderers() so all renderers see up-to-date splits.
     void ComputeCSMCascadeSplits();
     void ComputeCascadeViewProj();
+    void HandleDebugModeSettings();
 
     // Command List Management
     nvrhi::CommandListHandle AcquireCommandList(bool bImmediatelyQueue = true);
@@ -332,8 +333,9 @@ struct Renderer
     float m_BloomKnee = 0.1f;
     float m_UpsampleRadius = 0.85f;
 
-    int m_DebugMode = 0;
-    int m_ActiveDebugMode = 0;
+    int      m_DebugMode = 0;
+    int      m_ActiveDebugMode = 0;
+    bool     m_bAnyDebugWasActive = false;
     struct {
         bool m_EnableBloom;
         bool m_EnableAutoExposure;

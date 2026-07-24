@@ -200,9 +200,16 @@ float ComputePCSSShadow(
     float                  texelSize,
     uint                   frameIndex,
     uint2                  pixelPos,
-    uint                   bEnableCascadeBlend
+    uint                   bEnableCascadeBlend,
+    out float              dbgBlockerDepth,   // normalised avg blocker depth (0=at receiver, 1=no blocker)
+    out float              dbgPenumbraRadius, // penumbra radius in UV space
+    out float              dbgEarlyOut        // 1.0 = early-out fired, 0.0 = full search ran
 )
 {
+    dbgBlockerDepth   = 0.0f;
+    dbgPenumbraRadius = 0.0f;
+    dbgEarlyOut       = 0.0f;
+
     uint cascadeIndex = SelectCascade(viewDepth, cascadeSplits);
 
     // --- Normal-offset bias (same as ComputeCSMShadow) ---
@@ -239,7 +246,10 @@ float ComputePCSSShadow(
         shadowMip = clamp(shadowMip, 0.0f, 10.0f); // shadow map has up to 11 mip levels (2048→1)
         float minBlockerDepth = shadowMapMips.SampleLevel(samplerMinReduction, float3(shadowUV.xy, slice), shadowMip).r;
         if (minBlockerDepth >= receiverDepth - bias)
+        {
+            dbgEarlyOut = 1.0f;
             return 1.0f; // fully lit
+        }
     }
 
     // --- Stage 2: Blocker search (12 taps) ---
@@ -264,7 +274,10 @@ float ComputePCSSShadow(
     }
 
     if (blockerCount == 0.0f)
+    {
+        dbgEarlyOut = 1.0f;
         return 1.0f; // fully lit — no blockers found in the entire wave
+    }
 
     float robustBlockerDepth;
     if (kEnableBlockerEstimators)
@@ -329,6 +342,10 @@ float ComputePCSSShadow(
                      * kPenumbraScale;
     // Max penumbra is capped at the blocker search radius — can't be wider than what was searched.
     penumbraUV = clamp(penumbraUV, kMinPenumbra * texelSize, searchRadiusUV);
+
+    // Write debug values
+    dbgBlockerDepth   = robustBlockerDepth / max(receiverDepth, 1e-6f); // normalised to receiver depth
+    dbgPenumbraRadius = penumbraUV;
 
     // --- Stage 5: Adaptive PCF with blue-noise disc (16 taps) ---
     float shadow;
