@@ -14,18 +14,32 @@
 #include "Streaming/FeedbackManager.h"
 #include "Streaming/AsyncTileIO.h"
 
+// ============================================================================
+// Renderer interface & registry
+// ============================================================================
+
+// Base interface for a render-graph pass.
+//
+// Renderers are discovered through RendererRegistry (see REGISTER_RENDERER),
+// owned by Renderer::m_Renderers, and driven by
+// Renderer::ScheduleAndRunAllRenderers().
 class IRenderer
 {
 public:
     virtual ~IRenderer() = default;
+
+    // ─── Lifecycle ───
     virtual void Initialize() {}
     virtual void PostSceneLoad() {}
+
+    // ─── Render graph integration ───
     virtual bool Setup(RenderGraph& renderGraph) { return false; }
     virtual void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) {}
     virtual const char* GetName() const { return "Unnamed Renderer"; }
 
     virtual bool IsBasePassRenderer() const { return false; }
 
+    // ─── Per-frame statistics (filled in by the render loop) ───
     float m_CPUTime = 0.0f;
     float m_GPUTime = 0.0f;
     nvrhi::TimerQueryHandle m_GPUQueries[2];
@@ -37,6 +51,10 @@ public:
     bool m_bClearOnNextRender = false;
 };
 
+// Global registry of renderer factories and live instances.
+// Factories are added at static-init time by REGISTER_RENDERER; instances are
+// created during Renderer::InitializeGPUStack() and looked up by name when
+// the render graph is scheduled.
 class RendererRegistry
 {
 public:
@@ -70,6 +88,10 @@ private:
     inline static std::unordered_map<std::string, IRenderer*>  s_Renderers;
 };
 
+// ============================================================================
+// Renderer registration
+// ============================================================================
+
 // Macro to register a renderer class.
 // No longer creates cross-TU global pointers — renderers are stored in
 // RendererRegistry and looked up by name.  This eliminates incremental-linker
@@ -85,6 +107,10 @@ static bool s_##ClassName##Registered = []() { \
     return true; \
 }();
 
+// ============================================================================
+// Editor / debug UI
+// ============================================================================
+
 class ImGuiLayer
 {
 public:
@@ -94,67 +120,33 @@ public:
     void UpdateFrame();
 };
 
+// ============================================================================
+// Rendering mode
+// ============================================================================
+
+// Top-level rendering mode. The values mirror srrhi::CommonConsts::
+// RENDERING_MODE_* so they can be forwarded to shaders verbatim.
 enum class RenderingMode : uint32_t
 {
     Normal = srrhi::CommonConsts::RENDERING_MODE_NORMAL,
     ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER
 };
 
+// ============================================================================
+// Renderer
+// ============================================================================
+
+// Owns the RHI device, swapchain, scene, render graph and every render pass.
+//
+// State is deliberately public: the main loop, the individual renderers and the
+// ImGui layer read and write it directly. Reach the singleton via `g_Renderer`.
 struct Renderer
 {
+public:
     SingletonFunctionsSimple(Renderer);
-    
-    static constexpr float DEPTH_NEAR = 1.0f;
-    static constexpr float DEPTH_FAR = 0.0f;
-    static constexpr nvrhi::Format DEPTH_FORMAT = nvrhi::Format::D24S8;
-    static constexpr nvrhi::Format HDR_COLOR_FORMAT = nvrhi::Format::R11G11B10_FLOAT;
-    static constexpr nvrhi::Format PATH_TRACER_HDR_COLOR_FORMAT = nvrhi::Format::RGBA32_FLOAT;
-    static constexpr nvrhi::Format GBUFFER_ALBEDO_FORMAT    = nvrhi::Format::RGBA8_UNORM;
-    static constexpr nvrhi::Format GBUFFER_NORMALS_FORMAT   = nvrhi::Format::RG16_FLOAT;
-    static constexpr nvrhi::Format GBUFFER_ORM_FORMAT       = nvrhi::Format::RG8_UNORM;
-    static constexpr nvrhi::Format GBUFFER_EMISSIVE_FORMAT  = nvrhi::Format::RGBA16_FLOAT;
-    static constexpr nvrhi::Format GBUFFER_MOTION_FORMAT    = nvrhi::Format::RGBA16_FLOAT;
 
-    // Lifecycle
-    void Initialize();
-    void Run();
-    void Shutdown();
-    void ScheduleAndRunAllRenderers();
+    // ─── Nested types ───
 
-    // Upload any dirty instance transforms to the GPU and reset the dirty range.
-    // Must be called once per frame before ScheduleAndRunAllRenderers() so that
-    // the TLAS rebuild sees up-to-date RT instance descriptors.  Called explicitly
-    // by RenderFrame() (main loop).
-    void UploadDirtyInstanceTransforms();
-
-    // Upload material constants for any materials whose dirty range is set
-    // (m_MaterialDirtyRange.first <= second) and reset the range to clean.
-    // Handles the case where m_Materials is empty or m_MaterialConstantsBuffer
-    // is null (no-op).  Called explicitly by RenderFrame() (main loop).
-    void UploadDirtyMaterialConstants();
-
-    void HandleDebugModeSettings();
-
-    // Apply per-mode defaults for features that vary by rendering mode
-    // (RT shadows, ReSTIR DI, indirect lighting technique).
-    void ApplyRenderingModeDefaults(RenderingMode mode);
-
-    // Command List Management
-    nvrhi::CommandListHandle AcquireCommandList(bool bImmediatelyQueue = true);
-    void ExecutePendingCommandLists();
-
-    // Swapchain / Backbuffer
-    nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
-    void SaveBackBufferScreenshot();
-
-    // Binding Layouts & Pipelines
-    nvrhi::BindingLayoutHandle GetOrCreateBindingLayoutFromBindingSetDesc(const nvrhi::BindingSetDesc& setDesc, uint32_t registerSpace = 0);
-    nvrhi::BindingLayoutHandle GetOrCreateBindlessLayout(const nvrhi::BindlessLayoutDesc& desc);
-    nvrhi::GraphicsPipelineHandle GetOrCreateGraphicsPipeline(const nvrhi::GraphicsPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo);
-    nvrhi::MeshletPipelineHandle GetOrCreateMeshletPipeline(const nvrhi::MeshletPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo);
-    nvrhi::ComputePipelineHandle GetOrCreateComputePipeline(nvrhi::ShaderHandle shader, const nvrhi::BindingLayoutVector& bindingLayouts);
-
-    // Rendering Helpers
     struct ComputeDispatchParams
     {
         uint32_t x = 0, y = 0, z = 0; // For direct dispatch
@@ -187,18 +179,77 @@ struct Renderer
         nvrhi::BlendState::RenderTarget* blendState = nullptr;
     };
 
+    // ─── Constants ───
+
+    static constexpr float DEPTH_FAR = 0.0f;
+    static constexpr nvrhi::Format DEPTH_FORMAT = nvrhi::Format::D24S8;
+    static constexpr nvrhi::Format HDR_COLOR_FORMAT = nvrhi::Format::R11G11B10_FLOAT;
+    static constexpr nvrhi::Format PATH_TRACER_HDR_COLOR_FORMAT = nvrhi::Format::RGBA32_FLOAT;
+    static constexpr nvrhi::Format GBUFFER_ALBEDO_FORMAT    = nvrhi::Format::RGBA8_UNORM;
+    static constexpr nvrhi::Format GBUFFER_NORMALS_FORMAT   = nvrhi::Format::RG16_FLOAT;
+    static constexpr nvrhi::Format GBUFFER_ORM_FORMAT       = nvrhi::Format::RG8_UNORM;
+    static constexpr nvrhi::Format GBUFFER_EMISSIVE_FORMAT  = nvrhi::Format::RGBA16_FLOAT;
+    static constexpr nvrhi::Format GBUFFER_MOTION_FORMAT    = nvrhi::Format::RGBA16_FLOAT;
+
+    // ─── Lifecycle ───
+    void Initialize();
+    void Run();
+    void Shutdown();
+    void ScheduleAndRunAllRenderers();
+
+    // ─── Per-frame uploads (called by the main loop) ───
+
+    // Upload any dirty instance transforms to the GPU and reset the dirty range.
+    // Must be called once per frame before ScheduleAndRunAllRenderers() so that
+    // the TLAS rebuild sees up-to-date RT instance descriptors.  Called explicitly
+    // by RenderFrame() (main loop).
+    void UploadDirtyInstanceTransforms();
+
+    // Upload material constants for any materials whose dirty range is set
+    // (m_MaterialDirtyRange.first <= second) and reset the range to clean.
+    // Handles the case where m_Materials is empty or m_MaterialConstantsBuffer
+    // is null (no-op).  Called explicitly by RenderFrame() (main loop).
+    void UploadDirtyMaterialConstants();
+
+    // ─── Mode & debug settings ───
+
+    void HandleDebugModeSettings();
+
+    // Apply per-mode defaults for features that vary by rendering mode
+    // (RT shadows, ReSTIR DI, indirect lighting technique).
+    void ApplyRenderingModeDefaults(RenderingMode mode);
+
+    // ─── Command list management ───
+    nvrhi::CommandListHandle AcquireCommandList(bool bImmediatelyQueue = true);
+    void ExecutePendingCommandLists();
+
+    // ─── Swapchain / backbuffer ───
+    nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
+    void SaveBackBufferScreenshot();
+
+    // ─── Binding sets & pipelines (cached) ───
+    nvrhi::BindingLayoutHandle GetOrCreateBindingLayoutFromBindingSetDesc(const nvrhi::BindingSetDesc& setDesc, uint32_t registerSpace = 0);
+    nvrhi::BindingLayoutHandle GetOrCreateBindlessLayout(const nvrhi::BindlessLayoutDesc& desc);
+    nvrhi::GraphicsPipelineHandle GetOrCreateGraphicsPipeline(const nvrhi::GraphicsPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo);
+    nvrhi::MeshletPipelineHandle GetOrCreateMeshletPipeline(const nvrhi::MeshletPipelineDesc& pipelineDesc, const nvrhi::FramebufferInfoEx& fbInfo);
+    nvrhi::ComputePipelineHandle GetOrCreateComputePipeline(nvrhi::ShaderHandle shader, const nvrhi::BindingLayoutVector& bindingLayouts);
+
+    // ─── Pass recording helpers ───
+
     void AddComputePass(const RenderPassParams& params);
     void AddFullScreenPass(const RenderPassParams& params);
     void GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, uint32_t reductionType);
     nvrhi::ShaderHandle GetShaderHandle(uint32_t shaderID) const;
 
-    // Shared GPU stack init used by Initialize().
-    // Creates RHI device + swapchain against the given window, resolves asset
-    // paths, initialises bindless heaps, loads shaders, and brings up
-    // CommonResources.  Returns false on any fatal failure.
+    // ─── GPU stack initialisation ───
+
+    // Used by Initialize(). Creates the RHI device + swapchain against the given
+    // window, initialises the bindless heaps, loads shaders, and brings up
+    // CommonResources. Returns false on any fatal failure.
     bool InitializeGPUStack(SDL_Window* window);
 
-    // Global Bindless Texture System
+    // ─── Global bindless texture heap ───
+
     void InitializeStaticBindlessTextures();
 
     uint32_t RegisterTexture(nvrhi::TextureHandle texture) { return WriteBindlessItem(nvrhi::BindingSetItem::Texture_SRV(0, texture), "Texture_SRV"); }
@@ -211,19 +262,15 @@ struct Renderer
     nvrhi::DescriptorTableHandle GetStaticTextureDescriptorTable() const { return m_StaticTextureDescriptorTable; }
     nvrhi::BindingLayoutHandle GetStaticTextureBindingLayout() const { return m_StaticTextureBindingLayout; }
 
-    // Global Sampler Descriptor Heap
+    // ─── Global bindless sampler heap ───
+
     void InitializeStaticBindlessSamplers();
     bool RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampler);
     nvrhi::DescriptorTableHandle GetStaticSamplerDescriptorTable() const { return m_StaticSamplerDescriptorTable; }
     nvrhi::BindingLayoutHandle GetStaticSamplerBindingLayout() const { return m_StaticSamplerBindingLayout; }
 
-private:
-    // Allocate an index, write a BindingSetItem to the global descriptor table, return index (UINT32_MAX on failure).
-    uint32_t WriteBindlessItem(const nvrhi::BindingSetItem& item, const char* label);
-    // Write a BindingSetItem at a known index, return success.
-    bool WriteBindlessItemAtIndex(uint32_t index, const nvrhi::BindingSetItem& item, const char* label);
+    // ─── Queries ───
 
-public:
     double GetFrameTimeMs() const { return m_FrameTime; }
     void SetCameraFromSceneCamera(const Scene::Camera& sceneCam);
 
@@ -237,35 +284,60 @@ public:
     template<typename SrInput>
     static nvrhi::BindingSetDesc CreateBindingSetDesc(const SrInput& inputs) { return CreateBindingSetDesc(inputs.m_Resources, SrInput::PushConstantBytes); }
 
-    // Public State & Resources
+    // ─── Texture streaming ───
+
+    // Initialise the FeedbackManager after scene load.
+    void InitStreaming();
+    // Shutdown streaming resources.
+    void ShutdownStreaming();
+    // Pre-render streaming update: flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
+    // Call BEFORE ScheduleAndRunAllRenderers().
+    void UpdateStreamingPreRender(nvrhi::CommandListHandle cmd);
+    // Post-render streaming update: ResolveFeedback + EndFrame.
+    // Call AFTER ScheduleAndRunAllRenderers() so the GBuffer pass has written sampler feedback.
+    void UpdateStreamingPostRender();
+
+    // ─── Shader loading & pipeline hashing (internal) ───
+
+    void HashPipelineCommonState(size_t& h, const nvrhi::RenderState&, const nvrhi::FramebufferInfoEx&, const nvrhi::BindingLayoutVector&);
+    void LoadShaders();
+    void UnloadShaders();
+    void ReloadShaders();
+
+    // ========================================================================
+    // State
+    // ========================================================================
+
+    // ─── Window, device & swapchain ───
+
     SDL_Window* m_Window = nullptr;
     std::unique_ptr<GraphicRHI> m_RHI;
 
     uint32_t m_AcquiredSwapchainImageIdx = 0;
     uint32_t m_SwapChainImageIdx = 0;
 
-    // Render Graph
+    // ─── Render graph ───
     RenderGraph m_RenderGraph;
 
     // Shader handles — indexed by ShaderID:: constants, populated by LoadShaders()
     nvrhi::ShaderHandle m_ShaderHandles[ShaderID::COUNT]{};
 
-    // UI
+    // ─── Editor UI ───
     ImGuiLayer m_ImGuiLayer;
 
-    // Parallel processing
+    // ─── Task scheduling ───
     std::unique_ptr<TaskScheduler> m_TaskScheduler;
 
-    // Scene
+    // ─── Scene ───
     Scene m_Scene;
 
     // Camera state persistence (periodic save + restore on load)
     CameraStateManager m_CameraStateManager;
 
-    // Renderers
+    // ─── Render passes ───
     std::vector<std::shared_ptr<IRenderer>> m_Renderers;
 
-    // Performance metrics
+    // ─── Frame statistics & profiling ───
     double m_FrameTime = 0.0;
     double m_FPS       = 0.0;
     uint32_t m_TargetFPS = 200;
@@ -309,8 +381,7 @@ public:
     // SHARC debug overlay (SHARCDebugMode enum value; 0 = off)
     uint32_t m_SHARCDebugMode = 0;
 
-
-    // bloom
+    // Bloom shaping parameters
     float m_BloomKnee = 0.1f;
     float m_UpsampleRadius = 0.85f;
 
@@ -333,7 +404,7 @@ public:
     bool m_EnableSky = true;
 
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
-    
+
     std::unique_ptr<nvfeedback::AsyncTileIO> m_AsyncTileIO; // Async tile I/O thread pool
 
     // Tiles submitted to AsyncTileIO this frame — their UpdateTileMappings and MinMip
@@ -350,52 +421,58 @@ public:
 
     int m_TileResidencyDebugTextureIdx = -1; // -1 = disabled, 0..N = selected feedback texture index
 
-    // Initialise the FeedbackManager after scene load.
-    void InitStreaming();
-    // Shutdown streaming resources.
-    void ShutdownStreaming();
-    // Pre-render streaming update: flush async uploads, BeginFrame, tile submit, UpdateTileMappings.
-    // Call BEFORE ScheduleAndRunAllRenderers().
-    void UpdateStreamingPreRender(nvrhi::CommandListHandle cmd);
-    // Post-render streaming update: ResolveFeedback + EndFrame.
-    // Call AFTER ScheduleAndRunAllRenderers() so the GBuffer pass has written sampler feedback.
-    void UpdateStreamingPostRender();
+    // ─── Command list pool ───
 
-    // Internal State
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
     std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;
     std::vector<nvrhi::CommandListHandle> m_InFlightCommandLists;
 
-    // Caches
+    // ─── Pipeline & binding-layout caches ───
+
     std::mutex m_CacheMutex;
     std::unordered_map<size_t, nvrhi::BindingLayoutHandle> m_BindingLayoutCache;
     std::unordered_map<size_t, nvrhi::GraphicsPipelineHandle> m_GraphicsPipelineCache;
     std::unordered_map<size_t, nvrhi::MeshletPipelineHandle> m_MeshletPipelineCache;
     std::unordered_map<size_t, nvrhi::ComputePipelineHandle> m_ComputePipelineCache;
 
-    // Global bindless texture system
+    // ─── Bindless heap state ───
+
+    // Texture heap: STATIC_* slots first, dynamically allocated indices after them.
     nvrhi::DescriptorTableHandle m_StaticTextureDescriptorTable;
     nvrhi::BindingLayoutHandle m_StaticTextureBindingLayout;
     uint32_t m_NextTextureIndex = srrhi::CommonConsts::DEFAULT_TEXTURE_COUNT;
 
-    // Global sampler descriptor heap
+    // Sampler heap
     nvrhi::DescriptorTableHandle m_StaticSamplerDescriptorTable;
     nvrhi::BindingLayoutHandle m_StaticSamplerBindingLayout;
 
-    // GPU Timing
+    // ─── GPU timing ───
+
     nvrhi::TimerQueryHandle m_GPUQueries[2];
 
-    // Private methods
-    void HashPipelineCommonState(size_t& h, const nvrhi::RenderState&, const nvrhi::FramebufferInfoEx&, const nvrhi::BindingLayoutVector&);
-    void LoadShaders();
-    void UnloadShaders();
-    void ReloadShaders();
+    // ─── Runtime flags ───
 
     bool m_Running = true;
     bool m_RequestedShaderReload = false;
+
+private:
+    // ─── Bindless heap internals ───
+
+    // Allocate an index, write a BindingSetItem to the global descriptor table, return index (UINT32_MAX on failure).
+    uint32_t WriteBindlessItem(const nvrhi::BindingSetItem& item, const char* label);
+    // Write a BindingSetItem at a known index, return success.
+    bool WriteBindlessItemAtIndex(uint32_t index, const nvrhi::BindingSetItem& item, const char* label);
 };
+
+// Global accessor for the Renderer singleton.
 #define g_Renderer Renderer::GetInstance()
 
+// ============================================================================
+// RAII helpers
+// ============================================================================
+
+// Opens a debug marker on construction and holds the command list for the scope;
+// releases the list back to the renderer on destruction.
 class ScopedCommandList
 {
 public:
@@ -412,6 +489,7 @@ private:
     bool m_HasMarker;
 };
 
+// Opens a MicroProfile GPU timer scope on construction, closes it on destruction.
 class ScopedGpuProfile
 {
 public:
@@ -425,4 +503,5 @@ private:
     MicroProfileScopeGpuHandler m_Scope;
 };
 
+// Usage: PROFILE_GPU_SCOPED("Pass name", commandList);
 #define PROFILE_GPU_SCOPED(NAME, CMDLIST) ScopedGpuProfile GENERATE_UNIQUE_VARIABLE(scopedGpuProfile){ NAME, CMDLIST };

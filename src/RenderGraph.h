@@ -1,18 +1,15 @@
 #pragma once
 
-
 #include "GraphicRHI.h"
 
-class RenderGraph;
-
 // ============================================================================
-// Resource Handles (opaque indices)
+// Resource handles — opaque indices into the graph's resource tables
 // ============================================================================
 
 struct RGResourceHandleBase
 {
     uint32_t m_Index = UINT32_MAX;
-    
+
     bool IsValid() const { return m_Index != UINT32_MAX; }
     void Invalidate() { m_Index = UINT32_MAX; }
     bool operator==(const RGResourceHandleBase& other) const { return m_Index == other.m_Index; }
@@ -35,7 +32,7 @@ struct RGResourceDescBase
 struct RGTextureDesc : public RGResourceDescBase
 {
     nvrhi::TextureDesc m_NvrhiDesc;
-    
+
     size_t ComputeHash() const override;
     nvrhi::MemoryRequirements GetMemoryRequirements() const override;
 };
@@ -43,7 +40,7 @@ struct RGTextureDesc : public RGResourceDescBase
 struct RGBufferDesc : public RGResourceDescBase
 {
     nvrhi::BufferDesc m_NvrhiDesc;
-    
+
     size_t ComputeHash() const override;
     nvrhi::MemoryRequirements GetMemoryRequirements() const override;
 };
@@ -69,14 +66,8 @@ struct ResourceLifetime
 {
     uint16_t m_FirstPass = UINT16_MAX;
     uint16_t m_LastPass = 0;
-    
+
     bool IsValid() const { return m_FirstPass != UINT16_MAX; }
-    bool Overlaps(const ResourceLifetime& other) const
-    {
-        if (!IsValid() || !other.IsValid())
-            return false;
-        return !(m_LastPass < other.m_FirstPass || other.m_LastPass < m_FirstPass);
-    }
 };
 
 struct TransientResourceBase
@@ -128,70 +119,22 @@ struct TransientBuffer : public TransientResourceBase
 // Main Render Graph
 // ============================================================================
 
+// ----------------------------------------------------------------------------
+// RenderGraph
+//
+// Records the resources and passes of a frame, then compiles them into a
+// concrete execution plan (pass order, heap sub-allocation, aliasing, barriers)
+// before the passes are recorded and submitted.
+//
+// Per-frame protocol:
+//   Reset() -> BeginSetup() -> [Declare* / Read* / Write* / ScheduleRenderer]
+//           -> EndSetup() -> Compile() -> [passes run] -> PostRender()
+// ----------------------------------------------------------------------------
 class RenderGraph
 {
 public:
-    void Shutdown();
+    // ─── Nested types ──────────────────────────────────────────────────────
 
-    // Reset graph for new frame (doesn't free physical resources)
-    void Reset();
-    
-    // general purpose transient resource declaration (called during Setup phase)
-    // underlying memory is not guaranteed to be retained across the whole frame due to aliasing
-    bool DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle);
-    bool DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle);
-
-    // "persistent" resources are guaranteed to NOT be aliased with any other resource
-    // they are ideal for long-term caching of resources across frames
-    // they are only freed when the "owner" does not declare them for several frames
-    bool DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle);
-    bool DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle);
-
-    // Resource Access Registration (called during Setup phase)
-    void ReadTexture(RGTextureHandle handle);
-    void WriteTexture(RGTextureHandle handle);
-    
-    void ReadBuffer(RGBufferHandle handle);
-    void WriteBuffer(RGBufferHandle handle);
-    
-    // Pass management (internal use by render loop)
-    // BeginSetup() is called exactly once per frame (after Reset()), before any
-    // ScheduleRenderer() calls.  EndSetup() is called once after all renderers
-    // have been scheduled, before Compile().
-    void BeginSetup();
-    void EndSetup();
-    void BeginPass(const char* name);
-    
-    void ScheduleRenderer(class IRenderer* pRenderer);
-    
-    void Compile();
-    void PostRender();
-    
-    // Resource Retrieval (only valid after Compile and before Cleanup)
-    nvrhi::TextureHandle GetTexture(RGTextureHandle handle, RGResourceAccessMode access) const;
-    nvrhi::BufferHandle GetBuffer(RGBufferHandle handle, RGResourceAccessMode access) const;
-
-    // Raw retrieval without access validation (only for internal use by render loop, not safe for general use)
-    nvrhi::TextureHandle GetTextureRaw(RGTextureHandle handle) const;
-    nvrhi::BufferHandle GetBufferRaw(RGBufferHandle handle) const;
-
-    // Returns the 1-based pass index for the named pass as recorded during the last frame's
-    // Setup/ScheduleRenderer phase, or 0 if no enabled pass with that name was found.
-    // Pass names come directly from IRenderer::GetName(), so they match the renderer's name.
-    // Only valid after at least one frame has been rendered (i.e. after ScheduleAndRunAllRenderers).
-    uint16_t GetPassIndex(const char* passName) const;
-    
-    // Set the current active pass for validation (used during Render phase)
-    void SetActivePass(uint16_t passIndex);
-
-    // Insert global sync barriers for a given pass into the command list.
-    // Must be called at the start of each pass's command list recording, before any GPU work.
-    void InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const;
-
-    // Returns the pass index for the current pass (valid after BeginPass, before Compile)
-    uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
-
-    // Debug & Stats
     struct Stats
     {
         uint32_t m_NumTextures = 0;
@@ -203,17 +146,91 @@ public:
         size_t m_TotalTextureMemory = 0;
         size_t m_TotalBufferMemory = 0;
     };
-    
+
+    // ─── Lifecycle ─────────────────────────────────────────────────────────
+
+    void Shutdown();
+
+    // Reset graph for new frame (doesn't free physical resources)
+    void Reset();
+
+    // ─── Resource declaration ──────────────────────────────────────────────
+
+    // General purpose transient resource declaration (called during Setup phase).
+    // Underlying memory is not guaranteed to be retained across the whole frame due to aliasing.
+    bool DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle);
+    bool DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle);
+
+    // "Persistent" resources are guaranteed to NOT be aliased with any other resource.
+    // They are ideal for long-term caching of resources across frames; they are only
+    // freed once the "owner" has not declared them for several frames.
+    bool DeclarePersistentTexture(const RGTextureDesc& desc, RGTextureHandle& outputHandle);
+    bool DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHandle& outputHandle);
+
+    // ─── Resource access registration ──────────────────────────────────────
+
+    // Declare how a pass uses a resource (called during Setup phase).
+    void ReadTexture(RGTextureHandle handle);
+    void WriteTexture(RGTextureHandle handle);
+
+    void ReadBuffer(RGBufferHandle handle);
+    void WriteBuffer(RGBufferHandle handle);
+
+    // ─── Pass management (render-loop internals) ───────────────────────────
+
+    // BeginSetup() is called exactly once per frame (after Reset()), before any
+    // ScheduleRenderer() calls.  EndSetup() is called once after all renderers
+    // have been scheduled, before Compile().
+    void BeginSetup();
+    void EndSetup();
+    void BeginPass(const char* name);
+
+    void ScheduleRenderer(class IRenderer* pRenderer);
+
+    void Compile();
+    void PostRender();
+
+    // ─── Resource retrieval (valid only between Compile and the next Reset) ─
+
+    nvrhi::TextureHandle GetTexture(RGTextureHandle handle, RGResourceAccessMode access) const;
+    nvrhi::BufferHandle GetBuffer(RGBufferHandle handle, RGResourceAccessMode access) const;
+
+    // Raw retrieval without access validation — internal render-loop use only.
+    nvrhi::TextureHandle GetTextureRaw(RGTextureHandle handle) const;
+    nvrhi::BufferHandle GetBufferRaw(RGBufferHandle handle) const;
+
+    // ─── Synchronisation ───────────────────────────────────────────────────
+
+    // Set the current active pass for validation (used during Render phase)
+    void SetActivePass(uint16_t passIndex);
+
+    // Insert global sync barriers for a given pass into the command list.
+    // Must be called at the start of each pass's command list recording, before any GPU work.
+    void InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const;
+
+    // Returns the pass index for the current pass (valid after BeginPass, before Compile)
+    uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
+
+    // ─── Debug & diagnostics ───────────────────────────────────────────────
+
     void RenderDebugUI();
     std::string ExportToString() const;
 
     static RGBufferDesc GetSPDAtomicCounterDesc(const char* debugName, uint32_t numElements = 1);
-    
+
+    // Exposed for diagnostics only — do not use in production code.
+    uint32_t GetForceInvalidateFramesRemaining() const { return m_ForceInvalidateFramesRemaining; }
+
+    // Enable/disable verbose informational logging (pool-reuse, aliasing, eviction …).
+    void SetVerboseLogging(bool enabled) { m_bVerboseLogging = enabled; }
+    bool IsVerboseLogging() const { return m_bVerboseLogging; }
+
+// ============================================================================
+// Private implementation
+// ============================================================================
 private:
-    // Generic resource allocation helper (avoids code duplication)
-    void AllocateResourcesInternal(bool bIsBuffer, std::function<void(uint32_t, nvrhi::HeapHandle, uint64_t)> createAndBindResource);
-    
-    // Heap management
+    // ─── Nested types ──────────────────────────────────────────────────────
+
     struct HeapBlock
     {
         size_t m_Offset = 0;
@@ -229,32 +246,6 @@ private:
         uint32_t m_HeapIdx = UINT32_MAX;
         std::vector<HeapBlock> m_Blocks;
     };
-    std::vector<HeapEntry> m_Heaps;
-    nvrhi::HeapHandle CreateHeap(size_t size);
-    void SubAllocateResource(RenderGraphInternal::TransientResourceBase* resource, uint64_t alignment);
-    void FreeBlock(uint32_t heapIdx, uint64_t blockOffset);
-    
-    // Helper for updating resource lifetimes
-    void UpdateResourceLifetime(RenderGraphInternal::ResourceLifetime& lifetime, uint16_t currentPass);
-
-    // When m_AliasingEnabled is true, records which passes contain at least one aliased resource
-    // that needs a global sync barrier before it's first used.
-    // Set during Compile() by checking each aliased resource's first pass.
-    // Indexed by pass index (1-based, pass 0 is unused).
-    std::vector<bool> m_PassNeedsGlobalSyncBarrier;
-
-    // Deferred release: when aliasing replaces a physical resource handle,
-    // we must not immediately destroy the old D3D12 object because the GPU
-    // may still have work in-flight from the previous frame referencing it.
-    // Old handles are moved here and released at the start of the next
-    // Compile(), which runs after the previous frame's ExecutePendingCommandLists
-    // has synced the GPU (via waitForIdle).
-    void FlushDeferredReleases();
-    std::vector<nvrhi::TextureHandle> m_DeferredReleaseTextures;
-    std::vector<nvrhi::BufferHandle>  m_DeferredReleaseBuffers;
-    
-private:
-    uint16_t GetActivePassIndex() const;
 
     struct PassAccess
     {
@@ -263,18 +254,63 @@ private:
         std::unordered_set<uint32_t> m_ReadBuffers;
         std::unordered_set<uint32_t> m_WriteBuffers;
     };
+
+    // ─── Resource allocation & heap sub-allocation ─────────────────────────
+
+    // Generic resource allocation helper (avoids code duplication)
+    void AllocateResourcesInternal(bool bIsBuffer, std::function<void(uint32_t, nvrhi::HeapHandle, uint64_t)> createAndBindResource);
+
+    nvrhi::HeapHandle CreateHeap(size_t size);
+    void SubAllocateResource(RenderGraphInternal::TransientResourceBase* resource, uint64_t alignment);
+    void FreeBlock(uint32_t heapIdx, uint64_t blockOffset);
+
+    // ─── Lifetime tracking & barriers ──────────────────────────────────────
+
+    // Helper for updating resource lifetimes
+    void UpdateResourceLifetime(RenderGraphInternal::ResourceLifetime& lifetime, uint16_t currentPass);
+
+    // ─── Deferred release ──────────────────────────────────────────────────
+
+    // Deferred release: when aliasing replaces a physical resource handle,
+    // we must not immediately destroy the old D3D12 object because the GPU
+    // may still have work in-flight from the previous frame referencing it.
+    // Old handles are moved here and released at the start of the next
+    // Compile(), which runs after the previous frame's ExecutePendingCommandLists
+    // has synced the GPU (via waitForIdle).
+    void FlushDeferredReleases();
+
+    // ─── Pass bookkeeping ──────────────────────────────────────────────────
+
+    uint16_t GetActivePassIndex() const;
+
+    // ─── State ─────────────────────────────────────────────────────────────
+
+    // Heaps and per-pass resource access sets
+    std::vector<HeapEntry> m_Heaps;
     std::vector<PassAccess> m_PassAccesses;
 
+    // Resource tables (indexed by RG*Handle::m_Index)
     std::vector<RenderGraphInternal::TransientTexture> m_Textures;
     std::vector<RenderGraphInternal::TransientBuffer> m_Buffers;
     std::vector<const char*> m_PassNames;
 
-    // Setup state
+    // Deferred release queue (see FlushDeferredReleases)
+    std::vector<nvrhi::TextureHandle> m_DeferredReleaseTextures;
+    std::vector<nvrhi::BufferHandle>  m_DeferredReleaseBuffers;
+
+    // When m_AliasingEnabled is true, records which passes contain at least one aliased resource
+    // that needs a global sync barrier before it's first used.
+    // Set during Compile() by checking each aliased resource's first pass.
+    // Indexed by pass index (1-based, pass 0 is unused).
+    std::vector<bool> m_PassNeedsGlobalSyncBarrier;
+
+    // Setup-phase state
     bool m_IsInsideSetup = false;
     PassAccess m_PendingPassAccess;
     std::vector<uint32_t> m_PendingDeclaredTextures;
     std::vector<uint32_t> m_PendingDeclaredBuffers;
 
+    // Frame state
     Stats m_Stats;
     bool m_AliasingEnabled = true;
     bool m_IsCompiled = false;
@@ -290,17 +326,4 @@ private:
     // re-declared in the new mode.  This counter is set to 2 by Shutdown() and
     // decremented by Reset(); m_bForceInvalidateAllResources stays true while > 0.
     uint32_t m_ForceInvalidateFramesRemaining = 0;
-
-public:
-    // Exposed for diagnostics only — do not use in production code.
-    uint32_t GetForceInvalidateFramesRemaining() const { return m_ForceInvalidateFramesRemaining; }
-
-    // Enable/disable verbose informational logging (pool-reuse, aliasing, eviction …).
-    void SetVerboseLogging(bool enabled) { m_bVerboseLogging = enabled; }
-    bool IsVerboseLogging() const { return m_bVerboseLogging; }
-
-    const std::vector<RenderGraphInternal::TransientTexture>& GetTextures() const { return m_Textures; }
-    const std::vector<RenderGraphInternal::TransientBuffer>& GetBuffers() const { return m_Buffers; }
-    const std::vector<HeapEntry>& GetHeaps() const { return m_Heaps; }
-    const Stats& GetStats() const { return m_Stats; }
 };

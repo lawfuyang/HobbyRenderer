@@ -1607,17 +1607,6 @@ nvrhi::BufferHandle RenderGraph::GetBufferRaw(RGBufferHandle handle) const
     return buf.m_PhysicalBuffer;
 }
 
-uint16_t RenderGraph::GetPassIndex(const char* passName) const
-{
-    if (!passName) return 0;
-    for (uint16_t i = 0; i < static_cast<uint16_t>(m_PassNames.size()); ++i)
-    {
-        if (m_PassNames[i] && std::string_view(m_PassNames[i]) == std::string_view(passName))
-            return static_cast<uint16_t>(i + 1); // pass indices are 1-based
-    }
-    return 0; // not found / pass was disabled this frame
-}
-
 RGBufferDesc RenderGraph::GetSPDAtomicCounterDesc(const char* debugName, uint32_t numElements)
 {
     RGBufferDesc desc;
