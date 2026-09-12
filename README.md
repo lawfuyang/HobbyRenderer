@@ -38,7 +38,6 @@ A 3D rendering engine built in C++, featuring modern graphics techniques and sup
   - **Cone Culling**: Conservative back-face and silhouette culling for opaque geometry
   - **Hierarchical LOD (Level of Detail)**: Up to 8 distance-based LOD levels with progressive mesh simplification using meshoptimizer
 - **Multi-threaded Rendering**: Parallel command list recording and asynchronous task scheduling
-- **Image-Based Lighting (IBL)**: Environment lighting with irradiance and radiance cubemaps, including BRDF lookup table and Bruneton atmosphere textures
 - **AMD FidelityFX SPD**: Single Pass Downsampler for efficient HZB generation (min reduction) and texture mip-map chain generation (average reduction)
 - **FSR3 TAA**: AMD FidelityFX Super Resolution 3 temporal anti-aliasing with native resolution support, HDR aware, motion vector jitter cancelation, and runtime sharpness control
 
@@ -132,7 +131,6 @@ The project automatically downloads and builds the following dependencies:
 The engine supports multiple rendering modes, selectable via the ImGui UI or at runtime:
 
 - **Normal Mode**: Standard deferred rendering with real-time performance focus, featuring ReSTIR DI/GI, SHARC indirect lighting, hardware ray-traced shadows, and full RTXDI pipeline
-- **IBL Mode**: Image-based lighting dominant, useful for controlled lighting conditions
 - **Reference Path Tracer**: Unbiased Monte Carlo path tracing for reference-quality rendering with progressive refinement
 
 ## Shader System
@@ -167,4 +165,4 @@ Key shader features:
   - Environment lights with PDF-based sampling in ReSTIR DI
   - Configurable per-light sampling (128 RIS tiles × 1024 samples)
 - **Cameras**: Perspective cameras with configurable field-of-view, near/far planes, manual/auto exposure with EV100 support, and exposure compensation
-- **Texture Formats**: Supports DDS cubemaps for IBL (irradiance and radiance maps), BRDF LUT, and Bruneton atmosphere precomputed textures
+- **Texture Formats**: Supports DDS/PNG textures and Bruneton atmosphere precomputed textures

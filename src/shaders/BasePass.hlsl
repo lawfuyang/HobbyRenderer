@@ -365,7 +365,6 @@ GBufferOut GBuffer_PSMain(VSOut input)
     lightingInputs.metallic = metallic;
     lightingInputs.ior = mat.m_IOR;
     lightingInputs.worldPos = input.worldPos;
-    lightingInputs.radianceMipCount = g_PerFrame.m_RadianceMipCount;
     lightingInputs.enableRTShadows = g_PerFrame.m_EnableRTShadows != 0;
     lightingInputs.sceneAS = g_SceneAS;
     lightingInputs.instances = g_Instances;
@@ -381,35 +380,24 @@ GBufferOut GBuffer_PSMain(VSOut input)
 
     float3 color = 0;
     float3 directSpecular = 0;
-    if (g_PerFrame.m_RenderingMode == srrhi::CommonConsts::RENDERING_MODE_IBL)
+
+    float3 p_atmo = GetAtmospherePos(input.worldPos);
+
+    if (g_PerFrame.m_EnableSky)
     {
-        lightingInputs.L = g_PerFrame.m_SunDirection;
-        PrepareLightingByproducts(lightingInputs);
-        IBLComponents iblRes = ComputeIBL(lightingInputs);
-        color = iblRes.ibl;
-        directSpecular = iblRes.radiance;
-        
+        // Use solar_irradiance * transmittance as the direct sun radiance at surface
+        lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_PerFrame.m_SunDirection, g_Lights[0].m_Intensity);
+        lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+        lightingInputs.useSunRadiance = true;
     }
-    else
-    {
-        float3 p_atmo = GetAtmospherePos(input.worldPos);
 
-        if (g_PerFrame.m_EnableSky)
-        {
-            // Use solar_irradiance * transmittance as the direct sun radiance at surface
-            lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_PerFrame.m_SunDirection, g_Lights[0].m_Intensity);
-            lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
-            lightingInputs.useSunRadiance = true;
-        }
+    LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_PerFrame.m_LightCount);
+    float3 directDiffuse = directLighting.diffuse;
+    directSpecular = directLighting.specular;
 
-        LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_PerFrame.m_LightCount);
-        float3 directDiffuse = directLighting.diffuse;
-        directSpecular = directLighting.specular;
+    PrepareLightingByproducts(lightingInputs);
 
-        PrepareLightingByproducts(lightingInputs);
-
-        color = directDiffuse + directSpecular;
-    }
+    color = directDiffuse + directSpecular;
 
     // Refraction logic
     if (mat.m_TransmissionFactor > 0.0)

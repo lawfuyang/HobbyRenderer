@@ -80,9 +80,6 @@ public:
     nvrhi::TextureHandle DummySRVTextureArray;       // 1x1x1 Texture2DArray SRV for filling array slots
     nvrhi::TextureHandle DummySRVFloat4Array;        // 1x1x1 Texture2DArray RGBA32_FLOAT SRV for float4 array slots
     nvrhi::TextureHandle DummySRVTexture4;           // 1x1 RGBA32_FLOAT SRV texture for filling float4 SRV slots
-    nvrhi::TextureHandle BRDF_LUT;                   // BRDF integration LUT for IBL
-    nvrhi::TextureHandle IrradianceTexture;          // Irradiance cubemap for IBL
-    nvrhi::TextureHandle RadianceTexture;            // Radiance cubemap (filtered environment) for IBL
     // Bruneton Atmosphere textures
     nvrhi::TextureHandle BrunetonTransmittance;
     nvrhi::TextureHandle BrunetonScattering;
@@ -101,8 +98,6 @@ public:
 
     // Default meshes
     CommonMesh UnitSphereMesh;
-
-    uint32_t m_RadianceMipCount = 1;
 
     CommonResources() = default;
 };

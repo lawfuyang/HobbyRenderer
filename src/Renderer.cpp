@@ -277,7 +277,6 @@ void Renderer::SaveBackBufferScreenshot()
 // Responsibilities:
 //   � Create + init the D3D12 RHI device
 //   � Create the swapchain against the given window
-//   � Resolve asset paths (irradiance / radiance / BRDF LUT)
 //   � Initialise static bindless texture + sampler heaps
 //   � Load compiled shader blobs
 //   � Bring up CommonResources (samplers, states, default textures)
@@ -313,15 +312,6 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     {
         SDL_LOG_ASSERT_FAIL("Swapchain creation failed", "[Init] CreateSwapchain failed");
         return false;
-    }
-
-    // Resolve asset paths.
-    if (const char* basePathCStr = SDL_GetBasePath())
-    {
-        const std::filesystem::path exeDir{ basePathCStr };
-        m_IrradianceTexturePath = (exeDir / "irradiance.dds").string();
-        m_RadianceTexturePath   = (exeDir / "radiance.dds").string();
-        m_BRDFLutTexture        = (exeDir / "brdf_lut.dds").string();
     }
 
     // Bindless heaps must exist before CommonResources::Initialize() runs.
@@ -1029,11 +1019,6 @@ void Renderer::ApplyRenderingModeDefaults(RenderingMode mode)
             m_EnableRTShadows = true;
             m_EnableReSTIRDI = true;
             m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC;
-            break;
-        case RenderingMode::IBL:
-            m_EnableRTShadows = false;
-            m_EnableReSTIRDI = false;
-            m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE;
             break;
         case RenderingMode::ReferencePathTracer:
             m_EnableRTShadows = true;

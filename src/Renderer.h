@@ -97,7 +97,6 @@ public:
 enum class RenderingMode : uint32_t
 {
     Normal = srrhi::CommonConsts::RENDERING_MODE_NORMAL,
-    IBL = srrhi::CommonConsts::RENDERING_MODE_IBL,
     ReferencePathTracer = srrhi::CommonConsts::RENDERING_MODE_PATH_TRACER
 };
 
@@ -332,9 +331,6 @@ public:
 
     // Environment Lighting settings
     bool m_EnableSky = true;
-    std::string m_IrradianceTexturePath = "irradiance.dds";
-    std::string m_RadianceTexturePath = "radiance.dds";
-    std::string m_BRDFLutTexture = "brdf_lut.dds";
 
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
     

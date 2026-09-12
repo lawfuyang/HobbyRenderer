@@ -370,8 +370,6 @@ protected:
         cb.SetOpaqueColorMipCount(opaqueColor->getDesc().mipLevels);
         cb.SetEnableSky(g_Renderer.m_EnableSky ? 1 : 0);
         cb.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
-        cb.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
-        cb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
         cb.SetForcedTextureMip(g_Renderer.m_ForcedTextureMip);
 
         commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);

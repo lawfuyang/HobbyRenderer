@@ -278,7 +278,6 @@ struct LightingInputs
     float metallic;
     float ior;
     float3 worldPos;
-    uint radianceMipCount;
     bool enableRTShadows;
     RaytracingAccelerationStructure sceneAS;
     StructuredBuffer<srrhi::PerInstanceData> instances;
@@ -304,13 +303,6 @@ struct LightingInputs
     float VdotH; // Dot product of view direction and half vector
     float LdotV; // Dot product of light direction and view direction
     float LdotH; // Dot product of light direction and half vector
-};
-
-struct IBLComponents
-{
-    float3 irradiance;
-    float3 radiance;
-    float3 ibl;
 };
 
 void PrepareLightingByproducts(inout LightingInputs inputs)
@@ -905,36 +897,6 @@ LightingComponents AccumulateDirectLighting(LightingInputs inputs, uint lightCou
         }
     }
     return total;
-}
-
-IBLComponents ComputeIBL(LightingInputs inputs)
-{
-    IBLComponents components;
-
-    SamplerState clampSampler = SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_ANISOTROPIC_CLAMP_INDEX];
-
-    // Diffuse IBL
-    TextureCube irradianceMap = ResourceDescriptorHeap[srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE];
-    float3 irradiance = irradianceMap.Sample(clampSampler, inputs.N).rgb;
-    float3 diffuseIBL = irradiance * inputs.baseColor * inputs.kD;
-
-    // Specular IBL
-    TextureCube prefilteredEnvMap = ResourceDescriptorHeap[srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE];
-    float3 R = reflect(-inputs.V, inputs.N);
-    
-    float mipLevel = inputs.roughness * (float(inputs.radianceMipCount) - 1.0f);
-    float3 prefilteredColor = prefilteredEnvMap.SampleLevel(clampSampler, R, mipLevel).rgb;
-
-    Texture2D brdfLut = ResourceDescriptorHeap[srrhi::CommonConsts::DEFAULT_TEXTURE_BRDF_LUT];
-    float2 brdf = brdfLut.SampleLevel(clampSampler, float2(inputs.NdotV, inputs.roughness), 0).rg;
-
-    float3 specularIBL = prefilteredColor * (inputs.F0 * brdf.x + brdf.y);
-
-    components.irradiance = diffuseIBL;
-    components.radiance = specularIBL;
-    components.ibl = (diffuseIBL + specularIBL);
-
-    return components;
 }
 
 // ─── Bent normal: flip shading normal to the same hemisphere as flat normal ──

@@ -63,7 +63,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     lightingInputs.metallic = metallic;
     lightingInputs.ior = 1.5f; // Default IOR for opaque
     lightingInputs.worldPos = worldPos;
-    lightingInputs.radianceMipCount = g_Deferred.m_RadianceMipCount;
     lightingInputs.enableRTShadows = g_Deferred.m_EnableRTShadows != 0;
     lightingInputs.sceneAS = g_SceneAS;
     lightingInputs.instances = g_Instances;
@@ -78,43 +77,33 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     lightingInputs.sunShadow = 1.0f;
 
     float3 color = 0;
-    if (g_Deferred.m_RenderingMode == srrhi::CommonConsts::RENDERING_MODE_IBL)
+    if (g_Deferred.m_UseReSTIRDI != 0)
     {
-        lightingInputs.L = g_Deferred.m_SunDirection;
-        PrepareLightingByproducts(lightingInputs);
-        IBLComponents iblRes = ComputeIBL(lightingInputs);
-        color = iblRes.ibl + emissive;
+        // CompositingPass already remodulated DI by albedo and added emissive
+        color = g_RTXDIDIComposited.Load(uint3(uvInt, 0)).rgb;
     }
     else
     {
-        if (g_Deferred.m_UseReSTIRDI != 0)
-        {
-            // CompositingPass already remodulated DI by albedo and added emissive
-            color = g_RTXDIDIComposited.Load(uint3(uvInt, 0)).rgb;
-        }
-        else
-        {
-            float3 p_atmo = GetAtmospherePos(worldPos);
+        float3 p_atmo = GetAtmospherePos(worldPos);
 
-            if (g_Deferred.m_EnableSky)
-            {
-                // Use solar_irradiance * transmittance as the direct sun radiance at surface
-                lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity);
-                lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
-                lightingInputs.useSunRadiance = true;
-            }
-
-            LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
-            color = directLighting.diffuse + directLighting.specular;
-            color += emissive;
+        if (g_Deferred.m_EnableSky)
+        {
+            // Use solar_irradiance * transmittance as the direct sun radiance at surface
+            lightingInputs.sunRadiance = GetAtmosphereSunRadiance(p_atmo, g_Deferred.m_SunDirection, g_Lights[0].m_Intensity);
+            lightingInputs.sunShadow = CalculateRTShadow(lightingInputs, lightingInputs.sunDirection, 1e10f);
+            lightingInputs.useSunRadiance = true;
         }
 
-        // ---- SHARC Indirect ----
-        if (g_Deferred.m_IndirectLightingMode == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
-        {
-            // SHARC cache stores outgoing indirect radiance (BRDF already baked in during the Update pass). Add directly � no further BRDF modulation needed.
-            color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;
-        }
+        LightingComponents directLighting = AccumulateDirectLighting(lightingInputs, g_Deferred.m_LightCount);
+        color = directLighting.diffuse + directLighting.specular;
+        color += emissive;
+    }
+
+    // ---- SHARC Indirect ----
+    if (g_Deferred.m_IndirectLightingMode == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+    {
+        // SHARC cache stores outgoing indirect radiance (BRDF already baked in during the Update pass). Add directly � no further BRDF modulation needed.
+        color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;
     }
 
     // Debug visualizations

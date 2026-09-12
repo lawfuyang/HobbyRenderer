@@ -23,18 +23,7 @@ float4 Sky_PSMain(FullScreenVertexOut input) : SV_Target
     float3 V = normalize(g_Sky.m_CameraPos.xyz - worldPos);
 
     float3 viewRay = -V;
-    float3 skyRadiance = 0;
-
-    if (g_Sky.m_RenderingMode == srrhi::CommonConsts::RENDERING_MODE_IBL)
-    {
-        TextureCube radianceMap = ResourceDescriptorHeap[srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE];
-        SamplerState linearClamp = SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_LINEAR_CLAMP_INDEX];
-        skyRadiance = radianceMap.SampleLevel(linearClamp, viewRay, 0).rgb;
-    }
-    else
-    {
-        skyRadiance = GetAtmosphereSkyRadiance(g_Sky.m_CameraPos.xyz, viewRay, g_Sky.m_SunDirection, g_Sky.m_SunIntensity);
-    }
+    float3 skyRadiance = GetAtmosphereSkyRadiance(g_Sky.m_CameraPos.xyz, viewRay, g_Sky.m_SunDirection, g_Sky.m_SunIntensity);
 
     return float4(skyRadiance, 1.0);
 }

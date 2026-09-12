@@ -67,8 +67,6 @@ public:
         dcb.SetCameraPos(DirectX::XMFLOAT4{ camPos.x, camPos.y, camPos.z, 1.0f });
         dcb.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
         dcb.SetEnableSky(g_Renderer.m_EnableSky ? 1 : 0);
-        dcb.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
-        dcb.SetRadianceMipCount(CommonResources::GetInstance().m_RadianceMipCount);
         dcb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
         // RT shadows are ray-traced against the scene TLAS
         dcb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);

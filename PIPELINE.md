@@ -112,8 +112,8 @@ dependencies (the render graph resolves the rest):
 | `HZBGeneratorPhase2` | Generates hierarchical Z-buffer for occlusion culling |
 | `RTXDIRenderer` | ReSTIR DI + GI sampling & resampling |
 | `SHARCRenderer` | SHARC cache-based indirect lighting |
-| `DeferredRenderer` | Deferred lighting: combines G-Buffer + RTXDI/SHARC + IBL |
-| `SkyRenderer` | Atmospheric sky or IBL environment background |
+| `DeferredRenderer` | Deferred lighting: combines G-Buffer + RTXDI/SHARC |
+| `SkyRenderer` | Atmospheric sky background |
 | `TransparentPassRenderer` | Forward transparent rendering |
 | `TAARenderer` | Temporal anti-aliasing (FSR3) |
 | `BloomRenderer` | Bloom post-processing |

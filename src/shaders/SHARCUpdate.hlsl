@@ -50,7 +50,7 @@ static const StructuredBuffer<uint>                      g_Indices   = srrhi::SH
 // Helpers
 // ============================================================================
 
-// Shade a surface hit with all scene lights (direct lighting only, no IBL).
+// Shade a surface hit with all scene lights (direct lighting only).
 // Returns combined diffuse + specular radiance arriving at the hit point.
 float3 EvaluateDirectLightingAtHit(
     float3 worldPos,
@@ -70,7 +70,6 @@ float3 EvaluateDirectLightingAtHit(
     inputs.roughness        = roughness;
     inputs.metallic         = metallic;
     inputs.ior              = 1.5f;
-    inputs.radianceMipCount = 0;
     inputs.enableRTShadows  = true;
     inputs.sceneAS          = g_SceneAS;
     inputs.instances        = g_Instances;

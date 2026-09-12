@@ -89,7 +89,6 @@ srinput CommonConsts
 
     // Rendering modes
     static const int RENDERING_MODE_NORMAL = 0;
-    static const int RENDERING_MODE_IBL = 1;
     static const int RENDERING_MODE_PATH_TRACER = 2;
 
     // Texture flags (bit flags)
@@ -104,13 +103,10 @@ srinput CommonConsts
     static const int DEFAULT_TEXTURE_GRAY = 2;
     static const int DEFAULT_TEXTURE_NORMAL = 3;
     static const int DEFAULT_TEXTURE_PBR = 4;
-    static const int DEFAULT_TEXTURE_BRDF_LUT = 5;
-    static const int DEFAULT_TEXTURE_IRRADIANCE = 6;
-    static const int DEFAULT_TEXTURE_RADIANCE = 7;
-    static const int BRUNETON_TRANSMITTANCE_TEXTURE = 8;
-    static const int BRUNETON_SCATTERING_TEXTURE = 9;
-    static const int BRUNETON_IRRADIANCE_TEXTURE = 10;
-    static const int DEFAULT_TEXTURE_COUNT = 11;
+    static const int BRUNETON_TRANSMITTANCE_TEXTURE = 5;
+    static const int BRUNETON_SCATTERING_TEXTURE = 6;
+    static const int BRUNETON_IRRADIANCE_TEXTURE = 7;
+    static const int DEFAULT_TEXTURE_COUNT = 8;
 
     // Global sampler indices
     static const int SAMPLER_ANISOTROPIC_CLAMP_INDEX = 0;

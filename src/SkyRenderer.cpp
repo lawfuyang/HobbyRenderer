@@ -15,7 +15,7 @@ public:
     {
         
 
-        // SkyRenderer handles both atmospheric sky (Normal mode) and IBL background (IBL mode)
+        // SkyRenderer draws the atmospheric sky background
         if (g_Renderer.m_Mode == RenderingMode::Normal && !g_Renderer.m_EnableSky)
         {
             return false;
@@ -46,7 +46,6 @@ public:
         skyInputs.m_SkyCB.SetCameraPos(Vector4{ camPos.x, camPos.y, camPos.z, 1.0f });
         skyInputs.m_SkyCB.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
         skyInputs.m_SkyCB.SetSunIntensity(g_Renderer.m_Scene.GetSunIntensity());
-        skyInputs.m_SkyCB.SetRenderingMode((uint32_t)g_Renderer.m_Mode);
 
         commandList->writeBuffer(skyCB, &skyInputs.m_SkyCB, sizeof(skyInputs.m_SkyCB), 0);
         skyInputs.SetSkyCB(skyCB);

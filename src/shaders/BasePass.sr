@@ -23,8 +23,6 @@ cbuffer BasePassConstants
     float2 m_OpaqueColorDimensions;
     float3 m_SunDirection;
     uint m_EnableSky;
-    uint m_RenderingMode;
-    uint m_RadianceMipCount;
     uint m_OpaqueColorMipCount;
     int m_ForcedTextureMip;
 };

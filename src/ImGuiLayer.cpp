@@ -82,7 +82,7 @@ void ImGuiLayer::UpdateFrame()
         // Rendering options
         if (ImGui::TreeNode("Rendering"))
         {
-            static const char* kRenderingModes[] = { "Normal", "Image Based Lighting", "Reference Pathtracer" };
+            static const char* kRenderingModes[] = { "Normal", "Reference Pathtracer" };
             int currentMode = static_cast<int>(g_Renderer.m_Mode);
             if (ImGui::Combo("Rendering Mode", &currentMode, kRenderingModes, IM_ARRAYSIZE(kRenderingModes)))
             {

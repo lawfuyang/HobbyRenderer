@@ -125,7 +125,6 @@ void PathTracer_CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             inputs.roughness        = pbr.roughness;
             inputs.metallic         = pbr.metallic;
             inputs.ior              = mat.m_IOR;
-            inputs.radianceMipCount = 0;
             inputs.enableRTShadows  = true;
             inputs.sceneAS          = g_SceneAS;
             inputs.instances        = g_Instances;

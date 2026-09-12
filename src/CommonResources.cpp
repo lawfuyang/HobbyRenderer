@@ -457,43 +457,6 @@ void CommonResources::Initialize()
         const char* basePath = SDL_GetBasePath();
         const Config& config = Config::Get();
 
-        auto LoadAndUpload = [&](const std::string& configPath, const char* debugName, nvrhi::TextureHandle& outTexture, bool expectCube = false)
-        {
-            nvrhi::TextureDesc desc;
-            std::unique_ptr<MemoryMappedDataReader> data;
-            std::filesystem::path path(configPath);
-            if (path.is_relative() && basePath)
-            {
-                path = std::filesystem::path(basePath) / path;
-            }
-
-            if (LoadTexture(path.generic_string(), desc, data))
-            {
-                if (expectCube && desc.dimension != nvrhi::TextureDimension::TextureCube)
-                {
-                    SDL_LOG_ASSERT_FAIL("Texture must be a cubemap", "%s must be a TextureCube", debugName);
-                }
-
-                desc.debugName = debugName;
-                outTexture = device->createTexture(desc);
-                SDL_assert(outTexture);
-                ::UploadTexture(commandList, outTexture, desc, data->GetData(), data->GetSize());
-            }
-            else
-            {
-                SDL_LOG_ASSERT_FAIL("Failed to load texture", "Failed to load texture: %s", path.generic_string().c_str());
-            }
-        };
-
-        // Load BRDF LUT
-        LoadAndUpload(g_Renderer.m_BRDFLutTexture, "BRDF_LUT", BRDF_LUT);
-
-        // Load IBL textures
-        LoadAndUpload(g_Renderer.m_IrradianceTexturePath, "IrradianceTexture", IrradianceTexture, true);
-        LoadAndUpload(g_Renderer.m_RadianceTexturePath, "RadianceTexture", RadianceTexture, true);
-
-        m_RadianceMipCount = RadianceTexture->getDesc().mipLevels;
-
         // Load Bruneton Atmosphere textures
         auto LoadBruneton = [&](const char* filename, const char* debugName, nvrhi::TextureHandle& outTexture, uint32_t width, uint32_t height, uint32_t depth = 1)
         {
@@ -596,9 +559,6 @@ void CommonResources::Initialize()
         commandList->setPermanentTextureState(DummySRVTextureArray, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(DummySRVFloat4Array, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(DummySRVTexture4, nvrhi::ResourceStates::ShaderResource);
-        commandList->setPermanentTextureState(BRDF_LUT, nvrhi::ResourceStates::ShaderResource);
-        commandList->setPermanentTextureState(IrradianceTexture, nvrhi::ResourceStates::ShaderResource);
-        commandList->setPermanentTextureState(RadianceTexture, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BrunetonTransmittance, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BrunetonScattering, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentTextureState(BrunetonIrradiance, nvrhi::ResourceStates::ShaderResource);
@@ -626,9 +586,6 @@ void CommonResources::RegisterDefaultTextures()
     g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_GRAY, DefaultTextureGray);
     g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_NORMAL, DefaultTextureNormal);
     g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_PBR, DefaultTexturePBR);
-    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_BRDF_LUT, BRDF_LUT);
-    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_IRRADIANCE, IrradianceTexture);
-    g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::DEFAULT_TEXTURE_RADIANCE, RadianceTexture);
 
     g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_TRANSMITTANCE_TEXTURE, BrunetonTransmittance);
     g_Renderer.RegisterTextureAtIndex(srrhi::CommonConsts::BRUNETON_SCATTERING_TEXTURE, BrunetonScattering);
@@ -643,9 +600,6 @@ void CommonResources::Shutdown()
     BrunetonIrradiance = nullptr;
     BrunetonScattering = nullptr;
     BrunetonTransmittance = nullptr;
-    RadianceTexture = nullptr;
-    IrradianceTexture = nullptr;
-    BRDF_LUT = nullptr;
     DummyUAVTexture = nullptr;
     DummyUAVTextureArray = nullptr;
     DummyUAVTexture4 = nullptr;
