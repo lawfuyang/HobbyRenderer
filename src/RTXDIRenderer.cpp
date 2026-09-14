@@ -763,9 +763,9 @@ public:
         m_RISBufferSegmentAllocator = rtxdi::RISBufferSegmentAllocator{};
 
         // Allocate local-light RIS segment (tiles × tile size)
-        m_RISBufferSegmentAllocator.allocateSegment(k_RISTileSize * k_RISTileCount);
+        m_RISBufferSegmentAllocator.AllocateSegment(k_RISTileSize * k_RISTileCount);
         // Allocate env-light RIS segment
-        m_RISBufferSegmentAllocator.allocateSegment(k_EnvRISTileSize * k_EnvRISTileCount);
+        m_RISBufferSegmentAllocator.AllocateSegment(k_EnvRISTileSize * k_EnvRISTileCount);
 
         // Create the ReSTIRDI context
         const rtxdi::CheckerboardMode checkerMode = g_ReSTIRDI_CheckerboardMode;
@@ -779,10 +779,10 @@ public:
 
         // Create the ReGIR context (Onion mode, matching FullSample defaults)
         rtxdi::ReGIRStaticParameters regirStaticParams;
-        regirStaticParams.Mode = rtxdi::ReGIRMode::Onion;
-        regirStaticParams.LightsPerCell = 512;
-        regirStaticParams.onionParameters.OnionDetailLayers = 5;
-        regirStaticParams.onionParameters.OnionCoverageLayers = 10;
+        regirStaticParams.mode = rtxdi::ReGIRMode::Onion;
+        regirStaticParams.lightsPerCell = 512;
+        regirStaticParams.onionParameters.onionDetailLayers = 5;
+        regirStaticParams.onionParameters.onionCoverageLayers = 10;
 
         m_ReGIRContext = std::make_unique<rtxdi::ReGIRContext>(regirStaticParams, m_RISBufferSegmentAllocator);
 
@@ -1571,9 +1571,9 @@ public:
             auto onionParams   = m_ReGIRContext->GetReGIROnionCalculatedParameters();
 
             ReGIR_Parameters regirParams{};
-            regirParams.gridParams.cellsX = staticParams.gridParameters.GridSize.x;
-            regirParams.gridParams.cellsY = staticParams.gridParameters.GridSize.y;
-            regirParams.gridParams.cellsZ = staticParams.gridParameters.GridSize.z;
+            regirParams.gridParams.cellsX = staticParams.gridParameters.gridSize.x;
+            regirParams.gridParams.cellsY = staticParams.gridParameters.gridSize.y;
+            regirParams.gridParams.cellsZ = staticParams.gridParameters.gridSize.z;
 
             // Update the grid center to follow the camera so the Onion grid
             // is always centered on the viewer.
@@ -1585,12 +1585,12 @@ public:
 
             regirParams.commonParams.numRegirBuildSamples       = dynamicParams.regirNumBuildSamples;
             regirParams.commonParams.risBufferOffset            = m_ReGIRContext->GetReGIRCellOffset();
-            regirParams.commonParams.lightsPerCell              = staticParams.LightsPerCell;
+            regirParams.commonParams.lightsPerCell              = staticParams.lightsPerCell;
             regirParams.commonParams.centerX                    = dynamicParams.center.x;
             regirParams.commonParams.centerY                    = dynamicParams.center.y;
             regirParams.commonParams.centerZ                    = dynamicParams.center.z;
             // Onion operates with radii; "size" feels more like diameter — halve it
-            regirParams.commonParams.cellSize = (staticParams.Mode == rtxdi::ReGIRMode::Onion)
+            regirParams.commonParams.cellSize = (staticParams.mode == rtxdi::ReGIRMode::Onion)
                 ? dynamicParams.regirCellSize * 0.5f
                 : dynamicParams.regirCellSize;
             regirParams.commonParams.localLightSamplingFallbackMode = static_cast<uint32_t>(dynamicParams.fallbackSamplingMode);
