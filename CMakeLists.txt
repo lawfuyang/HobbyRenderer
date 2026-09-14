@@ -78,6 +78,49 @@ function(download_library LIB_NAME LIB_VERSION DOWNLOAD_URL LIB_PATTERN)
 endfunction()
 
 # ============================================================================
+# stage_dll — stage a runtime DLL next to the executable (bin/).
+#
+# A symlink avoids duplicating the file, but creating one on Windows needs
+# Developer Mode or elevation — and when it fails, CREATE_LINK leaves behind a
+# ZERO-BYTE file that makes the game abort at DLL-load time with
+# STATUS_STACK_BUFFER_OVERRUN and no diagnostics. So: check the result, and
+# fall back to a real copy. Shared by SDL3.dll and the DXC runtime DLLs.
+# ============================================================================
+function(stage_dll SRC DST)
+    if(NOT EXISTS "${SRC}")
+        message(WARNING "stage_dll: source missing: ${SRC}")
+        return()
+    endif()
+
+    set(STAGED FALSE)
+    if(EXISTS "${DST}")
+        file(SIZE "${DST}" DST_SIZE)
+        if(DST_SIZE GREATER 0)
+            set(STAGED TRUE)
+        else()
+            message(WARNING "${DST} is 0 bytes — replacing it")
+            file(REMOVE "${DST}")
+        endif()
+    endif()
+
+    if(NOT STAGED)
+        file(CREATE_LINK "${SRC}" "${DST}" SYMBOLIC RESULT LINK_RESULT)
+        set(LINK_OK FALSE)
+        if(LINK_RESULT EQUAL 0 AND EXISTS "${DST}")
+            file(SIZE "${DST}" DST_SIZE)
+            if(DST_SIZE GREATER 0)
+                set(LINK_OK TRUE)
+            endif()
+        endif()
+        if(NOT LINK_OK)
+            message(STATUS "${DST} symlink unavailable — copying instead")
+            file(REMOVE "${DST}")
+            file(COPY "${SRC}" DESTINATION "${CMAKE_SOURCE_DIR}/bin")
+        endif()
+    endif()
+endfunction()
+
+# ============================================================================
 # Download Libraries
 # ============================================================================
 
@@ -87,7 +130,7 @@ set(SDL3_URL "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3
 download_library("SDL3" "${SDL3_VERSION}" "${SDL3_URL}" "SDL3-*")
 set(SDL3_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/SDL3")
 if(WIN32)
-    file(CREATE_LINK "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll" "${CMAKE_SOURCE_DIR}/bin/SDL3.dll" SYMBOLIC)
+    stage_dll("${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll" "${CMAKE_SOURCE_DIR}/bin/SDL3.dll")
 endif()
 
 # Agility SDK Configuration
@@ -97,8 +140,8 @@ download_library("AgilitySDK" "${AGILITY_SDK_VERSION}" "${AGILITY_SDK_URL}" "Agi
 set(AGILITY_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/AgilitySDK")
 set(D3D12MA_AGILITY_SDK_DIRECTORY "${AGILITY_SDK_INSTALL_DIR}")
 if(WIN32)
-    file(CREATE_LINK "${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/D3D12Core.dll" "${CMAKE_SOURCE_DIR}/bin/D3D12Core.dll" SYMBOLIC)
-    file(CREATE_LINK "${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/d3d12SDKLayers.dll" "${CMAKE_SOURCE_DIR}/bin/d3d12SDKLayers.dll" SYMBOLIC)
+    stage_dll("${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/D3D12Core.dll" "${CMAKE_SOURCE_DIR}/bin/D3D12Core.dll")
+    stage_dll("${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/d3d12SDKLayers.dll" "${CMAKE_SOURCE_DIR}/bin/d3d12SDKLayers.dll")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -176,7 +219,7 @@ if(WIN32)
     file(GLOB FSR_DLL_FILES "${FSR_SDK_BIN_DIR}/*.dll")
     foreach(FSR_DLL ${FSR_DLL_FILES})
         get_filename_component(FSR_DLL_FILENAME ${FSR_DLL} NAME)
-        file(CREATE_LINK "${FSR_DLL}" "${CMAKE_SOURCE_DIR}/bin/${FSR_DLL_FILENAME}" SYMBOLIC)
+        stage_dll("${FSR_DLL}" "${CMAKE_SOURCE_DIR}/bin/${FSR_DLL_FILENAME}")
     endforeach()
 
     file(CREATE_LINK "${FSR_SDK_FIDELITY_FX_DIR}" "${CMAKE_SOURCE_DIR}/src/FidelityFX" SYMBOLIC)
