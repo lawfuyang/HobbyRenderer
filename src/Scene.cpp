@@ -94,12 +94,18 @@ void Scene::BuildAccelerationStructures()
 			{
 				nvrhi::rt::GeometryDesc geometryDesc;
 				nvrhi::rt::GeometryTriangles& geometryTriangle = geometryDesc.geometryData.triangles;
-				geometryTriangle.indexBuffer = m_IndexBuffer;
+				// Ray tracing uses the locally-rebased index buffer, and declares the exact vertex
+				// block those indices address. D3D12 requires every index to be less than
+				// VertexCount; with the shared global vertex buffer and globally-rebased indices
+				// that would have to be the whole scene's vertex count, which also makes tools
+				// that snapshot the referenced vertex range (e.g. RenderDoc's replay) read
+				// outside the data they captured.
+				geometryTriangle.indexBuffer = m_RTIndexBuffer;
 				geometryTriangle.vertexBuffer = m_VertexBufferQuantized;
 				geometryTriangle.indexFormat = nvrhi::Format::R32_UINT;
 				geometryTriangle.vertexFormat = nvrhi::Format::RGB32_FLOAT;
 				geometryTriangle.indexOffset = meshData.m_IndexOffsets[lod] * nvrhi::getFormatInfo(geometryTriangle.indexFormat).bytesPerBlock;
-				geometryTriangle.vertexOffset = 0; // Indices are already global relative to the start of the vertex buffer
+				geometryTriangle.vertexOffset = (uint64_t)primitive.m_VertexOffset * sizeof(srrhi::VertexQuantized);
 				geometryTriangle.indexCount = meshData.m_IndexCounts[lod];
 				geometryTriangle.vertexCount = primitive.m_VertexCount;
 				geometryTriangle.vertexStride = sizeof(srrhi::VertexQuantized);
