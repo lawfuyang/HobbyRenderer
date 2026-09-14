@@ -49,31 +49,40 @@ namespace nvfeedback
 
         tiledTextureManager->AddTiledTexture(tiledTextureDesc, m_TiledTextureId);
 
-        // Create sampler feedback texture (D3D12 only)
-        rtxts::TextureDesc feedbackDesc = tiledTextureManager->GetTextureDesc(m_TiledTextureId, rtxts::eFeedbackTexture);
+        // Feedback map geometry — one MinMip entry per feedback texel. Needed to size the
+        // resolve buffers, and (when sampler feedback is disabled) to size the
+        // CPU-synthesised feedback map that FeedbackManager feeds to TTM instead.
+        const rtxts::TextureDesc feedbackDesc = tiledTextureManager->GetTextureDesc(m_TiledTextureId, rtxts::eFeedbackTexture);
+        m_FeedbackMapWidth  = (desc.width  - 1) / feedbackDesc.textureOrMipRegionWidth  + 1;
+        m_FeedbackMapHeight = (desc.height - 1) / feedbackDesc.textureOrMipRegionHeight + 1;
 
-        nvrhi::SamplerFeedbackTextureDesc samplerFeedbackTextureDesc{};
-        samplerFeedbackTextureDesc.samplerFeedbackFormat = nvrhi::SamplerFeedbackFormat::MinMipOpaque;
-        samplerFeedbackTextureDesc.samplerFeedbackMipRegionX = feedbackDesc.textureOrMipRegionWidth;
-        samplerFeedbackTextureDesc.samplerFeedbackMipRegionY = feedbackDesc.textureOrMipRegionHeight;
-        samplerFeedbackTextureDesc.samplerFeedbackMipRegionZ = m_TileShape.depthInTexels;
-        samplerFeedbackTextureDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        samplerFeedbackTextureDesc.keepInitialState = true;
-        m_FeedbackTexture = device->createSamplerFeedbackTexture(m_ReservedTexture, samplerFeedbackTextureDesc);
-
-        // Create readback (resolve) buffers — one per frame-in-flight
-        m_FeedbackResolveBuffers.resize(3);
-        for (uint32_t i = 0; i < 3; i++)
+        // Create sampler feedback texture (D3D12 only).
+        // Skipped when sampler feedback is unavailable (unsupported device such as
+        // RenderDoc, or --disable-sampler-feedback): FeedbackManager then synthesises
+        // the feedback map on the CPU instead of resolving it from the GPU, so neither
+        // the feedback texture nor its readback buffers are needed.
+        if (g_Renderer.IsSamplerFeedbackEnabled())
         {
-            uint32_t feedbackTilesX = (desc.width - 1) / feedbackDesc.textureOrMipRegionWidth + 1;
-            uint32_t feedbackTilesY = (desc.height - 1) / feedbackDesc.textureOrMipRegionHeight + 1;
+            nvrhi::SamplerFeedbackTextureDesc samplerFeedbackTextureDesc{};
+            samplerFeedbackTextureDesc.samplerFeedbackFormat = nvrhi::SamplerFeedbackFormat::MinMipOpaque;
+            samplerFeedbackTextureDesc.samplerFeedbackMipRegionX = feedbackDesc.textureOrMipRegionWidth;
+            samplerFeedbackTextureDesc.samplerFeedbackMipRegionY = feedbackDesc.textureOrMipRegionHeight;
+            samplerFeedbackTextureDesc.samplerFeedbackMipRegionZ = m_TileShape.depthInTexels;
+            samplerFeedbackTextureDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            samplerFeedbackTextureDesc.keepInitialState = true;
+            m_FeedbackTexture = device->createSamplerFeedbackTexture(m_ReservedTexture, samplerFeedbackTextureDesc);
 
-            nvrhi::BufferDesc bufferDesc{};
-            bufferDesc.byteSize = feedbackTilesX * feedbackTilesY;
-            bufferDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
-            bufferDesc.initialState = nvrhi::ResourceStates::ResolveDest;
-            bufferDesc.debugName = "Feedback Resolve Buffer";
-            m_FeedbackResolveBuffers[i] = device->createBuffer(bufferDesc);
+            // Create readback (resolve) buffers — one per frame-in-flight
+            m_FeedbackResolveBuffers.resize(3);
+            for (uint32_t i = 0; i < 3; i++)
+            {
+                nvrhi::BufferDesc bufferDesc{};
+                bufferDesc.byteSize = (uint64_t)m_FeedbackMapWidth * m_FeedbackMapHeight;
+                bufferDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+                bufferDesc.initialState = nvrhi::ResourceStates::ResolveDest;
+                bufferDesc.debugName = "Feedback Resolve Buffer";
+                m_FeedbackResolveBuffers[i] = device->createBuffer(bufferDesc);
+            }
         }
 
         // Create MinMip texture (R8_UINT, one byte per feedback tile).

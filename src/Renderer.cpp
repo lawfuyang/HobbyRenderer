@@ -301,7 +301,17 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::Meshlets));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayQuery));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingAccelStruct));
-    SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::SamplerFeedback));
+    // Sampler feedback drives tiled-texture streaming, but it is optional: capture
+    // tools such as RenderDoc do not implement it, so fall back to synthesising the
+    // feedback map instead of asserting. See IsSamplerFeedbackEnabled().
+    {
+        const bool bSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::SamplerFeedback);
+        if (!bSupported)
+            SDL_Log("[Init] Device does not support sampler feedback — streaming will request the finest mip of every texture");
+        if (Config::Get().m_DisableSamplerFeedback)
+            SDL_Log("[Init] Sampler feedback disabled via command line");
+        m_bSamplerFeedbackEnabled = bSupported && !Config::Get().m_DisableSamplerFeedback;
+    }
 
     int windowWidth  = 0;
     int windowHeight = 0;
@@ -453,15 +463,6 @@ void Renderer::Run()
                 }
             }
         };
-
-        SDL_WindowFlags flags = SDL_GetWindowFlags(m_Window);
-        const bool bWindowIsInFocus = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
-
-        if (!bWindowIsInFocus)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue; // Skip rendering when window is not in focus to save resources
-        }
 
         if (m_RequestedShaderReload)
         {

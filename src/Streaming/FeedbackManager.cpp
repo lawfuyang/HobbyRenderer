@@ -208,22 +208,45 @@ namespace nvfeedback
         if (!readbackTextures.empty())
         {
             PROFILE_SCOPED("Resolve feedback");
+
+            const bool bSamplerFeedback = g_Renderer.IsSamplerFeedbackEnabled();
+
+            // Reused across the loop for the synthesised path below (no GPU feedback map).
+            std::vector<uint8_t> syntheticFeedback;
+
             for (uint32_t texIdx : readbackTextures)
             {
                 FeedbackTexture* readbackTexture = GetTextureByIndex(texIdx);
-                uint8_t* pReadbackData = static_cast<uint8_t*>(
-                    g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
-                                        nvrhi::CpuAccessMode::Read));
+                const uint32_t tiledTextureId = readbackTexture->GetTiledTextureId();
 
                 rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
-                samplerFeedbackDesc.pMinMipData = pReadbackData;
+
+                if (bSamplerFeedback)
+                {
+                    samplerFeedbackDesc.pMinMipData = static_cast<uint8_t*>(
+                        g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
+                                            nvrhi::CpuAccessMode::Read));
+                }
+                else
+                {
+                    // No sampler feedback available (unsupported device, e.g. RenderDoc, or
+                    // --disable-sampler-feedback). Feed TTM an all-zero feedback map, i.e.
+                    // "mip 0 is required for every tile region", so every texture streams in
+                    // its most detailed mip rather than the mips the shaders actually sampled.
+                    // 0xFF would mean "no feedback recorded"; 0 requests the finest mip.
+                    syntheticFeedback.assign(
+                        (size_t)readbackTexture->GetFeedbackMapWidth() * readbackTexture->GetFeedbackMapHeight(), 0);
+                    samplerFeedbackDesc.pMinMipData = syntheticFeedback.data();
+                }
+
                 m_TiledTextureManager->UpdateWithSamplerFeedback(
-                    readbackTexture->GetTiledTextureId(),
+                    tiledTextureId,
                     samplerFeedbackDesc,
                     timeStamp,
                     kTileHysteresisSeconds);
 
-                g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex));
+                if (bSamplerFeedback)
+                    g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex));
             }
         }
 
@@ -253,7 +276,9 @@ namespace nvfeedback
                 {
                     uint32_t texIdx = m_TexturesRingbuffer[(m_RingbufferCursor + i) % count];
                     FeedbackTexture* feedbackTexture = GetTextureByIndex(texIdx);
-                    commandList->clearSamplerFeedbackTexture(feedbackTexture->GetSamplerFeedbackTexture());
+                    // No feedback texture exists when sampler feedback is disabled.
+                    if (g_Renderer.IsSamplerFeedbackEnabled())
+                        commandList->clearSamplerFeedbackTexture(feedbackTexture->GetSamplerFeedbackTexture());
                     nextReadbackTextures.push_back(texIdx);
                     updatesLeft--;
                 }
@@ -501,6 +526,14 @@ namespace nvfeedback
 
     void FeedbackManager::ResolveFeedback(nvrhi::ICommandList* commandList)
     {
+        // Nothing to resolve without sampler feedback textures — BeginFrame synthesises
+        // the feedback map on the CPU in that case.
+        if (!g_Renderer.IsSamplerFeedbackEnabled())
+        {
+            m_ResolveCPUTime = 0.0;
+            return;
+        }
+
         // Use the NEXT slot — matches BeginFrame Step 2 which also assigns to (m_FrameIndex+1)%F
         std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[(m_FrameIndex + 1) % kNumFramesInFlight];
         if (readbackTextures.empty())

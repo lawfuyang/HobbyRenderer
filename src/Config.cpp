@@ -45,6 +45,11 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_EnableRenderGraphAliasing = false;
             SDL_Log("[Config] Render graph aliasing disabled via command line");
         }
+        else if (std::strcmp(arg, "--disable-sampler-feedback") == 0)
+        {
+            s_Instance.m_DisableSamplerFeedback = true;
+            SDL_Log("[Config] Sampler feedback disabled via command line");
+        }
         else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0)
         {
             SDL_Log("Hobby Renderer - Command Line Options:");
@@ -53,6 +58,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --execute-per-pass               Execute command lists per pass");
             SDL_Log("  --execute-per-pass-and-wait      Wait for idle after each pass execution");
             SDL_Log("  --disable-rendergraph-aliasing   Disable render graph aliasing");
+            SDL_Log("  --disable-sampler-feedback       Disable sampler feedback (streaming requests the finest mip)");
             SDL_Log("  --scene <path>                   Load the specified scene file");
             SDL_Log("  --help, -h                       Show this help message");
         }

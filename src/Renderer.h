@@ -286,6 +286,12 @@ public:
 
     // ─── Texture streaming ───
 
+    // True when sampler feedback can be used: the device supports it AND it was not
+    // disabled with --disable-sampler-feedback. When false no sampler feedback texture
+    // is created or resolved, and streaming synthesises an all-zero feedback map
+    // ("finest mip required everywhere") instead of reading one back from the GPU.
+    bool IsSamplerFeedbackEnabled() const { return m_bSamplerFeedbackEnabled; }
+
     // Initialise the FeedbackManager after scene load.
     void InitStreaming();
     // Shutdown streaming resources.
@@ -402,6 +408,9 @@ public:
 
     // Environment Lighting settings
     bool m_EnableSky = true;
+
+    // Effective sampler feedback state — see IsSamplerFeedbackEnabled().
+    bool m_bSamplerFeedbackEnabled = false;
 
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
 

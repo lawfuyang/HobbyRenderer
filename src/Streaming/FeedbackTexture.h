@@ -31,6 +31,12 @@ namespace nvfeedback
         nvrhi::TextureHandle GetReservedTexture()                       { return m_ReservedTexture; }
         nvrhi::SamplerFeedbackTextureHandle GetSamplerFeedbackTexture() { return m_FeedbackTexture; }
         nvrhi::TextureHandle GetMinMipTexture()                         { return m_MinMipTexture; }
+
+        // Dimensions of the sampler feedback map (one entry per feedback texel).
+        // Equal to the resolve buffer size in bytes. Used by FeedbackManager to size
+        // the CPU-synthesised feedback map when sampler feedback is disabled.
+        uint32_t GetFeedbackMapWidth() const  { return m_FeedbackMapWidth; }
+        uint32_t GetFeedbackMapHeight() const { return m_FeedbackMapHeight; }
         bool IsTilePacked(uint32_t tileIndex) { return tileIndex >= m_PackedMipDesc.startTileIndexInOverallResource; }
         void GetTileInfo(uint32_t tileIndex, std::vector<FeedbackTextureTileInfo>& tiles);
 
@@ -58,6 +64,9 @@ namespace nvfeedback
         uint32_t m_NumTiles = 0;
         nvrhi::PackedMipDesc m_PackedMipDesc{};
         nvrhi::TileShape m_TileShape{};
+
+        uint32_t m_FeedbackMapWidth = 0;
+        uint32_t m_FeedbackMapHeight = 0;
 
         uint32_t m_TiledTextureId = 0;
         int m_UserIndex = -1;
