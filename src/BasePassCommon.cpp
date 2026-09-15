@@ -2,8 +2,8 @@
 #include "Renderer.h"
 #include "Utilities.h"
 
-// Both base-pass paths use nvrhi's stock command signatures (neither sets useDrawIndex), so these
-// structs have to match the D3D12 argument layouts those signatures are built from
+// The base pass uses nvrhi's stock command signatures, so these structs have to match the D3D12
+// argument layouts those signatures are built from
 // (d3d12-device.cpp: 16 for DRAW, 20 for DRAW_INDEXED, 12 for DISPATCH / DISPATCH_MESH).
 static_assert(sizeof(srrhi::DrawIndexedIndirectArguments) == 20,
               "must match D3D12_DRAW_INDEXED_ARGUMENTS (the stock drawIndexedIndirectSignature stride)");

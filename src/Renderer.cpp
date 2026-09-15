@@ -1434,7 +1434,6 @@ nvrhi::GraphicsPipelineHandle Renderer::GetOrCreateGraphicsPipeline(const nvrhi:
     h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.inputLayout.Get());
     h = h * 1099511628211u + std::hash<int>()(static_cast<int>(pipelineDesc.primType));
     h = h * 1099511628211u + std::hash<uint32_t>()(pipelineDesc.patchControlPoints);
-    h = h * 1099511628211u + std::hash<bool>()(pipelineDesc.useDrawIndex);
     
     // Hash common state: RenderState, FramebufferInfo, BindingLayouts
     HashPipelineCommonState(h, pipelineDesc.renderState, fbInfo, pipelineDesc.bindingLayouts);
@@ -1466,7 +1465,6 @@ nvrhi::MeshletPipelineHandle Renderer::GetOrCreateMeshletPipeline(const nvrhi::M
     h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.MS.Get());
     h = h * 1099511628211u + std::hash<const void*>()(pipelineDesc.PS.Get());
     h = h * 1099511628211u + std::hash<int>()(static_cast<int>(pipelineDesc.primType));
-    h = h * 1099511628211u + std::hash<bool>()(pipelineDesc.useDrawIndex);
 
     // Hash common state: RenderState, FramebufferInfo, BindingLayouts
     HashPipelineCommonState(h, pipelineDesc.renderState, fbInfo, pipelineDesc.bindingLayouts);

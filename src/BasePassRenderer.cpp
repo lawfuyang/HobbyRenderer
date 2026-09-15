@@ -428,9 +428,6 @@ protected:
             meshPipelineDesc.PS = g_Renderer.GetShaderHandle(psID);
             meshPipelineDesc.renderState = renderState;
             meshPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
-            // The dispatch launches one threadgroup per job, so no per-command root constant is
-            // needed and the stock mesh dispatch signature is used.
-            meshPipelineDesc.useDrawIndex = false;
 
             const nvrhi::MeshletPipelineHandle meshPipeline = g_Renderer.GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
 
@@ -453,9 +450,6 @@ protected:
             pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
             pipelineDesc.renderState = renderState;
             pipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
-            // The vertex shader gets its instance from SV_InstanceID, so no per-command root
-            // constant is needed here either - the stock draw-indexed signature is used.
-            pipelineDesc.useDrawIndex = false;
 
             nvrhi::GraphicsState state;
             state.framebuffer = framebuffer;
