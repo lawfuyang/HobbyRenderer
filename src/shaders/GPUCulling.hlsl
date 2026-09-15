@@ -32,7 +32,7 @@ static RWStructuredBuffer<uint>                                    g_OccludedCou
 static RWStructuredBuffer<srrhi::DispatchIndirectArguments>        g_DispatchIndirectArgs = srrhi::GPUCullingInputs::GetDispatchIndirectArgs();
 static RWStructuredBuffer<srrhi::MeshletJob>                       g_MeshletJobs         = srrhi::GPUCullingInputs::GetMeshletJobs();
 static RWStructuredBuffer<uint>                                    g_MeshletJobCount     = srrhi::GPUCullingInputs::GetMeshletJobCount();
-static RWStructuredBuffer<srrhi::DispatchIndirectArguments>        g_MeshletIndirectArgs = srrhi::GPUCullingInputs::GetMeshletIndirectArgs();
+static RWStructuredBuffer<srrhi::DispatchMeshIndirectArguments>    g_MeshletIndirectArgs = srrhi::GPUCullingInputs::GetMeshletIndirectArgs();
 static RWStructuredBuffer<uint>                                    g_InstanceLOD         = srrhi::GPUCullingInputs::GetInstanceLOD();
 
 [numthreads(srrhi::CommonConsts::kThreadsPerGroup, 1, 1)]
@@ -104,7 +104,8 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             uint visibleIndex;
             InterlockedAdd(g_MeshletJobCount[0], 1, visibleIndex);
 
-            srrhi::DispatchIndirectArguments args;
+            srrhi::DispatchMeshIndirectArguments args;
+            args.m_JobIndex = visibleIndex;
             args.m_ThreadGroupCountX = DivideAndRoundUp(mesh.m_MeshletCounts[lodIndex], srrhi::CommonConsts::kThreadsPerGroup);
             args.m_ThreadGroupCountY = 1;
             args.m_ThreadGroupCountZ = 1;
@@ -121,6 +122,7 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
 
             srrhi::DrawIndexedIndirectArguments args;
+            args.m_JobIndex = visibleIndex;
             args.m_IndexCount = mesh.m_IndexCounts[lodIndex];
             args.m_InstanceCount = 1;
             args.m_StartIndexLocation = mesh.m_IndexOffsets[lodIndex];

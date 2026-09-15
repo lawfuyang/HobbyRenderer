@@ -2,6 +2,15 @@
 #include "Renderer.h"
 #include "Utilities.h"
 
+// The indirect argument layouts are baked into the command signatures that nvrhi creates when a
+// pipeline sets useDrawIndex (Device::getRootSignature in d3d12-resource-bindings.cpp): each
+// command is a leading 32-bit job index - delivered to the shader as the b255 root constant - 
+// followed by the raw draw/dispatch arguments. Keep these sizes in sync with those strides.
+static_assert(sizeof(srrhi::DrawIndexedIndirectArguments) == 24,
+              "must match the DrawIndexed command signature stride (4 byte job index + 20 byte args)");
+static_assert(sizeof(srrhi::DispatchMeshIndirectArguments) == 16,
+              "must match the DispatchMesh command signature stride (4 byte job index + 12 byte args)");
+
 void BasePassResources::Initialize()
 {
     // Create pipeline statistics queries for double buffering
@@ -95,8 +104,8 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(srrhi::DispatchIndirectArguments))
-                .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
+            desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(srrhi::DispatchMeshIndirectArguments))
+                .setStructStride(sizeof(srrhi::DispatchMeshIndirectArguments))
                 .setIsDrawIndirectArgs(true)
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)

@@ -1,5 +1,13 @@
+// Indirect argument structs whose first field is the per-command job index.
+//
+// The command signature consumes that leading 32-bit value as a root constant (b255, space0)
+// before it reads the draw/dispatch arguments, and the shader reads it back as g_DrawID. It
+// replaces D3D12_INDIRECT_ARGUMENT_TYPE_INCREMENTING_CONSTANT, which needs a recent driver and
+// is not understood by some capture tools. m_JobIndex must stay first: the command signature
+// layout depends on it, and every stride is 4 bytes larger because of it.
 struct DrawIndexedIndirectArguments
 {
+    uint m_JobIndex;                 // index into the visible job list, read as g_DrawID
     uint m_IndexCount;
     uint m_InstanceCount;
     uint m_StartIndexLocation;
@@ -7,6 +15,15 @@ struct DrawIndexedIndirectArguments
     uint m_StartInstanceLocation;
 };
 
+struct DispatchMeshIndirectArguments
+{
+    uint m_JobIndex;                 // index into the visible job list, read as g_DrawID
+    uint m_ThreadGroupCountX;
+    uint m_ThreadGroupCountY;
+    uint m_ThreadGroupCountZ;
+};
+
+// Plain compute dispatch arguments - no job index, these are written by the CPU.
 struct DispatchIndirectArguments
 {
     uint m_ThreadGroupCountX;
