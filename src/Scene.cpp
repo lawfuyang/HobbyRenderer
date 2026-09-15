@@ -338,6 +338,23 @@ void Scene::FinalizeLoadedScene()
     PushInstances(transparentStatic);
 	PushInstances(transparentDynamic);
 
+	// Worst-case number of meshlet jobs the base pass can emit: one job per meshlet group, with
+	// every instance rendering its most detailed LOD. Used to size the meshlet job buffer.
+	m_MaxMeshletJobCount = 0;
+	for (const srrhi::PerInstanceData& inst : m_InstanceData)
+	{
+		const srrhi::MeshData& meshData = m_MeshData[inst.m_MeshDataIndex];
+
+		uint32_t maxMeshlets = 0;
+		for (uint32_t lod = 0; lod < meshData.m_LODCount; ++lod)
+		{
+			maxMeshlets = std::max(maxMeshlets, meshData.m_MeshletCounts[lod]);
+		}
+
+		m_MaxMeshletJobCount += DivideAndRoundUp(maxMeshlets, srrhi::CommonConsts::kThreadsPerGroup);
+	}
+	m_MaxMeshletJobCount = std::max(m_MaxMeshletJobCount, 1u);
+
 	m_SceneBoundingSphere = DirectX::BoundingSphere{};
 	for (const Scene::Node& node : m_Nodes)
 	{

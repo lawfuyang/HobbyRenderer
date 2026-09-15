@@ -38,4 +38,8 @@ struct MeshletJob
 {
     uint m_InstanceIndex;
     uint m_LODIndex;
+    // Which threadgroup's worth of meshlets this job covers, within the instance's LOD.
+    // The base pass dispatches one job per meshlet group, so the group index has to travel
+    // with the job instead of being derived from the dispatch group id.
+    uint m_MeshletGroupIndex;
 };

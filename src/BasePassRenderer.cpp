@@ -194,6 +194,8 @@ protected:
         {
             // Clear visible count buffer for Phase 2
             commandList->clearBufferUInt(handles.visibleCount, 0);
+            // Culled instances keep their zeroed entry, which the indexed draw relies on.
+            commandList->clearBufferUInt(handles.visibleIndirect, 0);
 
             if (g_Renderer.m_UseMeshletRendering)
             {
@@ -262,8 +264,8 @@ protected:
 
         PROFILE_GPU_SCOPED("Build Indirect Arguments", commandList);
 
-        // Build indirect for Phase 2 culling and/or meshlet rendering
-        if (args.m_CullingPhase == 0)
+        // Build indirect args after every culling phase. The phase 2 culling grid is only
+        // meaningful after phase 0, but the mesh dispatch grid has to be rebuilt for both.
         {
             Renderer::RenderPassParams params;
             params.commandList = commandList;
@@ -426,7 +428,9 @@ protected:
             meshPipelineDesc.PS = g_Renderer.GetShaderHandle(psID);
             meshPipelineDesc.renderState = renderState;
             meshPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
-            meshPipelineDesc.useDrawIndex = true;
+            // The dispatch launches one threadgroup per job, so no per-command root constant is
+            // needed and the stock mesh dispatch signature is used.
+            meshPipelineDesc.useDrawIndex = false;
 
             const nvrhi::MeshletPipelineHandle meshPipeline = g_Renderer.GetOrCreateMeshletPipeline(meshPipelineDesc, fbInfo);
 
@@ -436,10 +440,10 @@ protected:
             meshState.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
             meshState.viewport = viewportState;
             meshState.indirectParams = handles.meshletIndirect;
-            meshState.indirectCountBuffer = handles.meshletJobCount;
 
             commandList->setMeshletState(meshState);
-            commandList->dispatchMeshIndirectCount(0, 0, args.m_NumInstances);
+            // A single DispatchMesh whose grid is the flat job count built by BuildIndirect.
+            commandList->dispatchMeshIndirect(0, 1);
         }
         else
         {
@@ -449,7 +453,9 @@ protected:
             pipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
             pipelineDesc.renderState = renderState;
             pipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
-            pipelineDesc.useDrawIndex = true;
+            // The vertex shader gets its instance from SV_InstanceID, so no per-command root
+            // constant is needed here either - the stock draw-indexed signature is used.
+            pipelineDesc.useDrawIndex = false;
 
             nvrhi::GraphicsState state;
             state.framebuffer = framebuffer;
@@ -458,10 +464,11 @@ protected:
             state.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
             state.pipeline = g_Renderer.GetOrCreateGraphicsPipeline(pipelineDesc, fbInfo);
             state.indirectParams = handles.visibleIndirect;
-            state.indirectCountBuffer = handles.visibleCount;
             commandList->setGraphicsState(state);
 
-            commandList->drawIndexedIndirectCount(0, 0, args.m_NumInstances);
+            // One command per instance; culled instances are left as all-zero (zero-instance)
+            // entries by the per-pass clear, so no count buffer is needed.
+            commandList->drawIndexedIndirect(0, args.m_NumInstances);
         }
     }
 
@@ -488,6 +495,8 @@ protected:
         
         PROFILE_GPU_SCOPED("Clear All Counters", commandList);
         commandList->clearBufferUInt(handles.visibleCount, 0);
+        // Culled instances keep their zeroed entry, which the indexed draw relies on.
+        commandList->clearBufferUInt(handles.visibleIndirect, 0);
         if (g_Renderer.m_EnableOcclusionCulling)
         {
             commandList->clearBufferUInt(handles.occludedCount, 0);

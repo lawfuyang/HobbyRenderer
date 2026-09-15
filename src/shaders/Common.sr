@@ -1,13 +1,9 @@
-// Indirect argument structs whose first field is the per-command job index.
-//
-// The command signature consumes that leading 32-bit value as a root constant (b255, space0)
-// before it reads the draw/dispatch arguments, and the shader reads it back as g_DrawID. It
-// replaces D3D12_INDIRECT_ARGUMENT_TYPE_INCREMENTING_CONSTANT, which needs a recent driver and
-// is not understood by some capture tools. m_JobIndex must stay first: the command signature
-// layout depends on it, and every stride is 4 bytes larger because of it.
+// Matches D3D12_DRAW_INDEXED_ARGUMENTS, which is what nvrhi's stock draw-indexed command
+// signature is built from. The base pass writes one of these per instance, and the vertex shader
+// reads the instance back from SV_InstanceID (StartInstanceLocation) - no per-command root
+// constant is involved.
 struct DrawIndexedIndirectArguments
 {
-    uint m_JobIndex;                 // index into the visible job list, read as g_DrawID
     uint m_IndexCount;
     uint m_InstanceCount;
     uint m_StartIndexLocation;
@@ -15,15 +11,8 @@ struct DrawIndexedIndirectArguments
     uint m_StartInstanceLocation;
 };
 
-struct DispatchMeshIndirectArguments
-{
-    uint m_JobIndex;                 // index into the visible job list, read as g_DrawID
-    uint m_ThreadGroupCountX;
-    uint m_ThreadGroupCountY;
-    uint m_ThreadGroupCountZ;
-};
-
-// Plain compute dispatch arguments - no job index, these are written by the CPU.
+// Plain dispatch arguments, used for both compute dispatches and the single mesh-shader
+// dispatch. No job index: the mesh base pass gets its job from SV_GroupID instead.
 struct DispatchIndirectArguments
 {
     uint m_ThreadGroupCountX;

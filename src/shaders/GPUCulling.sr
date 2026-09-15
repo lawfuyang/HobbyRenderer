@@ -34,6 +34,6 @@ srinput GPUCullingInputs
     RWStructuredBuffer<DispatchIndirectArguments> DispatchIndirectArgs;       // u4
     RWStructuredBuffer<MeshletJob> MeshletJobs;                               // u5
     RWStructuredBuffer<uint> MeshletJobCount;                                 // u6
-    RWStructuredBuffer<DispatchMeshIndirectArguments> MeshletIndirectArgs;    // u7
+    RWStructuredBuffer<DispatchIndirectArguments> MeshletIndirectArgs;        // u7
     RWStructuredBuffer<uint> InstanceLOD;                                     // u8
 };

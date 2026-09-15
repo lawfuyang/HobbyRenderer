@@ -54,7 +54,9 @@ bool AS_DecodeMeshletIndex(
     instanceIndex = job.m_InstanceIndex;
     lodIndex      = job.m_LODIndex;
 
-    uint meshletOffset   = groupId.x * srrhi::CommonConsts::kThreadsPerGroup;
+    // The job itself names the meshlet group it covers - the dispatch group id indexes the
+    // flat job list, not the instance's meshlets.
+    uint meshletOffset   = job.m_MeshletGroupIndex * srrhi::CommonConsts::kThreadsPerGroup;
     meshletIndex         = meshletOffset + groupThreadID.x;
 
     inst = instances[instanceIndex];

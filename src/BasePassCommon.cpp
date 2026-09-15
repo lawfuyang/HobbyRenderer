@@ -2,14 +2,13 @@
 #include "Renderer.h"
 #include "Utilities.h"
 
-// The indirect argument layouts are baked into the command signatures that nvrhi creates when a
-// pipeline sets useDrawIndex (Device::getRootSignature in d3d12-resource-bindings.cpp): each
-// command is a leading 32-bit job index - delivered to the shader as the b255 root constant - 
-// followed by the raw draw/dispatch arguments. Keep these sizes in sync with those strides.
-static_assert(sizeof(srrhi::DrawIndexedIndirectArguments) == 24,
-              "must match the DrawIndexed command signature stride (4 byte job index + 20 byte args)");
-static_assert(sizeof(srrhi::DispatchMeshIndirectArguments) == 16,
-              "must match the DispatchMesh command signature stride (4 byte job index + 12 byte args)");
+// Both base-pass paths use nvrhi's stock command signatures (neither sets useDrawIndex), so these
+// structs have to match the D3D12 argument layouts those signatures are built from
+// (d3d12-device.cpp: 16 for DRAW, 20 for DRAW_INDEXED, 12 for DISPATCH / DISPATCH_MESH).
+static_assert(sizeof(srrhi::DrawIndexedIndirectArguments) == 20,
+              "must match D3D12_DRAW_INDEXED_ARGUMENTS (the stock drawIndexedIndirectSignature stride)");
+static_assert(sizeof(srrhi::DispatchIndirectArguments) == 12,
+              "must match D3D12_DISPATCH_MESH_ARGUMENTS (the stock dispatchMeshIndirectSignature stride)");
 
 void BasePassResources::Initialize()
 {
@@ -104,8 +103,8 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(srrhi::DispatchMeshIndirectArguments))
-                .setStructStride(sizeof(srrhi::DispatchMeshIndirectArguments))
+            desc.m_NvrhiDesc.setByteSize(sizeof(srrhi::DispatchIndirectArguments))
+                .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
                 .setIsDrawIndirectArgs(true)
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
@@ -116,8 +115,10 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
         }
 
         {
+            // The job list holds one entry per meshlet group, not per instance, so size it by the
+            // worst case. That is computed once per scene in Scene::FinalizeLoadedScene().
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(numPrimitives * sizeof(srrhi::MeshletJob))
+            desc.m_NvrhiDesc.setByteSize(g_Renderer.m_Scene.m_MaxMeshletJobCount * sizeof(srrhi::MeshletJob))
                 .setStructStride(sizeof(srrhi::MeshletJob))
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
