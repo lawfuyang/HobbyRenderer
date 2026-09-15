@@ -134,9 +134,17 @@ namespace nvfeedback
             // ── Extract tile data from mmap'd DDS ──
             const uint8_t* ddsBase = static_cast<const uint8_t*>(req.m_SourceData->GetData());
 
-            // Use the cached per-mip file offsets (parsed once from the DDS header at load time)
-            size_t mipOffset = req.m_MipOffsets[req.m_MipLevel];
+            // Use the cached per-mip file offsets (parsed once from the DDS header at load time).
+            // Check the level before indexing (and before shifting by it) so a bad request can
+            // never read past the end of m_MipOffsets or shift by >= 32.
             SDL_assert(req.m_MipLevel < srrhi::CommonConsts::MAX_MIP_COUNT);
+            if (req.m_MipLevel >= srrhi::CommonConsts::MAX_MIP_COUNT)
+            {
+                m_PendingCount.fetch_sub(1, std::memory_order_release);
+                continue;
+            }
+
+            size_t mipOffset = req.m_MipOffsets[req.m_MipLevel];
 
             uint32_t mipWidth = std::max(req.m_TextureWidth >> req.m_MipLevel, 1u);
 

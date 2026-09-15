@@ -468,10 +468,21 @@ void CommonResources::Initialize()
                 return;
             }
 
-            size_t size = file.tellg();
+            const std::streamoff fileSize = file.tellg();
+            if (fileSize < 0 || (static_cast<uint64_t>(fileSize) % sizeof(float)) != 0)
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to load Bruneton texture", "Bad file size for %s", path.generic_string().c_str());
+                return;
+            }
+
+            const size_t size = static_cast<size_t>(fileSize);
             file.seekg(0, std::ios::beg);
             std::vector<float> data(size / sizeof(float));
-            file.read(reinterpret_cast<char*>(data.data()), size);
+            if (!file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size)))
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to load Bruneton texture", "Failed to read %s", path.generic_string().c_str());
+                return;
+            }
 
             const bool bUseHalfFloat = true; // We can use half float since the data is mostly low dynamic range, and it saves memory and bandwidth
 

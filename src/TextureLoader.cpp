@@ -178,14 +178,18 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
         return;
     }
 
-    uint32_t magic = *reinterpret_cast<const uint32_t*>(ptr);
+    // Copy the headers out of the mapping rather than aliasing it: the mapping is only
+    // guaranteed to be byte-aligned, and no DDS_HEADER object lives in those bytes.
+    uint32_t magic = 0;
+    std::memcpy(&magic, ptr, sizeof(magic));
     if (magic != DDS_MAGIC)
     {
         SDL_Log("Not a DDS file", "Not a DDS file");
         return;
     }
 
-    const DDS_HEADER& header = *reinterpret_cast<const DDS_HEADER*>(ptr + sizeof(uint32_t));
+    DDS_HEADER header{};
+    std::memcpy(&header, ptr + sizeof(uint32_t), sizeof(header));
     if (header.dwSize != sizeof(DDS_HEADER))
     {
         SDL_Log("Invalid DDS header size", "Invalid DDS header size");
@@ -203,7 +207,7 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
             SDL_Log("Invalid DDS file size (DX10)", "Invalid DDS file size (DX10)");
             return;
         }
-        dx10Header = *reinterpret_cast<const DDS_HEADER_DXT10*>(ptr + offset);
+        std::memcpy(&dx10Header, ptr + offset, sizeof(dx10Header));
         offset += sizeof(DDS_HEADER_DXT10);
     }
 
@@ -212,7 +216,15 @@ void LoadDDSTexture(std::string_view filePath, nvrhi::TextureDesc& desc, std::un
     desc.height = header.dwHeight;
     desc.depth = header.dwDepth ? header.dwDepth : 1;
     desc.arraySize = hasDX10 ? dx10Header.arraySize : 1;
-    desc.mipLevels = header.dwMipMapCount ? header.dwMipMapCount : 1;
+    // dwMipMapCount is taken straight from the file, so clamp it to the geometric maximum
+    // for the dimensions and to MAX_MIP_COUNT (what the mip-offset and streaming code
+    // assumes). Without this, `width >> mipLevel` can shift by >= 32, which is undefined
+    // behavior, and UploadTexture would walk past the end of the decoded data.
+    const uint32_t declaredMipLevels = header.dwMipMapCount ? header.dwMipMapCount : 1;
+    uint32_t maxMipLevels = 1;
+    for (uint32_t d = std::max({ desc.width, desc.height, desc.depth }); d > 1; d >>= 1)
+        ++maxMipLevels;
+    desc.mipLevels = std::min({ declaredMipLevels, maxMipLevels, srrhi::CommonConsts::MAX_MIP_COUNT });
     desc.format = GetFormatFromDDS(header.ddspf, hasDX10, dx10Header);
     desc.dimension = GetDimensionFromDDS(hasDX10, dx10Header, desc.arraySize);
     desc.initialState = nvrhi::ResourceStates::ShaderResource;

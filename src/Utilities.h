@@ -142,9 +142,12 @@ private:
 // Returns true if the 4×4 matrix has no NaN or Inf entries.
 inline bool MatrixIsFinite(const Matrix& m)
 {
-    const float* p = reinterpret_cast<const float*>(&m);
-    for (int i = 0; i < 16; ++i)
-        if (!std::isfinite(p[i])) return false;
+    // Index the nested float[4][4] instead of flattening the matrix with a
+    // reinterpret_cast: walking a float* past the end of its first float[4] sub-array
+    // is out-of-bounds pointer arithmetic.
+    for (int row = 0; row < 4; ++row)
+        for (int col = 0; col < 4; ++col)
+            if (!std::isfinite(m.m[row][col])) return false;
     return true;
 }
 
@@ -169,11 +172,10 @@ inline Vector3 MatrixRow0(const Matrix& m)
 // Returns true if |a - b| <= eps for every element of two 4x4 matrices.
 inline bool MatrixNearEqual(const Matrix& a, const Matrix& b, float eps = 1e-4f)
 {
-    const float* pa = reinterpret_cast<const float*>(&a);
-    const float* pb = reinterpret_cast<const float*>(&b);
-    for (int i = 0; i < 16; ++i)
-        if (std::fabs(pa[i] - pb[i]) > eps)
-            return false;
+    for (int row = 0; row < 4; ++row)
+        for (int col = 0; col < 4; ++col)
+            if (std::fabs(a.m[row][col] - b.m[row][col]) > eps)
+                return false;
     return true;
 }
 

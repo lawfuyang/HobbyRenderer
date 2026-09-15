@@ -251,11 +251,15 @@ void RTXDIIMGUISettings()
     ImGui::Indent();
 
     // ---- Quality mode preset ---------------------------------------------------
-    if (ImGui::Combo("Quality Mode", reinterpret_cast<int*>(&g_ReSTIR_QualityMode),
+    // ImGui writes an int, so stage it in an int and convert back: writing through an
+    // int* that aliases the enum object is undefined behavior.
+    int qualityMode = static_cast<int>(g_ReSTIR_QualityMode);
+    if (ImGui::Combo("Quality Mode", &qualityMode,
             "Balanced\0"
             "High Performance\0"
             "High Quality\0"))
     {
+        g_ReSTIR_QualityMode = static_cast<ReSTIR_QualityMode>(qualityMode);
         switch (g_ReSTIR_QualityMode)
         {
         case ReSTIR_QualityMode::Balanced:        ApplyBalancedPreset();     break;
@@ -272,11 +276,15 @@ void RTXDIIMGUISettings()
         // Fused spatiotemporal is not implemented in this renderer path.
         g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
     }
-    ImGui::Combo("Resampling Mode", (int*)&g_ReSTIRDI_ResamplingMode,
+    int resamplingMode = static_cast<int>(g_ReSTIRDI_ResamplingMode);
+    if (ImGui::Combo("Resampling Mode", &resamplingMode,
         "None\0"
         "Temporal\0"
         "Spatial\0"
-        "Temporal + Spatial\0");
+        "Temporal + Spatial\0"))
+    {
+        g_ReSTIRDI_ResamplingMode = static_cast<rtxdi::ReSTIRDI_ResamplingMode>(resamplingMode);
+    }
     ImGui::PopItemWidth();
 
     // ---- REBLUR Denoising toggle -------------------------------------------
@@ -298,7 +306,7 @@ void RTXDIIMGUISettings()
             {
                 bool is_selected = (i == static_cast<int>(g_ReGIR_DynamicParams.presamplingMode));
                 if (ImGui::Selectable(regirPresamplingOptions[i], is_selected))
-                    *(int*)&g_ReGIR_DynamicParams.presamplingMode = i;
+                    g_ReGIR_DynamicParams.presamplingMode = static_cast<rtxdi::LocalLightReGIRPresamplingMode>(i);
                 if (is_selected)
                     ImGui::SetItemDefaultFocus();
             }
@@ -316,16 +324,21 @@ void RTXDIIMGUISettings()
     {
         if (ImGui::TreeNode("Local Light Sampling"))
         {
-            int* localLightMode = (int*)&g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode;
+            // RadioButton writes an int; stage it in an int and convert back so the enum
+            // object is never accessed through an aliasing int*.
+            int localLightMode = static_cast<int>(g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode);
 
-            ImGui::RadioButton("Uniform Sampling##llMode", localLightMode, (int)ReSTIRDI_LocalLightSamplingMode::Uniform);
+            ImGui::RadioButton("Uniform Sampling##llMode", &localLightMode, (int)ReSTIRDI_LocalLightSamplingMode::Uniform);
             ImGui::SliderInt("Uniform Samples", (int*)&g_ReSTIRDI_NumLocalLightUniformSamples, 0, 32);
 
-            ImGui::RadioButton("Power RIS##llMode", localLightMode, (int)ReSTIRDI_LocalLightSamplingMode::Power_RIS);
+            ImGui::RadioButton("Power RIS##llMode", &localLightMode, (int)ReSTIRDI_LocalLightSamplingMode::Power_RIS);
             ImGui::SliderInt("Power RIS Samples", (int*)&g_ReSTIRDI_NumLocalLightPowerRISSamples, 0, 32);
 
-            ImGui::RadioButton("ReGIR RIS##llMode", localLightMode, (int)ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS);
+            ImGui::RadioButton("ReGIR RIS##llMode", &localLightMode, (int)ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS);
             ImGui::SliderInt("ReGIR RIS Samples", (int*)&g_ReSTIRDI_NumLocalLightReGIRRISSamples, 0, 32);
+
+            g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode =
+                static_cast<ReSTIRDI_LocalLightSamplingMode>(localLightMode);
 
             // Keep numLocalLightSamples in sync with the active mode
             switch (g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode)
@@ -352,7 +365,7 @@ void RTXDIIMGUISettings()
                 {
                     bool is_selected = (i == static_cast<int>(g_ReGIR_DynamicParams.fallbackSamplingMode));
                     if (ImGui::Selectable(regirFallbackOptions[i], is_selected))
-                        *(int*)&g_ReGIR_DynamicParams.fallbackSamplingMode = i;
+                        g_ReGIR_DynamicParams.fallbackSamplingMode = static_cast<rtxdi::LocalLightReGIRFallbackSamplingMode>(i);
                     if (is_selected)
                         ImGui::SetItemDefaultFocus();
                 }
@@ -389,9 +402,13 @@ void RTXDIIMGUISettings()
         if (ImGui::Checkbox("Enable Permutation Sampling", &enablePermutation))
             g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = enablePermutation ? 1u : 0u;
 
-        ImGui::Combo("Temporal Bias Correction",
-            (int*)&g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode,
-            "Off\0Basic\0Pairwise\0Ray Traced\0");
+        int temporalBiasCorrection = static_cast<int>(g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode);
+        if (ImGui::Combo("Temporal Bias Correction", &temporalBiasCorrection,
+            "Off\0Basic\0Pairwise\0Ray Traced\0"))
+        {
+            g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode =
+                static_cast<ReSTIRDI_TemporalBiasCorrectionMode>(temporalBiasCorrection);
+        }
 
         ImGui::SliderInt("Max History Length",
             (int*)&g_ReSTIRDI_TemporalResamplingParams.maxHistoryLength, 1, 100);
@@ -416,9 +433,13 @@ void RTXDIIMGUISettings()
     {
         if (g_ReSTIRDI_ResamplingMode != rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
         {
-            ImGui::Combo("Spatial Bias Correction",
-                (int*)&g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode,
-                "Off\0Basic\0Pairwise\0Ray Traced\0");
+            int spatialBiasCorrection = static_cast<int>(g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode);
+            if (ImGui::Combo("Spatial Bias Correction", &spatialBiasCorrection,
+                "Off\0Basic\0Pairwise\0Ray Traced\0"))
+            {
+                g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode =
+                    static_cast<ReSTIRDI_SpatialBiasCorrectionMode>(spatialBiasCorrection);
+            }
         }
 
         ImGui::SliderInt("Spatial Samples",
@@ -474,11 +495,15 @@ void RTXDIIMGUISettings()
                 g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
 
             ImGui::PushItemWidth(200.f);
-            ImGui::Combo("GI Resampling Mode", (int*)&g_ReSTIRGI_ResamplingMode,
+            int giResamplingMode = static_cast<int>(g_ReSTIRGI_ResamplingMode);
+            if (ImGui::Combo("GI Resampling Mode", &giResamplingMode,
                 "None\0"
                 "Temporal\0"
                 "Spatial\0"
-                "Temporal + Spatial\0");
+                "Temporal + Spatial\0"))
+            {
+                g_ReSTIRGI_ResamplingMode = static_cast<rtxdi::ReSTIRGI_ResamplingMode>(giResamplingMode);
+            }
             ImGui::PopItemWidth();
 
             // Temporal sub-section
