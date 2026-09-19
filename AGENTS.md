@@ -126,3 +126,21 @@ Use the following typedefs from `pch.h` instead of raw `DirectX::` namespace typ
 ---
 
 Place all C/C++ standard library #includes in pch.h. Do not include standard headers directly in source or header files.
+
+---
+
+# Asserts
+
+**A value that must be valid is asserted, not quietly tolerated.** Before adding a fallback, ask
+whether the value is legitimately absent at that point of call:
+
+* **Structural invariants — assert.** A pointer, handle or index the caller just resolved; a member
+  construction guarantees; an argument whose contract says non-null; a table index derived from
+  loaded data. A null or out-of-range value there is a BUG, not a state: `SDL_assert(ptr != nullptr);`
+  and let the debugger stop on it. Do not write the defensive branch that hides it.
+* **Legitimate optional state — keep the guard, and say why.** Assert only what is actually guaranteed, and comment the
+  guard with the reason it is expected.
+* **Argument validation on a resolved handle — assert the contract AND keep the caller safe.** never let a bad index or a null handle reach a dereference on that path.
+
+Asserts are development scaffolding and must be TRUE, never aspirational: an assert that fires during
+an ordinary run is worse than the fallback it replaced.
