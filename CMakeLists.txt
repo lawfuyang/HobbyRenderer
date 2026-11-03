@@ -380,7 +380,7 @@ add_custom_target(build_shaders
             -o "${SHADER_OUTPUT_DIR_DXIL}"
             --embedPDB
             --compiler "${DXC_EXE}"
-            --shaderModel 6_8
+            --shaderModel 6_9
             --hlsl2021
             -D WITH_NRD=1
             -X "-enable-16bit-types"
@@ -404,7 +404,7 @@ add_custom_target(build_shaders
             --embedPDB
             --compiler "${DXC_EXE}"
             --allResourcesBound
-            --shaderModel 6_8
+            --shaderModel 6_9
             --hlsl2021
             --include "${NRD_SRC_DIR}/Shaders"
             --include "${ML_SRC_DIR}"
