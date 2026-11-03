@@ -5,6 +5,11 @@
 #include "Utilities.h"
 #include "Config.h"
 
+CommonResources& CommonResources::GetInstance()
+{
+    return Renderer::GetInstance().m_CommonResources;
+}
+
 void CommonResources::Initialize()
 {
     
@@ -605,40 +610,9 @@ void CommonResources::RegisterDefaultTextures()
     SDL_Log("[CommonResources] Default textures registered with bindless system");
 }
 
-void CommonResources::Shutdown()
+// Every handle above releases itself here, while the device is still alive (see the note on
+// GetInstance()). Nothing has to be nulled out by hand: the members' own destructors do it.
+CommonResources::~CommonResources()
 {
-    BlueNoiseTexture = nullptr;
-    BrunetonIrradiance = nullptr;
-    BrunetonScattering = nullptr;
-    BrunetonTransmittance = nullptr;
-    DummyUAVTexture = nullptr;
-    DummyUAVTextureArray = nullptr;
-    DummyUAVTexture4 = nullptr;
-    DummySRVTexture = nullptr;
-    DummySRVTextureArray = nullptr;
-    DummySRVFloat4Array = nullptr;
-    DummySRVTexture4 = nullptr;
-    DummySRVByteAddressBuffer = nullptr;
-    DummyUAVByteAddressBuffer = nullptr;
-    DummySRVStructuredBuffer = nullptr;
-    DummyUAVStructuredBuffer = nullptr;
-    DummySRVTypedBuffer = nullptr;
-    DummyUAVTypedBuffer = nullptr;
-    DefaultTexturePBR = nullptr;
-    DefaultTextureNormal = nullptr;
-    DefaultTextureGray = nullptr;
-    DefaultTexture3DWhite = nullptr;
-    DefaultTextureWhite = nullptr;
-    DefaultTextureBlack = nullptr;
-    AnisotropicClamp = nullptr;
-    AnisotropicWrap = nullptr;
-    PointWrap = nullptr;
-    PointClamp = nullptr;
-    LinearWrap = nullptr;
-    LinearClamp = nullptr;
-    MaxReductionClamp = nullptr;
-    MinReductionClamp = nullptr;
-    LinearClampBorderWhite = nullptr;
-    PointMaxReductionClamp = nullptr;
-    PointMaxReductionWrap = nullptr;
+    SDL_Log("[CommonResources] Releasing shared GPU resources");
 }

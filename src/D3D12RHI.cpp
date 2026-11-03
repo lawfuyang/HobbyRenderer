@@ -265,6 +265,12 @@ public:
 
     void ReleaseSwapchain() override
     {
+        if (!m_SwapChain)
+        {
+            return;
+        }
+
+        SDL_Log("[RHI ] Releasing the swapchain");
         for (uint32_t i = 0; i < GraphicRHI::SwapchainImageCount; i++)
         {
             m_NvrhiSwapchainTextures[i] = nullptr;
@@ -304,6 +310,8 @@ public:
         // Last chance to see teardown messages: the queue below is the device's.
         DrainDebugMessages();
 
+        // Nothing may release a GPU resource after this line: the Context dies with the device.
+        SDL_Log("[RHI ] Releasing the nvrhi device and the DXGI objects");
         ReleaseSwapchain();
         m_NvrhiDevice = nullptr;
 

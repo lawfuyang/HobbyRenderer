@@ -2,6 +2,7 @@
 
 #include "Camera.h"
 #include "CameraStateManager.h"
+#include "CommonResources.h"
 #include "GraphicRHI.h"
 #include "RenderGraph.h"
 #include "Scene.h"
@@ -322,6 +323,11 @@ public:
     // declaration order, so all GPU resources in this object die while the device is still alive.
     // Nothing below may be declared before m_RHI.
     std::unique_ptr<GraphicRHI> m_RHI;
+
+    // Shared GPU resources (samplers, default textures, the unit-sphere mesh and its BLAS). Owned here
+    // rather than in a function-local static: a static is destroyed at process exit, i.e. after
+    // m_RHI has taken the device down, and its handles would then release against a dead Context.
+    CommonResources m_CommonResources;
 
     uint32_t m_AcquiredSwapchainImageIdx = 0;
     uint32_t m_SwapChainImageIdx = 0;

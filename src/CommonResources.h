@@ -13,11 +13,10 @@ struct CommonMesh
 class CommonResources
 {
 public:
-    static CommonResources& GetInstance()
-    {
-        static CommonResources instance;
-        return instance;
-    }
+    // One instance, owned by Renderer (see Renderer::m_CommonResources). It holds nvrhi handles whose
+    // destructors reach into the device's Context, so it must die while the device is alive; as a
+    // function-local static it would instead be destroyed at process exit, long after the device.
+    static CommonResources& GetInstance();
 
     // Delete copy and move constructors/operators
     CommonResources(const CommonResources&) = delete;
@@ -26,7 +25,6 @@ public:
     CommonResources& operator=(CommonResources&&) = delete;
 
     void Initialize();
-    void Shutdown();
 
     // Register default textures with the global bindless system
     void RegisterDefaultTextures();
@@ -100,4 +98,5 @@ public:
     CommonMesh UnitSphereMesh;
 
     CommonResources() = default;
+    ~CommonResources();
 };

@@ -669,21 +669,26 @@ void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
 
+    // Every phase is logged, and the log ends with the device release (see ~D3D12GraphicRHI): a line
+    // printed after that one means something still held a GPU handle past the device's lifetime.
+    SDL_Log("[Shutdown] Waiting for idle");
     MicroProfileShutdown();
 
     m_RHI->m_NvrhiDevice->waitForIdle();
     m_RHI->m_NvrhiDevice->runGarbageCollection();
 
+    SDL_Log("[Shutdown] Render graph");
     m_RenderGraph.Shutdown();
 
+    SDL_Log("[Shutdown] Command lists");
     m_InFlightCommandLists.clear();
     m_PendingCommandLists.clear();
     m_CommandListFreeList.clear();
 
+    SDL_Log("[Shutdown] ImGui layer");
     m_ImGuiLayer.Shutdown();
-    CommonResources::GetInstance().Shutdown();
 
-    // Shutdown global bindless systems
+    SDL_Log("[Shutdown] Bindless heaps");
     m_StaticTextureDescriptorTable = nullptr;
     m_StaticTextureBindingLayout = nullptr;
     m_NextTextureIndex = 0;
@@ -693,17 +698,22 @@ void Renderer::Shutdown()
 
     // Stop the camera-state async worker before tearing down the scene
     // (Scene::Shutdown calls SaveCamera synchronously).
+    SDL_Log("[Shutdown] Camera-state worker");
     m_CameraStateManager.StopAsyncWorker();
 
     // Shutdown texture streaming before scene resources are released
+    SDL_Log("[Shutdown] Texture streaming");
     ShutdownStreaming();
 
     // Shutdown scene and free its GPU resources
+    SDL_Log("[Shutdown] Scene");
     m_Scene.Shutdown();
 
     // Free renderer instances
+    SDL_Log("[Shutdown] %zu renderer instance(s)", m_Renderers.size());
     m_Renderers.clear();
 
+    SDL_Log("[Shutdown] GPU timers and pipeline caches");
     m_GPUQueries[0] = nullptr;
     m_GPUQueries[1] = nullptr;
 
@@ -712,6 +722,7 @@ void Renderer::Shutdown()
     m_ComputePipelineCache.clear();
     m_MeshletPipelineCache.clear();
 
+    SDL_Log("[Shutdown] Shaders");
     UnloadShaders();
 
     m_RHI->m_NvrhiDevice->waitForIdle();
@@ -720,14 +731,17 @@ void Renderer::Shutdown()
     // Only the presentation resources go here: the window cannot outlive the swapchain. The device
     // itself is released by ~Renderer together with m_RHI, i.e. after every member above that still
     // holds nvrhi handles has been destroyed.
+    SDL_Log("[Shutdown] Swapchain");
     m_RHI->ReleaseSwapchain();
 
     if (m_Window)
     {
+        SDL_Log("[Shutdown] Window");
         SDL_DestroyWindow(m_Window);
         m_Window = nullptr;
     }
 
+    SDL_Log("[Shutdown] SDL");
     SDL_Quit();
     SDL_Log("[Shutdown] Clean exit");
 }
@@ -2165,5 +2179,9 @@ int main(int argc, char* argv[])
 
     renderer.Run();
     renderer.Shutdown();
+
+    // Everything below happens in ~Renderer: its members release their GPU resources and m_RHI takes
+    // the device (and the Context those resources reference) down last.
+    SDL_Log("[Shutdown] Renderer going out of scope");
     return 0;
 }
