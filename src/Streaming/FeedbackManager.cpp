@@ -130,6 +130,10 @@ namespace nvfeedback
         tiledTextureManagerDesc.heapTilesCapacity = kHeapSizeInTiles;
         m_TiledTextureManager = std::unique_ptr<rtxts::TiledTextureManager>(
             rtxts::CreateTiledTextureManager(tiledTextureManagerDesc));
+
+        // Completion events for the per-slot feedback readbacks (see ReadbackSlot)
+        for (ReadbackSlot& slot : m_ReadbackSlots)
+            slot.m_Event = g_Renderer.m_RHI->m_NvrhiDevice->createEventQuery();
     }
 
     FeedbackTexture* FeedbackManager::CreateTexture(const nvrhi::TextureDesc& desc)
@@ -146,11 +150,12 @@ namespace nvfeedback
 
     void FeedbackManager::UnregisterTexture(uint32_t textureIdx)
     {
-        // Remove from readback slots
-        for (std::vector<uint32_t>& vec : m_TexturesToReadback)
+        // Remove from the readback batches (in flight, or collected by this frame)
+        for (ReadbackSlot& slot : m_ReadbackSlots)
         {
-            auto it = std::find(vec.begin(), vec.end(), textureIdx);
-            if (it != vec.end()) vec.erase(it);
+            auto it = std::find(slot.m_Textures.begin(), slot.m_Textures.end(), textureIdx);
+            if (it != slot.m_Textures.end())
+                slot.m_Textures.erase(it);
         }
 
         // Remove from ringbuffer
@@ -170,6 +175,18 @@ namespace nvfeedback
         }
 
         m_MinMipDirtyTextures.erase(textureIdx);
+
+        // Drop any write/mapping state for it, and shift the indices of the textures that move down
+        m_TilesReadyForMapping.erase(textureIdx);
+        std::erase_if(m_TileWritesOutstanding, [textureIdx](const auto& pair)
+                      { return uint32_t(pair.first >> 32) == textureIdx; });
+        std::erase_if(m_TilesToMap, [textureIdx](const auto& pair)
+                      { return pair.first == textureIdx; });
+        for (auto& pair : m_TilesToMap)
+        {
+            if (pair.first > textureIdx)
+                --pair.first;
+        }
 
         // Release ownership — this destroys the FeedbackTexture (and its nvrhi resources)
         m_Textures.erase(m_Textures.begin() + textureIdx);
@@ -198,55 +215,56 @@ namespace nvfeedback
         // tiles would be freed immediately and re-requested tiles would have
         // to go through the full allocate+submit+pending+mapping cycle.
         // 64 tiles ≈ 4 MB of VRAM headroom for hysteresis.
-        ttmConfig.numExtraStandbyTiles = 64;
+        // In packed-mips-only mode the pool is zero: a standby tile is still mapped, so anything
+        // above the packed levels has to be freed for the VRAM to actually drop.
+        ttmConfig.numExtraStandbyTiles = m_bPackedMipsOnly ? 0 : 64;
         m_TiledTextureManager->SetConfig(ttmConfig);
 
-        // ── Step 1: Read back feedback from N frames ago ──
-        std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[m_FrameIndex];
-        float timeStamp = static_cast<float>(GetTickCount64()) / 1000.0f;
+        // ── Step 1: Feed TTM the feedback whose decode has completed ──
+        const float timeStamp = static_cast<float>(GetTickCount64()) / 1000.0f;
 
-        if (!readbackTextures.empty())
+        if (m_bPackedMipsOnly)
         {
-            PROFILE_SCOPED("Resolve feedback");
-
-            const bool bSamplerFeedback = g_Renderer.IsSamplerFeedbackEnabled();
-
-            // Reused across the loop for the synthesised path below (no GPU feedback map).
-            std::vector<uint8_t> syntheticFeedback;
-
-            for (uint32_t texIdx : readbackTextures)
+            // Packed-mips-only test mode: report "no requirement" (0xFF) for every texture instead of
+            // the sampled feedback, and do it for the whole scene every frame rather than one readback
+            // batch, so the streamed-out state is reached in one hysteresis timeout instead of N
+            // ringbuffer cycles. TTM keeps the packed tiles requested on its own.
+            std::vector<uint8_t> noRequirement;
+            for (uint32_t texIdx = 0; texIdx < (uint32_t)m_Textures.size(); ++texIdx)
             {
-                FeedbackTexture* readbackTexture = GetTextureByIndex(texIdx);
-                const uint32_t tiledTextureId = readbackTexture->GetTiledTextureId();
+                FeedbackTexture* texture = m_Textures.at(texIdx).get();
+                const size_t elementCount =
+                    (size_t)texture->GetFeedbackMapWidth() * texture->GetFeedbackMapHeight();
+
+                if (noRequirement.size() < elementCount)
+                    noRequirement.resize(elementCount);
+                std::fill_n(noRequirement.begin(), elementCount, 0xFF);
 
                 rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
-
-                if (bSamplerFeedback)
-                {
-                    samplerFeedbackDesc.pMinMipData = static_cast<uint8_t*>(
-                        g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex),
-                                            nvrhi::CpuAccessMode::Read));
-                }
-                else
-                {
-                    // No sampler feedback available (unsupported device, e.g. RenderDoc, or
-                    // --disable-sampler-feedback). Feed TTM an all-zero feedback map, i.e.
-                    // "mip 0 is required for every tile region", so every texture streams in
-                    // its most detailed mip rather than the mips the shaders actually sampled.
-                    // 0xFF would mean "no feedback recorded"; 0 requests the finest mip.
-                    syntheticFeedback.assign(
-                        (size_t)readbackTexture->GetFeedbackMapWidth() * readbackTexture->GetFeedbackMapHeight(), 0);
-                    samplerFeedbackDesc.pMinMipData = syntheticFeedback.data();
-                }
-
+                samplerFeedbackDesc.pMinMipData = noRequirement.data();
                 m_TiledTextureManager->UpdateWithSamplerFeedback(
-                    tiledTextureId,
+                    texture->GetTiledTextureId(),
                     samplerFeedbackDesc,
                     timeStamp,
                     kTileHysteresisSeconds);
+            }
+        }
+        else
+        {
+            // A batch is consumed only once its decode event has completed; a batch that is still in
+            // flight is simply picked up on a later frame, so no frame ever waits for the GPU here.
+            for (uint32_t slotIndex = 0; slotIndex < kNumFramesInFlight; ++slotIndex)
+            {
+                ReadbackSlot& slot = m_ReadbackSlots[slotIndex];
+                if (!slot.m_bInFlight ||
+                    !g_Renderer.m_RHI->m_NvrhiDevice->pollEventQuery(slot.m_Event.Get()))
+                {
+                    continue;
+                }
 
-                if (bSamplerFeedback)
-                    g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(readbackTexture->GetFeedbackResolveBuffer(m_FrameIndex));
+                ProcessReadback(slotIndex, timeStamp);
+                slot.m_Textures.clear();
+                slot.m_bInFlight = false;
             }
         }
 
@@ -260,18 +278,22 @@ namespace nvfeedback
         // With 307 textures at 30/frame the ringbuffer cycle is ~10 frames (~167ms at 60fps),
         // giving 6 full cycles of margin before any tile times out.
 
-        // ── Step 2: Collect textures to read back NEXT frame ──
-        // Assign to the NEXT slot so that the following frame's Step 1 reads from the
-        // correct index (ResolveFeedback also decodes into this next slot).
+        // ── Step 2: Start the next readback batch ──
+        // The batch recorded here is decoded at the end of this frame (ResolveFeedback) and consumed
+        // one or more frames later, once its event query has completed.
+        m_ResolveSlotThisFrame = UINT32_MAX;
+        if (!m_bPackedMipsOnly && !m_TexturesRingbuffer.empty())
         {
             PROFILE_SCOPED("Collect textures to read back next frame");
 
-            std::vector<uint32_t>& nextReadbackTextures = m_TexturesToReadback[(m_FrameIndex + 1) % kNumFramesInFlight];
-            nextReadbackTextures.clear();
-            if (!m_TexturesRingbuffer.empty())
+            ReadbackSlot& slot = m_ReadbackSlots[(m_FrameIndex + 1) % kNumFramesInFlight];
+            // Still waiting for an older batch in this slot: skip a frame rather than overwrite it.
+            if (!slot.m_bInFlight)
             {
-                uint32_t updatesLeft = kFeedbackTexturesToResolvePerFrame;
+                slot.m_Textures.clear();
+
                 const uint32_t count = (uint32_t)m_TexturesRingbuffer.size();
+                uint32_t updatesLeft = kFeedbackTexturesToResolvePerFrame;
                 for (uint32_t i = 0; i < count && updatesLeft > 0; ++i)
                 {
                     uint32_t texIdx = m_TexturesRingbuffer[(m_RingbufferCursor + i) % count];
@@ -279,9 +301,11 @@ namespace nvfeedback
                     // No feedback texture exists when sampler feedback is disabled.
                     if (g_Renderer.IsSamplerFeedbackEnabled())
                         commandList->clearSamplerFeedbackTexture(feedbackTexture->GetSamplerFeedbackTexture());
-                    nextReadbackTextures.push_back(texIdx);
+                    slot.m_Textures.push_back(texIdx);
                     updatesLeft--;
                 }
+
+                m_ResolveSlotThisFrame = (m_FrameIndex + 1) % kNumFramesInFlight;
             }
         }
 
@@ -405,24 +429,36 @@ namespace nvfeedback
         m_BeginFrameCPUTime = timer.LapSeconds();
     }
 
-    void FeedbackManager::UpdateTileMappings(nvrhi::ICommandList* commandList, std::vector<FeedbackTextureUpdate>& tilesReady)
+    // Maps the heap slots of every tile whose data is being written this frame. This has to happen
+    // BEFORE those copies execute: a write into an unmapped tile is discarded by the driver, so the tile
+    // would later become visible containing uninitialised memory (the black fine-mip regions). The
+    // mapping is an immediate queue op issued while the copies are still only recorded in the open
+    // command list, so it is guaranteed to be applied ahead of them.
+    //
+    // Mapping does not advertise the tile: TTM's own bookkeeping (and therefore the MinMip texture) is
+    // only told about the tile once its data has actually been recorded, see UpdateTileMappings().
+    void FeedbackManager::MapPendingTiles()
     {
-        SimpleTimer timer;
+        if (m_TilesToMap.empty())
+            return;
 
-        for (FeedbackTextureUpdate& texUpdate : tilesReady)
+        // Group by texture, so each texture's tile coordinates are looked up once
+        std::map<uint32_t, std::vector<uint32_t>> tilesPerTexture;
+        for (const auto& [textureIdx, tileIndex] : m_TilesToMap)
+            tilesPerTexture[textureIdx].push_back(tileIndex);
+        m_TilesToMap.clear();
+
+        for (auto& [texIdx, tileIndices] : tilesPerTexture)
         {
-            FeedbackTexture* texture = GetTextureByIndex(texUpdate.m_TextureIdx);
-            m_MinMipDirtyTextures.insert(texUpdate.m_TextureIdx);
+            FeedbackTexture* texture = GetTextureByIndex(texIdx);
+            const uint32_t tiledTextureId = texture->GetTiledTextureId();
 
-            uint32_t tiledTextureId = texture->GetTiledTextureId();
-            m_TiledTextureManager->UpdateTilesMapping(tiledTextureId, texUpdate.m_TileIndices);
-
-            const std::vector<rtxts::TileCoord>& tileCoords     = m_TiledTextureManager->GetTileCoordinates(tiledTextureId);
+            const std::vector<rtxts::TileCoord>&      tileCoords      = m_TiledTextureManager->GetTileCoordinates(tiledTextureId);
             const std::vector<rtxts::TileAllocation>& tileAllocations = m_TiledTextureManager->GetTileAllocations(tiledTextureId);
 
             // Group tiles by heap for batched updateTextureTileMappings calls
             std::map<nvrhi::HeapHandle, std::vector<uint32_t>> heapTilesMapping;
-            for (uint32_t tileIndex : texUpdate.m_TileIndices)
+            for (uint32_t tileIndex : tileIndices)
             {
                 nvrhi::HeapHandle heap = m_HeapAllocator->GetHeapHandle(tileAllocations[tileIndex].heapId);
                 heapTilesMapping[heap].push_back(tileIndex);
@@ -430,14 +466,7 @@ namespace nvfeedback
 
             for (auto& [heap, heapTiles] : heapTilesMapping)
             {
-                uint32_t numTiles = (uint32_t)heapTiles.size();
-
-                if constexpr (kStreamingDebugLog)
-                {
-                    SDL_Log("[Streaming][Heap] UpdateTileMappings: textureIdx=%u mapping %u tiles to heap=%p "
-                            "(verify heap is not in release queue!)",
-                            texUpdate.m_TextureIdx, numTiles, (void*)heap.Get());
-                }
+                const uint32_t numTiles = (uint32_t)heapTiles.size();
 
                 std::vector<nvrhi::TiledTextureCoordinate> tiledTextureCoordinates;
                 std::vector<nvrhi::TiledTextureRegion>     tiledTextureRegions;
@@ -475,9 +504,69 @@ namespace nvfeedback
                 g_Renderer.m_RHI->m_NvrhiDevice->updateTextureTileMappings(texture->GetReservedTexture(), &textureTilesMapping, 1);
             }
         }
+    }
 
-        // Upload MinMip data for dirty textures
-        if (!m_MinMipDirtyTextures.empty())
+    void FeedbackManager::RegisterTileWrites(uint32_t textureIdx, uint32_t tileIndex, uint32_t numWrites)
+    {
+        // No writes at all means the whole tile lives in the packed mips, so it is complete already.
+        if (numWrites == 0)
+        {
+            m_TilesReadyForMapping[textureIdx].push_back(tileIndex);
+            return;
+        }
+
+        m_TileWritesOutstanding[(uint64_t(textureIdx) << 32) | tileIndex] = TileWriteState{ .m_Remaining = numWrites };
+    }
+
+    void FeedbackManager::OnTileWriteQueued(uint32_t textureIdx, uint32_t tileIndex)
+    {
+        auto it = m_TileWritesOutstanding.find((uint64_t(textureIdx) << 32) | tileIndex);
+        SDL_assert(it != m_TileWritesOutstanding.end());
+        if (it == m_TileWritesOutstanding.end())
+            return;
+
+        // Map the tile before its first write is recorded, so the write lands in mapped memory
+        if (!it->second.m_bMapQueued)
+        {
+            it->second.m_bMapQueued = true;
+            m_TilesToMap.emplace_back(textureIdx, tileIndex);
+        }
+
+        if (--it->second.m_Remaining == 0)
+        {
+            m_TileWritesOutstanding.erase(it);
+            m_TilesReadyForMapping[textureIdx].push_back(tileIndex);
+        }
+    }
+
+    void FeedbackManager::UpdateTileMappings()
+    {
+        SimpleTimer timer;
+
+        // Tiles whose data was recorded this frame are resident now: hand them to TTM, which is what
+        // makes them visible to WriteMinMipData() in UploadMinMipData().
+        for (auto& [textureIdx, tileIndices] : m_TilesReadyForMapping)
+        {
+            FeedbackTexture* texture = GetTextureByIndex(textureIdx);
+            m_MinMipDirtyTextures.insert(textureIdx);
+            m_TiledTextureManager->UpdateTilesMapping(texture->GetTiledTextureId(), tileIndices);
+        }
+        m_TilesReadyForMapping.clear();
+
+        m_UpdateTileMappingsCPUTime = timer.LapSeconds();
+    }
+
+    // Rewrites the MinMip texture of every texture whose residency changed this frame. Must run after
+    // BeginFrame, which is where tiles get unmapped: rewriting only the tiles mapped this frame would
+    // leave the MinMip advertising a mip whose tiles were just released, and the shaders would sample
+    // unmapped memory (black) until the next rewrite.
+    void FeedbackManager::UploadMinMipData(nvrhi::ICommandList* commandList)
+    {
+        if (m_MinMipDirtyTextures.empty())
+            return;
+
+        SimpleTimer timer;
+
         {
             const bool bUseAutomaticBarriers = false;
             commandList->setEnableAutomaticBarriers(bUseAutomaticBarriers);
@@ -521,7 +610,7 @@ namespace nvfeedback
             commandList->setEnableAutomaticBarriers(true);
         }
 
-        m_UpdateTileMappingsCPUTime = timer.LapSeconds();
+        m_UpdateTileMappingsCPUTime += timer.LapSeconds();
     }
 
     void FeedbackManager::ResolveFeedback(nvrhi::ICommandList* commandList)
@@ -534,8 +623,16 @@ namespace nvfeedback
             return;
         }
 
-        // Use the NEXT slot — matches BeginFrame Step 2 which also assigns to (m_FrameIndex+1)%F
-        std::vector<uint32_t>& readbackTextures = m_TexturesToReadback[(m_FrameIndex + 1) % kNumFramesInFlight];
+        // Use the slot BeginFrame filled this frame, if any
+        if (m_ResolveSlotThisFrame == UINT32_MAX)
+        {
+            m_ResolveCPUTime = 0.0;
+            return;
+        }
+
+        const uint32_t resolveSlot = m_ResolveSlotThisFrame;
+        ReadbackSlot& slot = m_ReadbackSlots[resolveSlot];
+        const std::vector<uint32_t>& readbackTextures = slot.m_Textures;
         if (readbackTextures.empty())
         {
             m_ResolveCPUTime = 0.0;
@@ -558,8 +655,6 @@ namespace nvfeedback
         for (uint32_t texIdx : readbackTextures)
         {
             FeedbackTexture* texture = GetTextureByIndex(texIdx);
-            // Decode into the NEXT slot to match BeginFrame Step 2's assignment
-            const uint32_t resolveSlot = (m_FrameIndex + 1) % kNumFramesInFlight;
             commandList->decodeSamplerFeedbackTexture(
                 texture->GetFeedbackResolveBuffer(resolveSlot),
                 texture->GetSamplerFeedbackTexture(),
@@ -576,7 +671,59 @@ namespace nvfeedback
 
         commandList->setEnableAutomaticBarriers(true);
 
+        // Arm the slot's completion event; BeginFrame consumes the batch on the first frame where the
+        // event has completed instead of waiting for it here.
+        slot.m_bInFlight = true;
+        g_Renderer.SignalEventAfterFrame(slot.m_Event);
+
         m_ResolveCPUTime = timer.LapSeconds();
+    }
+
+    // Feeds one completed readback batch to TTM. The slot's event has completed and its buffers were
+    // filled by ResolveFeedback in an earlier frame, so mapping them here never stalls the CPU.
+    void FeedbackManager::ProcessReadback(uint32_t slotIndex, float timeStamp)
+    {
+        const bool bSamplerFeedback = g_Renderer.IsSamplerFeedbackEnabled();
+
+        // Reused across the loop for the synthesised path below (no GPU feedback map).
+        std::vector<uint8_t> syntheticFeedback;
+
+        for (uint32_t texIdx : m_ReadbackSlots[slotIndex].m_Textures)
+        {
+            FeedbackTexture* readbackTexture = GetTextureByIndex(texIdx);
+            const nvrhi::BufferHandle resolveBuffer = readbackTexture->GetFeedbackResolveBuffer(slotIndex);
+
+            rtxts::SamplerFeedbackDesc samplerFeedbackDesc{};
+
+            if (bSamplerFeedback)
+            {
+                samplerFeedbackDesc.pMinMipData = static_cast<uint8_t*>(
+                    g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(resolveBuffer, nvrhi::CpuAccessMode::Read));
+
+                if (!samplerFeedbackDesc.pMinMipData)
+                    continue;
+            }
+            else
+            {
+                // No sampler feedback available (unsupported device, e.g. RenderDoc, or
+                // --disable-sampler-feedback). Feed TTM an all-zero feedback map, i.e.
+                // "mip 0 is required for every tile region", so every texture streams in
+                // its most detailed mip rather than the mips the shaders actually sampled.
+                // 0xFF would mean "no feedback recorded"; 0 requests the finest mip.
+                syntheticFeedback.assign(
+                    (size_t)readbackTexture->GetFeedbackMapWidth() * readbackTexture->GetFeedbackMapHeight(), 0);
+                samplerFeedbackDesc.pMinMipData = syntheticFeedback.data();
+            }
+
+            m_TiledTextureManager->UpdateWithSamplerFeedback(
+                readbackTexture->GetTiledTextureId(),
+                samplerFeedbackDesc,
+                timeStamp,
+                kTileHysteresisSeconds);
+
+            if (bSamplerFeedback)
+                g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(resolveBuffer);
+        }
     }
 
     void FeedbackManager::EndFrame()

@@ -224,6 +224,10 @@ public:
     nvrhi::CommandListHandle AcquireCommandList(bool bImmediatelyQueue = true);
     void ExecutePendingCommandLists();
 
+    // Signal this event query once the command lists submitted by the current frame have executed, so
+    // a consumer can poll it instead of calling waitForIdle() and stalling the CPU.
+    void SignalEventAfterFrame(nvrhi::EventQueryHandle event) { m_EventsToSignal.push_back(std::move(event)); }
+
     // ─── Swapchain / backbuffer ───
     nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
     void SaveBackBufferScreenshot();
@@ -426,11 +430,6 @@ public:
 
     std::unique_ptr<nvfeedback::AsyncTileIO> m_AsyncTileIO; // Async tile I/O thread pool
 
-    // Tiles submitted to AsyncTileIO this frame — their UpdateTileMappings and MinMip
-    // update is deferred to the NEXT frame, after Flush() confirms the tile data has
-    // been written to the GPU.
-    std::vector<nvfeedback::FeedbackTextureUpdate> m_SubmittedTilesPendingMapping;
-
     // Tile requests that exceeded the per-frame budget (kMaxTilesPerFrame) and were
     // deferred to the next frame.  Drained before new requests each frame.
     std::vector<nvfeedback::FeedbackTextureUpdate> m_PendingTileRequests;
@@ -445,6 +444,9 @@ public:
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
     std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;
     std::vector<nvrhi::CommandListHandle> m_InFlightCommandLists;
+
+    // Event queries to signal once this frame's command lists have executed (see SignalEventAfterFrame)
+    std::vector<nvrhi::EventQueryHandle> m_EventsToSignal;
 
     // ─── Pipeline & binding-layout caches ───
 

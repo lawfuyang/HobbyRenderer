@@ -503,6 +503,14 @@ void ImGuiLayer::UpdateFrame()
         {
             const nvfeedback::FeedbackManagerStats& stats = g_Renderer.m_FeedbackManager->GetStats();
 
+            // Test switch: stream every standard tile out so only the packed (mip-tail) levels stay
+            // resident; "Heap Allocated" and the VRAM readout below should drop within a second.
+            bool bPackedMipsOnly = g_Renderer.m_FeedbackManager->IsPackedMipsOnly();
+            if (ImGui::Checkbox("Packed mips only", &bPackedMipsOnly))
+                g_Renderer.m_FeedbackManager->SetPackedMipsOnly(bPackedMipsOnly);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Stop streaming: keep only the packed mip levels and unload every streamed tile");
+
             ImGui::SeparatorText("Memory");
             ImGui::Text("Heaps:           %u (TTM: %u, Packed-Mip: %u)",
                         stats.m_NumHeaps,

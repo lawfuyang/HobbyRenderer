@@ -18,8 +18,14 @@ public:
     RGBufferHandle m_RG_LuminanceHistogram;
     RGBufferHandle m_RG_ExposureBuffer;
 
-    // Readback: double-buffered staging buffers for reading back exposure to CPU
-    nvrhi::BufferHandle m_ExposureReadbackBuffers[2];
+    // Readback: ring of staging buffers for reading the exposure back to the CPU.
+    // Three of them, because a copy is polled two frames after it was recorded: a frame never waits for
+    // the GPU, and the frame that submits (which does wait for idle) is what guarantees the copy of two
+    // frames ago has completed.
+    static constexpr uint32_t kNumReadbackBuffers = 3;
+    nvrhi::BufferHandle m_ExposureReadbackBuffers[kNumReadbackBuffers];
+    // Signalled once the copy into each buffer has executed
+    nvrhi::EventQueryHandle m_ExposureReadbackEvents[kNumReadbackBuffers];
     bool m_ReadbackInitialized = false;
 
     bool Setup(RenderGraph& renderGraph) override
@@ -51,13 +57,14 @@ public:
         // Create readback staging buffers (once)
         if (!m_ReadbackInitialized)
         {
-            for (int i = 0; i < 2; i++)
+            for (uint32_t i = 0; i < kNumReadbackBuffers; i++)
             {
                 nvrhi::BufferDesc rbDesc;
                 rbDesc.byteSize = sizeof(float);
-                rbDesc.debugName = i == 0 ? "ExposureReadback0" : "ExposureReadback1";
+                rbDesc.debugName = "ExposureReadback" + std::to_string(i);
                 rbDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
                 m_ExposureReadbackBuffers[i] = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(rbDesc);
+                m_ExposureReadbackEvents[i] = g_Renderer.m_RHI->m_NvrhiDevice->createEventQuery();
             }
             m_ReadbackInitialized = true;
         }
@@ -176,18 +183,25 @@ public:
 
         // Readback previous frame's exposure for FSR3 preExposure
         {
-            const uint32_t writeIdx = g_Renderer.m_FrameNumber % 2;
-            const uint32_t readIdx = 1 - writeIdx;
+            const uint32_t writeIdx = g_Renderer.m_FrameNumber % kNumReadbackBuffers;
+            const uint32_t readIdx = (g_Renderer.m_FrameNumber + 1) % kNumReadbackBuffers;
 
             // Copy current exposure to staging buffer for next frame readback
             commandList->copyBuffer(m_ExposureReadbackBuffers[writeIdx], 0, exposureBuffer, 0, sizeof(float));
 
-            // Read back the previous frame's value
-            float* mapped = static_cast<float*>(g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(m_ExposureReadbackBuffers[readIdx], nvrhi::CpuAccessMode::Read));
-            if (mapped)
+            // Arm the copy's completion event. The buffer is read two frames later, by which point the
+            // submission of this frame has waited for idle and the copy is guaranteed complete, so the
+            // read below never stalls; until then the previous value is kept.
+            g_Renderer.SignalEventAfterFrame(m_ExposureReadbackEvents[writeIdx]);
+
+            if (g_Renderer.m_RHI->m_NvrhiDevice->pollEventQuery(m_ExposureReadbackEvents[readIdx].Get()))
             {
-                g_Renderer.m_PrevFrameExposure = *mapped;
-                g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(m_ExposureReadbackBuffers[readIdx]);
+                float* mapped = static_cast<float*>(g_Renderer.m_RHI->m_NvrhiDevice->mapBuffer(m_ExposureReadbackBuffers[readIdx], nvrhi::CpuAccessMode::Read));
+                if (mapped)
+                {
+                    g_Renderer.m_PrevFrameExposure = *mapped;
+                    g_Renderer.m_RHI->m_NvrhiDevice->unmapBuffer(m_ExposureReadbackBuffers[readIdx]);
+                }
             }
         }
 
