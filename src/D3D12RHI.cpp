@@ -209,6 +209,15 @@ public:
         }
     }
 
+    void ReleaseSwapchain() override
+    {
+        for (uint32_t i = 0; i < GraphicRHI::SwapchainImageCount; i++)
+        {
+            m_NvrhiSwapchainTextures[i] = nullptr;
+        }
+        m_SwapChain.Reset();
+    }
+
     void Shutdown() override
     {
         if (m_Device && m_CommandQueue)
@@ -238,13 +247,9 @@ public:
             }
         }
 
-        for (uint32_t i = 0; i < GraphicRHI::SwapchainImageCount; i++)
-        {
-            m_NvrhiSwapchainTextures[i] = nullptr;
-        }
+        ReleaseSwapchain();
         m_NvrhiDevice = nullptr;
 
-        m_SwapChain.Reset();
         m_CommandQueue.Reset();
         m_Device.Reset();
         m_Factory.Reset();

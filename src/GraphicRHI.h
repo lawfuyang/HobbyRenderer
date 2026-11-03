@@ -53,7 +53,13 @@ public:
     virtual ~GraphicRHI() = default;
 
     virtual void Initialize(SDL_Window* window) = 0;
+    // Releases the device and every object the RHI owns. Called from ~D3D12GraphicRHI, i.e. when
+    // Renderer's m_RHI is destroyed, so that the device outlives every subsystem holding nvrhi
+    // resources. Do not call it while such resources are still alive; use ReleaseSwapchain().
     virtual void Shutdown() = 0;
+    // Releases only the presentation resources (back buffers + swapchain) so the window can be
+    // destroyed while the device itself stays alive for the remaining owners.
+    virtual void ReleaseSwapchain() = 0;
     virtual bool CreateSwapchain(uint32_t width, uint32_t height) = 0;
     virtual bool AcquireNextSwapchainImage(uint32_t* outImageIndex) = 0;
     virtual bool PresentSwapchain(uint32_t imageIndex) = 0;

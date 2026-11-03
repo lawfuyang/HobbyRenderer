@@ -317,6 +317,10 @@ public:
     // ─── Window, device & swapchain ───
 
     SDL_Window* m_Window = nullptr;
+    // Owns the nvrhi device, and therefore the Context every GPU resource holds a raw reference to.
+    // Declared before every other member so it is destroyed last: members are destroyed in reverse
+    // declaration order, so all GPU resources in this object die while the device is still alive.
+    // Nothing below may be declared before m_RHI.
     std::unique_ptr<GraphicRHI> m_RHI;
 
     uint32_t m_AcquiredSwapchainImageIdx = 0;

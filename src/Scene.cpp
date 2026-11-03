@@ -604,41 +604,10 @@ void Scene::Shutdown()
 		g_Renderer.m_CameraStateManager.SaveCamera(Config::Get().m_ScenePath, state);
 	}
 
-	// Release GPU buffer handles so NVRHI can free underlying resources
-	m_VertexBufferQuantized = nullptr;
-	m_IndexBuffer = nullptr;
-	m_MaterialConstantsBuffer = nullptr;
-	m_InstanceDataBuffer = nullptr;
-	m_MeshDataBuffer = nullptr;
-	m_MeshletBuffer = nullptr;
-	m_MeshletVerticesBuffer = nullptr;
-	m_MeshletTrianglesBuffer = nullptr;
-	m_LightBuffer = nullptr;
-	m_TLAS = nullptr;
-	m_RTInstanceDescBuffer = nullptr;
-	m_BLASAddressBuffer = nullptr;
-	m_InstanceLODBuffer = nullptr;
-	m_RTInstanceDescs.clear();
-
-	// Clear CPU-side containers
-	m_Meshes.clear();
-	m_Nodes.clear();
-	m_Materials.clear();
-	m_MeshData.clear();
-	m_Meshlets.clear();
-	m_MeshletVertices.clear();
-	m_MeshletTriangles.clear();
-	for (Scene::Texture& tex : m_Textures)
-	{
-		tex.m_Handle = nullptr;
-	}
-	m_Textures.clear();
-	m_Cameras.clear();
-	m_Lights.clear();
-	m_Animations.clear();
-	m_DynamicMaterialIndices.clear();
-	m_DynamicNodeIndices.clear();
-	m_InstanceData.clear();
+	// Reset to a freshly constructed state: the implicit copy assignment releases the old GPU
+	// handles and containers on the way through, so no per-member release list has to be kept in
+	// sync with the class definition.
+	*this = Scene{};
 }
 
 void Scene::UpdateNodeBoundingSphere(int nodeIndex)

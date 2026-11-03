@@ -648,7 +648,10 @@ void Renderer::Shutdown()
     m_RHI->m_NvrhiDevice->waitForIdle();
     m_RHI->m_NvrhiDevice->runGarbageCollection();
 
-    m_RHI->Shutdown();
+    // Only the presentation resources go here: the window cannot outlive the swapchain. The device
+    // itself is released by ~Renderer together with m_RHI, i.e. after every member above that still
+    // holds nvrhi handles has been destroyed.
+    m_RHI->ReleaseSwapchain();
 
     if (m_Window)
     {
