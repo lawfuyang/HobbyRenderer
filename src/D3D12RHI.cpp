@@ -27,6 +27,9 @@ public:
     ComPtr<ID3D12CommandQueue> m_CommandQueue;
     ComPtr<ID3D12CommandQueue> m_CopyQueue;
     ComPtr<IDXGISwapChain3> m_SwapChain;
+    // Non-null only while the D3D12 debug layer is active (--rhidebug); drains its stored messages
+    // into SDL_Log so API warnings and errors end up in output.txt with the rest of the log.
+    ComPtr<ID3D12InfoQueue> m_InfoQueue;
     bool m_bTearingSupported = false;
     bool m_bTightAlignmentSupported = false;
     bool m_bDisplaySupportsHDR = false;
@@ -149,6 +152,8 @@ public:
                 filter.DenyList.NumIDs = _countof(deniedMessages);
                 filter.DenyList.pIDList = deniedMessages;
                 infoQueue->AddStorageFilterEntries(&filter);
+
+                m_InfoQueue = infoQueue;
             }
             else
             {
@@ -207,6 +212,55 @@ public:
                 SDL_Log("Display HDR support: %s", m_bDisplaySupportsHDR ? "true" : "false");
             }
         }
+
+        DrainDebugMessages();
+    }
+
+    void DrainDebugMessages()
+    {
+        if (!m_InfoQueue)
+        {
+            return;
+        }
+
+        const UINT64 messageCount = m_InfoQueue->GetNumStoredMessages();
+        for (UINT64 i = 0; i < messageCount; ++i)
+        {
+            SIZE_T messageLength = 0;
+            if (FAILED(m_InfoQueue->GetMessage(i, nullptr, &messageLength)) || messageLength == 0)
+            {
+                continue;
+            }
+
+            std::vector<char> buffer(messageLength);
+            D3D12_MESSAGE* message = reinterpret_cast<D3D12_MESSAGE*>(buffer.data());
+            if (FAILED(m_InfoQueue->GetMessage(i, message, &messageLength)))
+            {
+                continue;
+            }
+
+            SDL_LogPriority priority;
+            switch (message->Severity)
+            {
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+            case D3D12_MESSAGE_SEVERITY_ERROR:
+                priority = SDL_LOG_PRIORITY_ERROR;
+                break;
+
+            case D3D12_MESSAGE_SEVERITY_WARNING:
+                priority = SDL_LOG_PRIORITY_WARN;
+                break;
+
+            default:
+                // Informational messages are not what the log is for: only warnings and errors.
+                continue;
+            }
+
+            SDL_LogMessage(SDL_LOG_CATEGORY_APPLICATION, priority, "[D3D12] %s",
+                           message->pDescription != nullptr ? message->pDescription : "");
+        }
+
+        m_InfoQueue->ClearStoredMessages();
     }
 
     void ReleaseSwapchain() override
@@ -246,6 +300,9 @@ public:
                 SDL_LOG_ASSERT_FAIL("CreateFence failed", "Failed to create fence for GPU sync during shutdown");
             }
         }
+
+        // Last chance to see teardown messages: the queue below is the device's.
+        DrainDebugMessages();
 
         ReleaseSwapchain();
         m_NvrhiDevice = nullptr;
@@ -419,6 +476,8 @@ public:
             SDL_LOG_ASSERT_FAIL("IDXGISwapChain3::Present failed", "Swapchain Presentation failed: 0x%08X", hr);
             return false;
         }
+
+        DrainDebugMessages();
         return true;
     }
 

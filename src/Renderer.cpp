@@ -26,6 +26,75 @@ using FfxUInt32x4 = uint32_t[4];
 
 namespace
 {
+    // ─── SDL_Log → output.txt ───────────────────────────────────────────────
+    // The exe is a Windows GUI-subsystem app (add_executable(${PROJECT_NAME} WIN32)), so SDL_Log's
+    // stderr output is invisible when it is launched outside a terminal. Every line is mirrored to
+    // output.txt next to the .exe and still forwarded to the default output (terminal, debugger).
+    //
+    // A C FILE* rather than an SDL_IOStream: SDL3's Windows backend opens write handles with
+    // exclusive sharing, which locks the file against every reader while the handle is held, while
+    // fopen uses deny-none sharing, so the log stays readable (editor, Get-Content) while running.
+    FILE* gs_OutputLogFile = nullptr;
+    SDL_LogOutputFunction gs_DefaultLogFn = nullptr;
+    void* gs_DefaultLogUserdata = nullptr;
+
+    const char* LogPriorityLetter(SDL_LogPriority priority)
+    {
+        switch (priority)
+        {
+        case SDL_LOG_PRIORITY_VERBOSE:  return "V";
+        case SDL_LOG_PRIORITY_DEBUG:    return "D";
+        case SDL_LOG_PRIORITY_INFO:     return "I";
+        case SDL_LOG_PRIORITY_WARN:     return "W";
+        case SDL_LOG_PRIORITY_ERROR:    return "E";
+        case SDL_LOG_PRIORITY_CRITICAL: return "C";
+        default:                        return "?";
+        }
+    }
+
+    void SDLCALL FileLogCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
+    {
+        (void)userdata;
+        if (gs_OutputLogFile)
+        {
+            char line[8192];
+            const int length = SDL_snprintf(line, sizeof(line), "[%s] %s\r\n", LogPriorityLetter(priority), message);
+            if (length > 0)
+            {
+                fwrite(line, 1, static_cast<size_t>(length), gs_OutputLogFile);
+                fflush(gs_OutputLogFile); // per line, so a crash still leaves the log behind
+            }
+        }
+
+        // Forward to the previous/default output (terminal, debugger, ...).
+        if (gs_DefaultLogFn)
+        {
+            gs_DefaultLogFn(gs_DefaultLogUserdata, category, priority, message);
+        }
+    }
+
+    void InstallOutputLog()
+    {
+        const char* basePath = SDL_GetBasePath();
+        if (!basePath)
+        {
+            SDL_Log("[Log ] Could not resolve the exe folder: %s", SDL_GetError());
+            return;
+        }
+
+        const std::filesystem::path path = std::filesystem::path(basePath) / "output.txt";
+        gs_OutputLogFile = fopen(path.string().c_str(), "wb");
+        if (!gs_OutputLogFile)
+        {
+            SDL_Log("[Log ] Could not open %s for log output", path.string().c_str());
+            return;
+        }
+
+        SDL_GetLogOutputFunction(&gs_DefaultLogFn, &gs_DefaultLogUserdata);
+        SDL_SetLogOutputFunction(FileLogCallback, nullptr);
+        SDL_Log("[Log ] SDL_Log mirrored to %s", path.string().c_str());
+    }
+
     void InitSDL()
     {
         SDL_Log("[Init] Starting SDL initialization");
@@ -2084,6 +2153,8 @@ ScopedCommandList::~ScopedCommandList()
 
 int main(int argc, char* argv[])
 {
+    InstallOutputLog();
+
     // -----------------------------------------------------------------------
     // Normal renderer mode
     // -----------------------------------------------------------------------
