@@ -134,7 +134,7 @@ if(WIN32)
 endif()
 
 # Agility SDK Configuration
-set(AGILITY_SDK_VERSION "1.619.3")
+set(AGILITY_SDK_VERSION "1.620.1")
 set(AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${AGILITY_SDK_VERSION}")
 download_library("AgilitySDK" "${AGILITY_SDK_VERSION}" "${AGILITY_SDK_URL}" "AgilitySDK-*")
 set(AGILITY_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/AgilitySDK")
