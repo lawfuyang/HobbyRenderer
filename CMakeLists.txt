@@ -124,7 +124,9 @@ endfunction()
 # Download Libraries
 # ============================================================================
 
-# SDL3 Configuration
+# ---------------------------------------------------------------------------
+# SDL3
+# ---------------------------------------------------------------------------
 set(SDL3_VERSION "3.4.18")
 set(SDL3_URL "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-devel-${SDL3_VERSION}-VC.zip")
 download_library("SDL3" "${SDL3_VERSION}" "${SDL3_URL}" "SDL3-*")
@@ -133,7 +135,9 @@ if(WIN32)
     stage_dll("${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll" "${CMAKE_SOURCE_DIR}/bin/SDL3.dll")
 endif()
 
-# Agility SDK Configuration
+# ---------------------------------------------------------------------------
+# Agility SDK
+# ---------------------------------------------------------------------------
 set(AGILITY_SDK_VERSION "1.620.1")
 set(AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${AGILITY_SDK_VERSION}")
 download_library("AgilitySDK" "${AGILITY_SDK_VERSION}" "${AGILITY_SDK_URL}" "AgilitySDK-*")
@@ -157,8 +161,8 @@ set(CGLTF_SRC_DIR "${CGLTF_INSTALL_DIR}/${CGLTF_SUBDIR}")
 # ----------------------------------------------------------------------------
 # DirectX Shader Compiler (DXC) - downloaded into external/dxc
 # ----------------------------------------------------------------------------
-set(DXC_VERSION "v1.9.2607")
-set(DXC_URL "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/dxc_2026_07_29.zip")
+set(DXC_VERSION "v1.9.2609")
+set(DXC_URL "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/dxc_2026_09_29.zip")
 download_library("dxc" "${DXC_VERSION}" "${DXC_URL}" "dxc_*")
 set(DXC_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/dxc")
 set(DXC_EXE "${DXC_INSTALL_DIR}/bin/x64/dxc.exe")
@@ -166,9 +170,9 @@ set(NVRHI_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX12 ON CACHE BOOL "" FORCE)
 
-# ============================================================================
+# ---------------------------------------------------------------------------
 # MathLib (ML)
-# ============================================================================
+# ---------------------------------------------------------------------------
 set(ML_VERSION "11")
 set(ML_URL "https://github.com/NVIDIA-RTX/MathLib/archive/refs/tags/v${ML_VERSION}.zip")
 download_library("MathLib" "${ML_VERSION}" "${ML_URL}" "MathLib-*")
