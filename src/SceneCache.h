@@ -5,7 +5,7 @@
 namespace SceneCache
 {
     // ─────────────────────────────────────────────────────────────────────────────
-    // Cooked Mesh Binary Format (version 1)
+    // Cooked Mesh Binary Format
     //
     // Offset  Size   Field
     // ------  ----   -----
@@ -30,7 +30,7 @@ namespace SceneCache
     // - ProcessMeshes algorithm changes (new passes, different quantization)
     // - VertexQuantized or Meshlet struct layout changes
     // - LOD generation parameters change
-    constexpr uint32_t kCookedMeshVersion = 1;
+    constexpr uint32_t kCookedMeshVersion = 2;
 
     // ── Binary I/O helpers ────────────────────────────────────────────────────
 
