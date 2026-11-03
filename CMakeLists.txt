@@ -372,6 +372,11 @@ endif()
 add_custom_target(build_shaders
 
     # DXIL output for D3D12
+    # -Whlsl-2026-compat warns about code whose meaning changes under HLSL 2026. Its
+    # hlsl-legacy-literal sub-group is disabled: DXC 1.9.2609 also flags correct u-suffixed
+    # literals above INT_MAX (0xFFF00000u), contradicting its own valid-literals.hlsl test, so
+    # every remaining hit is a false positive. Revisit on the next DXC update; the rest of the
+    # group (hlsl-2026-removed-keywords, hlsl-effects-syntax, ...) stays enabled.
     COMMAND ${SHADERMAKE_PATH_GENEX}
             -p DXIL
             --binaryBlob
@@ -384,6 +389,7 @@ add_custom_target(build_shaders
             --hlsl2021
             -D WITH_NRD=1
             -X "-enable-16bit-types"
+            -X "-Whlsl-2026-compat -Wno-hlsl-legacy-literal"
             --include "${CMAKE_SOURCE_DIR}/src/shaders"
             --include "${CMAKE_SOURCE_DIR}/external/rtxdi/Include"
             --include "${CMAKE_SOURCE_DIR}/external/nvrhi/include"

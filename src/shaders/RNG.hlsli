@@ -43,12 +43,12 @@ uint murmur3(uint r)
 #define ROT32(x, y) ((x << y) | (x >> (32 - y)))
 
     // https://en.wikipedia.org/wiki/MurmurHash
-    uint c1 = 0xcc9e2d51;
+    uint c1 = 0xcc9e2d51u;
     uint c2 = 0x1b873593;
     uint r1 = 15;
     uint r2 = 13;
     uint m  = 5;
-    uint n  = 0xe6546b64;
+    uint n  = 0xe6546b64u;
 
     uint hash = r;
     uint k    = 39041; // random large prime number
@@ -61,9 +61,9 @@ uint murmur3(uint r)
 
     hash ^= 4;
     hash ^= (hash >> 16);
-    hash *= 0x85ebca6b;
+    hash *= 0x85ebca6bu;
     hash ^= (hash >> 13);
-    hash *= 0xc2b2ae35;
+    hash *= 0xc2b2ae35u;
     hash ^= (hash >> 16);
 
 #undef ROT32
