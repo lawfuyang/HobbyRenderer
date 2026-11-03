@@ -90,7 +90,10 @@ SharcParameters BuildSharcParams()
 //   1 = cosine direction clipped below primary surface
 //   2 = sky miss at some bounce / max bounces reached
 // ============================================================================
-static const uint SHARC_QUERY_MAX_BOUNCES = 4;
+// A path continues only while the segment is shorter than the local voxel size, i.e. the hit is too
+// close to trust the cache at. A second bounce covers that case; further bounces are both rare and
+// expensive (one ray plus a full vertex fetch each), so they are cut off here.
+static const uint SHARC_QUERY_MAX_BOUNCES = 2;
 
 struct IndirectRayResult
 {
@@ -136,9 +139,9 @@ IndirectRayResult TraceIndirectRay(uint2 pixel, float3 worldPos, float3 N, Sharc
 
         srrhi::PerInstanceData inst = t_InstanceData[hitInfo.m_InstanceIndex];
         srrhi::MeshData        mesh = t_GeometryData[inst.m_MeshDataIndex];
-        FullHitAttributes attr      = GetFullHitAttributes(hitInfo, ray, inst, mesh, t_SceneIndices, t_SceneVertices);
+        PositionNormal         hit  = GetPositionNormal(hitInfo, ray, inst, mesh, t_SceneIndices, t_SceneVertices);
 
-        float3 hitPos = attr.m_WorldPos;
+        float3 hitPos = hit.m_WorldPos;
         totalDist += length(hitPos - origin);
 
         uint  hitLevel  = HashGridGetLevel(hitPos, sharcParams.hashGridParameters);
@@ -147,14 +150,14 @@ IndirectRayResult TraceIndirectRay(uint2 pixel, float3 worldPos, float3 N, Sharc
         if (totalDist >= voxelSize)
         {
             result.hitData.positionWorld = hitPos;
-            result.hitData.normalWorld   = normalize(attr.m_WorldNormal);
+            result.hitData.normalWorld   = normalize(hit.m_WorldNormal);
             result.status = 0;
             return result;
         }
 
         // Segment still too short — continue tracing from this surface
         origin = hitPos;
-        normal = normalize(attr.m_WorldNormal);
+        normal = normalize(hit.m_WorldNormal);
     }
 
     // Reached max bounces without spanning the voxel
@@ -193,6 +196,19 @@ void SharcIndirectQuery_CSMain(uint2 GlobalIndex : SV_DispatchThreadID)
     }
 
     SharcParameters sharcParams = BuildSharcParams();
+
+    // Surfaces the update pass never caches (it skips the same roughness range) have nothing to query
+    // for: the walk would only be paid for and then discarded. Their indirect contribution is handled
+    // by the specular path.
+    if (primarySurface.material.roughness < srrhi::SHARCConsts::ROUGHNESS_THRESHOLD)
+    {
+        StoreShadingOutput(GlobalIndex, pixelPosition,
+            primarySurface.viewDepth, primarySurface.material.roughness,
+            /*diffuse=*/float3(0, 0, 0), /*specular=*/float3(0, 0, 0),
+            /*lightDistance=*/0.0f,
+            /*isFirstPass=*/false, /*isLastPass=*/true);
+        return;
+    }
 
     // Trace a cosine-weighted diffuse walk from the primary surface until the
     // accumulated path length spans the local voxel size, then query the cache.

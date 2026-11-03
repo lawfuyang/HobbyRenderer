@@ -208,9 +208,11 @@ public:
             params.commandList    = commandList;
             params.shaderID       = ShaderID::SHARCUPDATE_SHARCUPDATE_CSMAIN;
             params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
+            // One thread per SPARSE_BLOCK_SIZE x SPARSE_BLOCK_SIZE block: the dispatch is the sparse
+            // subset itself (about 4% of the pixels), not the full viewport.
             params.dispatchParams = {
-                .x = DivideAndRoundUp(width,  8u),
-                .y = DivideAndRoundUp(height, 8u),
+                .x = DivideAndRoundUp(DivideAndRoundUp(width,  srrhi::SHARCConsts::SPARSE_BLOCK_SIZE), 8u),
+                .y = DivideAndRoundUp(DivideAndRoundUp(height, srrhi::SHARCConsts::SPARSE_BLOCK_SIZE), 8u),
                 .z = 1u
             };
             g_Renderer.AddComputePass(params);

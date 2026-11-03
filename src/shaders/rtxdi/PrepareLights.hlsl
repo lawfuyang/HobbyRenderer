@@ -28,6 +28,7 @@ static const StructuredBuffer<srrhi::MeshData>                t_GeometryData    
 static const StructuredBuffer<srrhi::MaterialConstants>       t_MaterialConstants      = srrhi::PrepareLightsInputs::GetMaterialConstants();
 static const StructuredBuffer<uint>                           t_SceneIndices           = srrhi::PrepareLightsInputs::GetSceneIndices();
 static const StructuredBuffer<srrhi::VertexQuantized>         t_SceneVertices          = srrhi::PrepareLightsInputs::GetSceneVertices();
+static const StructuredBuffer<uint>                           t_LightTriangleRemap     = srrhi::PrepareLightsInputs::GetLightTriangleRemap();
 static const RWStructuredBuffer<srrhi::PolymorphicLightInfo>  u_LightDataBuffer        = srrhi::PrepareLightsInputs::GetLightDataBuffer();
 static const RWBuffer<uint>                                   u_LightIndexMappingBuffer = srrhi::PrepareLightsInputs::GetLightIndexMappingBuffer();
 static const RWTexture2D<float4>                              u_LocalLightPdfTexture   = srrhi::PrepareLightsInputs::GetLocalLightPdfTexture();
@@ -72,6 +73,10 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
     uint triangleIdx = dispatchThreadId - task.lightBufferOffset;
     bool isPrimitiveLight = (task.instanceAndGeometryIndex & TASK_PRIMITIVE_LIGHT_BIT) != 0;
 
+    // Light slot -> source triangle. The light list only holds the triangles whose emitted power is
+    // above the filter threshold, so the mapping is not the identity.
+    const uint lightBufferPtr = task.lightBufferOffset + triangleIdx;
+
     srrhi::PolymorphicLightInfo lightInfo = (srrhi::PolymorphicLightInfo)0;
 
     if (!isPrimitiveLight)
@@ -91,7 +96,7 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
         // instance.m_LODIndex here would read from a different (smaller)
         // index range, producing wrong geometry and out-of-bounds accesses.
         uint lodIndex = 0;
-        TriangleVertices tv = GetTriangleVertices(triangleIdx, lodIndex, geometry, t_SceneIndices, t_SceneVertices);
+        TriangleVertices tv = GetTriangleVertices(t_LightTriangleRemap[lightBufferPtr], lodIndex, geometry, t_SceneIndices, t_SceneVertices);
 
         float3 positions[3];
         positions[0] = MatrixMultiply(float4(tv.v0.m_Pos, 1.0f), instance.m_World).xyz;
@@ -167,7 +172,6 @@ void main(uint dispatchThreadId : SV_DispatchThreadID)
         lightInfo = t_PrimitiveLightBuffer[primitiveLightIndex];
     }
 
-    uint lightBufferPtr = task.lightBufferOffset + triangleIdx;
     u_LightDataBuffer[g_Const.currentFrameLightOffset + lightBufferPtr] = lightInfo;
 
     // Write light index mapping for temporal resampling

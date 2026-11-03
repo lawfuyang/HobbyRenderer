@@ -261,6 +261,9 @@ srinput PrepareLightsInputs
     StructuredBuffer<MaterialConstants>       m_MaterialConstants;
     StructuredBuffer<uint>                    m_SceneIndices;
     StructuredBuffer<VertexQuantized>         m_SceneVertices;
+    // Light slot -> source triangle index (LOD 0) inside the task's mesh. Lets low-power triangles be
+    // dropped from the light list without changing the per-mesh geometry the pass reads.
+    StructuredBuffer<uint>                    m_LightTriangleRemap;
     RWStructuredBuffer<PolymorphicLightInfo>  m_LightDataBuffer;
     RWBuffer<uint>                            m_LightIndexMappingBuffer;
     RWTexture2D<float4>                       m_LocalLightPdfTexture;

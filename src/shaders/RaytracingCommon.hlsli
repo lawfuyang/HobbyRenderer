@@ -88,6 +88,36 @@ float2 GetInterpolatedUV(
     return tv.v0.m_Uv * (1.0f - barycentrics.x - barycentrics.y) + tv.v1.m_Uv * barycentrics.x + tv.v2.m_Uv * barycentrics.y;
 }
 
+// Position and interpolated normal of a hit, and nothing else.
+//
+// Cheaper than GetFullHitAttributes: it skips the tangent transform and the UV interpolation, which
+// are only needed for material shading. Cache queries and any other hit consumer that only needs the
+// geometric frame should use this.
+struct PositionNormal
+{
+    float3 m_WorldPos;
+    float3 m_WorldNormal;
+};
+
+PositionNormal GetPositionNormal(
+    RayHitInfo hit,
+    RayDesc ray,
+    srrhi::PerInstanceData inst,
+    srrhi::MeshData mesh,
+    StructuredBuffer<uint> indices,
+    StructuredBuffer<srrhi::VertexQuantized> vertices)
+{
+    TriangleVertices tv = GetTriangleVertices(hit.m_PrimitiveIndex, inst.m_LODIndex, mesh, indices, vertices);
+
+    float3 bary = float3(1.0f - hit.m_Barycentrics.x - hit.m_Barycentrics.y, hit.m_Barycentrics.x, hit.m_Barycentrics.y);
+    float3 localNormal = tv.v0.m_Normal * bary.x + tv.v1.m_Normal * bary.y + tv.v2.m_Normal * bary.z;
+
+    PositionNormal result;
+    result.m_WorldPos    = ray.Origin + ray.Direction * hit.m_RayT;
+    result.m_WorldNormal = TransformNormal(localNormal, inst.m_World);
+    return result;
+}
+
 bool AlphaTest(
     float2 uv,
     srrhi::MaterialConstants mat,

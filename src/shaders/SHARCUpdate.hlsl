@@ -96,24 +96,19 @@ float3 EvaluateDirectLightingAtHit(
 // ============================================================================
 
 [numthreads(8, 8, 1)]
-void SHARCUpdate_CSMain(uint2 dispatchIdx : SV_DispatchThreadID)
+void SHARCUpdate_CSMain(uint2 sparseBlock : SV_DispatchThreadID)
 {
     // ---- Sparse pixel selection ------------------------------------------------
-    // Each kSparseBlockSize×kSparseBlockSize block contributes exactly one sample.
-    // The selected pixel within the block is randomised per-block per-frame so
-    // the cache receives uniform coverage over time.
+    // One thread per SPARSE_BLOCK_SIZE x SPARSE_BLOCK_SIZE block of screen pixels, so the dispatch is
+    // already the sparse subset (about 4% of the pixels) instead of the full viewport with an early-out
+    // 96% of the threads fall into. The selected pixel within the block is randomised per-block
+    // per-frame so the cache receives uniform coverage over time.
     const uint blockSize = srrhi::SHARCConsts::SPARSE_BLOCK_SIZE;
-
-    uint2 sparseBlock   = dispatchIdx / blockSize;
-    uint2 offsetInBlock = dispatchIdx % blockSize;
 
     // Per-block random offset — use PCG hash of block coords XOR frame index
     uint hashX = PCGHash(sparseBlock.x ^ (sparseBlock.y << 16) ^ g_Const.m_FrameIndex);
     uint hashY = PCGHash(sparseBlock.y ^ (sparseBlock.x << 16) ^ (g_Const.m_FrameIndex + 1u));
     uint2 randomOffset = uint2(hashX % blockSize, hashY % blockSize);
-
-    if (any(offsetInBlock != randomOffset))
-        return;
 
     uint2 pixel = sparseBlock * blockSize + randomOffset;
     if (any(pixel >= g_Const.m_ViewportSize))

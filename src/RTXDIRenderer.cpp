@@ -48,6 +48,25 @@ static constexpr uint32_t k_EnvPDFTexSize = 1024u;
 // Compact buffer stride: 2 x uint4 per RIS entry (see RAB_LightInfo.hlsli).
 static constexpr uint32_t k_CompactSlotsPerEntry = 2u;
 
+// RTXDI_IntegerCompact() / RTXDI_LinearIndexToZCurve() from Rtxdi/Utils/ZCurve.hlsli, on the CPU.
+// The local-light PDF texture is addressed with this curve, so reading the per-light power back
+// needs exactly the same mapping.
+static uint32_t CompactBits(uint32_t x)
+{
+    x = (x & 0x11111111u) | ((x & 0x44444444u) >> 1);
+    x = (x & 0x03030303u) | ((x & 0x30303030u) >> 2);
+    x = (x & 0x000F000Fu) | ((x & 0x0F000F00u) >> 4);
+    x = (x & 0x000000FFu) | ((x & 0x00FF0000u) >> 8);
+    return x;
+}
+
+static uint32_t ZCurveTexelIndex(uint32_t linearIndex, uint32_t textureSize)
+{
+    const uint32_t x = CompactBits(linearIndex);
+    const uint32_t y = CompactBits(linearIndex >> 1);
+    return y * textureSize + x;
+}
+
 // ============================================================================
 // ============================================================================
 // ReSTIR GI globals
@@ -105,11 +124,11 @@ static void ApplyBalancedPreset()
     g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
     g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
     g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-    g_ReSTIRDI_NumLocalLightUniformSamples = 8;
-    g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
-    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 4;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 4;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 4;
     g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightReGIRRISSamples;
-    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 0;
     g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
     g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
     g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
@@ -751,6 +770,25 @@ public:
     // RTXDI_INVALID_LIGHT_INDEX (0xFFFFFFFF) means not emissive.
     std::vector<uint32_t>                m_CachedGeometryInstanceToLight;
 
+    // ------------------------------------------------------------------
+    // Emissive-triangle light filter.
+    //
+    // Every triangle of a mesh with an emissive material becomes a DI light, which for a scene like
+    // Bistro is tens of thousands of entries, most of them black (the material has an emissive map that
+    // is dark over most of the mesh's UVs). A triangle's power is only known on the GPU — it needs the
+    // emissive texture and the triangle area — so the first frame's light flux is read back once and the
+    // light list is rebuilt with only the triangles whose power is above a fraction of the brightest
+    // light. PrepareLights then reads triangle m_LightTriangleRemap[slot] instead of the slot's own
+    // index.
+    // ------------------------------------------------------------------
+    static constexpr float        k_EmissiveTrianglePowerThreshold = 1e-4f; // relative to the brightest
+    static constexpr uint32_t     k_LightFilterReadbackDelayFrames = 4;
+    bool                          m_bLightFilterPending = true; // armed by PostSceneLoad
+    uint32_t                      m_LightFilterFrames      = 0;
+    nvrhi::StagingTextureHandle   m_LightFluxStagingTexture;
+    std::vector<uint32_t>         m_EmissiveTriangleRemap; // light slot -> source triangle (LOD 0)
+    nvrhi::BufferHandle           m_LightTriangleRemapBuffer;
+
     // Cached sun direction from last frame — used to detect changes and
     // trigger a rebuild of the analytical light buffer params.
     Vector3                              m_CachedSunDirection{ 0.f, 0.f, 0.f };
@@ -938,10 +976,109 @@ public:
 
             SDL_Log("[RTXDI] Triangle emissive lights: %u triangles across %u meshes",
                 m_TotalEmissiveTriangles, (uint32_t)m_CachedTriangleLightTasks.size());
+
+            // Start with an identity remap (every triangle is a light) and arm the power filter, which
+            // runs once the first frame's light flux has been read back.
+            m_EmissiveTriangleRemap.resize(m_TotalEmissiveTriangles);
+            for (const srrhi::PrepareLightsTask& task : m_CachedTriangleLightTasks)
+            {
+                for (uint32_t i = 0; i < task.triangleCount; ++i)
+                    m_EmissiveTriangleRemap[task.lightBufferOffset + i] = i;
+            }
+
+            m_LightTriangleRemapBuffer = nullptr;
+            {
+                // Always allocate at least one element: PrepareLights binds this unconditionally, and a
+                // scene can have analytical lights without any emissive triangles.
+                nvrhi::BufferDesc remapDesc;
+                remapDesc.byteSize     = std::max<size_t>(m_EmissiveTriangleRemap.size(), 1u) * sizeof(uint32_t);
+                remapDesc.structStride = sizeof(uint32_t);
+                remapDesc.canHaveUAVs  = true;
+                remapDesc.debugName    = "RTXDILightTriangleRemap";
+                m_LightTriangleRemapBuffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(remapDesc);
+
+                if (!m_EmissiveTriangleRemap.empty())
+                {
+                    scopeCl->writeBuffer(m_LightTriangleRemapBuffer, m_EmissiveTriangleRemap.data(),
+                        m_EmissiveTriangleRemap.size() * sizeof(uint32_t));
+                }
+            }
+
+            m_LightFluxStagingTexture = nullptr;
+            m_LightFilterFrames       = 0;
+            m_bLightFilterPending     = (m_TotalEmissiveTriangles > 0);
         }
 
         // Mark analytical lights dirty so the first frame rebuilds them.
         m_AnalyticalLightsDirty = true;
+    }
+
+    // Rebuilds the triangle light list from the per-light flux read back from the GPU: a triangle stays
+    // a light only if its emitted power is above k_EmissiveTrianglePowerThreshold of the brightest one.
+    // The threshold is relative so it scales with the scene's overall lighting level.
+    void FilterEmissiveLightsByPower(const std::vector<float>& lightFlux, nvrhi::ICommandList* commandList)
+    {
+        SDL_assert(lightFlux.size() == m_TotalEmissiveTriangles);
+
+        float maxFlux = 0.0f;
+        for (float flux : lightFlux)
+            maxFlux = std::max(maxFlux, flux);
+
+        const float threshold = maxFlux * k_EmissiveTrianglePowerThreshold;
+
+        std::vector<srrhi::PrepareLightsTask> keptTasks;
+        std::vector<uint32_t>                 remap;
+        keptTasks.reserve(m_CachedTriangleLightTasks.size());
+        remap.reserve(m_TotalEmissiveTriangles);
+
+        const uint32_t originalTriangleCount = m_TotalEmissiveTriangles;
+        uint32_t keptLightCount = 0;
+
+        for (const srrhi::PrepareLightsTask& task : m_CachedTriangleLightTasks)
+        {
+            std::vector<uint32_t> keptTriangles;
+            keptTriangles.reserve(task.triangleCount);
+
+            for (uint32_t i = 0; i < task.triangleCount; ++i)
+            {
+                if (lightFlux[task.lightBufferOffset + i] >= threshold)
+                    keptTriangles.push_back(i);
+            }
+
+            if (keptTriangles.empty())
+                continue;
+
+            srrhi::PrepareLightsTask keptTask = task;
+            keptTask.lightBufferOffset = keptLightCount;
+            keptTask.triangleCount     = static_cast<uint32_t>(keptTriangles.size());
+            keptTasks.push_back(keptTask);
+
+            remap.insert(remap.end(), keptTriangles.begin(), keptTriangles.end());
+            keptLightCount += static_cast<uint32_t>(keptTriangles.size());
+        }
+
+        m_CachedTriangleLightTasks = std::move(keptTasks);
+        m_TotalEmissiveTriangles   = keptLightCount;
+        m_EmissiveTriangleRemap    = std::move(remap);
+
+        // Rebuild the instance -> first-light map: meshes that lost every triangle are no longer lights.
+        std::fill(m_CachedGeometryInstanceToLight.begin(), m_CachedGeometryInstanceToLight.end(),
+            RTXDI_INVALID_LIGHT_INDEX);
+        for (const srrhi::PrepareLightsTask& task : m_CachedTriangleLightTasks)
+            m_CachedGeometryInstanceToLight[task.instanceAndGeometryIndex >> 12] = task.lightBufferOffset;
+
+        if (!m_EmissiveTriangleRemap.empty() && commandList)
+        {
+            commandList->writeBuffer(m_LightTriangleRemapBuffer, m_EmissiveTriangleRemap.data(),
+                m_EmissiveTriangleRemap.size() * sizeof(uint32_t));
+        }
+
+        m_bLightFilterPending = false;
+
+        SDL_Log("[RTXDI] Emissive light filter: kept %u of %u triangles (%u meshes), "
+                "power threshold %.3g of brightest %.3g",
+                keptLightCount, originalTriangleCount, static_cast<uint32_t>(m_CachedTriangleLightTasks.size()),
+                threshold, maxFlux);
     }
 
     // ------------------------------------------------------------------
@@ -1425,9 +1562,11 @@ public:
         // that reservoir indices stay within the buffer bounds.
         const uint32_t dispatchWidth = (rtp.activeCheckerboardField != 0) ? ((width + 1) / 2) : width;
 
-        // ReGIR is only used in HighQuality mode.
-        // HighPerformance uses REGIR_DISABLED shader variants and skips the ReGIR build pass.
-        const bool useReGIR = (g_ReSTIR_QualityMode == ReSTIR_QualityMode::HighQuality);
+        // ReGIR runs whenever the DI initial sampling asks for it (the Balanced and HighQuality presets
+        // do). It presamples the light list into per-cell reservoirs once per frame, so the per-pixel
+        // RIS samples candidates from a compact cell list instead of walking the whole light list.
+        const bool useReGIR = (g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode ==
+                               ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS) && (m_ReGIRContext != nullptr);
 
         // Rebuild analytical light buffer params only when any light node is dirty
         // (includes sun orientation/pitch changes tracked via m_LightsDirty, and
@@ -1986,6 +2125,7 @@ public:
                 plInputs.SetMaterialConstants(g_Renderer.m_Scene.m_MaterialConstantsBuffer);
                 plInputs.SetSceneIndices(g_Renderer.m_Scene.m_IndexBuffer);
                 plInputs.SetSceneVertices(g_Renderer.m_Scene.m_VertexBufferQuantized);
+                plInputs.SetLightTriangleRemap(m_LightTriangleRemapBuffer);
                 plInputs.SetLightDataBuffer(lightDataBuf);
                 plInputs.SetLightIndexMappingBuffer(lightIndexMapBuf);
                 plInputs.SetLocalLightPdfTexture(localLightPDFTex, 0);
@@ -2066,6 +2206,52 @@ public:
                     .bIncludeBindlessResources = false,
                     .dispatchParams = { .x = presampleGroupsX, .y = k_RISTileCount, .z = 1u }
                 });
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // One-time readback of the per-light flux, used to drop black emissive triangles.
+        // PrepareLights wrote each light's power into the PDF texture above, so the map is complete
+        // here. The staging copy is issued once and mapped a few frames later, so no frame waits.
+        // ------------------------------------------------------------------
+        if (m_bLightFilterPending && m_TotalEmissiveTriangles > 0 && m_PDFTexSize > 0)
+        {
+            nvrhi::TextureSlice pdfSlice;
+            pdfSlice.setSize(m_PDFTexSize, m_PDFTexSize).setMipLevel(0);
+
+            if (!m_LightFluxStagingTexture)
+            {
+                nvrhi::TextureDesc stagingDesc;
+                stagingDesc.width     = m_PDFTexSize;
+                stagingDesc.height    = m_PDFTexSize;
+                stagingDesc.format    = nvrhi::Format::R32_FLOAT;
+                stagingDesc.debugName = "RTXDI Light Flux Readback";
+                m_LightFluxStagingTexture = device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+
+                commandList->copyTexture(m_LightFluxStagingTexture, pdfSlice, localLightPDFTex, pdfSlice);
+                m_LightFilterFrames = k_LightFilterReadbackDelayFrames;
+            }
+            else if (m_LightFilterFrames > 0 && --m_LightFilterFrames == 0)
+            {
+                size_t rowPitch = 0;
+                const void* mapped = device->mapStagingTexture(m_LightFluxStagingTexture, nvrhi::TextureSlice{},
+                    nvrhi::CpuAccessMode::Read, &rowPitch);
+                SDL_assert(mapped && rowPitch >= m_PDFTexSize * sizeof(float));
+
+                // The map is addressed by the same Z-curve the shader uses (RTXDI_LinearIndexToZCurve).
+                std::vector<float> lightFlux(m_TotalEmissiveTriangles, 0.0f);
+                for (uint32_t slot = 0; slot < m_TotalEmissiveTriangles; ++slot)
+                {
+                    const uint32_t zc = ZCurveTexelIndex(slot, m_PDFTexSize);
+                    const uint32_t x  = zc % m_PDFTexSize;
+                    const uint32_t y  = zc / m_PDFTexSize;
+                    lightFlux[slot] = *reinterpret_cast<const float*>(
+                        static_cast<const uint8_t*>(mapped) + y * rowPitch + x * sizeof(float));
+                }
+                device->unmapStagingTexture(m_LightFluxStagingTexture);
+                m_LightFluxStagingTexture = nullptr;
+
+                FilterEmissiveLightsByPower(lightFlux, commandList);
             }
         }
 
