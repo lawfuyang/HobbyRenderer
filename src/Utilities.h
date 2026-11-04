@@ -123,6 +123,9 @@ public:
     bool        IsValid()  const { return m_Data != nullptr; }
     // Returns a pointer at the current offset (see SetOffset).
     const void* GetData()  const { return static_cast<const uint8_t*>(m_Data) + m_Offset; }
+    // Returns a pointer at an explicit offset, leaving the reader's own offset alone: SetOffset mutates state
+    // that the streaming threads share, so a reader used from two places must not pass through it.
+    const void* GetDataAt(size_t offset) const { return static_cast<const uint8_t*>(m_Data) + offset; }
     // Returns the number of bytes from the current offset to the end of the mapping.
     size_t      GetSize()  const { return m_Size - m_Offset; }
     // Skip the first `offset` bytes of the mapped region (e.g. to skip a header).

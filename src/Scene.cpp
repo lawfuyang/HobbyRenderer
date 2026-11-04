@@ -5,6 +5,7 @@
 #include "Renderer.h"
 #include "CommonResources.h"
 #include "Utilities.h"
+#include "Omm/OmmSceneBaker.h"
 
 void Scene::LoadScene()
 {
@@ -52,6 +53,12 @@ void Scene::LoadScene()
 
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
+
+    if (g_Renderer.m_bOmmSupported)
+    {
+        OmmBakeParams ommParams;
+        BakeSceneOmm(*this, allVerticesQuantized, allIndices, ommParams);
+    }
 	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
 	BuildAccelerationStructures();
