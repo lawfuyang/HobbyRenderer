@@ -92,31 +92,33 @@ function(stage_dll SRC DST)
         return()
     endif()
 
-    set(STAGED FALSE)
+    # A staged copy has to match the library it was downloaded from: comparing content instead of mere
+    # existence makes bumping a dependency replace the file instead of silently keeping the old build.
     if(EXISTS "${DST}")
+        file(SHA256 "${SRC}" SRC_HASH)
+        file(SHA256 "${DST}" DST_HASH)
+        if(SRC_HASH STREQUAL DST_HASH)
+            return()
+        endif()
+
+        message(STATUS "stage_dll: ${DST} does not match its source, restaging")
+        file(REMOVE "${DST}")
+    endif()
+
+    file(CREATE_LINK "${SRC}" "${DST}" SYMBOLIC RESULT LINK_RESULT)
+    set(LINK_OK FALSE)
+    if(LINK_RESULT EQUAL 0 AND EXISTS "${DST}")
         file(SIZE "${DST}" DST_SIZE)
         if(DST_SIZE GREATER 0)
-            set(STAGED TRUE)
-        else()
-            message(WARNING "${DST} is 0 bytes — replacing it")
-            file(REMOVE "${DST}")
+            set(LINK_OK TRUE)
         endif()
     endif()
 
-    if(NOT STAGED)
-        file(CREATE_LINK "${SRC}" "${DST}" SYMBOLIC RESULT LINK_RESULT)
-        set(LINK_OK FALSE)
-        if(LINK_RESULT EQUAL 0 AND EXISTS "${DST}")
-            file(SIZE "${DST}" DST_SIZE)
-            if(DST_SIZE GREATER 0)
-                set(LINK_OK TRUE)
-            endif()
-        endif()
-        if(NOT LINK_OK)
-            message(STATUS "${DST} symlink unavailable — copying instead")
-            file(REMOVE "${DST}")
-            file(COPY "${SRC}" DESTINATION "${CMAKE_SOURCE_DIR}/bin")
-        endif()
+    if(NOT LINK_OK)
+        message(STATUS "${DST} symlink unavailable, copying instead")
+        file(REMOVE "${DST}")
+        get_filename_component(DST_DIR "${DST}" DIRECTORY)
+        file(COPY "${SRC}" DESTINATION "${DST_DIR}")
     endif()
 endfunction()
 
@@ -133,19 +135,6 @@ download_library("SDL3" "${SDL3_VERSION}" "${SDL3_URL}" "SDL3-*")
 set(SDL3_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/SDL3")
 if(WIN32)
     stage_dll("${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64/SDL3.dll" "${CMAKE_SOURCE_DIR}/bin/SDL3.dll")
-endif()
-
-# ---------------------------------------------------------------------------
-# Agility SDK
-# ---------------------------------------------------------------------------
-set(AGILITY_SDK_VERSION "1.620.1")
-set(AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${AGILITY_SDK_VERSION}")
-download_library("AgilitySDK" "${AGILITY_SDK_VERSION}" "${AGILITY_SDK_URL}" "AgilitySDK-*")
-set(AGILITY_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/AgilitySDK")
-set(D3D12MA_AGILITY_SDK_DIRECTORY "${AGILITY_SDK_INSTALL_DIR}")
-if(WIN32)
-    stage_dll("${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/D3D12Core.dll" "${CMAKE_SOURCE_DIR}/bin/D3D12Core.dll")
-    stage_dll("${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/d3d12SDKLayers.dll" "${CMAKE_SOURCE_DIR}/bin/d3d12SDKLayers.dll")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -294,7 +283,6 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE src/pch.h)
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders/rtxdi/SharedShaderInclude/SharedShaderInclude)
-target_include_directories(${PROJECT_NAME} PUBLIC "${AGILITY_SDK_INSTALL_DIR}/build/native/include")
 
 # ImGui Include
 target_include_directories(${PROJECT_NAME} PRIVATE ${IMGUI_SOURCE_DIR})
@@ -385,7 +373,7 @@ add_custom_target(build_shaders
             -o "${SHADER_OUTPUT_DIR_DXIL}"
             --embedPDB
             --compiler "${DXC_EXE}"
-            --shaderModel 6_9
+            --shaderModel 6_8
             --hlsl2021
             -D WITH_NRD=1
             -X "-enable-16bit-types"
@@ -410,7 +398,7 @@ add_custom_target(build_shaders
             --embedPDB
             --compiler "${DXC_EXE}"
             --allResourcesBound
-            --shaderModel 6_9
+            --shaderModel 6_8
             --hlsl2021
             --include "${NRD_SRC_DIR}/Shaders"
             --include "${ML_SRC_DIR}"

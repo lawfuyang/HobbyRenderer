@@ -1,6 +1,6 @@
 
 
-#include <d3d12.h>
+#include <directx/d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <directx/d3dx12_check_feature_support.h>
@@ -9,9 +9,6 @@
 
 #include "GraphicRHI.h"
 #include "Config.h"
-
-extern "C" { __declspec(dllexport) extern const UINT D3D12SDKVersion = D3D12_SDK_VERSION; }
-extern "C" { __declspec(dllexport) extern const char* D3D12SDKPath = ".\\"; }
 
 using Microsoft::WRL::ComPtr;
 
