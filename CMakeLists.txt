@@ -264,6 +264,50 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_SOURCE_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_SOURCE_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_SOURCE_DIR}/bin)
 
+# ----------------------------------------------------------------------------
+# RenderDoc in-application API header (src/RenderDocCapture.cpp)
+#
+# The header ships with RenderDoc and is taken from the installation rather than vendored, so the API table
+# the renderer casts to is always the one the loaded library was built from. The search mirrors
+# RenderDocCapture::Load: the executable directory first, then %ProgramFiles%/RenderDoc, with
+# -DRENDERDOC_DIR=<dir> overriding both. The hit is linked into external/renderdoc/ (copied when a symlink is
+# not permitted) and that directory is untracked, since it describes one machine's installation.
+#
+# A machine without RenderDoc is a supported configuration: the header is then absent, HOBBY_RENDERER_WITH_RENDERDOC
+# stays undefined, and src/RenderDocCapture.cpp compiles to no-ops so the panel control stays greyed out.
+# ----------------------------------------------------------------------------
+set(RENDERDOC_DIR "" CACHE PATH "Directory holding renderdoc_app.h and renderdoc.dll")
+
+set(RENDERDOC_HEADER_CANDIDATES "")
+if(RENDERDOC_DIR)
+    list(APPEND RENDERDOC_HEADER_CANDIDATES "${RENDERDOC_DIR}/renderdoc_app.h")
+endif()
+list(APPEND RENDERDOC_HEADER_CANDIDATES
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/renderdoc_app.h"
+    "$ENV{ProgramFiles}/RenderDoc/renderdoc_app.h")
+
+foreach(candidate IN LISTS RENDERDOC_HEADER_CANDIDATES)
+    if(EXISTS "${candidate}")
+        set(RENDERDOC_APP_HEADER "${candidate}")
+        break()
+    endif()
+endforeach()
+
+if(RENDERDOC_APP_HEADER)
+    set(HOBBY_RENDERER_WITH_RENDERDOC ON)
+    set(RENDERDOC_IMPORT_DIR "${CMAKE_SOURCE_DIR}/external/renderdoc")
+    file(MAKE_DIRECTORY "${RENDERDOC_IMPORT_DIR}")
+    file(CREATE_LINK "${RENDERDOC_APP_HEADER}" "${RENDERDOC_IMPORT_DIR}/renderdoc_app.h" SYMBOLIC RESULT _renderdocLinkResult)
+    if(NOT _renderdocLinkResult STREQUAL "0")
+        file(COPY_FILE "${RENDERDOC_APP_HEADER}" "${RENDERDOC_IMPORT_DIR}/renderdoc_app.h" ONLY_IF_DIFFERENT)
+    endif()
+    message(STATUS "RenderDoc API header: ${RENDERDOC_APP_HEADER}")
+else()
+    set(HOBBY_RENDERER_WITH_RENDERDOC OFF)
+    message(STATUS "renderdoc_app.h not found (searched: ${RENDERDOC_HEADER_CANDIDATES}); "
+                   "RenderDoc capture support is disabled")
+endif()
+
 # Find all C++ source files in src directory
 file(GLOB_RECURSE SOURCES 
     "src/*.cpp"
@@ -286,6 +330,12 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE src/pch.h)
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders/rtxdi/SharedShaderInclude/SharedShaderInclude)
+
+# RenderDoc's in-application API header, imported above
+if(HOBBY_RENDERER_WITH_RENDERDOC)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${RENDERDOC_IMPORT_DIR})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HOBBY_RENDERER_WITH_RENDERDOC)
+endif()
 
 # ImGui Include
 target_include_directories(${PROJECT_NAME} PRIVATE ${IMGUI_SOURCE_DIR})

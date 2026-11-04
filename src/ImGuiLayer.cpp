@@ -1,5 +1,6 @@
 ﻿#include "Renderer.h"
 #include "CommonResources.h"
+#include "RenderDocCapture.h"
 #include "Streaming/FeedbackManager.h"
 
 #include <imgui.h>
@@ -397,6 +398,27 @@ void ImGuiLayer::UpdateFrame()
             {
                 const std::string dumpPath = (std::filesystem::path{ SDL_GetBasePath() } / "profiler_dump.html").string();
                 MicroProfileDumpFileImmediately(dumpPath.c_str(), nullptr, nullptr);
+            }
+
+            // The capture itself needs a frame boundary, so the button only arms it for the next frame.
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!g_RenderDoc.IsAvailable());
+            if (ImGui::Button("RenderDoc Capture"))
+            {
+                g_Renderer.m_bRenderDocCaptureRequested = true;
+            }
+            ImGui::EndDisabled();
+
+            if (!g_RenderDoc.IsAvailable() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip(RenderDocCapture::IsCompiledIn()
+                    ? "RenderDoc is unavailable: no renderdoc.dll was loaded (pass --renderdoc=<path>)"
+                    : "RenderDoc is unavailable: this build has no RenderDoc support (renderdoc_app.h was not found when CMake ran)");
+            }
+
+            if (!g_Renderer.m_RenderDocLastCapturePath.empty())
+            {
+                ImGui::TextWrapped("Last capture: %s", g_Renderer.m_RenderDocLastCapturePath.c_str());
             }
 
             ImGui::Text("Total Instances: %zu", scene.m_InstanceData.size());

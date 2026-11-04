@@ -83,14 +83,19 @@ Goal: prove the toolchain can do ray-query OMM at SM 6.8 *before* writing pipeli
   (e.g. `bool m_bOmmSupported`).
 - Verify: log shows `true` on this machine; nothing else changes.
 
-**T0.3 — Shader spike.**
-- Add a throw-away entry point that traces with `RayQuery` in an OMM-attached scene, using
-  `RAY_FLAG_FORCE_OMM_2_STATE` (the HLSL flag corresponding to `InstanceFlags::ForceOMM2State`).
-- Verify: DXC compiles it at `-m 6_8` with `--hlsl2021` (the exact flags in `build_shaders`,
-  `CMakeLists.txt:373-410`). **If this fails, stop and report** — ray-query OMM would need a newer shader
-  model, i.e. the Agility SDK, and that decision is the user's.
+**T0.3 — Shader spike.** — **done, outcome changed.** DXC does reject
+`RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS` and `RAY_FLAG_FORCE_OMM_2_STATE` at `-m 6_8` (both are SM 6.9), but
+the shader-side spelling is not the only opt-in: the DXR spec defines
+`D3D12_PIPELINE_STATE_FLAG_RAYQUERY_ALLOW_OPACITY_MICROMAPS_ON_PRE_SM69_SHADERS` (0x80) for pipelines and
+`..._STATE_OBJECT_FLAG_...` (0x800) for state objects. The engine's ray tracing is inline `RayQuery` in
+compute passes, so the pipeline flag suffices and **no SM 6.9 / Agility SDK is needed**. nvrhi upstream set
+no pipeline flags of any kind for compute/graphics, so the fork adds them (`[rlaw]` blocks in
+`d3d12-backend.h` and `d3d12-compute.cpp`). The HLSL `RAY_FLAG_FORCE_OMM_2_STATE` is replaced by
+`InstanceFlags::ForceOMM2State` (`D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OMM_2_STATE`), which has no shader
+model requirement. See analysis §5.3.
 
-**Exit criteria**: flag on, feature `true`, OMM ray query compiles. No visual change.
+**Exit criteria (met)**: flag on, feature `true`, the pre-SM6.9 pipeline flag accepted with
+`--rhidebug` clean, no visual change.
 
 ---
 
@@ -326,4 +331,4 @@ pattern: own MS/PS, `DepthDisabled`, `dispatchMesh`, `REGISTER_RENDERER`, schedu
 - OMM for BLEND materials (stochastic transparency) and for ray-traced transmission volumetrics.
 - OMM updates (`ALLOW_OPACITY_MICROMAP_UPDATE`) for animated/deforming geometry — BLASes here are static
   (`Scene.cpp:57`), so linkage never changes at runtime.
-- Anything requiring the Agility SDK: the measured runtime already reports DXR 1.2 (§3 of the analysis).
+- Anything requiring the Agility SDK: Phase 0 established that none is needed (analysis §5.3).

@@ -2,6 +2,7 @@
 #include "Utilities.h"
 #include "Config.h"
 #include "CommonResources.h"
+#include "RenderDocCapture.h"
 #include "SceneLoader.h"
 #include "Streaming/FeedbackTexture.h"
 
@@ -542,6 +543,16 @@ void Renderer::Run()
             ReloadShaders();
         }
 
+        // A capture spans one whole frame, swapchain acquire to present. Requested either from the ImGui
+        // panel (the next frame brackets it) or from --renderdoc-capture-frame.
+        const bool bRenderDocCapture = g_RenderDoc.IsAvailable() &&
+            (m_bRenderDocCaptureRequested ||
+             Config::Get().m_RenderDocCaptureFrame == static_cast<int>(m_FrameNumber));
+        if (bRenderDocCapture)
+        {
+            g_RenderDoc.BeginFrameCapture();
+        }
+
         const bool bSwapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_AcquiredSwapchainImageIdx);
         
         m_TaskScheduler->ScheduleTask([this]() {
@@ -639,6 +650,19 @@ void Renderer::Run()
             break;
         }
         m_SwapChainImageIdx = 1 - m_SwapChainImageIdx;
+
+        if (bRenderDocCapture)
+        {
+            const bool bCaptured = g_RenderDoc.EndFrameCapture();
+            m_bRenderDocCaptureRequested = false;
+            m_RenderDocLastCapturePath = g_RenderDoc.GetNewestCapturePath();
+
+            // A scripted capture is the whole point of the run: stop as soon as it is on disk.
+            if (bCaptured && Config::Get().m_RenderDocCaptureFrame >= 0)
+            {
+                m_Running = false;
+            }
+        }
 
         const uint64_t workTimeNs = SDL_GetTicksNS() - frameStart;
 
@@ -2161,6 +2185,16 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     Renderer renderer{};
     Config::ParseCommandLine(argc, argv);
+
+    // RenderDoc hooks D3D12CreateDevice through this module's import table, so the DLL has to be in the
+    // process before Renderer::Initialize creates the device.
+    if (Config::Get().m_bRenderDoc && g_RenderDoc.Load(Config::Get().m_RenderDocDllPath))
+    {
+        const std::filesystem::path captureStem = Config::Get().m_ScenePath.empty()
+            ? std::filesystem::path{ "capture" }
+            : std::filesystem::path{ Config::Get().m_ScenePath }.stem();
+        g_RenderDoc.SetCapturePathTemplate((std::filesystem::path{ SDL_GetBasePath() } / "captures" / captureStem).string());
+    }
 
     renderer.Initialize();
 

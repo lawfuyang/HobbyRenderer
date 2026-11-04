@@ -104,7 +104,7 @@ m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicro
 | `CommandList::buildOpacityMicromap(omm, desc)` | `nvrhi.h:3667`; impl `d3d12-raytracing.cpp:2189-2260` (barriers, scratch, build call) |
 | OMM linkage fill for BLAS geometry | `d3d12-raytracing.cpp:648-656` (`fillD3dGeometryOMMLinkageDesc`), geometry switch `:695-703`, BLAS path `:776-777` |
 | Instance flags `ForceOMM2State` (16), `DisableOMMs` (32) | `nvrhi.h:1746-1747` |
-| Pipeline flag `allowOpacityMicromaps` (state objects only — unused here) | `nvrhi.h:2978`, `d3d12-raytracing.cpp:1751-1754` |
+| Pipeline flag `allowOpacityMicromaps` — upstream only consumes it for ray-tracing state objects (`d3d12-raytracing.cpp:1751-1754`); the fork also maps it onto compute/graphics pipelines, see §5.3 | `nvrhi.h:2978` |
 
 The build switch to flip, next to the existing nvrhi options at `CMakeLists.txt:158-160`:
 
@@ -210,12 +210,36 @@ All three OMM debug views can be built from these: one new debug pass modelled o
 2. **No Agility SDK means the runtime is whatever Windows ships.** An older `D3D12Core.dll` reports a lower
    tier, so the feature must degrade gracefully (feature query gate; simply not attaching OMM).
 3. **Ray queries, not hit groups.** OMM works through `RayQuery` here: hardware filters candidates, our
-   existing alpha test handles "unknown" ones. `allowOpacityMicromaps` / 
-   `D3D12_RAYTRACING_PIPELINE_FLAG_ALLOW_OPACITY_MICROMAPS` apply to state objects we never create.
+   existing alpha test handles "unknown" ones. `D3D12_RAYTRACING_PIPELINE_FLAG_ALLOW_OPACITY_MICROMAPS`
+   applies to state objects we never create.
 4. **OMM has no mips.** At distance a subdiv-6 mask against a minified texture can alias; the D3D12 sample
    notes exactly this. Mitigation: LOD0-only masks first, lower `max_level` for small instances.
 5. **`ForceOMM2State`** (`InstanceFlags::ForceOMM2State`) makes 4-state data behave as 2-state at traversal
    time — a quality/perf knob and an A/B switch for debugging.
+
+### 5.3 Ray-query opt-in at shader model 6.8 (measured)
+
+`RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS` is a **template parameter as of shader model 6.9**, and DXC rejects
+both it and `RAY_FLAG_FORCE_OMM_2_STATE` at `--shader-model 6_8` ("introduced in shader model 6.9"). That
+looked like an Agility SDK / SM 6.9 requirement. It is not: the DXR spec ("RayQuery flags on pre Shader
+Model 6.9 shaders") defines an API-level opt-in for exactly this case:
+
+| Level | Flag |
+|---|---|
+| pipeline (`CreateComputePipelineState`, `CreateGraphicsPipelineState`, `CreatePipelineState`) | `D3D12_PIPELINE_STATE_FLAG_RAYQUERY_ALLOW_OPACITY_MICROMAPS_ON_PRE_SM69_SHADERS` (0x80) |
+| state object (`CreateStateObject`) | `D3D12_STATE_OBJECT_FLAG_RAYQUERY_ALLOW_OPACITY_MICROMAPS_ON_PRE_SM69_SHADERS` (0x800) |
+
+Because all ray tracing here is inline `RayQuery` inside compute passes, the pipeline-level flag is the one
+that matters. nvrhi upstream never set it — `allowOpacityMicromaps` reached only ray-tracing state objects,
+and `Device::createPipelineState` for compute/graphics/meshlet passed no `D3D12_PIPELINE_STATE_FLAGS` at
+all. The fork closes that gap (`d3d12-backend.h` constant, `d3d12-compute.cpp` application, both wrapped in
+`[rlaw]` markers); the vendored DirectX-Headers stop before the enum value, so the backend carries the
+spec's `0x80` literal with the name in a comment.
+
+Verified on this machine: `Feature::RayTracingOpacityMicromap` is `true`, the flag is accepted by
+D3D12Core 10.0.26100.9818, and `--rhidebug` reports no messages. **No Agility SDK, no SM 6.9.** The
+6.9-only `RAY_FLAG_FORCE_OMM_2_STATE` is replaced by `D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OMM_2_STATE`
+(`InstanceFlags::ForceOMM2State`), which has no shader model requirement.
 
 ---
 

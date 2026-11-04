@@ -136,3 +136,7 @@ src/shaders/srrhi
 src/shaders/ShaderIDs.h
 src/srrhi.h
 src/FidelityFX
+
+# Imported from the installed RenderDoc by CMake at configure time (see the RenderDoc API header block in
+# CMakeLists.txt), never vendored: it describes one machine's installation.
+external/renderdoc/

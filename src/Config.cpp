@@ -50,6 +50,30 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_DisableSamplerFeedback = true;
             SDL_Log("[Config] Sampler feedback disabled via command line");
         }
+        else if (std::strcmp(arg, "--renderdoc") == 0)
+        {
+            s_Instance.m_bRenderDoc = true;
+            SDL_Log("[Config] RenderDoc enabled via command line");
+        }
+        else if (std::strncmp(arg, "--renderdoc=", 12) == 0)
+        {
+            s_Instance.m_bRenderDoc = true;
+            s_Instance.m_RenderDocDllPath = arg + 12;
+            SDL_Log("[Config] RenderDoc enabled via command line, dll: %s", s_Instance.m_RenderDocDllPath.c_str());
+        }
+        else if (std::strcmp(arg, "--renderdoc-capture-frame") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_bRenderDoc = true;
+                s_Instance.m_RenderDocCaptureFrame = std::atoi(argv[++i]);
+                SDL_Log("[Config] RenderDoc will capture frame %d and exit", s_Instance.m_RenderDocCaptureFrame);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --renderdoc-capture-frame", "[Config] Missing value for --renderdoc-capture-frame");
+            }
+        }
         else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0)
         {
             SDL_Log("Hobby Renderer - Command Line Options:");
@@ -59,6 +83,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --execute-per-pass-and-wait      Wait for idle after each pass execution");
             SDL_Log("  --disable-rendergraph-aliasing   Disable render graph aliasing");
             SDL_Log("  --disable-sampler-feedback       Disable sampler feedback (streaming requests the finest mip)");
+            SDL_Log("  --renderdoc[=<path>]             Load renderdoc.dll for in-app captures (before the device exists)");
+            SDL_Log("  --renderdoc-capture-frame <n>    Capture frame n and exit (implies --renderdoc)");
             SDL_Log("  --scene <path>                   Load the specified scene file");
             SDL_Log("  --help, -h                       Show this help message");
         }

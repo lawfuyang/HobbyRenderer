@@ -425,6 +425,11 @@ public:
     bool m_bEnableOmm = true;     // User toggle; masks stay attached, traversal-side disabling needs a BLAS rebuild
     int  m_OmmDebugMode = 0;      // 0 = off, 1 = texel classification, 2 = micromap grid, 3 = candidate heatmap
 
+    // RenderDoc in-app capture: the panel requests one, the frame loop brackets the next frame with it, and
+    // the newest written path is reported back in the panel.
+    bool m_bRenderDocCaptureRequested = false;
+    std::string m_RenderDocLastCapturePath;
+
     // Environment Lighting settings
     bool m_EnableSky = true;
 
