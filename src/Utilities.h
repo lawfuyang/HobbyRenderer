@@ -25,6 +25,9 @@ std::vector<uint8_t> ReadBinaryFile(const std::filesystem::path& path);
 
 uint32_t HashToUint(size_t hash);
 
+// Folds a byte run into a running hash so several buffers can be digested together.
+size_t HashBytes(size_t hash, const void* data, size_t size);
+
 void ChooseWindowSize(int* outWidth, int* outHeight);
 
 struct SimpleTimer

@@ -18,6 +18,6 @@ struct OmmBakeInput
 
 // Subdivides and rasterizes one LOD's triangles against the alpha texture, compacts the result, and fills the
 // structures the GPU build consumes. When pTexelStats is given it also classifies the bake mip's texels for the
-// debug view. Returns false when there is nothing to bake.
-[[nodiscard]] bool BakeLod(const OmmBakeInput& input, const OmmBakeParams& params, OmmLodData& out,
-                           OmmDebugTexelStats* pTexelStats = nullptr);
+// debug view. Returns false when there is nothing to bake, which the caller sees as an empty out.m_Data.
+bool BakeLod(const OmmBakeInput& input, const OmmBakeParams& params, OmmLodData& out,
+             OmmDebugTexelStats* pTexelStats = nullptr);

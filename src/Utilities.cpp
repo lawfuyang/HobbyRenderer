@@ -176,6 +176,15 @@ uint32_t HashToUint(size_t hash)
     return uint32_t(hash ^ (hash >> 32));
 }
 
+size_t HashBytes(size_t hash, const void* data, size_t size)
+{
+    if (size == 0)
+        return hash;
+
+    const std::string_view bytes(static_cast<const char*>(data), size);
+    return hash * 1099511628211ull + std::hash<std::string_view>{}(bytes);
+}
+
 void ChooseWindowSize(int* outWidth, int* outHeight)
 {
     int windowW = 1280;

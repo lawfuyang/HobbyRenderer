@@ -36,6 +36,12 @@ namespace
         stats.m_Height = height;
         stats.m_Class.assign(alpha.size(), 0);
 
+        // Counters describe this texture only: the caller classifies one primitive''s texture and reports it, so
+        // accumulating across calls would divide a multi-texture total by a single texture''s texel count.
+        stats.m_OpaqueCount = 0;
+        stats.m_TransparentCount = 0;
+        stats.m_MixedCount = 0;
+
         for (uint32_t y = 0; y < height; ++y)
         {
             for (uint32_t x = 0; x < width; ++x)
@@ -127,6 +133,8 @@ bool BakeLod(const OmmBakeInput& input, const OmmBakeParams& params, OmmLodData&
 
     std::vector<uint8_t> data(dataSize, 0);
 
+    // Sequential on purpose: BakeLod is one unit of work that callers hand to a parallel loop, so fanning out here
+    // as well would oversubscribe the machine and put the same entries on every core twice.
     for (size_t i = 0; i < ommCount; ++i)
     {
         const uint32_t triangle = sources[i];
