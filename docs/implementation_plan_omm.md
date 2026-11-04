@@ -41,7 +41,7 @@ New directory `src/Omm/` (mirrors how `src/Streaming/` groups the streaming syst
 struct OmmLodData                       // one per (primitive, LOD)
 {
     std::vector<nvrhi::rt::OpacityMicromapUsageCount> m_Counts;  // histogram, needed by the GPU build
-    std::vector<uint32_t> m_PerOmmDescs; // packed: (offset << 4) | subdivisionLevel   (niagara scene.cpp:1021)
+    std::vector<OmmPerOmmDesc> m_PerOmmDescs; // D3D12_RAYTRACING_OPACITY_MICROMAP_DESC: {byteOffset, level:16 | format:16}
     std::vector<int32_t>  m_Indices;     // one per triangle: mask index or special -4..-1
     std::vector<uint8_t>  m_Data;        // compacted micro-triangle states
     uint32_t m_MaxMaskIndex = 0;
