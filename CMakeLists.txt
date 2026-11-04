@@ -158,6 +158,9 @@ set(DXC_EXE "${DXC_INSTALL_DIR}/bin/x64/dxc.exe")
 set(NVRHI_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
 set(NVRHI_WITH_DX12 ON CACHE BOOL "" FORCE)
+# Opacity micromaps (DXR 1.2). The device must also report D3D12_RAYTRACING_TIER_1_2 at runtime;
+# Renderer::Initialize logs that, and everything OMM related is gated on it.
+set(NVRHI_D3D12_WITH_DXR12_OPACITY_MICROMAP ON CACHE BOOL "" FORCE)
 
 # ---------------------------------------------------------------------------
 # MathLib (ML)

@@ -370,6 +370,10 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::Meshlets));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayQuery));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingAccelStruct));
+
+    // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
+    m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
+    SDL_Log("[Init] Opacity micromaps: %s", m_bOmmSupported ? "supported" : "unsupported");
     // Sampler feedback drives tiled-texture streaming, but it is optional: capture
     // tools such as RenderDoc do not implement it, so fall back to synthesising the
     // feedback map instead of asserting. See IsSamplerFeedbackEnabled().

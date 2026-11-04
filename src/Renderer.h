@@ -420,6 +420,11 @@ public:
     float m_TAASharpness = 0.0f;
     float m_PrevFrameExposure = 1.0f; // Previous frame's exposure multiplier (readback from GPU)
 
+    // Opacity micromaps (OMM): baked per primitive per LOD, attached to the BLAS.
+    bool m_bOmmSupported = false; // Device capability, set during Initialize
+    bool m_bEnableOmm = true;     // User toggle; masks stay attached, traversal-side disabling needs a BLAS rebuild
+    int  m_OmmDebugMode = 0;      // 0 = off, 1 = texel classification, 2 = micromap grid, 3 = candidate heatmap
+
     // Environment Lighting settings
     bool m_EnableSky = true;
 
