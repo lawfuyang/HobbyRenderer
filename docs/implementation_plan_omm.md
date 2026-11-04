@@ -135,8 +135,10 @@ Goal: turn (RT indices, UVs, alpha texture) into `OmmLodData` for one primitive,
 - Verify: counts sum to `width*height`; log the three percentages for a foliage texture (expect a large
   "mixed" fraction at subdiv-6 — if it is tiny, the classification is broken).
 
-**Exit criteria**: bake works for every MASK primitive of Bistro, produces deterministic bytes, and logs
-plausible statistics. No GPU work yet, nothing visible on screen.
+**Exit criteria (met)**: every masked Bistro primitive bakes (39 of 42 primitives, 107 LODs, 18,735 masks,
+7.7 MiB of mask data), the pass runs in parallel over the task scheduler (2.1 s against 4.97 s serial), and
+the digest the summary logs is identical across runs (`811da39c2ca43b7f`). The three skipped primitives have
+no CPU-readable alpha texture. No GPU work yet, nothing visible on screen.
 
 ---
 
@@ -171,7 +173,11 @@ plausible statistics. No GPU work yet, nothing visible on screen.
   switch). Cheaper alternative: nvrhi patch so `InstanceFlags::DisableOMMs` works — see T3.2.
 - Verify: toggling produces two visually similar images and two different candidate counts (T3.3).
 
-**Exit criteria**: masks exist on the GPU, attached to the BLAS, validation clean, toggle works.
+**Exit criteria (met)**: `src/Omm/OmmRuntime.cpp` builds 107 arrays in 0.10 s (7.7 MiB mask data, 0.7 MiB
+indices), per (primitive, LOD), and the BLAS geometry links them; `--rhidebug` on Bistro reports no
+messages. The panel's toggle rebuilds the acceleration structures, which was exercised by forcing the
+request once at frame 120 with the debug layer on (no messages, no crash). Letting traversal actually *use*
+the masks is Phase 3: no compute pipeline sets the pre-SM6.9 opt-in yet.
 
 ---
 

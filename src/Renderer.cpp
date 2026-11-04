@@ -563,6 +563,15 @@ void Renderer::Run()
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)
         m_ImGuiLayer.UpdateFrame();
 
+        // The panel runs before the passes are recorded and the swapchain image is only acquired, so a rebuild
+        // it asked for lands in this frame's command lists.
+        if (m_bOmmRebuildRequested)
+        {
+            m_bOmmRebuildRequested = false;
+            m_RHI->m_NvrhiDevice->waitForIdle();
+            m_Scene.BuildAccelerationStructures();
+        }
+
         // Update animations
         if (m_EnableAnimations)
         {

@@ -391,6 +391,26 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
+        // Opacity micromaps: the toggle relinks every BLAS, so it is a load-time cost rather than a frame knob.
+        if (ImGui::TreeNode("Opacity Micromaps"))
+        {
+            ImGui::BeginDisabled(!g_Renderer.m_bOmmSupported);
+            bool bEnableOmm = g_Renderer.m_bEnableOmm;
+            if (ImGui::Checkbox("Enable OMM", &bEnableOmm))
+            {
+                g_Renderer.m_bEnableOmm = bEnableOmm;
+                g_Renderer.m_bOmmRebuildRequested = true;
+            }
+            ImGui::EndDisabled();
+
+            if (!g_Renderer.m_bOmmSupported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("The device does not report Feature::RayTracingOpacityMicromap");
+            }
+
+            ImGui::TreePop();
+        }
+
         // Timings
         if (ImGui::TreeNode("Profiler"))
         {

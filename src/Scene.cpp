@@ -6,6 +6,7 @@
 #include "CommonResources.h"
 #include "Utilities.h"
 #include "Omm/OmmSceneBaker.h"
+#include "Omm/OmmRuntime.h"
 
 void Scene::LoadScene()
 {
@@ -58,6 +59,7 @@ void Scene::LoadScene()
     {
         OmmBakeParams ommParams;
         BakeSceneOmm(*this, allVerticesQuantized, allIndices, ommParams);
+        BuildSceneOmm(*this);
     }
 	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
@@ -79,6 +81,14 @@ void Scene::BuildAccelerationStructures()
 	nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 	ScopedCommandList scopedCmd{ cmd, "Build Scene Accel Structs" };
 
+	// The OMM toggle rebuilds these, so the previous build is released rather than asserted against.
+	for (Mesh& mesh : m_Meshes)
+	{
+		for (Primitive& primitive : mesh.m_Primitives)
+			primitive.m_BLAS.clear();
+	}
+	m_RTInstanceDescs.clear();
+
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build
     std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
 
@@ -88,7 +98,6 @@ void Scene::BuildAccelerationStructures()
 	{
 		for (Primitive& primitive : mesh.m_Primitives)
 		{
-			SDL_assert(primitive.m_BLAS.empty());
 			meshDataToPrimitive[primitive.m_MeshDataIndex] = &primitive;
 
 			const srrhi::MeshData& meshData = m_MeshData[primitive.m_MeshDataIndex];
@@ -116,6 +125,21 @@ void Scene::BuildAccelerationStructures()
 				geometryTriangle.indexCount = meshData.m_IndexCounts[lod];
 				geometryTriangle.vertexCount = primitive.m_VertexCount;
 				geometryTriangle.vertexStride = sizeof(srrhi::VertexQuantized);
+
+				// The masks are linked per geometry, so a LOD baked for this primitive rides along with its BLAS.
+				if (g_Renderer.m_bEnableOmm && lod < primitive.m_Omm.size() && primitive.m_Omm[lod].m_Array)
+				{
+					const OmmLodData& omm = primitive.m_Omm[lod];
+					SDL_assert(omm.m_IndexCount == geometryTriangle.indexCount);
+
+					geometryTriangle.setOpacityMicromap(omm.m_Array);
+					geometryTriangle.setOmmIndexBuffer(omm.m_IndexBuffer);
+					geometryTriangle.setOmmIndexBufferOffset(0);
+					geometryTriangle.setOmmIndexFormat(omm.m_Stats.m_bSixteenBitIndices ? nvrhi::Format::R16_UINT
+					                                                                : nvrhi::Format::R32_UINT);
+					geometryTriangle.setPOmmUsageCounts(omm.m_Counts.data());
+					geometryTriangle.setNumOmmUsageCounts(uint32_t(omm.m_Counts.size()));
+				}
 
 				geometryDesc.flags = nvrhi::rt::GeometryFlags::None; // can't be opaque since we have alpha tested materials that can be applied to this mesh
 				geometryDesc.geometryType = nvrhi::rt::GeometryType::Triangles;

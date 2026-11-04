@@ -421,9 +421,10 @@ public:
     float m_PrevFrameExposure = 1.0f; // Previous frame's exposure multiplier (readback from GPU)
 
     // Opacity micromaps (OMM): baked per primitive per LOD, attached to the BLAS.
-    bool m_bOmmSupported = false; // Device capability, set during Initialize
-    bool m_bEnableOmm = true;     // User toggle; masks stay attached, traversal-side disabling needs a BLAS rebuild
-    int  m_OmmDebugMode = 0;      // 0 = off, 1 = texel classification, 2 = micromap grid, 3 = candidate heatmap
+    bool m_bOmmSupported = false;        // Device capability, set during Initialize
+    bool m_bEnableOmm = true;            // User toggle; off rebuilds the BLASes without the micromap linkage
+    bool m_bOmmRebuildRequested = false; // Set by the panel, serviced by the frame loop
+    int  m_OmmDebugMode = 0;             // 0 = off, 1 = texel classification, 2 = micromap grid, 3 = candidate heatmap
 
     // RenderDoc in-app capture: the panel requests one, the frame loop brackets the next frame with it, and
     // the newest written path is reported back in the panel.
