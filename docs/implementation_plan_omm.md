@@ -94,8 +94,55 @@ no pipeline flags of any kind for compute/graphics, so the fork adds them (`[rla
 `InstanceFlags::ForceOMM2State` (`D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OMM_2_STATE`), which has no shader
 model requirement. See analysis §5.3.
 
-**Exit criteria (met)**: flag on, feature `true`, the pre-SM6.9 pipeline flag accepted with
-`--rhidebug` clean, no visual change.
+**Exit criteria (met, with a correction)**: flag on, feature `true`, `--rhidebug` clean, no visual change.
+The earlier note that the pre-SM6.9 pipeline flag is "accepted" was measured on a run in which no pipeline
+set it: setting it makes `CreateComputePipelineState` return E_INVALIDARG on this machine, see Phase 3.
+
+---
+
+### Phase 3 — Traversal correctness — **unblocked via the Agility SDK and shader model 6.9**
+
+The pre-SM6.9 pipeline flag (`D3D12_PIPELINE_STATE_FLAG_RAYQUERY_ALLOW_OPACITY_MICROMAPS_ON_PRE_SM69_SHADERS`,
+0x80, DXR spec v1.47) is rejected by the system runtime: `CreateComputePipelineState` returned E_INVALIDARG
+for every compute pipeline that set it, including passes with no reachable ray query. That is no longer the
+route taken. The spec's supported route is a shader-model-6.9 `RayQuery`, which takes the opt-in as its
+second template parameter:
+
+```hlsl
+RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
+```
+
+SM 6.9 needs a D3D12Core newer than the system one, so the build now ships the Agility SDK:
+
+- `CMakeLists.txt` downloads `Microsoft.Direct3D.D3D12` 1.620.1 into `external/AgilitySDK`, stages
+  `D3D12Core.dll` + `d3d12SDKLayers.dll` next to the executable, and puts its headers first for the exe.
+- `src/D3D12RHI.cpp` exports `D3D12SDKVersion = D3D12_SDK_VERSION` (620) and `D3D12SDKPath = ".\\"`, which is
+  what makes the process load the staged core instead of the system one.
+- `src/shaders/shaders.cfg` pins every entry at `-m 6_9`; the per-entry pins override the `--shaderModel`
+  default, so the two must agree.
+- Every ray query in the renderer (`RaytracingCommon.hlsli`, `CommonLighting.hlsli`, `RAB_LightSampling.hlsli`,
+  `RAB_VisibilityTest.hlsli`, `BrdfRayTracing.hlsl`) names `RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS`. This is
+  **required**, not optional: the scene BLASes carry OMM links, and traversing them from a ray query that did
+  not opt in is undefined behaviour.
+
+Measured on Bistro: `[Init] Opacity micromaps: supported`, 107 arrays built as before, a full scene renders
+with no NVRHI/assertion messages, and hiding the staged `D3D12Core.dll` reproduces the pre-Agility failure
+(`D3D12CreateDevice` refuses the adapter) — the positive control that the new core is the one in use. A/B
+screenshot of frame 8 with `--disable-omm`: mean absolute difference 2.0/255 per channel, no holes or black
+patches on the alpha-tested foliage.
+
+Open before T3.1/T3.3 can be *measured* rather than eyeballed:
+
+- `--rhidebug` now aborts while enabling the debug layer (exception `0x87A` from KERNELBASE, no layer
+  message) once the process has opted into an Agility core. Without the staged layers DLL the same call
+  returns `DXGI_ERROR_SDK_COMPONENT_MISSING` (0x887A002D), as expected for an app that asked for SDK 620.
+  Acquiring the controller through `D3D12GetInterface(CLSID_D3D12Debug)` instead of the legacy
+  `D3D12GetDebugInterface` did not change it. Needs its own investigation (layer/core version interop).
+- No candidate counter yet (T3.3), so "OMM changes traversal" is currently evidenced only by the A/B frame.
+- RenderDoc still cannot show the OMM stage: its D3D12 layer clamps `OPTIONS5.RaytracingTier` to 1.1, which
+  turns nvrhi's `RayTracingOpacityMicromap` gate off for capture runs.
+
+
 
 ---
 
@@ -179,9 +226,60 @@ messages. The panel's toggle rebuilds the acceleration structures, which was exe
 request once at frame 120 with the debug layer on (no messages, no crash). Letting traversal actually *use*
 the masks is Phase 3: no compute pipeline sets the pre-SM6.9 opt-in yet.
 
+#### Capture verification (rdc-tools, offline)
+
+Two captures of Bistro, analysed with `D:\Workspace\rdc-tools` (`rdc_analysis.py`), neither of which can
+show the OMM path — see "Why no capture contains the OMM stage" below.
+
+*Load stage* — `--renderdoc-capture-frame 0` (177 MB, `verify`: `problems: 0`). Frame 0 is the frame the
+load's command lists execute in, so the capture bracket now opens before `Scene::LoadScene`:
+`LoadTextures` (3029 `List_CopyTextureRegion`), `Upload MaterialConstants`, `Upload Scene Buffers`,
+`Upload Light Buffer`, **`Build Scene Accel Structs`** (1301 `List_BuildRaytracingAccelerationStructure`
+calls), `RTXDI::Initialize`, then the first frame's passes.
+
+*Frame 60* — `--renderdoc-capture-frame 60` (1.31 GB, `verify`: `problems: 0`, 14,081 chunks, 54
+draw/dispatch calls, 125 marker ranges). Every stage the engine declares is present with its shader entry
+point in the marker name: `GPUCulling_Culling_CSMain` / `GPUCulling_BuildIndirect_CSMain` (occlusion
+culling phases 1–2 for opaque, masked and transparent, plus `Build Indirect Arguments`), the four base-pass
+phases (`Base Pass Render (Phase 1/2) — Opaque / Opaque (Occluded) / Masked / Transparent`),
+`DeferredLighting_DeferredLighting_PSMain`, the full RTXDI chain (`GenerateViewZ`, `PrepareLights`,
+`PresampleLights`, `PresampleEnvironmentMap`, `PresampleReGIR`, `GenerateInitialSamples`,
+`TemporalResampling`, `SpatialResampling`, `ShadeSamples`, `CompositingPass`), SHARC
+(`SHARCUpdate`/`SharcResolve`/`SharcIndirectQuery`), `TLAS Update`/`TLAS Patch`, the NRD REBLUR chain
+(7 sub-passes), HZB, SPD mip chains, bloom (prefilter/downsample/upsample/composite), luminance histogram,
+exposure adaptation, tonemapping, FSR3 TAA and the sky pass.
+
+Verdict-producing checks on that frame: `hazards` 10 findings / 8 distinct, `samplers` 0 arithmetic
+verdicts (26 samplers, 28 pairs, every reachable mip range satisfied), `rootsig-check` 0 certain / 7
+question. Every `hazards` finding has the same shape — one SRV plus ten UAVs all from `rp1 (table …)`, i.e.
+a bindless descriptor *range* counted as if every descriptor in it were bound, on render-graph transients
+(`HZB`, `OpaqueColorTexture`, `RTXDI_EnvLightPDF`, `RTXDI_LocalLight…`). The earlier Cornell capture
+reports the identical four-shape set, so it is the analyser's bindless artefact and not something these
+changes introduced; the OMM work adds no draw or dispatch to the frame.
+
+*Sponza, frame 60* — `Sponza_capture.rdc` (176 MB, `verify`: `problems: 0`, 5408 chunks, 46 draw/dispatch
+calls, 108 marker ranges): the same stage set (culling phases 1–2 for opaque and masked, both base-pass
+phases, TLAS update/patch, HZB, the REBLUR chain, TAA, exposure adaptation, HDR post-processing) with
+`hazards` 6 findings / 4 distinct (same bindless shape), `samplers` 0 verdicts, `rootsig-check` 0 certain.
+
+**Why no capture contains the OMM stage.** `Feature::RayTracingOpacityMicromap` is answered by
+`m_Options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_2` (`external/nvrhi/src/d3d12/d3d12-device.cpp:260`),
+and RenderDoc's `WrappedID3D12Device::CheckFeatureSupport` clamps `D3D12_FEATURE_D3D12_OPTIONS5`'s
+`RaytracingTier` to `D3D12_RAYTRACING_TIER_1_1` ("don't support DXR 1.2") — it also forces sampler feedback
+to not-supported and zeroes work graphs. So with `renderdoc.dll` in the process the log reads
+`[Init] Opacity micromaps: unsupported`, the bake and array build are skipped, and no BLAS is linked to a
+micromap. Measured differentially on the same binary: `supported` without `--renderdoc`, `unsupported`
+with it. The OMM stage is therefore verified by its own logs, the bake digest and a clean `--rhidebug`,
+not by a capture.
+
+
 ---
 
 ### Phase 3 — Traversal correctness
+
+**Unblocked**: traversal now opts in through shader model 6.9's `RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS` on the
+Agility SDK runtime — see the note at the end of Phase 0 for the wiring, the measurements, and the two open
+items (the `--rhidebug` abort and the missing candidate counter).
 
 **T3.1 — Confirm the alpha test still runs for the right candidates.**
 - With OMM attached, hardware skips fully-transparent micro-triangles and auto-commits fully-opaque ones;
