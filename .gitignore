@@ -140,3 +140,6 @@ src/FidelityFX
 # Imported from the installed RenderDoc by CMake at configure time (see the RenderDoc API header block in
 # CMakeLists.txt), never vendored: it describes one machine's installation.
 external/renderdoc/
+
+# Unpacked WinPixEventRuntime package (CMakeLists.txt downloads the newest published version).
+external/WinPixEventRuntime/

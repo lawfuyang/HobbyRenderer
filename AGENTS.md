@@ -65,6 +65,15 @@ Resource Binding, nvrhi, srrhi, ShaderIDs, and the full build pipeline lives in
 **[PIPELINE.md](PIPELINE.md)** — refer to that file for comprehensive pipeline and
 codebase usage documentation.
 
+# Debugging with captures
+
+To take, read, process or debug a PIX `.wpix` capture, follow
+**[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)** — capture switches,
+every `pixtool.exe` command with examples, recipes for event lists / hardware counters /
+per-pass images, the known tool bugs on this machine, and what needs the PIX GUI instead.
+RenderDoc captures are the other half: `--renderdoc*` switches, see the same document's
+introduction.
+
 ### Quick Reference
 
 | Step | Command | Description |

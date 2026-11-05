@@ -320,6 +320,88 @@ else()
                    "RenderDoc capture support is disabled")
 endif()
 
+# ----------------------------------------------------------------------------
+# PIX (WinPixEventRuntime markers + programmatic GPU captures)
+#
+# Two halves, found separately:
+#
+#  - WinPixEventRuntime, whose pix3.h carries PIXBeginEvent/PIXEndEvent and the programmatic capture pair
+#    PIXBeginCapture2/PIXEndCapture. Its newest version is read from nuget.org's flat-container index at
+#    configure time and unpacked into external/WinPixEventRuntime (untracked, like the other downloads). When
+#    the index cannot be reached the version pinned below is used, so an offline configure still builds.
+#  - the PIX installation, which carries WinPixGpuCapturer.dll - the module PIXBeginCapture2 hands the
+#    capture to, and it has to sit next to the executable - and pixtool.exe, which reads captures back. The
+#    newest "Microsoft PIX/<version>" directory wins unless -DPIX_DIR points elsewhere.
+#
+# Either half missing keeps the build working: HOBBY_RENDERER_WITH_PIX stays undefined, src/PixCapture.cpp
+# compiles to no-ops, and nvrhi keeps emitting markers through the Windows SDK's pix.h.
+# ----------------------------------------------------------------------------
+set(PIX_DIR "" CACHE PATH "PIX installation directory (holds pixtool.exe and WinPixGpuCapturer.dll)")
+set(WINPIX_EVENT_RUNTIME_VERSION "" CACHE STRING "WinPixEventRuntime version; empty = newest on nuget.org")
+
+set(_winpixFallbackVersion "1.0.240308001")
+set(_winpixVersion "${WINPIX_EVENT_RUNTIME_VERSION}")
+if(NOT _winpixVersion)
+    set(_winpixIndexFile "${CMAKE_BINARY_DIR}/winpixeventruntime-versions.json")
+    file(DOWNLOAD "https://api.nuget.org/v3-flatcontainer/winpixeventruntime/index.json" "${_winpixIndexFile}"
+        STATUS _winpixIndexStatus TIMEOUT 20)
+    list(GET _winpixIndexStatus 0 _winpixIndexResult)
+    if(_winpixIndexResult EQUAL 0)
+        file(READ "${_winpixIndexFile}" _winpixIndex)
+        string(REGEX MATCHALL "[0-9]+\\.[0-9]+\\.[0-9]+" _winpixVersions "${_winpixIndex}")
+        list(LENGTH _winpixVersions _winpixVersionCount)
+        math(EXPR _winpixVersionLast "${_winpixVersionCount} - 1")
+        list(GET _winpixVersions ${_winpixVersionLast} _winpixVersion)
+        message(STATUS "WinPixEventRuntime: newest published version is ${_winpixVersion}")
+    else()
+        set(_winpixVersion "${_winpixFallbackVersion}")
+        message(STATUS "WinPixEventRuntime: nuget.org index unavailable, falling back to ${_winpixVersion}")
+    endif()
+endif()
+
+set(WINPIX_EVENT_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/external/WinPixEventRuntime")
+download_library("WinPixEventRuntime" "${_winpixVersion}"
+    "https://api.nuget.org/v3-flatcontainer/winpixeventruntime/${_winpixVersion}/winpixeventruntime.${_winpixVersion}.nupkg"
+    "WinPixEventRuntime-*")
+set(WINPIX_EVENT_RUNTIME_INCLUDE_DIR "${WINPIX_EVENT_RUNTIME_DIR}/Include/WinPixEventRuntime")
+set(WINPIX_EVENT_RUNTIME_X64_DIR "${WINPIX_EVENT_RUNTIME_DIR}/bin/x64")
+
+if(EXISTS "${WINPIX_EVENT_RUNTIME_INCLUDE_DIR}/pix3.h" AND EXISTS "${WINPIX_EVENT_RUNTIME_X64_DIR}/WinPixEventRuntime.lib")
+    set(HOBBY_RENDERER_WITH_PIX ON)
+    message(STATUS "WinPixEventRuntime ${_winpixVersion}: ${WINPIX_EVENT_RUNTIME_DIR}")
+    stage_dll("${WINPIX_EVENT_RUNTIME_X64_DIR}/WinPixEventRuntime.dll" "${CMAKE_SOURCE_DIR}/bin/WinPixEventRuntime.dll")
+else()
+    set(HOBBY_RENDERER_WITH_PIX OFF)
+    message(WARNING "WinPixEventRuntime headers or libs missing in ${WINPIX_EVENT_RUNTIME_DIR}; "
+                    "PIX capture support is disabled")
+endif()
+
+if(NOT PIX_DIR)
+    file(GLOB _pixInstallCandidates LIST_DIRECTORIES true "$ENV{ProgramFiles}/Microsoft PIX/*")
+    foreach(_pixCandidate IN LISTS _pixInstallCandidates)
+        if(EXISTS "${_pixCandidate}/pixtool.exe")
+            list(APPEND _pixInstallHits "${_pixCandidate}")
+        endif()
+    endforeach()
+    if(_pixInstallHits)
+        list(SORT _pixInstallHits)
+        list(LENGTH _pixInstallHits _pixHitCount)
+        math(EXPR _pixHitLast "${_pixHitCount} - 1")
+        list(GET _pixInstallHits ${_pixHitLast} PIX_DIR)
+    endif()
+endif()
+
+if(PIX_DIR AND EXISTS "${PIX_DIR}/WinPixGpuCapturer.dll")
+    # PIXBeginCapture2 loads the capturer by name, so a copy has to sit next to the executable.
+    stage_dll("${PIX_DIR}/WinPixGpuCapturer.dll" "${CMAKE_SOURCE_DIR}/bin/WinPixGpuCapturer.dll")
+    message(STATUS "PIX installation: ${PIX_DIR}")
+elseif(PIX_DIR)
+    message(STATUS "PIX installation at ${PIX_DIR} has no WinPixGpuCapturer.dll; programmatic captures will fail")
+else()
+    message(STATUS "Microsoft PIX not found (searched: $ENV{ProgramFiles}/Microsoft PIX/*); "
+                   "programmatic captures stay unavailable")
+endif()
+
 # Find all C++ source files in src directory
 file(GLOB_RECURSE SOURCES 
     "src/*.cpp"
@@ -350,6 +432,22 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${AGILITY_SDK_INSTALL_DIR}/b
 if(HOBBY_RENDERER_WITH_RENDERDOC)
     target_include_directories(${PROJECT_NAME} PRIVATE ${RENDERDOC_IMPORT_DIR})
     target_compile_definitions(${PROJECT_NAME} PRIVATE HOBBY_RENDERER_WITH_RENDERDOC)
+endif()
+
+# WinPixEventRuntime: the marker/capture entry points behind HOBBY_RENDERER_WITH_PIX. USE_PIX is what turns
+# pix3.h's inline no-ops into calls into the runtime, so it is defined for release builds too.
+if(HOBBY_RENDERER_WITH_PIX)
+    target_include_directories(${PROJECT_NAME} PRIVATE "${WINPIX_EVENT_RUNTIME_INCLUDE_DIR}")
+    target_link_directories(${PROJECT_NAME} PRIVATE "${WINPIX_EVENT_RUNTIME_X64_DIR}")
+    target_link_libraries(${PROJECT_NAME} PRIVATE WinPixEventRuntime)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HOBBY_RENDERER_WITH_PIX USE_PIX)
+
+    # nvrhi's beginMarker/endMarker belong to the same runtime, so the events PIX shows are exactly the
+    # scopes this project opens. Without the runtime nvrhi keeps the SDK's legacy pix.h path.
+    if(TARGET nvrhi_d3d12)
+        target_include_directories(nvrhi_d3d12 PRIVATE "${WINPIX_EVENT_RUNTIME_INCLUDE_DIR}")
+        target_compile_definitions(nvrhi_d3d12 PRIVATE USE_PIX NVRHI_WITH_WINPIX_EVENT_RUNTIME)
+    endif()
 endif()
 
 # ImGui Include
@@ -400,6 +498,27 @@ target_link_libraries(${PROJECT_NAME} PRIVATE "${FSR_SDK_BIN_DIR}/amd_fidelityfx
 # TTM
 target_include_directories(${PROJECT_NAME} PRIVATE "${RTXTSTTM_INCLUDE_DIR}")
 target_link_libraries(${PROJECT_NAME} PRIVATE rtxts-ttm)
+
+# ============================================================================
+# PixProbe - reads captures through the PIX API (tools/PixProbe/main.cpp)
+#
+# The PIX API is loaded at run time (the tool resolves the installation itself and calls PixCreateFactory
+# from pixapi.dll), so only the headers are needed here. See docs/pix-capture-debugging.md.
+# ============================================================================
+if(PIX_DIR AND EXISTS "${PIX_DIR}/include/PixApi.h")
+    add_executable(PixProbe tools/PixProbe/main.cpp)
+    target_include_directories(PixProbe PRIVATE "${PIX_DIR}/include")
+    # The PIX headers name D3D12 types the Windows SDK does not ship yet.
+    target_include_directories(PixProbe PRIVATE "${AGILITY_SDK_INSTALL_DIR}/build/native/include")
+    target_compile_definitions(PixProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    set_target_properties(PixProbe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/bin"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/bin")
+    message(STATUS "PixProbe: enabled (headers from ${PIX_DIR}/include)")
+else()
+    message(STATUS "PixProbe: disabled (no PixApi.h under the found PIX installation)")
+endif()
 
 # ============================================================================
 # ShaderMake Integration (offline HLSL compilation)
