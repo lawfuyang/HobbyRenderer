@@ -138,6 +138,18 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# Agility SDK
+# ---------------------------------------------------------------------------
+set(AGILITY_SDK_VERSION "1.620.1")
+set(AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${AGILITY_SDK_VERSION}")
+download_library("AgilitySDK" "${AGILITY_SDK_VERSION}" "${AGILITY_SDK_URL}" "AgilitySDK-*")
+set(AGILITY_SDK_INSTALL_DIR "${CMAKE_SOURCE_DIR}/external/AgilitySDK")
+if(WIN32)
+    stage_dll("${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/D3D12Core.dll" "${CMAKE_SOURCE_DIR}/bin/D3D12Core.dll")
+    stage_dll("${AGILITY_SDK_INSTALL_DIR}/build/native/bin/x64/d3d12SDKLayers.dll" "${CMAKE_SOURCE_DIR}/bin/d3d12SDKLayers.dll")
+endif()
+
+# ---------------------------------------------------------------------------
 # cgltf (glTF loader) - downloaded into external/cgltf and compiled
 # ---------------------------------------------------------------------------
 set(CGLTF_VERSION "1.15")
@@ -330,6 +342,9 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE src/pch.h)
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders/rtxdi/SharedShaderInclude/SharedShaderInclude)
+# The Agility headers, so D3D12RHI.cpp exports the SDK version of the D3D12Core.dll staged above rather than
+# the Windows SDK's older one.
+target_include_directories(${PROJECT_NAME} PRIVATE "${AGILITY_SDK_INSTALL_DIR}/build/native/include")
 
 # RenderDoc's in-application API header, imported above
 if(HOBBY_RENDERER_WITH_RENDERDOC)
@@ -426,7 +441,7 @@ add_custom_target(build_shaders
             -o "${SHADER_OUTPUT_DIR_DXIL}"
             --embedPDB
             --compiler "${DXC_EXE}"
-            --shaderModel 6_8
+            --shaderModel 6_9
             --hlsl2021
             -D WITH_NRD=1
             -X "-enable-16bit-types"
@@ -451,7 +466,7 @@ add_custom_target(build_shaders
             --embedPDB
             --compiler "${DXC_EXE}"
             --allResourcesBound
-            --shaderModel 6_8
+            --shaderModel 6_9
             --hlsl2021
             --include "${NRD_SRC_DIR}/Shaders"
             --include "${ML_SRC_DIR}"

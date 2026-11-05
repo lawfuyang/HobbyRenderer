@@ -1,6 +1,6 @@
 
 
-#include <directx/d3d12.h>
+#include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <directx/d3dx12_check_feature_support.h>
@@ -9,6 +9,12 @@
 
 #include "GraphicRHI.h"
 #include "Config.h"
+
+// Opts the process into the D3D12Core.dll staged next to the executable (CMakeLists' AGILITY_SDK_VERSION)
+// instead of the system one. Both must agree: the runtime rejects an SDK version it does not implement, and
+// shader model 6.9 — the model RayQuery needs for RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS — comes with 1.619+.
+extern "C" { __declspec(dllexport) extern const UINT D3D12SDKVersion = D3D12_SDK_VERSION; }
+extern "C" { __declspec(dllexport) extern const char* D3D12SDKPath = ".\\"; }
 
 using Microsoft::WRL::ComPtr;
 
@@ -40,8 +46,10 @@ public:
 
         if (Config::Get().m_EnableValidation)
         {
+            // D3D12GetInterface rather than the legacy D3D12GetDebugInterface: the latter resolves against the
+            // system runtime, which raises 0x87A once the process has opted into an Agility D3D12Core.
             ComPtr<ID3D12Debug> debugController;
-            const HRESULT hr = D3D12GetDebugInterface(IID_PPV_ARGS(&debugController));
+            const HRESULT hr = D3D12GetInterface(CLSID_D3D12Debug, IID_PPV_ARGS(&debugController));
             if (SUCCEEDED(hr))
             {
                 debugController->EnableDebugLayer();
@@ -61,7 +69,7 @@ public:
             }
             else
             {
-                SDL_LOG_ASSERT_FAIL("D3D12GetDebugInterface failed", "D3D12GetDebugInterface failed: 0x%08X", hr);
+                SDL_LOG_ASSERT_FAIL("D3D12GetInterface(CLSID_D3D12Debug) failed", "D3D12GetInterface(CLSID_D3D12Debug) failed: 0x%08X", hr);
             }
         }
 
@@ -144,6 +152,12 @@ public:
                 // Ignore specific warnings
                 D3D12_MESSAGE_ID deniedMessages[] = {
                     D3D12_MESSAGE_ID_CREATERESOURCE_STATE_IGNORED,
+                    // nvrhi asks every capability question through ID3D12Device::CheckFeatureSupport, which the
+                    // Agility debug layer flags as superseded by ID3D12Device16::CheckFeatureSupport1 plus an
+                    // explicit SDK version. The calls are nvrhi's, so there is nothing to fix on this side; only
+                    // the capability *reporting* is clamped by CheckFeatureSupport1, not the runtime's feature
+                    // support, so muting it hides no capability problem. Drop this entry once nvrhi moves over.
+                    D3D12_MESSAGE_ID_DEPRECATED_API,
                 };
                 D3D12_INFO_QUEUE_FILTER filter = {};
                 filter.DenyList.NumIDs = _countof(deniedMessages);
