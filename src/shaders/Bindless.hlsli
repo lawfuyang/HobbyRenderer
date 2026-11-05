@@ -44,6 +44,17 @@ void WriteStreamingFeedback(Texture2D tex, SamplerState sam, float2 uv, uint fee
     }
 }
 
+// Coarsest mip level whose tiles are guaranteed mapped at this uv, read from the R8_UINT MinMip residency
+// texture. frac() handles tiling/repeating UVs (uv > 1.0) the way the WRAP sampler does.
+uint LoadMinResidentMip(uint minMipIndex, float2 uv, uint2 minMipDims)
+{
+    Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
+    float2 wrappedUV = frac(uv);
+    uint2 mcoord = uint2(wrappedUV * float2(minMipDims));
+    mcoord = min(mcoord, minMipDims - 1);  // clamp for uv == 1.0
+    return minMipTex.Load(uint3(mcoord, 0));
+}
+
 // Streaming-aware variant: if minMipIndex > 0 (streaming enabled for this texture),
 // performs an opportunistic sample with MinMip fallback and writes sampler feedback.
 // When minMipIndex == 0, degrades to a regular Sample() with no feedback write.
@@ -79,16 +90,7 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
 
     // Streaming path: read minMip FIRST and use it as MinLODClamp on the initial
     // sample.  This prevents the hardware from ever fetching an unmapped tile.
-    Texture2D<uint> minMipTex = ResourceDescriptorHeap[NonUniformResourceIndex(minMipIndex)];
-
-    // Load() reads the exact MinMip tile value at the integer coordinate
-    // corresponding to uv — no sampler needed, avoids R8_UINT sampler quirks.
-    // Apply frac() to handle tiling/repeating UVs (uv > 1.0), matching the
-    // WRAP sampler behaviour used when sampling the streaming texture.
-    float2 wrappedUV = frac(uv);
-    uint2 mcoord = uint2(wrappedUV * float2(minMipDims));
-    mcoord = min(mcoord, minMipDims - 1);  // clamp for uv == 1.0
-    uint minResidentMip = minMipTex.Load(uint3(mcoord, 0));
+    uint minResidentMip = LoadMinResidentMip(minMipIndex, uv, minMipDims);
 
     // Sample with minResidentMip as the MinLODClamp — the hardware will never
     // pick a finer mip than what is resident, so the result is always mapped.
@@ -111,6 +113,49 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
 
     WriteStreamingFeedback(tex, sam, uv, feedbackIndex, forcedMip);
     return color;
+}
+
+// Ray-tracing/compute variants of SampleBindlessStreamedTexture: the same residency clamp, at an explicit LOD
+// and without writing sampler feedback (a ray has no pixel to charge it to).
+//
+// Alpha tests must go through these, not through a plain SampleLevel/SampleGrad. A tile that is not mapped yet
+// reads back as zero, so an alpha-tested surface would report "transparent" to every shadow and GI ray until
+// streaming catches up with the camera — and only its shadows would be wrong, because the base pass clamps and
+// keeps drawing the surface itself.
+//
+// These deliberately sample WITHOUT a status operand. A status sample makes the hardware resolve the whole
+// footprint and report partial mapping, which is a slow path, and inside a ray-traversal loop (one alpha test per
+// alpha-tested triangle the ray crosses) that cost is multiplied by the number of candidates — a ray grazing a
+// dense canopy stalled the GPU for hundreds of milliseconds. Clamping the level to the MinMip texture is enough
+// on its own: that level's tiles are the ones streaming guarantees to be mapped.
+float4 SampleBindlessStreamedTextureLevel(
+    uint textureIndex, uint samplerIndex, uint minMipIndex, float2 uv, float lod, uint2 minMipDims)
+{
+    Texture2D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
+    SamplerState sam = SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
+
+    if (minMipIndex == srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK)
+        return tex.SampleLevel(sam, uv, lod);
+
+    // Asking for a finer mip than the resident one is what produces the zeros, so clamp the level up first.
+    const uint minResidentMip = LoadMinResidentMip(minMipIndex, uv, minMipDims);
+    const float level = max(max(lod, 0.0f), (float)minResidentMip);
+    return tex.SampleLevel(sam, uv, level);
+}
+
+float4 SampleBindlessStreamedTextureGrad(
+    uint textureIndex, uint samplerIndex, uint minMipIndex, float2 uv, float2 ddx_uv, float2 ddy_uv, uint2 minMipDims)
+{
+    Texture2D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
+    SamplerState sam = SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
+
+    if (minMipIndex == srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK)
+        return tex.SampleGrad(sam, uv, ddx_uv, ddy_uv);
+
+    // The clamp argument is the sampler's MinLOD, so the gradients still pick the anisotropic footprint but can
+    // never resolve to a mip whose tiles are not mapped.
+    const uint minResidentMip = LoadMinResidentMip(minMipIndex, uv, minMipDims);
+    return tex.SampleGrad(sam, uv, ddx_uv, ddy_uv, 0, (float)minResidentMip);
 }
 
 // Helper function to sample from bindless textures at a specific LOD level.

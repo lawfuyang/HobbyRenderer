@@ -387,7 +387,8 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
     ray.TMin      = kShadowBias;
     ray.TMax      = max(kShadowBias, maxDist - kShadowBias * 2.0f);
 
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | (bWithTransmission ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH)> q;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | (bWithTransmission ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH),
+             RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
     q.TraceRayInline(inputs.sceneAS, RAY_FLAG_NONE, 0xFF, ray);
 
     float transmission = 1.0f; // Accumulate transmission through translucent surfaces
@@ -428,7 +429,9 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
                     float alpha = mat.m_BaseColor.w;
                     if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
                     {
-                        alpha *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                        alpha *= SampleBindlessStreamedTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                                                    mat.m_AlbedoMinMipIndex, uvSample, 0.0f,
+                                                                    uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY)).w;
                     }
                     
                     float opacity = saturate(alpha * (1.0f - mat.m_TransmissionFactor));

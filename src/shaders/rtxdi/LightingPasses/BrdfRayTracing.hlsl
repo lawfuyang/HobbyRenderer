@@ -135,7 +135,7 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
     if (g_Const.sceneConstants.enableTransparentGeometry)
         instanceMask |= INSTANCE_MASK_TRANSPARENT;
 
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> rayQuery;
 
     rayQuery.TraceRayInline(SceneBVH, RAY_FLAG_NONE, instanceMask, ray);
 

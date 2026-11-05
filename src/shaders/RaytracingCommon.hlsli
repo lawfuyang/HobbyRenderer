@@ -1,4 +1,4 @@
-﻿#ifndef RAYTRACING_COMMON_HLSLI
+#ifndef RAYTRACING_COMMON_HLSLI
 #define RAYTRACING_COMMON_HLSLI
 
 #include "Bindless.hlsli"
@@ -131,7 +131,9 @@ bool AlphaTest(
         float alpha = mat.m_BaseColor.w;
         if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
         {
-            alpha *= SampleBindlessTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uv, lod).w;
+            alpha *= SampleBindlessStreamedTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                                        mat.m_AlbedoMinMipIndex, uv, lod,
+                                                        uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY)).w;
         }
         return alpha >= mat.m_AlphaCutoff;
     }
@@ -153,7 +155,9 @@ bool AlphaTestGrad(
         float alpha = mat.m_BaseColor.w;
         if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
         {
-            alpha *= SampleBindlessTextureGrad(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uv, ddx_uv, ddy_uv).w;
+            alpha *= SampleBindlessStreamedTextureGrad(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                                       mat.m_AlbedoMinMipIndex, uv, ddx_uv, ddy_uv,
+                                                       uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY)).w;
         }
         return alpha >= mat.m_AlphaCutoff;
     }
@@ -161,7 +165,7 @@ bool AlphaTestGrad(
     return true;
 }
 
-// ─── Shared inline ray tracing ───────────────────────────────────────────────
+// --- Shared inline ray tracing -----------------------------------------------
 // Standard ray trace with alpha mask/blend support. Used by PathTracer.
 // Scene resources are passed as parameters
 // because each shader binds them from different srrhi input namespaces.
@@ -176,7 +180,7 @@ bool TraceRayStandard(
     StructuredBuffer<uint> indices,
     StructuredBuffer<srrhi::VertexQuantized> vertices)
 {
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
     q.TraceRayInline(sceneAS, RAY_FLAG_NONE, 0xFF, ray);
 
     while (q.Proceed())
@@ -203,7 +207,9 @@ bool TraceRayStandard(
                 float alpha = mat.m_BaseColor.w;
                 if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
                 {
-                    alpha *= SampleBindlessTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uvSample).w;
+                    alpha *= SampleBindlessStreamedTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                                                mat.m_AlbedoMinMipIndex, uvSample, 0.0f,
+                                                                uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY)).w;
                 }
 
                 // For transmissive materials, always keep the hit and let the BSDF branch
@@ -286,7 +292,9 @@ PBRAttributes GetPBRAttributes(FullHitAttributes attr, srrhi::MaterialConstants 
     pbrAttr.alpha = mat.m_BaseColor.w;
     if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
     {
-        float4 albedoSample = SampleBindlessTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, attr.m_Uv, lod);
+        float4 albedoSample = SampleBindlessStreamedTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                                                 mat.m_AlbedoMinMipIndex, attr.m_Uv, lod,
+                                                                 uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY));
         pbrAttr.baseColor *= albedoSample.xyz;
         pbrAttr.alpha *= albedoSample.w;
     }

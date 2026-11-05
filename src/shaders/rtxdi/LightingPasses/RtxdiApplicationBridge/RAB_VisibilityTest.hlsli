@@ -49,7 +49,8 @@ bool GetConservativeVisibility(RaytracingAccelerationStructure accelStruct, RAB_
 {
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition);
 
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> rayQuery;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+             RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> rayQuery;
 
     rayQuery.TraceRayInline(accelStruct, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
 
@@ -108,7 +109,7 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure accelStruct, RAB_Surfa
 {
     RayDesc ray = SetupShadowRay(surface.worldPos, surface.normal, samplePosition, 0.01);
 
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> rayQuery;
     rayQuery.TraceRayInline(accelStruct, RAY_FLAG_NONE, 0xFF, ray);
 
     float3 throughput = 1.0f;

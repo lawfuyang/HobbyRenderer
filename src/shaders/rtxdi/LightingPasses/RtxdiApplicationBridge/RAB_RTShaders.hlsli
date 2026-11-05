@@ -29,7 +29,11 @@ bool considerTransparentMaterial(uint instanceIndex, uint geometryIndex, uint tr
     float4 baseColorSample = float4(1.0, 1.0, 1.0, 1.0);
     if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
     {
-        baseColorSample = SampleBindlessTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex, uv, 0);
+        // Residency-clamped: an unmapped tile reads 0, which would make every alpha-tested surface transparent to
+        // the rays that use this test until streaming catches up.
+        baseColorSample = SampleBindlessStreamedTextureLevel(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                                            mat.m_AlbedoMinMipIndex, uv, 0,
+                                                            uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY));
     }
 
     float alpha = mat.m_BaseColor.a * baseColorSample.a;
