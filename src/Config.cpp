@@ -259,7 +259,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --pix-capture-load               Take a PIX GPU capture of the scene load: micromap and BLAS builds (implies --pix)");
             SDL_Log("  --pix-capture-dir <dir>          Where PIX captures are written (default bin/captures/<scene>)");
             SDL_Log("  --screenshot-frame <n>           Write screenshot.jpg on frame n and exit");
-            SDL_Log("  --half-res-di                    Run RTXDI and NRD at half the render resolution");
+            SDL_Log("  --half-res-di                    Run RTXDI and NRD at half the render resolution (default)");
             SDL_Log("  --full-res-di                    Override: run RTXDI and NRD at full render resolution");
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");
             SDL_Log("  --hitch-log <ms>                 Log every frame slower than this with streaming/VRAM state");
