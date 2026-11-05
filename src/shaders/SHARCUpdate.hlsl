@@ -146,15 +146,19 @@ void SHARCUpdate_CSMain(uint2 sparseBlock : SV_DispatchThreadID)
     // ---- Trace path with signal back-propagation (SHARC loop) -----------------
     // Each iteration traces one segment.  SharcSetThroughput propagates the
     // segment throughput to all prior path vertices.  SharcUpdateHit returns
-    // false when the path stack is full (SHARC_PROPAGATION_DEPTH reached) or
-    // cache resampling terminates the path early.
+    // false only when cache resampling terminates the path, and resampling needs a
+    // resolved voxel at the hit point. A region the cache has not covered yet —
+    // geometry that has just come into view — has none, so there the path only ends
+    // when a ray happens to miss, and a ray bouncing between closed surfaces never
+    // does: the dispatch then waits on that single thread for hundreds of
+    // milliseconds. Hence the explicit segment bound.
     float3 surfPos   = worldPos;    // surface we're bouncing FROM
     float3 surfN     = N;
     float3 surfColor = baseColor;
     float  surfMetal = metallic;
     bool   firstHit  = true;        // first bounce uses SharcUpdateHit even on miss
 
-    while (true)
+    for (uint segment = 0; segment < srrhi::SHARCConsts::MAX_PATH_SEGMENTS; ++segment)
     {
         float3 rayDir     = SampleHemisphereCosine(NextFloat2(rng), surfN);
         if (dot(surfN, rayDir) <= 0.0f) return;

@@ -21,6 +21,7 @@ srinput SHARCConsts
     static const uint  LINEAR_BLOCK_SIZE        = 256;        // resolve pass thread-group size
     static const uint  ACCUMULATION_FRAME_NUM    = 60;       // temporal accumulation window (frames)
     static const uint  STALE_FRAME_NUM_MAX       = 64;        // frames before untouched entry is evicted
+    static const uint  MAX_PATH_SEGMENTS         = 8;        // hard bound on the update path length, see SHARCUpdate.hlsl
 };
 
 // ---------------------------------------------------------------------------
