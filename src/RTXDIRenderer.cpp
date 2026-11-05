@@ -126,16 +126,21 @@ static bool g_ReSTIRDI_HalfRes = true;
 // ReSTIR GI: moderate history, boiling filter on, no MIS.
 static void ApplyBalancedPreset()
 {
+    // Matches NVIDIA's FullSample "Medium" preset, which is that sample's own default
+    // (UserInterface.cpp: 8 ReGIR samples, one BRDF sample, raytraced temporal bias
+    // correction, 8 disocclusion boost samples).
+
     // ---- ReSTIR DI ----
     g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
     g_ReSTIRDI_InitialSamplingParams = rtxdi::GetDefaultReSTIRDIInitialSamplingParams();
     g_ReSTIRDI_InitialSamplingParams.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-    g_ReSTIRDI_NumLocalLightUniformSamples = 4;
-    g_ReSTIRDI_NumLocalLightPowerRISSamples = 4;
-    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 4;
+    g_ReSTIRDI_NumLocalLightUniformSamples = 8;
+    g_ReSTIRDI_NumLocalLightPowerRISSamples = 8;
+    g_ReSTIRDI_NumLocalLightReGIRRISSamples = 8;
     g_ReSTIRDI_InitialSamplingParams.numLocalLightSamples = g_ReSTIRDI_NumLocalLightReGIRRISSamples;
-    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 0;
+    g_ReSTIRDI_InitialSamplingParams.numBrdfSamples = 1;
     g_ReSTIRDI_InitialSamplingParams.numInfiniteLightSamples = 1;
+    g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 1u;
     g_ReSTIRDI_TemporalResamplingParams.enableVisibilityShortcut = 1u;
     g_ReSTIRDI_BoilingFilterParams.enableBoilingFilter = 1u;
     g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
@@ -148,12 +153,13 @@ static void ApplyBalancedPreset()
 
     // ---- ReSTIR GI ----
     g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+    g_ReSTIRGI_EnableSecondaryResampling = true;
 
     g_ReSTIRGI_TemporalParams = rtxdi::GetDefaultReSTIRGITemporalResamplingParams();
     g_ReSTIRGI_TemporalParams.maxHistoryLength              = 8;
     g_ReSTIRGI_TemporalParams.maxReservoirAge               = 30;
     g_ReSTIRGI_TemporalParams.enableFallbackSampling        = 1u;
-    g_ReSTIRGI_TemporalParams.enablePermutationSampling     = 0u;
+    g_ReSTIRGI_TemporalParams.enablePermutationSampling     = 1u;
     g_ReSTIRGI_TemporalParams.biasCorrectionMode            = RTXDI_GIBiasCorrectionMode::Basic;
     g_ReSTIRGI_TemporalParams.depthThreshold                = 0.1f;
     g_ReSTIRGI_TemporalParams.normalThreshold               = 0.6f;
@@ -793,15 +799,20 @@ public:
     // ------------------------------------------------------------------
     // Emissive-triangle light filter.
     //
-    // Every triangle of a mesh with an emissive material becomes a DI light, which for a scene like
-    // Bistro is tens of thousands of entries, most of them black (the material has an emissive map that
-    // is dark over most of the mesh's UVs). A triangle's power is only known on the GPU — it needs the
-    // emissive texture and the triangle area — so the first frame's light flux is read back once and the
-    // light list is rebuilt with only the triangles whose power is above a fraction of the brightest
-    // light. PrepareLights then reads triangle m_LightTriangleRemap[slot] instead of the slot's own
-    // index.
+    // Every triangle of a mesh with an emissive material becomes a candidate DI light, which for a scene
+    // like Bistro is tens of thousands of entries, most of them black (the material has an emissive map
+    // that is dark over most of the mesh's UVs). A triangle's power is only known on the GPU — it needs
+    // the emissive texture and the triangle area — so the first frame's light flux is read back once and
+    // the light list can be rebuilt with only the triangles whose power is above a fraction of the
+    // brightest light. PrepareLights then reads triangle m_LightTriangleRemap[slot] instead of the slot's
+    // own index.
+    //
+    // The threshold is off because the FullSample samples every emissive triangle, and at 1e-4 Bistro
+    // loses 62 352 of its 96 291 emitters (65 %) — the interior comes out about 1.5 stops darker and its
+    // shadows reach pure black, against the same scene in the sample. The cost of keeping them all is
+    // unmeasured; measure it before re-enabling the filter for performance.
     // ------------------------------------------------------------------
-    static constexpr float        k_EmissiveTrianglePowerThreshold = 1e-4f; // relative to the brightest
+    static constexpr float        k_EmissiveTrianglePowerThreshold = 0.0f; // relative to the brightest
     static constexpr uint32_t     k_LightFilterReadbackDelayFrames = 4;
     bool                          m_bLightFilterPending = true; // armed by PostSceneLoad
     uint32_t                      m_LightFilterFrames      = 0;
@@ -924,13 +935,21 @@ public:
         g_ReSTIRDI_HalfRes = Config::Get().m_HalfResDI;
 
         CreateRTXDIContext();
-        ApplyBalancedPreset();
-        g_ReSTIRDI_TemporalResamplingParams.enablePermutationSampling = 0u; // disabling this somehow increases image quality?
+        switch (Config::Get().m_ReSTIRPreset)
+        {
+        case 1:  ApplyHighPerfPreset();    break;
+        case 2:  ApplyHighQualityPreset(); break;
+        default: ApplyBalancedPreset();    break;
+        }
 
         m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
 
         m_NRDReblurSettings.enableAntiFirefly = true;
+        // Reconstruct the hit distance of pixels whose rays missed from the 3×3 neighbourhood, which
+        // is what the FullSample does (SetDefaultDenoiserSettings). Without it the blur radius is
+        // limited by missing hit distances, so REBLUR both blurs more and still leaves noise.
+        m_NRDReblurSettings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
     }
 
     void PostSceneLoad() override
