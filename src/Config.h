@@ -21,9 +21,25 @@ struct Config
     // the most detailed mip of every texture instead of the observed mips.
     bool m_DisableSamplerFeedback = false;
 
-    // Start with opacity micromaps switched off. The panel toggle does the same thing at runtime, but the A/B
-    // comparison runs have no way to press it.
-    bool m_DisableOmm = false;
+    // Opacity micromaps are opt-in: every measurement in this renderer had the masks costing more GPU time than
+    // the alpha test they replace, and the shadow silhouette still drifted at deep subdivision. The panel toggle
+    // does the same thing at runtime, but A/B runs have no way to press it.
+    bool m_EnableOmm = false;
+
+    // Opacity micromap bake overrides. 0 keeps OmmBakeParams' own default; the subdivision level and the
+    // micro-triangle edge target decide how closely the masks follow a texel-level alpha silhouette, so runs
+    // that compare shadow edges need to vary them without a rebuild.
+    uint32_t m_OmmMaxLevel = 0;      // 0 = default, else 1..12
+    float m_OmmTargetEdge = 0.0f;    // 0 = default, else texels per micro-triangle edge
+
+    // Opens the Phase 5 texel-classification view on this primitive index (0 = the first primitive). The panel
+    // exposes the same controls; this exists so a screenshot run can be scripted.
+    int m_OmmDebugPrimitive = -1;    // -1 = view closed
+    int m_OmmDebugMip = 0;
+
+    // Writes the classification of every mip of this primitive's alpha texture to bin/omm_class_p<N>_mip<M>.png
+    // and skips the view. Used to check a mip chain for a per-level drift.
+    int m_OmmDumpMipsPrimitive = -1;
 
     // RenderDoc in-app capture (see RenderDocCapture.h). The DLL has to be loaded before the D3D12 device
     // is created, so this is a start-up decision rather than a runtime toggle.
@@ -34,6 +50,16 @@ struct Config
     // Write bin/screenshot.jpg on this frame number and stop; -1 = never. Comparison runs use it so an A/B
     // pair does not depend on somebody pressing the screenshot key at the right moment.
     int m_ScreenshotFrame = -1;
+
+    // PIX in-app capture (see PixCapture.h). The capturer module is loaded at start-up, and a capture of one
+    // frame is taken with PIXBeginCapture2/PIXEndCapture rather than from the PIX UI.
+    bool m_bPix = false;
+    std::string m_PixCapturerDllPath = ""; // empty = exe directory, then the newest PIX installation
+    std::string m_PixCaptureDir = "";      // empty = bin/captures/<scene stem>
+    int m_PixCaptureFrame = -1;            // capture this frame number, then exit; -1 = never
+    // Capture the scene load instead of a frame: the micromap and acceleration structure builds happen there,
+    // so this is the only capture that contains the OMM builds and the geometries that link them.
+    bool m_bPixCaptureLoad = false;
 
     // Rotate the view by this many degrees per second. Streaming and shadow problems that only appear while the
     // camera moves need a scripted camera to be reproducible.

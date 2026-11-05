@@ -3,6 +3,7 @@
 #include "SceneCache.h"
 #include "Config.h"
 #include "Renderer.h"
+#include "PixCapture.h"
 #include "CommonResources.h"
 #include "Utilities.h"
 #include "Omm/OmmSceneBaker.h"
@@ -55,21 +56,37 @@ void Scene::LoadScene()
 	SceneLoader::LoadTexturesFromImages(*this, sceneDir);
 	SceneLoader::UpdateMaterialsAndCreateConstants(*this);
 
-    if (g_Renderer.m_bOmmSupported)
-    {
-        OmmBakeParams ommParams;
-        BakeSceneOmm(*this, allVerticesQuantized, allIndices, ommParams);
-        BuildSceneOmm(*this);
-    }
+	// A frame capture starts at a frame boundary, so the micromap and acceleration structure builds below are
+	// never inside one. --pix-capture-load starts the bracket here instead, which is the capture to open when
+	// the question is what the OMM arrays contain or which geometries link them.
+	const bool bPixLoadCapture = Config::Get().m_bPixCaptureLoad && g_Pix.IsAvailable() &&
+		g_Pix.BeginCaptureTagged("-load");
+
+	if (g_Renderer.m_bOmmSupported && g_Renderer.m_bEnableOmm)
+	{
+		OmmBakeParams ommParams;
+		// Command-line overrides exist so the shadow-edge A/B runs can vary the subdivision without a rebuild.
+		if (Config::Get().m_OmmMaxLevel != 0)
+			ommParams.m_MaxLevel = Config::Get().m_OmmMaxLevel;
+		if (Config::Get().m_OmmTargetEdge > 0.0f)
+			ommParams.m_TargetEdge = Config::Get().m_OmmTargetEdge;
+		BakeSceneOmm(*this, allVerticesQuantized, allIndices, ommParams);
+		BuildSceneOmm(*this);
+	}
 	SceneLoader::CreateAndUploadGpuBuffers(*this, allVerticesQuantized, allIndices);
 	SceneLoader::CreateAndUploadLightBuffer(*this);
 	BuildAccelerationStructures();
 
-	if (!m_Cameras.empty())
+	// A frame capture starts at a frame boundary, so the micromap and acceleration structure builds above are
+	// never inside one. --pix-capture-load brackets them here instead, which is the capture to open when the
+	// question is what the OMM arrays contain or which geometries link them.
+	if (bPixLoadCapture)
 	{
-		const Scene::Camera& firstCam = m_Cameras[0];
-		g_Renderer.SetCameraFromSceneCamera(firstCam);
-		m_SelectedCameraIndex = 0;
+		g_Renderer.ExecutePendingCommandLists();
+		if (g_Pix.EndCapture())
+			SDL_Log("[PIX] Load capture written: %s", g_Pix.GetNewestCapturePath().c_str());
+		else
+			SDL_Log("[PIX] Load capture was not written");
 	}
 }
 

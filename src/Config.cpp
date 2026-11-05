@@ -50,10 +50,10 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_DisableSamplerFeedback = true;
             SDL_Log("[Config] Sampler feedback disabled via command line");
         }
-        else if (std::strcmp(arg, "--disable-omm") == 0)
+        else if (std::strcmp(arg, "--enable-omm") == 0)
         {
-            s_Instance.m_DisableOmm = true;
-            SDL_Log("[Config] Opacity micromaps disabled via command line");
+            s_Instance.m_EnableOmm = true;
+            SDL_Log("[Config] Opacity micromaps enabled via command line");
         }
         else if (std::strcmp(arg, "--renderdoc") == 0)
         {
@@ -77,6 +77,108 @@ void Config::ParseCommandLine(int argc, char* argv[])
             else
             {
                 SDL_LOG_ASSERT_FAIL("Missing value for --renderdoc-capture-frame", "[Config] Missing value for --renderdoc-capture-frame");
+            }
+        }
+        else if (std::strcmp(arg, "--pix") == 0)
+        {
+            s_Instance.m_bPix = true;
+            SDL_Log("[Config] PIX enabled via command line");
+        }
+        else if (std::strncmp(arg, "--pix=", 6) == 0)
+        {
+            s_Instance.m_bPix = true;
+            s_Instance.m_PixCapturerDllPath = arg + 6;
+            SDL_Log("[Config] PIX enabled via command line, capturer dll: %s", s_Instance.m_PixCapturerDllPath.c_str());
+        }
+        else if (std::strcmp(arg, "--pix-capture-frame") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_bPix = true;
+                s_Instance.m_PixCaptureFrame = std::atoi(argv[++i]);
+                SDL_Log("[Config] PIX will capture frame %d and exit", s_Instance.m_PixCaptureFrame);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --pix-capture-frame", "[Config] Missing value for --pix-capture-frame");
+            }
+        }
+        else if (std::strcmp(arg, "--pix-capture-dir") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_PixCaptureDir = argv[++i];
+                SDL_Log("[Config] PIX captures go to %s", s_Instance.m_PixCaptureDir.c_str());
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --pix-capture-dir", "[Config] Missing value for --pix-capture-dir");
+            }
+        }
+        else if (std::strcmp(arg, "--pix-capture-load") == 0)
+        {
+            s_Instance.m_bPix = true;
+            s_Instance.m_bPixCaptureLoad = true;
+            SDL_Log("[Config] PIX will capture the scene load");
+        }
+        else if (std::strcmp(arg, "--omm-max-level") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_OmmMaxLevel = static_cast<uint32_t>(std::atoi(argv[++i]));
+                SDL_Log("[Config] OMM bake max subdivision level: %u", s_Instance.m_OmmMaxLevel);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --omm-max-level", "[Config] Missing value for --omm-max-level");
+            }
+        }
+        else if (std::strcmp(arg, "--omm-debug") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_OmmDebugPrimitive = std::atoi(argv[++i]);
+                SDL_Log("[Config] OMM debug view on primitive %d", s_Instance.m_OmmDebugPrimitive);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --omm-debug", "[Config] Missing value for --omm-debug");
+            }
+        }
+        else if (std::strcmp(arg, "--omm-dump-mips") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_OmmDumpMipsPrimitive = std::atoi(argv[++i]);
+                SDL_Log("[Config] Dumping every alpha mip classification of primitive %d", s_Instance.m_OmmDumpMipsPrimitive);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --omm-dump-mips", "[Config] Missing value for --omm-dump-mips");
+            }
+        }
+        else if (std::strcmp(arg, "--omm-debug-mip") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_OmmDebugMip = std::atoi(argv[++i]);
+                SDL_Log("[Config] OMM debug view mip: %d", s_Instance.m_OmmDebugMip);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --omm-debug-mip", "[Config] Missing value for --omm-debug-mip");
+            }
+        }
+        else if (std::strcmp(arg, "--omm-target-edge") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_OmmTargetEdge = static_cast<float>(std::atof(argv[++i]));
+                SDL_Log("[Config] OMM bake target edge: %.2f texels per micro-triangle", s_Instance.m_OmmTargetEdge);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --omm-target-edge", "[Config] Missing value for --omm-target-edge");
             }
         }
         else if (std::strcmp(arg, "--screenshot-frame") == 0)
@@ -136,9 +238,16 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --execute-per-pass-and-wait      Wait for idle after each pass execution");
             SDL_Log("  --disable-rendergraph-aliasing   Disable render graph aliasing");
             SDL_Log("  --disable-sampler-feedback       Disable sampler feedback (streaming requests the finest mip)");
-            SDL_Log("  --disable-omm                    Start with opacity micromaps switched off (panel toggle)");
-            SDL_Log("  --renderdoc[=<path>]             Load renderdoc.dll for in-app captures (before the device exists)");
+            SDL_Log("  --enable-omm                     Build opacity micromaps (off by default; needs DXR 1.2)");
+            SDL_Log("  --omm-max-level <n>              OMM bake subdivision level cap (default 6, valid 1..12)");
+            SDL_Log("  --omm-target-edge <f>            OMM bake micro-triangle edge target in texels (default 3.0)");        SDL_Log("  --omm-debug <primitive>          Open the OMM texel-classification view on this primitive");
+        SDL_Log("  --omm-debug-mip <n>              Alpha mip the OMM debug view classifies (default 0)");
+        SDL_Log("  --omm-dump-mips <primitive>      Dump every alpha mip classification of that primitive to bin/");            SDL_Log("  --renderdoc[=<path>]             Load renderdoc.dll for in-app captures (before the device exists)");
             SDL_Log("  --renderdoc-capture-frame <n>    Capture frame n and exit (implies --renderdoc)");
+            SDL_Log("  --pix[=<path>]                  Load WinPixGpuCapturer.dll for in-app PIX captures");
+            SDL_Log("  --pix-capture-frame <n>          Take a PIX GPU capture of frame n and exit (implies --pix)");
+            SDL_Log("  --pix-capture-load               Take a PIX GPU capture of the scene load: micromap and BLAS builds (implies --pix)");
+            SDL_Log("  --pix-capture-dir <dir>          Where PIX captures are written (default bin/captures/<scene>)");
             SDL_Log("  --screenshot-frame <n>           Write screenshot.jpg on frame n and exit");
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");
             SDL_Log("  --hitch-log <ms>                 Log every frame slower than this with streaming/VRAM state");

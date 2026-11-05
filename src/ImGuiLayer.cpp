@@ -1,5 +1,6 @@
 ﻿#include "Renderer.h"
 #include "CommonResources.h"
+#include "PixCapture.h"
 #include "RenderDocCapture.h"
 #include "Streaming/FeedbackManager.h"
 
@@ -400,12 +401,67 @@ void ImGuiLayer::UpdateFrame()
             {
                 g_Renderer.m_bEnableOmm = bEnableOmm;
                 g_Renderer.m_bOmmRebuildRequested = true;
+                g_Renderer.m_bOmmDebugDirty = true;
             }
             ImGui::EndDisabled();
 
             if (!g_Renderer.m_bOmmSupported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                 ImGui::SetTooltip("The device does not report Feature::RayTracingOpacityMicromap");
+            }
+
+            // Scene totals straight from the bake results the BLASes were built from.
+            uint64_t maskCount = 0;
+            uint64_t dataBytes = 0;
+            uint64_t maskedTriangles = 0;
+            int primitiveCount = 0;
+            for (const Scene::Mesh& mesh : scene.m_Meshes)
+            {
+                for (const Scene::Primitive& primitive : mesh.m_Primitives)
+                {
+                    ++primitiveCount;
+                    for (const OmmLodData& lod : primitive.m_Omm)
+                    {
+                        maskCount += lod.m_Stats.m_MaskCount;
+                        dataBytes += lod.m_Stats.m_DataBytes;
+                        maskedTriangles += lod.m_Stats.m_MaskedTriangles;
+                    }
+                }
+            }
+            ImGui::Text("%llu masks, %.2f MiB, %llu masked triangles", static_cast<unsigned long long>(maskCount),
+                        double(dataBytes) / (1024.0 * 1024.0), static_cast<unsigned long long>(maskedTriangles));
+
+            // The classification view is mode 1; the micromap grid and the candidate heatmap are not implemented.
+            static const char* kDebugViews[] = { "Off", "Texel classification" };
+            int debugMode = std::min(g_Renderer.m_OmmDebugMode, 1);
+            if (ImGui::Combo("Debug view", &debugMode, kDebugViews, IM_ARRAYSIZE(kDebugViews)))
+            {
+                g_Renderer.m_OmmDebugMode = debugMode;
+                g_Renderer.m_bOmmDebugDirty = true;
+            }
+
+            if (g_Renderer.m_OmmDebugMode == 1)
+            {
+                if (ImGui::SliderInt("Primitive", &g_Renderer.m_OmmDebugPrimitive, 0, std::max(0, primitiveCount - 1)))
+                    g_Renderer.m_bOmmDebugDirty = true;
+                if (ImGui::SliderInt("Alpha mip", &g_Renderer.m_OmmDebugMip, 0, 6))
+                    g_Renderer.m_bOmmDebugDirty = true;
+                ImGui::Checkbox("Mixed only", &g_Renderer.m_bOmmShowOnlyMixed);
+                if (ImGui::Button("Refresh"))
+                    g_Renderer.m_bOmmDebugDirty = true;
+
+                const OmmDebugTexelStats& stats = g_Renderer.m_OmmDebugStats;
+                if (stats.m_Width > 0)
+                {
+                    const double texels = double(stats.m_Width) * double(stats.m_Height);
+                    ImGui::Text("%ux%u: %.1f%% opaque, %.1f%% transparent, %.1f%% mixed", stats.m_Width, stats.m_Height,
+                                100.0 * stats.m_OpaqueCount / texels, 100.0 * stats.m_TransparentCount / texels,
+                                100.0 * stats.m_MixedCount / texels);
+                }
+                else
+                {
+                    ImGui::TextDisabled("No readable alpha texture for this primitive");
+                }
             }
 
             ImGui::TreePop();
@@ -439,6 +495,27 @@ void ImGuiLayer::UpdateFrame()
             if (!g_Renderer.m_RenderDocLastCapturePath.empty())
             {
                 ImGui::TextWrapped("Last capture: %s", g_Renderer.m_RenderDocLastCapturePath.c_str());
+            }
+
+            // PIX arms the same way: the capture has to bracket a whole frame.
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!g_Pix.IsAvailable());
+            if (ImGui::Button("PIX Capture"))
+            {
+                g_Renderer.m_bPixCaptureRequested = true;
+            }
+            ImGui::EndDisabled();
+
+            if (!g_Pix.IsAvailable() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip(PixCapture::IsCompiledIn()
+                    ? "PIX is unavailable: no WinPixGpuCapturer.dll was found (pass --pix=<path>)"
+                    : "PIX is unavailable: this build has no PIX support (WinPixEventRuntime was not found when CMake ran)");
+            }
+
+            if (!g_Renderer.m_PixLastCapturePath.empty())
+            {
+                ImGui::TextWrapped("Last PIX capture: %s", g_Renderer.m_PixLastCapturePath.c_str());
             }
 
             ImGui::Text("Total Instances: %zu", scene.m_InstanceData.size());

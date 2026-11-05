@@ -178,6 +178,9 @@ public:
         nvrhi::FramebufferHandle framebuffer;
         nvrhi::DepthStencilState* depthStencilState = nullptr;
         nvrhi::BlendState::RenderTarget* blendState = nullptr;
+        // Restricts the pass to a sub-rectangle of the framebuffer. Null covers the whole attachment, which is
+        // what every pass but the debug overlays wants.
+        const nvrhi::Viewport* viewport = nullptr;
     };
 
     // ─── Constants ───
@@ -422,14 +425,25 @@ public:
 
     // Opacity micromaps (OMM): baked per primitive per LOD, attached to the BLAS.
     bool m_bOmmSupported = false;        // Device capability, set during Initialize
-    bool m_bEnableOmm = true;            // User toggle; off rebuilds the BLASes without the micromap linkage
+    bool m_bEnableOmm = false;           // User toggle; off rebuilds the BLASes without the micromap linkage
     bool m_bOmmRebuildRequested = false; // Set by the panel, serviced by the frame loop
     int  m_OmmDebugMode = 0;             // 0 = off, 1 = texel classification, 2 = micromap grid, 3 = candidate heatmap
+    int  m_OmmDebugPrimitive = 0;        // flat index over Scene::Mesh::m_Primitives
+    int  m_OmmDebugMip = 0;              // alpha mip the classification is taken from
+    bool m_bOmmShowOnlyMixed = false;    // classification view: draw mixed texels only
+    bool m_bOmmDebugDirty = true;        // set by the panel, serviced by UpdateOmmDebugTexture
+    OmmDebugTexelStats m_OmmDebugStats;  // classification of the selected primitive, read by the panel
+    nvrhi::TextureHandle m_OmmDebugTexture; // RGBA8 view of m_OmmDebugStats, sampled by the debug pass
 
     // RenderDoc in-app capture: the panel requests one, the frame loop brackets the next frame with it, and
     // the newest written path is reported back in the panel.
     bool m_bRenderDocCaptureRequested = false;
     std::string m_RenderDocLastCapturePath;
+
+    // PIX takes a capture through its own capturer module rather than an injected tool, so the bracket is
+    // PIXBeginCapture2/PIXEndCapture around one frame (see PixCapture.h).
+    bool m_bPixCaptureRequested = false;
+    std::string m_PixLastCapturePath;
 
     // Environment Lighting settings
     bool m_EnableSky = true;
@@ -477,6 +491,9 @@ public:
     // Sampler heap
     nvrhi::DescriptorTableHandle m_StaticSamplerDescriptorTable;
     nvrhi::BindingLayoutHandle m_StaticSamplerBindingLayout;
+    // Slots RegisterSamplerAtIndex has written; everything else is filled with the default sampler so the
+    // shader-visible heap holds no uninitialised descriptors.
+    std::unordered_set<uint32_t> m_RegisteredSamplerIndices;
 
     // ─── GPU timing ───
 
@@ -495,6 +512,10 @@ private:
 
     // Allocate an index, write a BindingSetItem to the global descriptor table, return index (UINT32_MAX on failure).
     uint32_t WriteBindlessItem(const nvrhi::BindingSetItem& item, const char* label);
+    // Fills the slots of the two bindless tables that no registration wrote with a valid default descriptor.
+    void FillUnusedBindlessSlots();
+    // Rebuilds the OMM debug classification texture when the panel changed the selected primitive or mip.
+    void UpdateOmmDebugTexture();
     // Write a BindingSetItem at a known index, return success.
     bool WriteBindlessItemAtIndex(uint32_t index, const nvrhi::BindingSetItem& item, const char* label);
 };

@@ -84,6 +84,57 @@ namespace
     }
 }
 
+void ClassifyAlphaTexels(const uint8_t* alpha, uint32_t width, uint32_t height, float cutoff,
+                         OmmDebugTexelStats& stats)
+{
+    const std::vector<uint8_t> scaled = ScaleAlphaToHalfCutoff(alpha, size_t(width) * height, cutoff);
+    ClassifyTexels(scaled, width, height, stats);
+}
+
+void ReduceClassificationConservative(const OmmDebugTexelStats& src, OmmDebugTexelStats& dst)
+{
+    SDL_assert(src.m_Width > 0 && src.m_Height > 0);
+
+    dst.m_Width = std::max(1u, src.m_Width / 2);
+    dst.m_Height = std::max(1u, src.m_Height / 2);
+    dst.m_Class.assign(size_t(dst.m_Width) * dst.m_Height, 0);
+    dst.m_OpaqueCount = 0;
+    dst.m_TransparentCount = 0;
+    dst.m_MixedCount = 0;
+
+    for (uint32_t y = 0; y < dst.m_Height; ++y)
+    {
+        for (uint32_t x = 0; x < dst.m_Width; ++x)
+        {
+            uint8_t merged = 0xFF;
+            for (uint32_t dy = 0; dy < 2 && merged != 2; ++dy)
+            {
+                for (uint32_t dx = 0; dx < 2; ++dx)
+                {
+                    const uint32_t sx = std::min(x * 2 + dx, src.m_Width - 1);
+                    const uint32_t sy = std::min(y * 2 + dy, src.m_Height - 1);
+                    const uint8_t child = src.m_Class[size_t(sy) * src.m_Width + sx];
+
+                    // Any mixed child, or two children that disagree, make the parent unknown. Only a block whose
+                    // children all agree keeps a definitive state.
+                    if (child == 2 || (merged != 0xFF && merged != child))
+                    {
+                        merged = 2;
+                        break;
+                    }
+
+                    merged = child;
+                }
+            }
+
+            dst.m_Class[size_t(y) * dst.m_Width + x] = merged;
+            if (merged == 0)      ++dst.m_OpaqueCount;
+            else if (merged == 1) ++dst.m_TransparentCount;
+            else                  ++dst.m_MixedCount;
+        }
+    }
+}
+
 bool BakeLod(const OmmBakeInput& input, const OmmBakeParams& params, OmmLodData& out, OmmDebugTexelStats* pTexelStats)
 {
     SDL_assert(input.m_Indices != nullptr);

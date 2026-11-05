@@ -2,6 +2,8 @@
 #include "Utilities.h"
 #include "Config.h"
 #include "CommonResources.h"
+#include "Omm/OmmSceneBaker.h"
+#include "PixCapture.h"
 #include "RenderDocCapture.h"
 #include "SceneLoader.h"
 #include "Streaming/FeedbackTexture.h"
@@ -374,7 +376,13 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
 
     // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
-    m_bEnableOmm = !Config::Get().m_DisableOmm;
+    m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
+    if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
+    {
+        m_OmmDebugMode = 1;
+        m_OmmDebugPrimitive = std::max(Config::Get().m_OmmDebugPrimitive, 0);
+        m_OmmDebugMip = Config::Get().m_OmmDebugMip;
+    }
     SDL_Log("[Init] Opacity micromaps: %s", m_bOmmSupported ? (m_bEnableOmm ? "supported" : "supported, disabled")
                                                             : "unsupported");
     // Sampler feedback drives tiled-texture streaming, but it is optional: capture
@@ -411,6 +419,12 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     // CommonResources: samplers, raster/blend/depth states, default textures.
     CommonResources::GetInstance().Initialize();
     CommonResources::GetInstance().RegisterDefaultTextures();
+
+    // Both bindless tables reserve far more slots than a scene needs, and only the registered ones are
+    // written. Left alone, the rest of the shader-visible heap holds descriptors no copy ever produced: the
+    // PIX capturer reports those as "Invalid/Uninitialized descriptor used in command list event" on every
+    // event that binds the heap, and a stray index would read them. Fill them once the defaults exist.
+    FillUnusedBindlessSlots();
 
     // GPU timer queries for the Renderer itself.
     m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
@@ -456,6 +470,14 @@ void Renderer::Initialize()
     {
         SDL_Quit();
         return;
+    }
+
+    // PIX captures a swapchain through a window handle; without it a windowed app can capture a frame PIX
+    // does not treat as the target.
+    if (g_Pix.IsAvailable())
+    {
+        g_Pix.SetTargetWindow(SDL_GetPointerProperty(SDL_GetWindowProperties(m_Window),
+                                                     SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
     }
 
     if (!InitializeGPUStack(m_Window))
@@ -587,6 +609,14 @@ void Renderer::Run()
             g_RenderDoc.BeginFrameCapture();
         }
 
+        // PIX brackets the same span. The two are mutually exclusive: both tools hook the same command queue,
+        // and a capture inside a capture is not something either of them supports.
+        const bool bPixCapture = g_Pix.IsAvailable() &&
+            (m_bPixCaptureRequested ||
+             Config::Get().m_PixCaptureFrame == static_cast<int>(m_FrameNumber));
+        SDL_assert(!(bRenderDocCapture && bPixCapture) && "RenderDoc and PIX captures cannot overlap");
+        const bool bPixCaptureActive = bPixCapture && !bRenderDocCapture && g_Pix.BeginCapture(m_FrameNumber);
+
         const bool bSwapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_AcquiredSwapchainImageIdx);
         const uint64_t markAcquireNs = SDL_GetTicksNS();
         
@@ -607,6 +637,9 @@ void Renderer::Run()
             m_RHI->m_NvrhiDevice->waitForIdle();
             m_Scene.BuildAccelerationStructures();
         }
+
+        // The debug view's classification texture is rebuilt from the CPU bake data when the selection changes.
+        UpdateOmmDebugTexture();
 
         // Update animations
         if (m_EnableAnimations)
@@ -709,6 +742,18 @@ void Renderer::Run()
 
             // A scripted capture is the whole point of the run: stop as soon as it is on disk.
             if (bCaptured && Config::Get().m_RenderDocCaptureFrame >= 0)
+            {
+                m_Running = false;
+            }
+        }
+
+        if (bPixCaptureActive)
+        {
+            const bool bCaptured = g_Pix.EndCapture();
+            m_bPixCaptureRequested = false;
+            m_PixLastCapturePath = g_Pix.GetNewestCapturePath();
+
+            if (bCaptured && Config::Get().m_PixCaptureFrame >= 0)
             {
                 m_Running = false;
             }
@@ -1251,6 +1296,114 @@ void Renderer::HandleDebugModeSettings()
     }
 }
 
+void Renderer::UpdateOmmDebugTexture()
+{
+    if (m_OmmDebugMode != 1 || !m_bOmmDebugDirty)
+        return;
+
+    // The scene is still loading; the selection stays dirty so the next frame retries.
+    if (m_Scene.m_Meshes.empty())
+        return;
+
+    m_bOmmDebugDirty = false;
+
+    // Diagnostic: dump the classification of every mip the alpha chain provides. A mip generated without a
+    // half-texel centre offset drifts sideways with each level, which shows up in these images directly.
+    if (const int dumpPrimitive = Config::Get().m_OmmDumpMipsPrimitive; dumpPrimitive >= 0)
+    {
+        for (uint32_t mip = 0; mip < 16; ++mip)
+        {
+            OmmDebugTexelStats mipStats;
+            if (!ClassifyPrimitiveAlpha(m_Scene, uint32_t(dumpPrimitive), mip, mipStats))
+                break;
+
+            const std::string path = (std::filesystem::path{ SDL_GetBasePath() } /
+                ("omm_class_p" + std::to_string(dumpPrimitive) + "_mip" + std::to_string(mip) + ".png")).string();
+            stbi_write_png(path.c_str(), int(mipStats.m_Width), int(mipStats.m_Height), 1, mipStats.m_Class.data(),
+                           int(mipStats.m_Width));
+
+            const double texels = double(mipStats.m_Width) * double(mipStats.m_Height);
+            SDL_Log("[OMM] Dumped mip %u (%ux%u): %.1f%% opaque, %.1f%% transparent, %.1f%% mixed", mip,
+                    mipStats.m_Width, mipStats.m_Height, 100.0 * mipStats.m_OpaqueCount / texels,
+                    100.0 * mipStats.m_TransparentCount / texels, 100.0 * mipStats.m_MixedCount / texels);
+        }
+
+        return;
+    }
+    m_OmmDebugTexture = nullptr;
+
+    if (!m_bEnableOmm)
+        return;
+
+    if (!ClassifyPrimitiveAlpha(m_Scene, uint32_t(m_OmmDebugPrimitive), uint32_t(m_OmmDebugMip), m_OmmDebugStats))
+        return;
+
+    // A 4096^2 classification is 64 MiB of RGBA8 and the view is never larger than a few hundred pixels, so the
+    // upload is reduced by a whole-texel step. Any mixed texel in a block keeps the block mixed, which keeps the
+    // boundary band visible at any reduction.
+    constexpr uint32_t kMaxDimension = 2048;
+    const uint32_t step = std::max(1u, (std::max(m_OmmDebugStats.m_Width, m_OmmDebugStats.m_Height) + kMaxDimension - 1) /
+                                           kMaxDimension);
+    const uint32_t outWidth = std::max(1u, m_OmmDebugStats.m_Width / step);
+    const uint32_t outHeight = std::max(1u, m_OmmDebugStats.m_Height / step);
+
+    std::vector<uint8_t> pixels(size_t(outWidth) * outHeight * 4);
+    for (uint32_t y = 0; y < outHeight; ++y)
+    {
+        for (uint32_t x = 0; x < outWidth; ++x)
+        {
+            uint8_t texelClass = 1;
+            for (uint32_t dy = 0; dy < step && texelClass != 2; ++dy)
+            {
+                for (uint32_t dx = 0; dx < step; ++dx)
+                {
+                    const uint32_t sx = std::min(x * step + dx, m_OmmDebugStats.m_Width - 1);
+                    const uint32_t sy = std::min(y * step + dy, m_OmmDebugStats.m_Height - 1);
+                    const uint8_t c = m_OmmDebugStats.m_Class[size_t(sy) * m_OmmDebugStats.m_Width + sx];
+                    if (c == 2) { texelClass = 2; break; }
+                    if (c == 0) texelClass = 0;
+                }
+            }
+
+            // Opaque green, transparent red, mixed yellow. "Mixed only" is filtered here rather than in the
+            // shader so the view needs no constants at all.
+            uint8_t* pixel = pixels.data() + (size_t(y) * outWidth + x) * 4;
+            if (m_bOmmShowOnlyMixed && texelClass != 2)
+            {
+                pixel[0] = 0; pixel[1] = 0; pixel[2] = 0; pixel[3] = 0;
+                continue;
+            }
+
+            if (texelClass == 0)      { pixel[0] = 0;   pixel[1] = 200; pixel[2] = 0; }
+            else if (texelClass == 1) { pixel[0] = 200; pixel[1] = 0;   pixel[2] = 0; }
+            else                      { pixel[0] = 255; pixel[1] = 230; pixel[2] = 0; }
+            pixel[3] = texelClass;
+        }
+    }
+
+    nvrhi::TextureDesc desc;
+    desc.width  = outWidth;
+    desc.height = outHeight;
+    desc.format = nvrhi::Format::RGBA8_UNORM;
+    desc.dimension = nvrhi::TextureDimension::Texture2D;
+    desc.initialState = nvrhi::ResourceStates::ShaderResource;
+    desc.keepInitialState = true;
+    desc.debugName = "OMM Debug Classification";
+    m_OmmDebugTexture = m_RHI->m_NvrhiDevice->createTexture(desc);
+    SDL_assert(m_OmmDebugTexture && "the OMM debug classification texture has to exist before it is written");
+
+    nvrhi::CommandListHandle cmd = AcquireCommandList();
+    ScopedCommandList scopedCmd{ cmd, "OMM Debug Classification" };
+    cmd->writeTexture(m_OmmDebugTexture, 0, 0, pixels.data(), outWidth * 4);
+
+    const double texels = double(m_OmmDebugStats.m_Width) * double(m_OmmDebugStats.m_Height);
+    SDL_Log("[OMM] Debug view: primitive %d, mip %u, %ux%u -> %ux%u: %.1f%% opaque, %.1f%% transparent, %.1f%% mixed",
+            m_OmmDebugPrimitive, m_OmmDebugMip, m_OmmDebugStats.m_Width, m_OmmDebugStats.m_Height, outWidth, outHeight,
+            100.0 * m_OmmDebugStats.m_OpaqueCount / texels,
+            100.0 * m_OmmDebugStats.m_TransparentCount / texels,
+            100.0 * m_OmmDebugStats.m_MixedCount / texels);
+}
+
 void Renderer::ScheduleAndRunAllRenderers()
 {
     PROFILE_FUNCTION();
@@ -1287,6 +1440,7 @@ void Renderer::ScheduleAndRunAllRenderers()
 
     m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HDRRenderer"));
     m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TileResidencyDebugRenderer"));
+    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OmmDebugRenderer"));
     m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ImGuiRenderer"));
 
     m_RenderGraph.EndSetup();
@@ -1484,6 +1638,55 @@ uint32_t Renderer::WriteBindlessItem(const nvrhi::BindingSetItem& itemTemplate, 
     return index;
 }
 
+void Renderer::FillUnusedBindlessSlots()
+{
+    const CommonResources& common = CommonResources::GetInstance();
+    SDL_assert(common.DefaultTextureBlack && "the default textures have to exist before the fill");
+    SDL_assert(common.LinearClamp && "the default samplers have to exist before the fill");
+
+    uint32_t filledTextures = 0;
+    if (m_StaticTextureDescriptorTable)
+    {
+        const uint32_t capacity = m_StaticTextureDescriptorTable->getCapacity();
+        for (uint32_t index = m_NextTextureIndex; index < capacity; ++index)
+        {
+            const nvrhi::BindingSetItem item =
+                nvrhi::BindingSetItem::Texture_SRV(index, common.DefaultTextureBlack);
+            if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_StaticTextureDescriptorTable, item))
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to fill an unused bindless texture slot",
+                                    "[Renderer] FillUnusedBindlessSlots: texture slot %u failed", index);
+                break;
+            }
+            ++filledTextures;
+        }
+    }
+
+    uint32_t filledSamplers = 0;
+    if (m_StaticSamplerDescriptorTable)
+    {
+        const uint32_t capacity = m_StaticSamplerDescriptorTable->getCapacity();
+        for (uint32_t index = 0; index < capacity; ++index)
+        {
+            // D3D12 has no null sampler, so the unused slots take the default linear clamp one.
+            if (m_RegisteredSamplerIndices.contains(index))
+                continue;
+
+            const nvrhi::BindingSetItem item = nvrhi::BindingSetItem::Sampler(index, common.LinearClamp);
+            if (!m_RHI->m_NvrhiDevice->writeDescriptorTable(m_StaticSamplerDescriptorTable, item))
+            {
+                SDL_LOG_ASSERT_FAIL("Failed to fill an unused bindless sampler slot",
+                                    "[Renderer] FillUnusedBindlessSlots: sampler slot %u failed", index);
+                break;
+            }
+            ++filledSamplers;
+        }
+    }
+
+    SDL_Log("[Renderer] Bindless heaps: filled %u unused texture slot(s) and %u unused sampler slot(s)",
+            filledTextures, filledSamplers);
+}
+
 bool Renderer::WriteBindlessItemAtIndex(uint32_t index, const nvrhi::BindingSetItem& item, const char* label)
 {
     if (!m_StaticTextureDescriptorTable)
@@ -1547,6 +1750,7 @@ bool Renderer::RegisterSamplerAtIndex(uint32_t index, nvrhi::SamplerHandle sampl
         SDL_LOG_ASSERT_FAIL("Failed to register sampler in global descriptor table", "[Renderer] Failed to register sampler at index %u", index);
         return false;
     }
+    m_RegisteredSamplerIndices.insert(index);
     //SDL_Log("[Renderer] Registered sampler at index %u", index);
     return true;
 }
@@ -1765,8 +1969,13 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
     uint32_t width = std::max(1u, texDesc.width >> mipLevel);
     uint32_t height = std::max(1u, texDesc.height >> mipLevel);
 
-    state.viewport.viewports.push_back(nvrhi::Viewport(0, (float)width, 0, (float)height, 0, 1));
-    state.viewport.scissorRects.push_back(nvrhi::Rect(0, (int)width, 0, (int)height));
+    // A pass that draws an overlay covers only its own rectangle; everything else covers the whole attachment.
+    const nvrhi::Viewport viewport = params.viewport ? *params.viewport
+                                                     : nvrhi::Viewport(0, (float)width, 0, (float)height, 0, 1);
+
+    state.viewport.viewports.push_back(viewport);
+    state.viewport.scissorRects.push_back(nvrhi::Rect((int)viewport.minX, (int)viewport.maxX,
+                                                      (int)viewport.minY, (int)viewport.maxY));
 
     params.commandList->setMeshletState(state);
     if (params.pushConstants && params.pushConstantsSize > 0)
@@ -2307,6 +2516,24 @@ int main(int argc, char* argv[])
             ? std::filesystem::path{ "capture" }
             : std::filesystem::path{ Config::Get().m_ScenePath }.stem();
         g_RenderDoc.SetCapturePathTemplate((std::filesystem::path{ SDL_GetBasePath() } / "captures" / captureStem).string());
+    }
+
+    // PIX does not inject into the process the way RenderDoc does: PIXBeginCapture2 hands the frame to the
+    // capturer module, which therefore has to be loadable before the capture is taken. The capture file name
+    // comes from here, since PIX names nothing itself.
+    if (Config::Get().m_bPix && g_Pix.Load(Config::Get().m_PixCapturerDllPath))
+    {
+        if (!Config::Get().m_PixCaptureDir.empty())
+        {
+            g_Pix.SetCapturePathTemplate(Config::Get().m_PixCaptureDir);
+        }
+        else
+        {
+            const std::filesystem::path captureStem = Config::Get().m_ScenePath.empty()
+                ? std::filesystem::path{ "capture" }
+                : std::filesystem::path{ Config::Get().m_ScenePath }.stem();
+            g_Pix.SetCapturePathTemplate((std::filesystem::path{ SDL_GetBasePath() } / "captures" / captureStem).string());
+        }
     }
 
     renderer.Initialize();

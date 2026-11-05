@@ -4,24 +4,36 @@
 #include "OmmBaker.h"
 #include "Scene.h"
 #include "Renderer.h"
+#include "TextureLoader.h"
 #include "Utilities.h"
 
 namespace
 {
-    // Decodes the alpha of one streamed texture mip. Returns false when the texture is not readable from the
-    // CPU, which is the normal case for anything that is not a streamed block-compressed texture.
-    bool ReadAlphaMip(const Scene::StreamingTexture& texture, uint32_t mip, std::vector<uint8_t>& alpha,
+    // Decodes the alpha of one mip of the file the loader opened for this texture. Alpha-masked albedos are
+    // committed textures, so their payload is no longer resident and the streaming path does not own them: the
+    // bake re-reads the file instead. Returns false when the file cannot be read or its format carries no alpha
+    // the reader understands, so the caller skips the primitive rather than baking against invented data.
+    bool ReadAlphaMip(const Scene::Texture& texture, uint32_t mip, std::vector<uint8_t>& alpha,
                       uint32_t& width, uint32_t& height)
     {
-        if (!texture.m_ReservedTexture || !texture.m_SourceData || !texture.m_SourceData->IsValid())
+        if (texture.m_ResolvedPath.empty())
             return false;
 
-        const nvrhi::TextureDesc& desc = texture.m_ReservedTexture->getDesc();
+        nvrhi::TextureDesc desc;
+        std::unique_ptr<MemoryMappedDataReader> data;
+        if (!LoadTexture(texture.m_ResolvedPath, desc, data))
+            return false;
+
+        size_t mipOffsets[srrhi::CommonConsts::MAX_MIP_COUNT] = {};
+        const uint32_t mipCount = ComputeDDSMipOffsets(desc, mipOffsets);
+        if (mip >= mipCount)
+            return false;
+
         width = std::max(1u, desc.width >> mip);
         height = std::max(1u, desc.height >> mip);
 
         OmmAlphaMip mipData;
-        mipData.m_Data = static_cast<const uint8_t*>(texture.m_SourceData->GetDataAt(texture.m_MipDataOffsets[mip]));
+        mipData.m_Data = static_cast<const uint8_t*>(data->GetDataAt(mipOffsets[mip]));
         mipData.m_Width = width;
         mipData.m_Height = height;
         mipData.m_Size = GetOmmMipByteSize(desc.format, width, height);
@@ -93,7 +105,7 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
             ++maskedPrimitives;
 
             const int textureIndex = material.m_BaseColorTexture;
-            if (textureIndex < 0 || size_t(textureIndex) >= scene.m_StreamingTextures.size())
+            if (textureIndex < 0 || size_t(textureIndex) >= scene.m_Textures.size())
             {
                 ++skippedUnreadableTexture;
                 continue;
@@ -104,7 +116,7 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
             {
                 const uint64_t decodeStartMs = SDL_GetTicks();
                 CachedAlpha entry;
-                entry.m_bValid = ReadAlphaMip(scene.m_StreamingTextures[textureIndex], params.m_MipLevel, entry.m_Bytes,
+                entry.m_bValid = ReadAlphaMip(scene.m_Textures[textureIndex], params.m_MipLevel, entry.m_Bytes,
                                               entry.m_Width, entry.m_Height);
                 decodeMs += SDL_GetTicks() - decodeStartMs;
                 cached = alphaCache.emplace(textureIndex, std::move(entry)).first;
@@ -197,6 +209,9 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
     // The digest is of everything the bake produced, so two runs can be compared byte for byte, which is what the
     // cache in a later phase relies on.
     size_t digest = 0;
+    uint64_t transparentTriangles = 0;
+    uint64_t opaqueTriangles = 0;
+    uint64_t maskedTriangles = 0;
     for (Scene::Mesh& mesh : scene.m_Meshes)
     {
         for (Scene::Primitive& primitive : mesh.m_Primitives)
@@ -211,6 +226,9 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
                 ++bakedLods;
                 totalMasks += lod.m_Stats.m_MaskCount;
                 totalDataBytes += lod.m_Stats.m_DataBytes;
+                transparentTriangles += lod.m_Stats.m_TransparentTriangles;
+                opaqueTriangles += lod.m_Stats.m_OpaqueTriangles;
+                maskedTriangles += lod.m_Stats.m_MaskedTriangles;
 
                 digest = HashBytes(digest, lod.m_Data.data(), lod.m_Data.size());
                 if (lod.m_Stats.m_bSixteenBitIndices)
@@ -242,5 +260,61 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
             double(totalDataBytes) / (1024.0 * 1024.0), double(SDL_GetTicks() - bakeStartMs) / 1000.0,
             double(decodeMs) / 1000.0, skippedUnreadableTexture, digest);
 
+    // Per-triangle outcome: a bake that folds most of its triangles into "fully transparent" is the signature of
+    // masks that will make surfaces vanish in traversal, so print it rather than only the mask count.
+    const uint64_t classified = transparentTriangles + opaqueTriangles + maskedTriangles;
+    if (classified > 0)
+    {
+        SDL_Log("[OMM] Triangles: %llu total, %.1f%% fully transparent, %.1f%% fully opaque, %.1f%% masked",
+                static_cast<unsigned long long>(classified),
+                100.0 * double(transparentTriangles) / double(classified),
+                100.0 * double(opaqueTriangles) / double(classified),
+                100.0 * double(maskedTriangles) / double(classified));
+    }
+
     return bakedPrimitives;
+}
+
+bool ClassifyPrimitiveAlpha(const Scene& scene, uint32_t flatPrimitiveIndex, uint32_t mip,
+                            OmmDebugTexelStats& stats)
+{
+    uint32_t index = 0;
+    for (const Scene::Mesh& mesh : scene.m_Meshes)
+    {
+        for (const Scene::Primitive& primitive : mesh.m_Primitives)
+        {
+            if (index++ != flatPrimitiveIndex)
+                continue;
+
+            if (primitive.m_MaterialIndex < 0 || size_t(primitive.m_MaterialIndex) >= scene.m_Materials.size())
+                return false;
+
+            const Scene::Material& material = scene.m_Materials[primitive.m_MaterialIndex];
+            const int textureIndex = material.m_BaseColorTexture;
+            if (textureIndex < 0 || size_t(textureIndex) >= scene.m_Textures.size())
+                return false;
+
+            std::vector<uint8_t> alpha;
+            uint32_t width = 0;
+            uint32_t height = 0;
+            if (!ReadAlphaMip(scene.m_Textures[textureIndex], 0, alpha, width, height))
+                return false;
+
+            ClassifyAlphaTexels(alpha.data(), width, height, material.m_GPU.m_AlphaCutoff, stats);
+
+            // Coarser levels come from a conservative reduction of mip 0 rather than from the stored chain: an
+            // averaged mip turns partially covered blocks into fully opaque texels, while a conservative level
+            // keeps them unknown, which is the only answer that cannot contradict the fine level.
+            for (uint32_t level = 0; level < mip; ++level)
+            {
+                OmmDebugTexelStats reduced;
+                ReduceClassificationConservative(stats, reduced);
+                stats = std::move(reduced);
+            }
+
+            return true;
+        }
+    }
+
+    return false;
 }

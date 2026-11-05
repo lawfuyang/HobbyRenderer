@@ -1,0 +1,4 @@
+srinput OmmDebugInputs
+{
+    Texture2D<float4> SrcClass; // t0, RGBA8: rgb = class colour, a = class index / 255
+};
