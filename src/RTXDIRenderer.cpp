@@ -2708,6 +2708,13 @@ public:
             compInputs.SetGBufferEmissive(emissiveTex);
             compInputs.SetDiffuseIllumination(bDenoise ? denoisedDiffuseTex  : diOutputTex);
             compInputs.SetSpecularIllumination(bDenoise ? denoisedSpecularTex : specularOutTex);
+            // Depth pair for the upsample: this pixel's view depth and the reduced chain's, so
+            // lighting is not blended across a silhouette. Unused when the chain is full size,
+            // but it still has to be a single-channel float SRV there.
+            compInputs.SetViewDepth(linearDepthTex);
+            compInputs.SetHalfViewDepth(gbufferScale > 1
+                ? renderGraph.GetTexture(m_RG_HalfLinearDepth, RGResourceAccessMode::Read)
+                : linearDepthTex);
 
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(compositedTex);

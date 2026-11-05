@@ -349,4 +349,8 @@ srinput CompositingPassInputs
     Texture2D<float4>   m_GBufferEmissive;          // t2
     Texture2D<float4>   m_DiffuseIllumination;      // t3
     Texture2D<float4>   m_SpecularIllumination;     // t4
+    // View depth of this pixel and of the reduced-resolution chain it reads from, used to
+    // keep the upsample from blending lighting across a geometry silhouette.
+    Texture2D<float>    m_ViewDepth;                // t5
+    Texture2D<float>    m_HalfViewDepth;            // t6
 };
