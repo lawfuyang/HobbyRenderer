@@ -63,6 +63,7 @@ public:
             srrhi::BloomPrefilterInputs inputs;
             inputs.m_PrefilterConstants.SetKnee(g_Renderer.m_BloomKnee);
             inputs.m_PrefilterConstants.SetStrength(1.0f);
+            inputs.m_PrefilterConstants.SetThreshold(g_Renderer.m_BloomThreshold);
             inputs.SetInputTexture(taaOutput);
 
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);

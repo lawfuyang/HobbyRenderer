@@ -23,16 +23,14 @@ float3 SafeHDR(float3 c)
 float3 Prefilter(float3 color)
 {
     float brightness = max(color.r, max(color.g, color.b));
+    float knee = max(PrefilterCB.m_Knee * PrefilterCB.m_Threshold, 1e-4);
 
-    // Soft knee
-    float soft = brightness + PrefilterCB.m_Knee;
-    soft = clamp(soft, 0.0, 2.0 * PrefilterCB.m_Knee);
-    soft = (soft * soft) / (4.0 * PrefilterCB.m_Knee + 1e-6);
-
-    float contribution = max(soft, brightness);
-    contribution /= max(brightness, 1e-4);
-
-    return color * contribution;
+    // Only the part of the pixel above the threshold blooms, eased in over a knee. Without this every pixel
+    // reaches the blur, so one very bright emitter (a lamp at a few hundred in linear) smears over the whole
+    // frame instead of glowing around itself.
+    float soft = clamp(brightness - PrefilterCB.m_Threshold + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee);
+    return color * (max(soft, brightness - PrefilterCB.m_Threshold) / max(brightness, 1e-4));
 }
 
 float4 Prefilter_PSMain(FullScreenVertexOut input) : SV_Target

@@ -406,6 +406,9 @@ public:
 
     // Bloom shaping parameters
     float m_BloomKnee = 0.1f;
+    // Scene luminance below this blooms not at all. The emitters in Bistro are hundreds of times brighter than
+    // the room around them, so with no threshold one lamp smears over the whole frame.
+    float m_BloomThreshold = 1.0f;
     float m_UpsampleRadius = 0.85f;
 
     int      m_DebugMode = 0;

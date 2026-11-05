@@ -2,6 +2,7 @@ cbuffer BloomPrefilterConstants
 {
     float m_Knee;
     float m_Strength;
+    float m_Threshold;
 };
 
 cbuffer BloomDownsampleConstants
