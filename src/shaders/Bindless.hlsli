@@ -143,21 +143,6 @@ float4 SampleBindlessStreamedTextureLevel(
     return tex.SampleLevel(sam, uv, level);
 }
 
-float4 SampleBindlessStreamedTextureGrad(
-    uint textureIndex, uint samplerIndex, uint minMipIndex, float2 uv, float2 ddx_uv, float2 ddy_uv, uint2 minMipDims)
-{
-    Texture2D tex = ResourceDescriptorHeap[NonUniformResourceIndex(textureIndex)];
-    SamplerState sam = SamplerDescriptorHeap[NonUniformResourceIndex(samplerIndex)];
-
-    if (minMipIndex == srrhi::CommonConsts::DEFAULT_TEXTURE_BLACK)
-        return tex.SampleGrad(sam, uv, ddx_uv, ddy_uv);
-
-    // The clamp argument is the sampler's MinLOD, so the gradients still pick the anisotropic footprint but can
-    // never resolve to a mip whose tiles are not mapped.
-    const uint minResidentMip = LoadMinResidentMip(minMipIndex, uv, minMipDims);
-    return tex.SampleGrad(sam, uv, ddx_uv, ddy_uv, 0, (float)minResidentMip);
-}
-
 // Helper function to sample from bindless textures at a specific LOD level.
 // Required in Compute Shaders or Ray Tracing where implicit derivatives are unavailable.
 float4 SampleBindlessTextureLevel(uint textureIndex, uint samplerIndex, float2 uv, float lod)

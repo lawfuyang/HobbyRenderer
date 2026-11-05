@@ -411,10 +411,12 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
 
             if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK)
             {
-                TriangleVertices tv = GetTriangleVertices(primitiveIndex, inst.m_LODIndex, mesh, inputs.indices, inputs.vertices);
-                RayGradients grad = GetShadowRayGradients(tv, bary, ray.Origin, inst.m_World);
-                
-                if (AlphaTestGrad(grad.uv, grad.ddx, grad.ddy, mat))
+                // Shadow rays test mip 0. The micromap is baked from mip 0 and masked albedos are kept fully
+                // resident, so this reads the same alpha the mask was built from; a derivative-derived LOD reads
+                // a blurred mip whose averaged alpha no longer describes the texel the ray actually hit.
+                float2 uvSample = GetInterpolatedUV(primitiveIndex, inst.m_LODIndex, bary, mesh, inputs.indices, inputs.vertices);
+
+                if (AlphaTest(uvSample, mat, 0.0f))
                 {
                     q.CommitNonOpaqueTriangleHit();
                 }

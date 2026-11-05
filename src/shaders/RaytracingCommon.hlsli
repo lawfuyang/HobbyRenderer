@@ -141,30 +141,6 @@ bool AlphaTest(
     return true;
 }
 
-bool AlphaTestGrad(
-    float2 uv,
-    float2 ddx_uv,
-    float2 ddy_uv,
-    srrhi::MaterialConstants mat)
-{
-    if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE)
-        return true;
-    
-    if (mat.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK)
-    {
-        float alpha = mat.m_BaseColor.w;
-        if ((mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0)
-        {
-            alpha *= SampleBindlessStreamedTextureGrad(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
-                                                       mat.m_AlbedoMinMipIndex, uv, ddx_uv, ddy_uv,
-                                                       uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY)).w;
-        }
-        return alpha >= mat.m_AlphaCutoff;
-    }
-
-    return true;
-}
-
 // --- Shared inline ray tracing -----------------------------------------------
 // Standard ray trace with alpha mask/blend support. Used by PathTracer.
 // Scene resources are passed as parameters
@@ -231,48 +207,6 @@ bool TraceRayStandard(
 
     hit = (RayHitInfo)0;
     return false;
-}
-
-struct RayGradients
-{
-    float2 uv;
-    float2 ddx;
-    float2 ddy;
-};
-
-RayGradients GetShadowRayGradients(
-    TriangleVertices tv,
-    float2 bary,
-    float3 rayOrigin,
-    float4x4 world)
-{
-    float3 p0 = MatrixMultiply(float4(tv.v0.m_Pos, 1.0f), world).xyz;
-    float3 p1 = MatrixMultiply(float4(tv.v1.m_Pos, 1.0f), world).xyz;
-    float3 p2 = MatrixMultiply(float4(tv.v2.m_Pos, 1.0f), world).xyz;
-
-    float3 hitPos = p0 * (1.0f - bary.x - bary.y) + p1 * bary.x + p2 * bary.y;
-    float dist = length(hitPos - rayOrigin);
-
-    float3 edge1 = p1 - p0;
-    float3 edge2 = p2 - p0;
-    float triangleArea = length(cross(edge1, edge2)) * 0.5f;
-
-    float2 uv0 = tv.v0.m_Uv;
-    float2 uv1 = tv.v1.m_Uv;
-    float2 uv2 = tv.v2.m_Uv;
-    
-    RayGradients grad;
-    grad.uv = uv0 * (1.0f - bary.x - bary.y) + uv1 * bary.x + uv2 * bary.y;
-
-    float2 uvMin = min(uv0, min(uv1, uv2));
-    float2 uvMax = max(uv0, max(uv1, uv2));
-    float2 uvRange = uvMax - uvMin;
-
-    float gradientScale = triangleArea / max(dist, 0.1f);
-    
-    grad.ddx = uvRange * gradientScale;
-    grad.ddy = uvRange * gradientScale;
-    return grad;
 }
 
 struct PBRAttributes
