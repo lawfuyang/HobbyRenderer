@@ -374,7 +374,9 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
 
     // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
-    SDL_Log("[Init] Opacity micromaps: %s", m_bOmmSupported ? "supported" : "unsupported");
+    m_bEnableOmm = !Config::Get().m_DisableOmm;
+    SDL_Log("[Init] Opacity micromaps: %s", m_bOmmSupported ? (m_bEnableOmm ? "supported" : "supported, disabled")
+                                                            : "unsupported");
     // Sampler feedback drives tiled-texture streaming, but it is optional: capture
     // tools such as RenderDoc do not implement it, so fall back to synthesising the
     // feedback map instead of asserting. See IsSamplerFeedbackEnabled().
@@ -466,6 +468,16 @@ void Renderer::Initialize()
 
     InitStreaming();
 
+    // The scene load records its uploads and acceleration structure builds and submits them at the end of this
+    // function, so a capture of frame 0 has to be opened before the load: inside the frame loop the bracket would
+    // start after those command lists are already executed. The loop's own request for frame 0 is then refused
+    // ("a capture is already running") and its EndFrameCapture closes this one.
+    if (g_RenderDoc.IsAvailable() && Config::Get().m_RenderDocCaptureFrame == 0)
+    {
+        SDL_Log("[RenderDoc] Opening the frame 0 capture before scene load, so the load's command lists are in it");
+        g_RenderDoc.BeginFrameCapture();
+    }
+
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
@@ -543,6 +555,22 @@ void Renderer::Run()
             ReloadShaders();
         }
 
+        // Scripted camera motion: the streaming and masked-shadow problems only show up while the camera moves,
+        // and a scripted run has no way to drive the mouse.
+        if (const float spinDegreesPerSecond = Config::Get().m_CameraSpinDegreesPerSecond; spinDegreesPerSecond != 0.0f)
+        {
+            const float deltaSeconds = static_cast<float>(m_FrameTime / 1000.0);
+            m_Scene.m_Camera.SetYaw(m_Scene.m_Camera.GetYaw() + DirectX::XMConvertToRadians(spinDegreesPerSecond) * deltaSeconds);
+        }
+
+        // A comparison run stops as soon as its frame is on disk. This sits before the swapchain acquire, so
+        // the backbuffer still holds the frame that was just presented.
+        if (Config::Get().m_ScreenshotFrame == static_cast<int>(m_FrameNumber))
+        {
+            SaveBackBufferScreenshot();
+            m_Running = false;
+        }
+
         // A capture spans one whole frame, swapchain acquire to present. Requested either from the ImGui
         // panel (the next frame brackets it) or from --renderdoc-capture-frame.
         const bool bRenderDocCapture = g_RenderDoc.IsAvailable() &&
@@ -554,6 +582,7 @@ void Renderer::Run()
         }
 
         const bool bSwapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_AcquiredSwapchainImageIdx);
+        const uint64_t markAcquireNs = SDL_GetTicksNS();
         
         m_TaskScheduler->ScheduleTask([this]() {
             PROFILE_SCOPED("Garbage Collection");
@@ -562,6 +591,7 @@ void Renderer::Run()
 
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)
         m_ImGuiLayer.UpdateFrame();
+        const uint64_t markImGuiNs = SDL_GetTicksNS();
 
         // The panel runs before the passes are recorded and the swapchain image is only acquired, so a rebuild
         // it asked for lands in this frame's command lists.
@@ -626,6 +656,7 @@ void Renderer::Run()
             nvrhi::CommandListHandle cmd = AcquireCommandList();
             UpdateStreamingPreRender(cmd);
         }
+        const uint64_t markStreamingPreNs = SDL_GetTicksNS();
 
         ScheduleAndRunAllRenderers();
 
@@ -633,10 +664,12 @@ void Renderer::Run()
         m_TaskScheduler->ExecuteAllScheduledTasks();
 
         m_RenderGraph.PostRender();
+        const uint64_t markRecordNs = SDL_GetTicksNS();
 
         // Update texture streaming -> post-render phase:
         // ResolveFeedback (reads sampler feedback written by GBuffer pass) + EndFrame.
         UpdateStreamingPostRender();
+        const uint64_t markStreamingPostNs = SDL_GetTicksNS();
 
         // GPU query for frame timer is super expensive on the CPU for some reason. i give up using it
         if constexpr (false)
@@ -649,6 +682,7 @@ void Renderer::Run()
 
         // Execute any queued GPU work in submission order
         ExecutePendingCommandLists();
+        const uint64_t markExecuteNs = SDL_GetTicksNS();
 
         // Present swapchain
         SDL_assert(bSwapChainImageAcquireSuccess);
@@ -659,6 +693,7 @@ void Renderer::Run()
             break;
         }
         m_SwapChainImageIdx = 1 - m_SwapChainImageIdx;
+        const uint64_t markPresentNs = SDL_GetTicksNS();
 
         if (bRenderDocCapture)
         {
@@ -690,11 +725,52 @@ void Renderer::Run()
         if (m_FrameTime > 0.0)
             m_FPS = 1000.0 / m_FrameTime;
 
+        // The first frames carry the scene load's uploads and the first PSO compilations, so they are slow by
+        // definition and would drown out a real hitch.
+        constexpr uint64_t kHitchWarmupFrames = 60;
+
+        // A frame that overran its budget is logged with the state that sideways movement produced: GPU stalls
+        // show up here too, because the CPU blocks in submission or present while the queue drains.
+        if (const float hitchThresholdMs = Config::Get().m_HitchLogThresholdMs;
+            hitchThresholdMs > 0.0f && m_FrameNumber > kHitchWarmupFrames && m_FrameTime > hitchThresholdMs)
+        {
+            const nvfeedback::FeedbackManagerStats& stats = m_FeedbackManager->GetStats();
+            const double ms = 1.0 / 1000000.0;
+            const uint64_t marks[] = { frameStart, markAcquireNs, markImGuiNs, markStreamingPreNs, markRecordNs,
+                                       markStreamingPostNs, markExecuteNs, markPresentNs };
+            SDL_Log("[Hitch] frame %llu took %.1f ms | cpu: swapchain %.1f, imgui %.1f, streaming-pre %.1f, record %.1f,"
+                    " streaming-post %.1f, submit %.1f, present %.1f, tail %.1f | tiles submitted %u | tile memory %.1f MB"
+                    " in %u heaps | tiles %u/%u (standby %u) | mappings %.2f ms | VRAM %.1f MB",
+                    static_cast<unsigned long long>(m_FrameNumber), m_FrameTime,
+                    static_cast<double>(marks[1] - marks[0]) * ms, static_cast<double>(marks[2] - marks[1]) * ms,
+                    static_cast<double>(marks[3] - marks[2]) * ms, static_cast<double>(marks[4] - marks[3]) * ms,
+                    static_cast<double>(marks[5] - marks[4]) * ms, static_cast<double>(marks[6] - marks[5]) * ms,
+                    static_cast<double>(marks[7] - marks[6]) * ms,
+                    static_cast<double>(SDL_GetTicksNS() - marks[7]) * ms,
+                    m_TilesSubmittedThisFrame,
+                    static_cast<double>(stats.m_HeapAllocationInBytes) / (1024.0 * 1024.0), stats.m_NumHeaps,
+                    stats.m_TilesAllocated, stats.m_TilesTotal, stats.m_TilesStandby,
+                    stats.m_CpuTimeUpdateTileMappings * 1000.0,
+                    static_cast<double>(m_RHI->GetVRAMUsageMB()));
+        }
+
+        // Which pass absorbs the spike is the whole question, and a hitch this rare cannot be caught by hand.
+        if (const float hitchDumpThresholdMs = Config::Get().m_HitchDumpThresholdMs;
+            hitchDumpThresholdMs > 0.0f && m_FrameNumber > kHitchWarmupFrames && m_FrameTime > hitchDumpThresholdMs)
+        {
+            const std::string dumpPath = (std::filesystem::path{ SDL_GetBasePath() } / "profiler_dump.html").string();
+            SDL_Log("[Hitch] frame %llu took %.1f ms; writing %s and stopping",
+                    static_cast<unsigned long long>(m_FrameNumber), m_FrameTime, dumpPath.c_str());
+            MicroProfileDumpFileImmediately(dumpPath.c_str(), nullptr, nullptr);
+            m_Running = false;
+        }
+
         // Increment frame number for double buffering
         m_FrameNumber++;
 
-        // Periodic camera-state save (every 1 s, only if camera moved)
-        if (!Config::Get().m_ScenePath.empty())
+        // Periodic camera-state save (every 1 s, only if camera moved). A scripted spin is a test pose, not the
+        // user's viewpoint, so it must not overwrite the saved state.
+        if (!Config::Get().m_ScenePath.empty() && Config::Get().m_CameraSpinDegreesPerSecond == 0.0f)
         {
             CameraSavedState state;
             state.position = m_Scene.m_Camera.GetPosition();
@@ -1730,6 +1806,12 @@ void Renderer::AddComputePass(const RenderPassParams& params)
 
     nvrhi::ComputeState state;
     const nvrhi::ShaderHandle computeShader = GetShaderHandle(params.shaderID);
+    // Ray-query opacity micromaps would be opted into here with the pre-SM6.9 pipeline flag
+    // (ComputePipelineDesc::allowOpacityMicromaps). It cannot be used on this machine: the D3D12 runtime installed
+    // here (D3D12Core 10.0.26100.9818) predates the spec revision that introduced the flag (DXR v1.47, 2026-08),
+    // and CreateComputePipelineState returns E_INVALIDARG for every pipeline that sets it - whatever its shaders,
+    // including passes that do trace scene rays. Inline ray queries therefore stay OMM-unaware and the micromaps
+    // built at load time have no effect on traversal until an Agility SDK ships a newer D3D12Core.
     state.pipeline = GetOrCreateComputePipeline(computeShader, layouts);
     for (const nvrhi::BindingSetHandle& bindingSet : bindingSets)
     {
