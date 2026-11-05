@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "CameraStateManager.h"
 #include "CommonResources.h"
+#include "GpuPassTimers.h"
 #include "GraphicRHI.h"
 #include "RenderGraph.h"
 #include "Scene.h"
@@ -41,9 +42,8 @@ public:
     virtual bool IsBasePassRenderer() const { return false; }
 
     // ─── Per-frame statistics (filled in by the render loop) ───
+    // GPU time of this renderer's own scope comes from GpuPassTimers, which the Profiler panel reads.
     float m_CPUTime = 0.0f;
-    float m_GPUTime = 0.0f;
-    nvrhi::TimerQueryHandle m_GPUQueries[2];
     bool m_bPassEnabled = false;
 
     // Set to true by ImGuiLayer when the indirect lighting technique switches TO this
@@ -482,6 +482,9 @@ public:
 
     nvrhi::TimerQueryHandle m_GPUQueries[2];
 
+    // One timer query per GPU scope the frame records; the Profiler panel's GPU column reads it.
+    GpuPassTimers m_GpuPassTimers;
+
     // ─── Runtime flags ───
 
     bool m_Running = true;
@@ -521,11 +524,16 @@ private:
     bool m_HasMarker;
 };
 
-// Opens a MicroProfile GPU timer scope on construction, closes it on destruction.
+// Opens a MicroProfile GPU timer scope on construction, closes it on destruction, and times the same range
+// with a nvrhi timer query for the Profiler panel's GPU column.
 class ScopedGpuProfile
 {
 public:
     ScopedGpuProfile(std::string_view name, const nvrhi::CommandListHandle& commandList);
+    ~ScopedGpuProfile();
+
+    ScopedGpuProfile(const ScopedGpuProfile&) = delete;
+    ScopedGpuProfile& operator=(const ScopedGpuProfile&) = delete;
 
 private:
     static std::string_view BuildMicroProfileName(std::string_view name);
@@ -533,6 +541,8 @@ private:
     nvrhi::utils::ScopedMarker m_Marker;
     MicroProfileToken m_Token = MICROPROFILE_INVALID_TOKEN;
     MicroProfileScopeGpuHandler m_Scope;
+    nvrhi::ICommandList* m_CommandList = nullptr;
+    nvrhi::ITimerQuery* m_TimerQuery = nullptr;   // null when this scope got no query
 };
 
 // Usage: PROFILE_GPU_SCOPED("Pass name", commandList);

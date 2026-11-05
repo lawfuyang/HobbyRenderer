@@ -277,9 +277,6 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
 {
     SDL_assert(m_IsInsideSetup && "ScheduleRenderer() called outside of BeginSetup()/EndSetup() block");
 
-    const int readIndex = g_Renderer.m_FrameNumber % 2;
-    const int writeIndex = (g_Renderer.m_FrameNumber + 1) % 2;
-
     pRenderer->m_bPassEnabled = false;
     {
         PROFILE_SCOPED("SetupRenderer");
@@ -316,7 +313,6 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         m_PendingDeclaredBuffers.clear();
         m_PendingPassAccess = {};
         pRenderer->m_CPUTime = 0.0f;
-        pRenderer->m_GPUTime = 0.0f;
         return;
     }
 
@@ -326,7 +322,7 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
     nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 
     const bool bImmediateExecute = false; /* defer execution until after render graph compiles */
-    g_Renderer.m_TaskScheduler->ScheduleTask([pRenderer, cmd, readIndex, writeIndex, passIndex]() {
+    g_Renderer.m_TaskScheduler->ScheduleTask([pRenderer, cmd, passIndex]() {
         PROFILE_SCOPED(pRenderer->GetName());
         SimpleTimer cpuTimer;
         ScopedCommandList scopedCmd{ cmd, pRenderer->GetName() };
@@ -334,17 +330,15 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
 
         g_Renderer.m_RenderGraph.SetActivePass(passIndex);
 
-        if (g_Renderer.m_RHI->m_NvrhiDevice->pollTimerQuery(pRenderer->m_GPUQueries[readIndex]))
-        {
-            pRenderer->m_GPUTime = SimpleTimer::SecondsToMilliseconds(g_Renderer.m_RHI->m_NvrhiDevice->getTimerQueryTime(pRenderer->m_GPUQueries[readIndex]));
-        }
-        g_Renderer.m_RHI->m_NvrhiDevice->resetTimerQuery(pRenderer->m_GPUQueries[readIndex]);
-
         g_Renderer.m_RenderGraph.InsertGlobalSyncBarriers(passIndex, scopedCmd);
-        scopedCmd->beginTimerQuery(pRenderer->m_GPUQueries[writeIndex]);
-        pRenderer->Render(scopedCmd, g_Renderer.m_RenderGraph);
+
+        {
+            // Every scope recorded from here on is listed under this renderer in the Profiler panel.
+            ScopedGpuTimerGroup timerGroup{ pRenderer->GetName() };
+            pRenderer->Render(scopedCmd, g_Renderer.m_RenderGraph);
+        }
+
         g_Renderer.m_RenderGraph.SetActivePass(0);
-        scopedCmd->endTimerQuery(pRenderer->m_GPUQueries[writeIndex]);
         pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds());
     }, bImmediateExecute);
 }

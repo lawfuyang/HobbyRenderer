@@ -416,6 +416,10 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
     m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
 
+    // Per-scope timings for the Profiler panel. Created before any pass records, since the queries have to
+    // exist before a scope can start one.
+    m_GpuPassTimers.Initialize(m_RHI->m_NvrhiDevice);
+
     m_ImGuiLayer.Initialize();
 
     // Initialize renderers now that shaders and device are ready
@@ -425,8 +429,6 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
         renderer->Initialize();
         
         m_Renderers.push_back(renderer);
-        renderer->m_GPUQueries[0] = m_RHI->m_NvrhiDevice->createTimerQuery();
-        renderer->m_GPUQueries[1] = m_RHI->m_NvrhiDevice->createTimerQuery();
     }
 
     // Flush any pending uploads from CommonResources::Initialize().
@@ -518,6 +520,10 @@ void Renderer::Run()
         PROFILE_SCOPED("Frame");
         const uint64_t frameStart = SDL_GetTicksNS();
         const uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / m_TargetFPS;
+
+        // Starts this frame's GPU timing. The values themselves are read back in ExecutePendingCommandLists,
+        // which is where the previously submitted work is known to have finished.
+        m_GpuPassTimers.BeginFrame();
 
         {
             PROFILE_SCOPED("Event Polling");
@@ -832,6 +838,7 @@ void Renderer::Shutdown()
     m_Renderers.clear();
 
     SDL_Log("[Shutdown] GPU timers and pipeline caches");
+    m_GpuPassTimers.Shutdown();
     m_GPUQueries[0] = nullptr;
     m_GPUQueries[1] = nullptr;
 
@@ -2023,6 +2030,11 @@ void Renderer::ExecutePendingCommandLists()
         m_RHI->m_NvrhiDevice->waitForIdle();
      }
 
+    // Everything submitted by the frames before this one has now completed, so their GPU timestamps can be
+    // read. This sits after the wait and before this frame's lists are submitted, so a query is never reset
+    // while its own submission is still in flight.
+    m_GpuPassTimers.Resolve(m_RHI->m_NvrhiDevice);
+
     m_CommandListFreeList.insert(m_CommandListFreeList.end(), m_InFlightCommandLists.begin(), m_InFlightCommandLists.end());
     m_InFlightCommandLists.clear();
 
@@ -2221,7 +2233,17 @@ ScopedGpuProfile::ScopedGpuProfile(std::string_view name, const nvrhi::CommandLi
     : m_Marker(commandList, name.data())
     , m_Token(MicroProfileGetToken("GPU", BuildMicroProfileName(name).data(), MP_AUTO, MicroProfileTokenTypeGpu, 0))
     , m_Scope(m_Token, Renderer::GetGPULogForCurrentThread())
+    , m_CommandList(commandList.Get())
 {
+    m_TimerQuery = g_Renderer.m_GpuPassTimers.Begin(m_CommandList, name);
+}
+
+ScopedGpuProfile::~ScopedGpuProfile()
+{
+    if (m_TimerQuery)
+    {
+        g_Renderer.m_GpuPassTimers.End(m_CommandList, m_TimerQuery);
+    }
 }
 
 thread_local bool tl_bScopedCommandListActive = false;

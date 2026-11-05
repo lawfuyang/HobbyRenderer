@@ -197,6 +197,9 @@ public:
         nvrhiDesc.pCopyCommandQueue = m_CopyQueue.Get();
         nvrhiDesc.errorCB = &ms_NvrhiCallback;
         nvrhiDesc.enableHeapDirectlyIndexed = true;
+        // GpuPassTimers keeps two frames' worth of per-scope timer queries; nvrhi sizes its timestamp heap
+        // from this once, so the default of 256 would leave most scopes untimed.
+        nvrhiDesc.maxTimerQueries = 1024;
 
         m_NvrhiDevice = nvrhi::d3d12::createDevice(nvrhiDesc);
 

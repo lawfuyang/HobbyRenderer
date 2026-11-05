@@ -453,6 +453,31 @@ void ImGuiLayer::UpdateFrame()
                 ImGui::TableSetupColumn("CPU (ms)");
                 ImGui::TableSetupColumn("GPU (ms)");
                 ImGui::TableHeadersRow();
+
+                // Timings come from the timer queries each GPU scope opens, resolved one frame late.
+                const GpuPassTimers& gpuTimers = g_Renderer.m_GpuPassTimers;
+                const std::vector<GpuPassTimers::Entry>& gpuEntries = gpuTimers.GetEntries();
+                const uint32_t gpuFrame = gpuTimers.GetLastResolvedFrame();
+
+                // "-" rather than 0.000: a scope whose query had not completed is not 0 ms.
+                auto drawGpuTime = [&](const GpuPassTimers::Entry& entry)
+                {
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.3f", entry.m_Milliseconds);
+                };
+
+                auto findEntry = [&](std::string_view group, std::string_view name) -> const GpuPassTimers::Entry*
+                {
+                    for (const GpuPassTimers::Entry& entry : gpuEntries)
+                    {
+                        if (entry.m_Frame == gpuFrame && entry.m_Name == name && entry.m_Group == group)
+                        {
+                            return &entry;
+                        }
+                    }
+                    return nullptr;
+                };
+
                 for (const std::shared_ptr<IRenderer>& r : g_Renderer.m_Renderers)
                 {
                     if (!r->m_bPassEnabled)
@@ -465,9 +490,57 @@ void ImGuiLayer::UpdateFrame()
                     ImGui::Text("%s", r->GetName());
                     ImGui::TableSetColumnIndex(1);
                     ImGui::Text("%.3f", r->m_CPUTime);
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::Text("%.3f", r->m_GPUTime);
+
+                    // The renderer's own scope, then every dispatch it recorded underneath it.
+                    if (const GpuPassTimers::Entry* entry = findEntry({}, r->GetName()))
+                    {
+                        drawGpuTime(*entry);
+                    }
+                    else
+                    {
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted("-");
+                    }
+
+                    for (const GpuPassTimers::Entry& entry : gpuEntries)
+                    {
+                        if (entry.m_Frame != gpuFrame || entry.m_Group != r->GetName())
+                        {
+                            continue;
+                        }
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("    %s", entry.m_Name.c_str());
+                        drawGpuTime(entry);
+                    }
                 }
+
+                // Scopes recorded outside a renderer: the load's uploads and mip chains, the tile work, and
+                // anything a renderer does not own.
+                for (const GpuPassTimers::Entry& entry : gpuEntries)
+                {
+                    if (entry.m_Frame != gpuFrame || !entry.m_Group.empty())
+                    {
+                        continue;
+                    }
+
+                    bool bIsRendererScope = false;
+                    for (const std::shared_ptr<IRenderer>& r : g_Renderer.m_Renderers)
+                    {
+                        bIsRendererScope |= (entry.m_Name == r->GetName());
+                    }
+                    if (bIsRendererScope)
+                    {
+                        continue;
+                    }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%s", entry.m_Name.c_str());
+                    drawGpuTime(entry);
+                }
+
                 ImGui::EndTable();
             }
 
