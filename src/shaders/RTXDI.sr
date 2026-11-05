@@ -163,6 +163,12 @@ cbuffer ResamplingConstants
     uint  visualizeRegirCells;
     uint2 environmentPdfTextureSize;
     uint2 localLightPdfTextureSize;
+
+    // How many full-resolution G-buffer texels one screen-space pass pixel stands for.
+    // 1 = the passes run at the render resolution, 2 = they run at half of it.
+    // The G-buffer itself is always stored at the full render resolution, so a pass
+    // pixel p reads the G-buffer texel p * gbufferScale.
+    uint  gbufferScale;
 };
 
 // ---------------------------------------------------------------------------
@@ -239,6 +245,21 @@ srinput GenerateViewZInputs
     ResamplingConstants m_Const;
     Texture2D<float>    m_Depth;
     RWTexture2D<float>  m_LinearDepth;
+};
+
+// ---- DownsampleDIInputs pass ----
+// Produces the half-resolution copies of the screen-space inputs that NRD consumes
+// when the DI chain runs below the render resolution. Point samples: every value here
+// is a per-surface quantity that must not be blended across geometry edges.
+srinput DownsampleDIInputs
+{
+    ResamplingConstants  m_Const;
+    Texture2D<float>     m_ViewDepth;
+    Texture2D<float4>    m_MotionVectors;
+    Texture2D<float3>    m_NormalRoughness;
+    RWTexture2D<float>   m_HalfViewDepth;
+    RWTexture2D<float4>  m_HalfMotionVectors;
+    RWTexture2D<float3>  m_HalfNormalRoughness;
 };
 
 // ---- PostprocessGBuffer pass ----

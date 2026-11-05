@@ -78,14 +78,17 @@ RAB_Material GetGBufferMaterial(
 {
     RAB_Material material = RAB_EmptyMaterial();
 
-    if (any(pixelPosition >= view.m_ViewportSize))
+    // The G-buffer is stored at the full render resolution; this pass may not be.
+    const int2 gbufferPos = RAB_GbufferTexelPos(pixelPosition);
+
+    if (any(gbufferPos >= int2(view.m_ViewportSize)))
         return material;
 
     // Albedo is RGBA8_UNORM — read directly, no unpacking needed.
-    float3 baseColor = albedoTexture[pixelPosition].rgb;
+    float3 baseColor = albedoTexture[gbufferPos].rgb;
 
     // ORM is RG8_UNORM — .r = roughness, .g = metallic.  No unpacking needed.
-    float2 orm     = ormTexture[pixelPosition];
+    float2 orm     = ormTexture[gbufferPos];
     float roughness = orm.r;
     float metallic  = orm.g;
 

@@ -92,14 +92,11 @@ static void NrdFree(void* /*userArg*/, void* memory)
 // FillNRDCommonSettings
 // ============================================================================
 
-void FillNRDCommonSettings(nrd::CommonSettings& settings)
+void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32_t height, uint32_t gbufferScale)
 {
     
     const srrhi::PlanarViewConstants& view     = g_Renderer.m_Scene.m_View;
     const srrhi::PlanarViewConstants& prevView = g_Renderer.m_Scene.m_ViewPrev;
-
-    const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
-    const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
     // NRD expects column-major matrices with column-vector convention.
     // Our matrices are row-major with row-vector convention (DirectXMath style).
@@ -121,10 +118,14 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings)
     settings.rectSizePrev[0]     = static_cast<uint16_t>(width);
     settings.rectSizePrev[1]     = static_cast<uint16_t>(height);
 
-    // Motion vectors are in pixel space (Δx, Δy). NRD expects:
+    // Motion vectors are in render-resolution pixels (Δx, Δy). NRD expects:
     //   pixelUvPrev = pixelUv + mv.xy → scale pixels → UV.
-    settings.motionVectorScale[0] = 1.0f / static_cast<float>(width);
-    settings.motionVectorScale[1] = 1.0f / static_cast<float>(height);
+    // The UV space is independent of the denoised resolution, so the scale divides by the
+    // render-resolution width, which is the denoised width times the block size.
+    const uint32_t fullWidth  = width  * gbufferScale;
+    const uint32_t fullHeight = height * gbufferScale;
+    settings.motionVectorScale[0] = 1.0f / static_cast<float>(fullWidth);
+    settings.motionVectorScale[1] = 1.0f / static_cast<float>(fullHeight);
     settings.motionVectorScale[2] = 1.0f; // mv.z is already in view-space units
 
     settings.isMotionVectorInWorldSpace = false;
@@ -138,12 +139,14 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings)
     settings.isHistoryConfidenceAvailable        = false;
     settings.isDisocclusionThresholdMixAvailable = false;
 
-    // Camera jitter offsets (in pixels, current and previous frame).
+    // Camera jitter offsets (in render-resolution pixels, current and previous frame),
+    // converted to the denoised resolution.
     // m_PixelOffset is the Halton sub-pixel jitter applied to the projection matrix.
-    settings.cameraJitter[0]     = view.m_PixelOffset.x;
-    settings.cameraJitter[1]     = view.m_PixelOffset.y;
-    settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x;
-    settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y;
+    const float jitterScale = 1.0f / static_cast<float>(gbufferScale);
+    settings.cameraJitter[0]     = view.m_PixelOffset.x * jitterScale;
+    settings.cameraJitter[1]     = view.m_PixelOffset.y * jitterScale;
+    settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x * jitterScale;
+    settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y * jitterScale;
 
     // Sky pixels are written as 1e6 in GenerateViewZ — safely outside this range.
     settings.denoisingRange = 1000.0f;
@@ -357,7 +360,7 @@ bool NrdIntegration::Initialize()
     return true;
 }
 
-void NrdIntegration::Setup(RenderGraph& renderGraph)
+void NrdIntegration::Setup(RenderGraph& renderGraph, uint32_t width, uint32_t height)
 {
     
     nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
@@ -365,9 +368,6 @@ void NrdIntegration::Setup(RenderGraph& renderGraph)
 
     m_PermanentPoolTextures.resize(instanceDesc->permanentPoolSize);
     m_TransientPoolTextures.resize(instanceDesc->transientPoolSize);
-
-    const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
-    const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
     // -------------------------------------------------------------------------
     // Permanent and transient pool textures
@@ -474,8 +474,6 @@ void NrdIntegration::RunDenoiserPasses(
 
     
     nvrhi::DeviceHandle device = g_Renderer.m_RHI->m_NvrhiDevice;
-    const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
-    const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
     // -------------------------------------------------------------------------
     // Configure NRD denoiser settings

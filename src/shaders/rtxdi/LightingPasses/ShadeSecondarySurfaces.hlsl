@@ -49,7 +49,7 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID)
 {
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
-    if (any(pixelPosition > int2(g_Const.view.m_ViewportSize)))
+    if (any(pixelPosition > RAB_GetRenderSize()))
         return;
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(GlobalIndex, g_Const.runtimeParams.frameIndex, RTXDI_SECONDARY_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);

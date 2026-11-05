@@ -34,6 +34,44 @@
 #define DENOISER_MODE_RELAX      srrhi::RTXDIConstants::DENOISER_MODE_RELAX
 #define DENOISER_MODE_REBLUR     srrhi::RTXDIConstants::DENOISER_MODE_REBLUR
 
+// Undo the NRD packing of the lighting signal. Packed radiance is not linear, so it
+// has to be unpacked before any interpolation between texels.
+float4 UnpackIllumination(float4 packed)
+{
+#ifdef WITH_NRD
+    if (g_Const.denoiserMode == DENOISER_MODE_REBLUR)
+        return REBLUR_BackEnd_UnpackRadianceAndNormHitDist(packed);
+    else if (g_Const.denoiserMode == DENOISER_MODE_RELAX)
+        return RELAX_BackEnd_UnpackRadiance(packed);
+#endif
+    return packed;
+}
+
+// Reads the lighting signal at this full-resolution pixel. The screen-space passes may have run
+// at a fraction of the render resolution, in which case the four surrounding texels are unpacked
+// and bilinearly blended.
+float4 LoadIllumination(Texture2D<float4> tex, int2 pixelPos)
+{
+    if (g_Const.gbufferScale <= 1)
+        return UnpackIllumination(tex[pixelPos]);
+
+    const int2 srcSize = int2(g_Const.view.m_ViewportSize) / int(g_Const.gbufferScale);
+
+    float2 srcPos = (float2(pixelPos) + 0.5f) / float(g_Const.gbufferScale) - 0.5f;
+    int2 i0 = int2(floor(srcPos));
+    float2 f = srcPos - float2(i0);
+
+    i0 = clamp(i0, int2(0, 0), srcSize - 1);
+    const int2 i1 = min(i0 + 1, srcSize - 1);
+
+    float4 v00 = UnpackIllumination(tex[int2(i0.x, i0.y)]);
+    float4 v10 = UnpackIllumination(tex[int2(i1.x, i0.y)]);
+    float4 v01 = UnpackIllumination(tex[int2(i0.x, i1.y)]);
+    float4 v11 = UnpackIllumination(tex[i1]);
+
+    return lerp(lerp(v00, v10, f.x), lerp(v01, v11, f.x), f.y);
+}
+
 float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target
 {
     int2 pixelPos = int2(input.pos.xy);
@@ -50,21 +88,8 @@ float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target
     GetReflectivityFromMetallic(metallic, baseColor, diffuseAlbedo, specularF0);
 
     // Load DI illumination (demodulated — multiply by albedo/F0 to reconstruct radiance).
-    float4 diffuse_illumination  = t_DiffuseIllumination[pixelPos];
-    float4 specular_illumination = t_SpecularIllumination[pixelPos];
-
-#ifdef WITH_NRD
-    if (g_Const.denoiserMode == DENOISER_MODE_REBLUR)
-    {
-        diffuse_illumination  = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(diffuse_illumination);
-        specular_illumination = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(specular_illumination);
-    }
-    else if (g_Const.denoiserMode == DENOISER_MODE_RELAX)
-    {
-        diffuse_illumination  = RELAX_BackEnd_UnpackRadiance(diffuse_illumination);
-        specular_illumination = RELAX_BackEnd_UnpackRadiance(specular_illumination);
-    }
-#endif
+    float4 diffuse_illumination  = LoadIllumination(t_DiffuseIllumination, pixelPos);
+    float4 specular_illumination = LoadIllumination(t_SpecularIllumination, pixelPos);
 
     // Remodulate: multiply demodulated illumination by albedo/F0.
     float3 color = diffuse_illumination.rgb  * diffuseAlbedo

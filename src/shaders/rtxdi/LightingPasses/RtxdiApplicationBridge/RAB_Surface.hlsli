@@ -117,10 +117,13 @@ RAB_Surface GetGBufferSurface(
 {
     RAB_Surface surface = RAB_EmptySurface();
 
-    if (any(pixelPosition >= int2(view.m_ViewportSize)))
+    // The G-buffer is stored at the full render resolution; this pass may not be.
+    const int2 gbufferPos = RAB_GbufferTexelPos(pixelPosition);
+
+    if (any(gbufferPos >= int2(view.m_ViewportSize)))
         return surface;
 
-    float rawDepth = depthTexture[pixelPosition];
+    float rawDepth = depthTexture[gbufferPos];
 
     // Reversed-Z: far plane maps to rawDepth == 0 (background/sky).
     if (rawDepth == 0.0f)
@@ -137,13 +140,13 @@ RAB_Surface GetGBufferSurface(
 
     surface.material = RAB_GetGBufferMaterial(pixelPosition, previousFrame);
 
-    surface.geoNormal = DecodeNormal(geoNormalsTexture[pixelPosition]);
-    surface.normal = DecodeNormal(normalsTexture[pixelPosition]);
+    surface.geoNormal = DecodeNormal(geoNormalsTexture[gbufferPos]);
+    surface.normal = DecodeNormal(normalsTexture[gbufferPos]);
 
     // Reconstruct world position from clip-space depth.  The depth buffer is
     // written with the jittered projection, so we must use the jittered inverse.
     {
-        float2 uv = (float2(pixelPosition) + 0.5f) / float2(view.m_ViewportSize);
+        float2 uv = (float2(gbufferPos) + 0.5f) / float2(view.m_ViewportSize);
         float4 clipPos = float4(uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), rawDepth, 1.0f);
         float4 worldPosFour = MatrixMultiply(clipPos, view.m_MatClipToWorld);
         surface.worldPos = worldPosFour.xyz / worldPosFour.w;

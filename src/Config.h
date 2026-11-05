@@ -65,6 +65,11 @@ struct Config
     // camera moves need a scripted camera to be reproducible.
     float m_CameraSpinDegreesPerSecond = 0.0f;
 
+    // Run the RTXDI screen-space chain (reservoirs, shading, the SHARC query) and the NRD
+    // denoiser at half the render resolution. The panel exposes the same toggle; this exists
+    // so an A/B run can be scripted.
+    bool m_HalfResDI = false;
+
     // Log one line per frame slower than this, with the streaming and VRAM state that frame saw, so a hitch can
     // be attributed to a subsystem after the fact. 0 = off.
     float m_HitchLogThresholdMs = 0.0f;

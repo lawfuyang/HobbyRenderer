@@ -134,8 +134,7 @@ void StoreShadingOutput(
     bool isFirstPass,
     bool isLastPass)
 {
-    // Lighting textures are always full-resolution in this codebase.
-    // Always write at pixelPosition (full-screen coordinates).
+    // Lighting textures live in the resolution of the screen-space passes.
     uint2 lightingTexturePos = pixelPosition;
 
     float diffuseHitT = lightDistance;
@@ -219,8 +218,7 @@ void StoreShadingOutput(
     bool isFirstPassSpecular,
     bool isLastPass)
 {
-    // Lighting textures are always full-resolution in this codebase.
-    // Always write at pixelPosition (full-screen coordinates).
+    // Lighting textures live in the resolution of the screen-space passes.
     uint2 lightingTexturePos = pixelPosition;
 
     if (!isFirstPassDiffuse)

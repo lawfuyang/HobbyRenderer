@@ -175,7 +175,7 @@ void SharcIndirectQuery_CSMain(uint2 GlobalIndex : SV_DispatchThreadID)
     // Map reservoir-space index → full-screen pixel position (handles checkerboard)
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
-    if (any(pixelPosition >= uint2(g_Const.view.m_ViewportSize)))
+    if (any(pixelPosition >= uint2(RAB_GetRenderSize())))
         return;
 
     // Read primary surface from G-buffer.

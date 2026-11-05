@@ -19,8 +19,9 @@
 // The simplest implementation will just return the input pixelPosition.
 int2 RAB_ClampSamplePositionIntoView(int2 pixelPosition, bool previousFrame)
 {
-    int width = int(g_Const.view.m_ViewportSize.x);
-    int height = int(g_Const.view.m_ViewportSize.y);
+    int2 renderSize = RAB_GetRenderSize();
+    int width = renderSize.x;
+    int height = renderSize.y;
 
     // Reflect the position across the screen edges.
     // Compared to simple clamping, this prevents the spread of colorful blobs from screen edges.

@@ -50,7 +50,7 @@ void main(uint2 GlobalIndex : SV_DispatchThreadID, uint2 LocalIndex : SV_GroupTh
         RTXDI_DIReservoir curSample = RTXDI_LoadDIReservoir(g_Const.restirDI.reservoirBufferParams,
             GlobalIndex, g_Const.restirDI.bufferIndices.initialSamplingOutputBufferIndex);
 
-        float3 motionVector = t_MotionVectors[pixelPosition].xyz;
+        float3 motionVector = t_MotionVectors[RAB_GbufferTexelPos(pixelPosition)].xyz;
         motionVector = ConvertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, pixelPosition, motionVector);
 
 		uint sourceBufferIndex = g_Const.restirDI.bufferIndices.temporalResamplingInputBufferIndex;
