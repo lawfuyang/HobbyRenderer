@@ -332,11 +332,27 @@ void Renderer::SaveBackBufferScreenshot()
     // Get the base path where to save the screenshot
     const char* basePath = SDL_GetBasePath();
     std::string screenshotPath{ basePath };
-    screenshotPath += "screenshot.jpg";
+    screenshotPath += "screenshot.png";
 
-    // Write the image as JPEG
-    int writeResult = stbi_write_jpg(screenshotPath.c_str(), (int)width, (int)height, 4, mappedData, 0);
-    SDL_assert(writeResult && "Failed to write screenshot using stb_image_write");
+    // PNG rather than JPEG: a comparison screenshot is measured pixel by pixel against another renderer's
+    // output, and JPEG's ringing would be the same size as the differences being looked for.
+    const size_t tightPitch = static_cast<size_t>(width) * 4;
+    if (rowPitch == tightPitch)
+    {
+        const int writeResult = stbi_write_png(screenshotPath.c_str(), (int)width, (int)height, 4, mappedData, (int)tightPitch);
+        SDL_assert(writeResult && "Failed to write screenshot using stb_image_write");
+    }
+    else
+    {
+        // The staging copy is aligned per row, so the rows have to be repacked before encoding.
+        std::vector<uint8_t> pixels(tightPitch * height);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            std::memcpy(pixels.data() + y * tightPitch, static_cast<const uint8_t*>(mappedData) + y * rowPitch, tightPitch);
+        }
+        const int writeResult = stbi_write_png(screenshotPath.c_str(), (int)width, (int)height, 4, pixels.data(), (int)tightPitch);
+        SDL_assert(writeResult && "Failed to write screenshot using stb_image_write");
+    }
 
     // Unmap the staging texture
     m_RHI->m_NvrhiDevice->unmapStagingTexture(stagingTexture);
@@ -490,6 +506,25 @@ void Renderer::Initialize()
 
     ApplyRenderingModeDefaults(m_Mode);
 
+    // Ablations for comparison runs: switch one pass off and see which way the image moves. They have to be
+    // applied after the mode defaults, which otherwise put the switches back.
+    if (Config::Get().m_bNoIndirect)
+    {
+        m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE;
+    }
+    if (Config::Get().m_bNoDenoise)
+    {
+        m_EnableReSTIRDenoising = false;
+    }
+    if (Config::Get().m_bNoSky)
+    {
+        m_EnableSky = false;
+    }
+    if (const float taaSharpness = Config::Get().m_TaaSharpness; taaSharpness >= 0.0f)
+    {
+        m_TAASharpness = taaSharpness;
+    }
+
     InitStreaming();
 
     // The scene load records its uploads and acceleration structure builds and submits them at the end of this
@@ -520,6 +555,22 @@ void Renderer::Initialize()
                 SDL_Log("[CameraState] Restored camera for scene: %s", scenePath.c_str());
             }
         }
+    }
+
+    // A comparison against another renderer needs the same projection on both sides. The FOV otherwise stays at
+    // ProjectionParams' default until a camera is picked in the panel, so the state restore above does not set it.
+    if (const float fovDegrees = Config::Get().m_FovDegrees; fovDegrees > 0.0f)
+    {
+        ProjectionParams projection = m_Scene.m_Camera.GetProjection();
+        projection.fovY = DirectX::XMConvertToRadians(fovDegrees);
+        m_Scene.m_Camera.SetProjection(projection);
+        SDL_Log("[Camera] Vertical FOV overridden to %.2f degrees", fovDegrees);
+    }
+
+    if (const float exposureStops = Config::Get().m_ExposureCompensationStops; exposureStops != 0.0f)
+    {
+        m_Scene.m_Camera.m_ExposureCompensation = exposureStops;
+        SDL_Log("[Camera] Exposure compensation set to %.2f stops", exposureStops);
     }
 
     // Initialize renderers with scene-dependent resources
@@ -1455,7 +1506,13 @@ void Renderer::SetCameraFromSceneCamera(const Scene::Camera& sceneCam)
     {
         const Matrix& worldTransform = m_Scene.m_Nodes[sceneCam.m_NodeIndex].m_WorldTransform;
         m_Scene.m_Camera.SetFromMatrix(worldTransform);
-        m_Scene.m_Camera.SetProjection(sceneCam.m_Projection);
+
+        ProjectionParams projection = sceneCam.m_Projection;
+        if (const float fovDegrees = Config::Get().m_FovDegrees; fovDegrees > 0.0f)
+        {
+            projection.fovY = DirectX::XMConvertToRadians(fovDegrees);
+        }
+        m_Scene.m_Camera.SetProjection(projection);
 
         m_Scene.m_Camera.m_ExposureValue = sceneCam.m_ExposureValue;
         m_Scene.m_Camera.m_ExposureCompensation = sceneCam.m_ExposureCompensation;

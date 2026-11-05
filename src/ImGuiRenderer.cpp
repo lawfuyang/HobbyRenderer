@@ -55,6 +55,13 @@ void ImGuiRenderer::Render(nvrhi::CommandListHandle commandList, const RenderGra
     
     ImDrawData* draw_data = ImGui::GetDrawData();
 
+    // The buffers below are sized from the draw data, so a frame with no UI geometry would ask for a
+    // zero-byte vertex buffer, which the device rejects.
+    if (draw_data == nullptr || draw_data->TotalVtxCount == 0)
+    {
+        return;
+    }
+
     int fb_width = (int)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
     int fb_height = (int)(draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
 

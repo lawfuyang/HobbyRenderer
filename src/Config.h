@@ -71,6 +71,33 @@ struct Config
     // The panel exposes the same toggle, and `--full-res-di` turns it off for an A/B run.
     bool m_HalfResDI = true;
 
+    // ReSTIR quality preset: 0 = Balanced (the FullSample's "Medium"), 1 = HighPerformance
+    // (its "Fast"), 2 = HighQuality (its "Ultra"). Selected with --restir-preset.
+    int m_ReSTIRPreset = 0;
+
+    // Vertical field of view in degrees, overriding the scene camera's own value; 0 = use the scene's.
+    // A comparison against another renderer needs the same projection on both sides, and nothing else in the
+    // pipeline can move this: the value otherwise comes from the glTF camera.
+    float m_FovDegrees = 0.0f;
+
+    // Draw no ImGui windows. A screenshot shows the backbuffer as it was presented, so the panel of the frame
+    // before sits in the pixels; an A/B image pair cannot carry that.
+    bool m_bHideUI = false;
+
+    // Bias on the auto-exposure, in stops, positive = brighter. Two renderers adapt the eye differently, so a
+    // comparison has to put both at the same brightness before the differences underneath it can be read.
+    float m_ExposureCompensationStops = 0.0f;
+
+    // Pass ablations. Measuring which pass owns a difference means rendering without it, and the panel is not
+    // reachable from a scripted run.
+    bool m_bNoIndirect = false; // indirect lighting off (RTXDI/Deferred read no indirect)
+    bool m_bNoDenoise = false;  // NRD REBLUR off
+    bool m_bNoSky = false;      // sky drawn as black, and no sky ambient in the deferred shader
+
+    // Sharpening applied by the TAA resolve, 0..1. The sample's resolve leaves more high-frequency detail than
+    // an unsharpened resolve does, and this is the knob that closes that gap.
+    float m_TaaSharpness = -1.0f; // < 0 = leave the renderer's default
+
     // Log one line per frame slower than this, with the streaming and VRAM state that frame saw, so a hitch can
     // be attributed to a subsystem after the fact. 0 = off.
     float m_HitchLogThresholdMs = 0.0f;

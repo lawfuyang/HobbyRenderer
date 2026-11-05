@@ -1,5 +1,6 @@
 ﻿#include "Renderer.h"
 #include "CommonResources.h"
+#include "Config.h"
 #include "PixCapture.h"
 #include "RenderDocCapture.h"
 #include "Streaming/FeedbackManager.h"
@@ -57,6 +58,14 @@ void ImGuiLayer::UpdateFrame()
         "ImGuiIO::DisplaySize.x is 0 after ImGui_ImplSDL3_NewFrame — window may not be visible");
     SDL_assert(ImGui::GetIO().DisplaySize.y > 0.0f &&
         "ImGuiIO::DisplaySize.y is 0 after ImGui_ImplSDL3_NewFrame — window may not be visible");
+
+    // A screenshot reads the backbuffer, so whatever the previous frame's UI drew is in the image. Comparison
+    // runs skip the UI entirely; the frame still has to be submitted and rendered for the buffer to be complete.
+    if (Config::Get().m_bHideUI)
+    {
+        ImGui::Render();
+        return;
+    }
 
     if (ImGui::BeginMainMenuBar())
     {
@@ -209,6 +218,7 @@ void ImGuiLayer::UpdateFrame()
             ImGui::Checkbox("Debug Bloom Only", &g_Renderer.m_DebugBloom);
             ImGui::DragFloat("Bloom Intensity", &g_Renderer.m_BloomIntensity, 0.001f, 0.0f, 1.0f);
             ImGui::DragFloat("Bloom Knee", &g_Renderer.m_BloomKnee, 0.01f, 0.0f, 1.0f);
+            ImGui::DragFloat("Bloom Threshold", &g_Renderer.m_BloomThreshold, 0.01f, 0.0f, 10.0f);
             ImGui::DragFloat("Bloom Upsample Radius", &g_Renderer.m_UpsampleRadius, 0.01f, 0.1f, 2.0f);
 
             ImGui::Separator();

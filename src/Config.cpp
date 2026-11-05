@@ -65,6 +65,89 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_HalfResDI = false;
             SDL_Log("[Config] RTXDI + denoising at full resolution");
         }
+        else if (std::strcmp(arg, "--restir-preset") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                const char* preset = argv[++i];
+                if (std::strcmp(preset, "balanced") == 0)         s_Instance.m_ReSTIRPreset = 0;
+                else if (std::strcmp(preset, "highperf") == 0)    s_Instance.m_ReSTIRPreset = 1;
+                else if (std::strcmp(preset, "highquality") == 0) s_Instance.m_ReSTIRPreset = 2;
+                else
+                {
+                    SDL_LOG_ASSERT_FAIL("Unknown ReSTIR preset", "[Config] Unknown ReSTIR preset");
+                }
+                SDL_Log("[Config] ReSTIR preset: %s", preset);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --restir-preset", "[Config] Missing value for --restir-preset");
+            }
+        }
+        else if (std::strcmp(arg, "--fov") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                const float degrees = static_cast<float>(std::atof(argv[++i]));
+                if (degrees <= 0.0f || degrees >= 180.0f)
+                {
+                    SDL_LOG_ASSERT_FAIL("Vertical FOV must be inside (0, 180) degrees", "[Config] Invalid --fov value");
+                }
+                else
+                {
+                    s_Instance.m_FovDegrees = degrees;
+                    SDL_Log("[Config] Vertical FOV overridden to %.2f degrees", degrees);
+                }
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --fov", "[Config] Missing value for --fov");
+            }
+        }
+        else if (std::strcmp(arg, "--hide-ui") == 0)
+        {
+            s_Instance.m_bHideUI = true;
+            SDL_Log("[Config] ImGui windows disabled");
+        }
+        else if (std::strcmp(arg, "--exposure") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ExposureCompensationStops = static_cast<float>(std::atof(argv[++i]));
+                SDL_Log("[Config] Exposure compensation %.2f stops", s_Instance.m_ExposureCompensationStops);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --exposure", "[Config] Missing value for --exposure");
+            }
+        }
+        else if (std::strcmp(arg, "--no-indirect") == 0)
+        {
+            s_Instance.m_bNoIndirect = true;
+            SDL_Log("[Config] Indirect lighting disabled");
+        }
+        else if (std::strcmp(arg, "--no-denoise") == 0)
+        {
+            s_Instance.m_bNoDenoise = true;
+            SDL_Log("[Config] NRD denoising disabled");
+        }
+        else if (std::strcmp(arg, "--no-sky") == 0)
+        {
+            s_Instance.m_bNoSky = true;
+            SDL_Log("[Config] Sky disabled");
+        }
+        else if (std::strcmp(arg, "--taa-sharpness") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_TaaSharpness = static_cast<float>(std::atof(argv[++i]));
+                SDL_Log("[Config] TAA sharpness %.2f", s_Instance.m_TaaSharpness);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --taa-sharpness", "[Config] Missing value for --taa-sharpness");
+            }
+        }
         else if (std::strcmp(arg, "--renderdoc") == 0)
         {
             s_Instance.m_bRenderDoc = true;
@@ -258,9 +341,17 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --pix-capture-frame <n>          Take a PIX GPU capture of frame n and exit (implies --pix)");
             SDL_Log("  --pix-capture-load               Take a PIX GPU capture of the scene load: micromap and BLAS builds (implies --pix)");
             SDL_Log("  --pix-capture-dir <dir>          Where PIX captures are written (default bin/captures/<scene>)");
-            SDL_Log("  --screenshot-frame <n>           Write screenshot.jpg on frame n and exit");
-            SDL_Log("  --half-res-di                    Run RTXDI and NRD at half the render resolution (default)");
-            SDL_Log("  --full-res-di                    Override: run RTXDI and NRD at full render resolution");
+            SDL_Log("  --screenshot-frame <n>           Write screenshot.png on frame n and exit");
+            SDL_Log("  --hide-ui                        Draw no ImGui windows, so a screenshot is only the render");
+            SDL_Log("  --exposure <stops>               Bias the auto-exposure; positive is brighter");
+            SDL_Log("  --no-indirect                    Ablation: no indirect lighting");
+            SDL_Log("  --no-denoise                     Ablation: no NRD denoising");
+            SDL_Log("  --no-sky                         Ablation: no sky and no sky ambient");
+            SDL_Log("  --taa-sharpness <0..1>           Sharpening applied by the TAA resolve");
+            SDL_Log("  --half-res-di                    Run RTXDI and NRD at half the render resolution");
+            SDL_Log("  --full-res-di                    Override: run RTXDI and NRD at full render resolution (default)");
+            SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
+            SDL_Log("  --fov <degrees>                  Override the vertical field of view; default is the scene camera's");
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");
             SDL_Log("  --hitch-log <ms>                 Log every frame slower than this with streaming/VRAM state");
             SDL_Log("  --hitch-dump <ms>                Dump the profiler and exit on the first frame slower than this");
