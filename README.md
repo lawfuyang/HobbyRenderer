@@ -1,168 +1,212 @@
 # HobbyRenderer
 
-A 3D rendering engine built in C++, featuring modern graphics techniques and supporting Direct3D 12 API.
+A real-time renderer built in C++20 on Direct3D 12, with an NVIDIA RTX feature set: ReSTIR
+direct and indirect illumination, a spatial-hash radiance cache, NRD denoising, ray-traced shadows,
+opacity micromaps, GPU-driven meshlet geometry and sampler-feedback virtual texturing.
+
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/d8f3c499-4f13-4549-8c5e-dd43b4b3b963" />
+
+For how the pieces fit together — `IRenderer`, the render graph, resource binding, srrhi, ShaderIDs and
+the build pipeline — see **[PIPELINE.md](PIPELINE.md)**. For capturing and reading PIX/RenderDoc frames,
+see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
+
 ## Features
 
-### Core Rendering Pipeline
-- **Deferred Rendering**: Multi-pass architecture with G-Buffer containing albedo, geometry normals, world-space normals, ORM (occlusion/roughness/metallic), emissive, and motion vector channels
-- **Reference Path Tracer**: Unbiased Monte Carlo path tracing with next event estimation, Russian roulette termination, and BRDF importance sampling
-- **Physically-Based Rendering (PBR)**: Full PBR material support with metallic/roughness workflow, including transmission, thickness, and Fresnel-Schlick approximation
-- **Transparency**: Forward rendering for transparent objects with transmission, IOR, spectral attenuation, and volumetric absorption
-- **HDR Rendering**: High dynamic range pipeline with histogram-based automatic exposure adaptation (EV100), PBR Neutral tone mapping for SDR output, and scRGB HDR display support with Reinhard rolloff for wide-gamut displays
-- **Ray-Traced Shadows**: Hardware-accelerated ray tracing for directional light shadows with inline ray queries
-- **ReSTIR DI (Direct Illumination)**: Advanced stochastic light sampling with initial sampling modes (uniform, Power-RIS, ReGIR-RIS), temporal and spatial resampling, and boiling filter for variance reduction
-- **ReSTIR GI (Global Illumination)**: Indirect lighting via RTXDI's ReSTIR GI framework with temporal & spatial resampling, final visibility rays, MIS, and additive BRDF blending
-- **ReGIR (Reservoir-based Grid Importance Resampling)**: Onion-mode spatial grid for efficient light distribution (5 detail layers, 10 coverage layers, 512 lights per cell) with configurable cell size and presampling
-- **NRD RELAX Denoising**: NVIDIA Real-time Denoiser integration with diffuse + specular RELAX denoising, anti-firefly filtering, and NRD-pack normal roughness pre-pass
-- **SHARC (Spatial Hash Radiance Cache)**: Screen-space indirect lighting via hash-based radiance cache with sparse update, temporal resolve/eviction, and screen-space query passes
-- **Indirect Lighting Pipeline**: Selectable indirect lighting technique — None, ReSTIR GI, or SHARC — all composited into the deferred shading pass
-- **FSR3 Temporal Anti-Aliasing (TAA)**: AMD FidelityFX SDK integration providing high-quality TAA with HDR support, sharpness control, jitter cancelation, debug view, and exposure-aware pre-exposure
-- **Bloom**: Multi-stage pyramid-based bloom with prefilter, configurable intensity, knee, and upsample radius
-- **Atmosphere Rendering**: Physically-based sky and sun atmosphere lighting across all rendering modes
+### Lighting and denoising
+- **ReSTIR DI**: stochastic direct-light sampling over local, emissive-triangle and environment lights,
+  with ReGIR, temporal and spatial resampling, a boiling filter, and selectable bias correction
+  (off / basic / ray-traced) per resampling stage
+- **ReGIR (Onion mode)**: 5 detail and 10 coverage layers, camera-following, configurable cell size,
+  build-sample count and jitter, matching the NVIDIA FullSample's defaults
+- **ReSTIR GI**: indirect lighting through RTXDI's ReSTIR GI with temporal and spatial resampling,
+  final-visibility rays, MIS and additive BRDF blending
+- **SHARC**: spatial-hash radiance cache for screen-space indirect lighting — sparse update, temporal
+  resolve and eviction, and a screen-space query pass with a heatmap debug view
+- **Selectable indirect technique**: none, ReSTIR GI, SHARC, or GI + SHARC composited together
+- **Quality presets**: `--restir-preset balanced|highperf|highquality` map to the FullSample's
+  Medium / Fast / Ultra sample budgets (8/8/8, 4/4/4 and 16/16/16 ReGIR-RIS samples, with matching
+  BRDF sample counts, spatial sample counts and bias-correction modes)
+- **Half-resolution lighting**: the RTXDI chain and NRD can run at half the render resolution
+  (`m_HalfResDI`, on by default) with a depth-aware joint-bilateral upsample in the compositing pass;
+  `--full-res-di` overrides
+- **NRD REBLUR denoising**: diffuse + specular REBLUR with anti-firefly filtering, 3×3 hit-distance
+  reconstruction, and NRD-pack normal/roughness input
+- **Ray-traced shadows**: inline ray queries for the sun, with an option to disable shadow tracing
 
-### Rendering Techniques
-- **GPU-Driven Rendering**: Meshlet-based geometry processing using mesh shaders with indirect dispatch
-- **Meshlet Rendering**: Efficient GPU-driven rendering with automatic meshlet generation and caching (64 vertices, 96 triangles per meshlet)
-- **Ray Tracing Acceleration**:
-  - **Multi-LOD BLAS/TLAS**: Bottom and top-level acceleration structures with per-LOD geometry support
-  - **TLASPatch Synchronization**: Compute shader for updating BLAS addresses across LOD levels
-  - **LOD-Aware Ray Tracing**: Automatic or manual LOD selection for ray tracing operations
-- **Bindless Textures & Samplers**: Descriptor indexing for unlimited texture and sampler access without binding changes
-- **Virtual Texture Streaming**: Sampler feedback-driven tiled resource streaming with NVIDIA RTX Tiled Texture Manager (rtxts-ttm), hysteresis-based tile eviction, asynchronous tile I/O, minmip residency tracking, and packed-mip prefetching — supports thousands of textures with on-demand streaming at scale
-- **Hierarchical Z-Buffer (HZB)**: Multi-level depth buffer for efficient occlusion culling using AMD Single Pass Downsampler (SPD) with min reduction
-- **Advanced GPU Culling**: 
-  - **Phase 1**: Frustum culling combined with occlusion culling using HZB
-  - **Phase 2**: Occlusion culling on occluded primitives with meshlet job generation
-  - **Cone Culling**: Conservative back-face and silhouette culling for opaque geometry
-  - **Hierarchical LOD (Level of Detail)**: Up to 8 distance-based LOD levels with progressive mesh simplification using meshoptimizer
-- **Multi-threaded Rendering**: Parallel command list recording and asynchronous task scheduling
-- **AMD FidelityFX SPD**: Single Pass Downsampler for efficient HZB generation (min reduction) and texture mip-map chain generation (average reduction)
-- **FSR3 TAA**: AMD FidelityFX Super Resolution 3 temporal anti-aliasing with native resolution support, HDR aware, motion vector jitter cancelation, and runtime sharpness control
+### Geometry and acceleration structures
+- **GPU-driven meshlet rendering**: mesh and amplification shaders over generated meshlets (64 vertices,
+  96 triangles), with indirect dispatch built on the GPU
+- **Two-phase occlusion culling**: frustum culling in phase 1, HZB occlusion culling with a phase-2 pass
+  over the survivors, cone/silhouette culling, and per-instance LOD selection
+- **Hierarchical Z-buffer**: built with AMD FidelityFX Single Pass Downsampler (min reduction)
+- **Hierarchical LOD**: up to 8 levels generated with meshoptimizer progressive simplification, plus
+  vertex quantization
+- **Multi-LOD acceleration structures**: per-LOD BLAS with a `TLASPatch` compute pass keeping the TLAS
+  instance addresses current as LODs change
+- **Opacity micromaps (OMM)**: alpha-masked geometry is baked into 4-state micromaps (adaptive
+  subdivision, `m_MaxLevel` 6, `m_TargetEdge` 3, selectable alpha mip), uploaded, and linked into the
+  BLAS so masked rays resolve opacity in hardware instead of being treated as opaque. Baked from the
+  masked base-colour DDS's alpha channel.
+  CLI: `--enable-omm`, `--omm-max-level`, `--omm-target-edge`, `--omm-debug`, `--omm-debug-mip`,
+  `--omm-dump-mips`. The panel has a debug view over texel classification, the micromap grid and the
+  candidate heatmap.
 
-### Performance & Profiling
-- **Microprofile Integration**: Detailed CPU and GPU performance profiling with real-time visualization and HTML dump export
-- **Pipeline State Caching**: Automatic caching of graphics, meshlet, and compute pipeline states
-- **GPU Profiling**: Per-renderer GPU timing via integrated timer queries, pipeline statistics collection (IA, VS, GS, PS, HS, DS, CS, AS, MS invocations and primitive counts), and per-pass CPU/GPU timing tables
-- **Memory Efficiency**: Render graph resource aliasing for minimal VRAM usage with transient resource pooling, detailed memory statistics, and D3D12 VRAM usage monitoring
-- **Render Graph Visualizer**: Real-time resource lifetime visualization, heap allocation tracking, pass dependency graphing, and per-resource read/write access inspection
+### Materials, transparency and post-processing
+- **PBR**: metallic/roughness workflow with normal, ORM and emissive maps;
+  `KHR_materials_pbrSpecularGlossiness` is converted on import; IOR, transmission, thickness,
+  attenuation distance/colour and thin-surface flags
+- **Transparency**: forward pass for transparent geometry with transmission, spectral attenuation and
+  volumetric absorption
+- **HDR pipeline**: luminance histogram → EV100 auto-exposure (adaptation speed, EV clamps, exposure
+  compensation) → PBR Neutral tone mapping → sRGB, plus an scRGB HDR path with a Reinhard rolloff above
+  SDR white for wide-gamut displays
+- **FSR3 TAA**: AMD FidelityFX temporal anti-aliasing with jitter cancellation, HDR aware, runtime
+  sharpness (`--taa-sharpness`), a debug view, and exposure-aware pre-exposure
+- **Bloom**: pyramid prefilter / downsample / upsample / composite with intensity, knee, threshold
+  (only what is above SDR white blooms) and upsample radius
+- **Atmosphere**: a Bruneton precomputed atmosphere drives the sky and the sun in every rendering mode
 
-### Developer Experience
-- **ImGui UI**: Real-time debugging interface with rendering mode selection, indirect lighting technique selection, pass toggles, per-pass CPU/GPU timing table, and comprehensive performance metrics
-- **Debug Visualization Modes**:
-  - Instance visualization (per-instance coloring)
-  - Meshlet visualization (per-meshlet coloring)
-  - World normals, albedo, roughness, metallic, emissive visualization
-  - LOD level visualization
-  - Motion vector visualization
-  - ReGIR cell visualization
-  - Isolated bloom debug view
-  - TAA debug view (FSR3 native debug overlay)
-  - SHARC cache debug overlay (heatmap)
-  - Tile residency debug overlay (texture streaming heatmap)
-- **Flexible Configuration**: Runtime adjustable parameters for culling (frustum, occlusion, cone), rendering mode, meshlet toggling, LOD forcing, texture mip forcing, post-processing (auto exposure, adaptation speed, bloom, tone mapping), and lighting (sky, RT shadows)
-- **ReSTIR DI/GI Tuning**: Advanced/standard settings panels with per-pass parameter control — initial sampling (BRDF, light, environment counts), temporal/spatial resampling thresholds, boiling filter strength, bias correction modes, and GI final visibility/MIS
-- **ReGIR Configuration**: Runtime cell size, grid build samples, sampling jitter, presampling and fallback mode selection
-- **NRD Denoising Toggle**: RELAX diffuse+specular denoising with anti-firefly filtering
-- **Scene Statistics**: Real-time display of instance counts (opaque, masked, transparent), VRAM usage (including streaming tile heaps), pipeline statistics, texture streaming residency metrics, and render graph memory breakdown
-- **Modern C++**: C++20 features with clean, maintainable architecture and automatic dependency management via CMake
-- **Shader Hot Reloading**: Runtime shader recompilation and seamless reloading without engine restart
-- **D3D12 Debug & Validation**: Configurable debug layer, GPU-based validation, stable power state for consistent profiling results, and scRGB HDR display output support
-- **Camera State Persistence**: Automatic camera state save/restore across scene loads via `CameraStateManager`
-- **Command Line Configuration**: Scene path and validation flags configurable via command line arguments
-- **Screenshot Capture**: One-click backbuffer screenshot saving at runtime
+### Streaming
+- **Sampler-feedback virtual texturing**: per-texture tile residency driven by GPU feedback, with an
+  RTX Tiled Texture Manager backend, hysteresis eviction, asynchronous tile I/O on a worker pool,
+  per-frame tile budgets, minmip tracking and packed-mip prefetch; `--disable-sampler-feedback` forces
+  everything resident for A/B runs
+- **Tooling**: tile residency debug view and per-texture residency statistics in the panel
+
+### Engine and tooling
+- **Render graph**: transient resource allocation with aliasing, automatic dependency ordering, pass
+  toggling, per-pass submission (`--execute-per-pass`, `--execute-per-pass-and-wait`), optional
+  aliasing (`--disable-rendergraph-aliasing`), and a visualizer for resource lifetimes, heap usage and
+  pass access
+- **srrhi**: a `.sr` shader-resource description compiled into C++ argument structs and HLSL binding
+  code, so a pass's bindings are declared once (see PIPELINE.md)
+- **ShaderIDs**: `.cfg`-driven shader table generation
+- **Hot reload**: F5 recompiles and rebinds shaders without restarting
+- **Multithreaded recording**: 12-worker `TaskScheduler` with `ParallelFor`, parallel command-list
+  recording and deferred garbage collection
+- **Profiling**: MicroProfile CPU scopes with HTML dump, per-scope GPU timer queries (`GpuPassTimers`,
+  up to 256 scopes per frame), pipeline statistics, and a per-pass CPU/GPU table in the panel.
+  `--hitch-log <ms>` logs frames slower than a threshold with streaming and VRAM state;
+  `--hitch-dump <ms>` writes `profiler_dump.html` and exits on the first such frame
+- **Capture support**: PIX3 markers, in-app PIX captures (`--pix`, `--pix-capture-frame`,
+  `--pix-capture-load`, `--pix-capture-dir`) and in-app RenderDoc captures (`--renderdoc`,
+  `--renderdoc-capture-frame`) — never both on one frame
+- **Scene loading**: glTF 2.0 via cgltf, a versioned binary scene cache, mesh optimization, LOD
+  generation, and an animation system (linear, step, cubic spline, SLERP, Catmull-Rom; transform and
+  material-emissive channels, topologically sorted)
+- **Camera state**: per-scene position, yaw and pitch persisted and restored on load
+- **Screenshots**: `--screenshot-frame <n>` writes a lossless `bin/screenshot.png` and exits; `Ctrl+P`
+  at runtime
+- **Comparison switches** for A/B runs against another renderer: `--fov`, `--exposure`, `--hide-ui`,
+  `--taa-sharpness`, and the pass ablations `--no-indirect`, `--no-denoise`, `--no-sky`
+
+## Requirements
+
+- Windows 10/11 x64
+- A Direct3D 12 GPU with ray tracing and **shader model 6.9** — opacity micromaps and inline ray queries
+  need it, which is why the Agility SDK 1.620.1 runtime is staged into `bin/`
+- A recent NVIDIA driver for the RTX feature set (RTXDI, SHARC, NRD)
+
+The renderer targets Direct3D 12 only. NVRHI is used as the GPU abstraction layer, but there is no
+Vulkan or D3D11 backend in this build, and shaders compile to DXIL only.
+
+## Building
+
+```powershell
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+cmake --build build --config Release --target HobbyRenderer
+```
+
+The executable lands in `bin/` for every configuration. Generators run as part of the build, ordered by
+CMake dependencies:
+
+| Target | Purpose |
+|---|---|
+| `build_srrhi` | `.sr` files → C++ binding headers and HLSL includes |
+| `build_shaderids` | `.cfg` files → `src/shaders/ShaderIDs.h` |
+| `build_shaders` | `.hlsl` files → DXIL in `bin/shaders/dxil` |
+| `HobbyRenderer` | the executable |
+
+Files under `src/shaders/srrhi/` and `src/shaders/ShaderIDs.h` are generated — edit the `.sr`/`.cfg`
+sources instead.
+
+## Command line
+
+Every switch is parsed in `src/Config.cpp`; the useful ones:
+
+| Switch | Effect |
+|---|---|
+| `--scene <path>` | scene to load (`.gltf`/`.glb`, or a `.scene.json` descriptor with models and lights) |
+| `--restir-preset balanced\|highperf\|highquality` | ReSTIR sample budget (default `balanced`) |
+| `--half-res-di` / `--full-res-di` | lighting and denoising resolution |
+| `--fov <degrees>` | vertical FOV override |
+| `--exposure <stops>` | auto-exposure bias |
+| `--taa-sharpness <0..1>` | sharpening in the TAA resolve |
+| `--hide-ui` | draw no ImGui windows |
+| `--screenshot-frame <n>` | write `bin/screenshot.png` on frame n and exit |
+| `--enable-omm`, `--omm-max-level`, `--omm-target-edge`, `--omm-debug` | opacity micromaps |
+| `--disable-sampler-feedback`, `--disable-rendergraph-aliasing` | force full residency / no aliasing |
+| `--execute-per-pass`, `--execute-per-pass-and-wait` | submit one render-graph pass at a time |
+| `--pix[=<dll>]`, `--pix-capture-frame <n>`, `--pix-capture-load`, `--pix-capture-dir <dir>` | PIX |
+| `--renderdoc[=<dll>]`, `--renderdoc-capture-frame <n>` | RenderDoc |
+| `--camera-spin <deg/s>` | scripted rotation, for reproducing motion-only artifacts |
+| `--hitch-log <ms>`, `--hitch-dump <ms>` | slow-frame logging / profiler dump |
+| `--rhidebug`, `--rhidebug-gpu` | D3D12 debug layer / GPU-based validation |
+| `--help` | print the list |
 
 ## Architecture
 
-The engine is built around several key architectural components:
+### Render graph
+Passes declare what they read and write; the graph allocates transient targets, aliases them, orders the
+passes, and exposes a visualizer. PIPELINE.md has the details.
 
-### Render Graph System
-- **Automatic Resource Management**: Transient resources (textures, buffers) are automatically allocated and freed
-- **Resource Aliasing**: Memory-efficient resource reuse across rendering passes
-- **Data-Flow Tracking**: Implicit dependency resolution between rendering passes
-- **Efficient Scheduling**: Automatic pass ordering based on resource dependencies
+### Renderers
+Each pass is an `IRenderer` registered with the renderer registry, with its own `Setup`/`Render` and its
+own GPU timer group. Passes can be toggled individually from the panel.
 
-### Rendering Pipeline Architecture
-- **Modular Renderer Design**: Each rendering pass is implemented as a separate `IRenderer` interface
-- **Registered Renderer System**: Dynamic renderer registration for flexible pass composition
-- **Per-Pass Toggle**: Each rendering pass can be individually enabled/disabled at runtime via the ImGui UI for targeted debugging
-- **Command List Management**: Efficient command buffer pooling and reuse with parallel renderer execution support
-- **Pipeline State Caching**: Automatic caching of graphics and compute pipelines for reduced CPU overhead
+### Rendering modes
+- **Normal**: deferred G-buffer (albedo, normals, ORM, emissive, motion vectors) plus the full RTX
+  pipeline — ReSTIR DI/GI, SHARC, NRD, ray-traced shadows, TAA, bloom, tonemap
+- **Reference Path Tracer**: unbiased Monte Carlo path tracer with next-event estimation, Russian
+  roulette and BRDF importance sampling, accumulated progressively
 
-### Graphics Abstraction Layer
-Built on top of NVRHI (NVIDIA Rendering Hardware Interface) providing:
-- Unified API for Vulkan and Direct3D 12 with seamless cross-platform rendering
-- Automatic resource state management and synchronization
-- Cross-API shader compilation (SPIR-V/DXIL)
-- Hardware capability querying and feature negotiation
-- GPU memory management and resource pooling
-
-### Scene Management
-- **glTF 2.0 Loading**: Complete scene import from standard glTF 2.0 files via cgltf
-- **Binary Scene Caching**: Fast loading with binary cache validation, versioning, and cache invalidation
-- **Mesh Optimization**: Vertex quantization, mesh optimization, and automatic LOD generation (up to 8 levels) with meshoptimizer
-- **Animation System**: GPU-friendly animation playback with multiple interpolation modes (linear, step, cubic spline, SLERP, Catmull-Rom); automatic identification of animated and dynamic nodes with topologically-sorted update order; material animation support (emissive intensity)
-- **Lighting**: Automatic light buffer generation with ray tracing support; directional/infinite lights with sun direction and angular size; point/local lights with per-light RIS tile PDF sampling; environment lights with equirectangular PDF-based sampling; always a fallback default directional light
-- **Camera Persistence**: `CameraStateManager` automatically saves camera position/orientation and restores it after scene transitions
+### Scene
+glTF 2.0 through cgltf, cached to a versioned binary, with meshlet and LOD generation, animation, a light
+buffer for ray tracing (directional with angular size, point/spot, environment), and OMM baking.
 
 ## Dependencies
 
-The project automatically downloads and builds the following dependencies:
-- **[SDL3](https://www.libsdl.org/)**: Cross-platform windowing and input
-- **[NVRHI](https://github.com/NVIDIA-RTX/NVRHI)**: Graphics API abstraction layer
-- **[ImGui](https://github.com/ocornut/imgui)**: Immediate mode GUI
-- **[cgltf](https://github.com/jkuhlmann/cgltf)**: glTF 2.0 parsing
-- **[DirectX Shader Compiler (DXC)](https://github.com/microsoft/DirectXShaderCompiler)**: HLSL compilation
-- **[ShaderMake](https://github.com/NVIDIA-RTX/ShaderMake)**: Offline shader compilation tool
-- **[meshoptimizer](https://github.com/zeux/meshoptimizer)**: Mesh optimization and quantization
-- **[microprofile](https://github.com/jonasmr/microprofile)**: Performance profiling
-- **[stb_image](https://github.com/nothings/stb)**: Image loading
-- **[RTXDI](https://github.com/NVIDIA-RTX/RTXDI)**: ReSTIR Direct Illumination framework and light sampling utilities
-- **[NRD](https://github.com/NVIDIAGameWorks/RayTracingDenoiser)**: NVIDIA Real-time Denoiser (RELAX for diffuse + specular)
-- **[rtxts-ttm](https://github.com/NVIDIA-RTX/rtxts-ttm)**: Tiled Texture Manager for sampler-feedback-driven virtual texture streaming
-- **[AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)**: FSR3 temporal anti-aliasing and Single Pass Downsampler (SPD)
-- **[SHARC](https://github.com/NVIDIAGameWorks/SHARC)**: Spatial Hash Radiance Cache for real-time indirect lighting
-- **[Agility SDK](https://github.com/microsoft/DirectX-Headers)**: Direct3D 12 core headers and runtime support
-- **[MathLib](https://github.com/NVIDIA-RTX/MathLib)**: Vector/matrix math utilities
+Fetched and built by CMake (versions from `CMakeLists.txt`):
 
-## Rendering Modes
+- [SDL3](https://www.libsdl.org/) 3.4.20 — windowing and input
+- [NVRHI](https://github.com/NVIDIA-RTX/NVRHI) — D3D12 abstraction (forked copy under `external/nvrhi`)
+- [Agility SDK](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12) 1.620.1 — D3D12 runtime and headers
+- [ImGui](https://github.com/ocornut/imgui) — immediate-mode UI
+- [cgltf](https://github.com/jkuhlmann/cgltf) 1.15 — glTF 2.0 parsing
+- [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler) v1.9.2609 — HLSL → DXIL
+- [ShaderMake](https://github.com/NVIDIA-RTX/ShaderMake) — offline shader compilation
+- [meshoptimizer](https://github.com/zeux/meshoptimizer) — optimization, quantization, simplification
+- [MathLib](https://github.com/NVIDIA-RTX/MathLib) 11 — vector/matrix math
+- [RTXDI](https://github.com/NVIDIA-RTX/RTXDI) — ReSTIR DI/GI, ReGIR, light presampling
+- [NRD](https://github.com/NVIDIA-RTX/NRD) 4.18.0 — REBLUR denoising
+- [SHARC](https://github.com/NVIDIAGameWorks/SHARC) — spatial hash radiance cache
+- [rtxts-ttm](https://github.com/NVIDIA-RTX/rtxts-ttm) 0.7.1 — tiled texture manager for streaming
+- [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 2.4.0 — FSR3 TAA and SPD
+- [microprofile](https://github.com/jonasmr/microprofile) — CPU profiling
+- [stb_image](https://github.com/nothings/stb) — image loading, PNG/JPG writing
+- [WinPixEventRuntime](https://www.nuget.org/packages/WinPixEventRuntime) — PIX markers and capture
 
-The engine supports multiple rendering modes, selectable via the ImGui UI or at runtime:
+## Repository layout
 
-- **Normal Mode**: Standard deferred rendering with real-time performance focus, featuring ReSTIR DI/GI, SHARC indirect lighting, hardware ray-traced shadows, and full RTXDI pipeline
-- **Reference Path Tracer**: Unbiased Monte Carlo path tracing for reference-quality rendering with progressive refinement
-
-## Shader System
-
-Shaders are written in HLSL and compiled offline to both SPIR-V (Vulkan) and DXIL (Direct3D 12) using ShaderMake. The shader configuration is defined in `src/shaders/shaders.cfg`.
-
-Key shader features:
-- **Shader Model 6.8**: Latest HLSL features including mesh shaders and ray tracing
-- **Cross-compilation**: Automatic compilation to both SPIR-V and DXIL formats
-- **Offline Compilation**: Shaders compiled at build time for faster loading via ShaderMake
-- **Bindless Resources**: Descriptor indexing for textures and buffers
-- **Ray Tracing**: Inline ray queries (RayQuery) for shadows, ReSTIR DI/GI, SHARC, and path tracing
-- **Mesh Shaders**: GPU-driven geometry processing with automatic task/mesh shader pipeline generation
-- **Compute Shaders**: For culling, histogram generation, SPD mip reduction, ReSTIR passes, SHARC passes, and post-processing
-- **SRRHI (Shader Resource Render Hardware Interface)**: Custom `.sr` shader resource interface system that generates C++ and HLSL binding code automatically, eliminating manual descriptor table construction
-
-### Supported Features
-- **Meshes**: Triangle meshes with automatic vertex quantization, mesh optimization, and up to 8-level hierarchical LOD generation
-- **Materials**: 
-  - Core PBR with albedo, normal, ORM (occlusion/roughness/metallic), and emissive textures
-  - KHR Extensions: Index of Refraction (IOR), transmission factor, volumetric properties
-  - Volume Properties: Thickness factor, attenuation distance/color, absorption (Sigma_A) and scattering (Sigma_S) coefficients, thin-surface flag
-  - Material Animations: Emissive intensity animation via JSON
-- **Animations**:
-  - Skeletal and transform animations with multiple interpolation modes
-  - Interpolation Types: Linear, step (discrete), cubic spline, spherical linear interpolation (SLERP) for quaternions, and Catmull-Rom spline
-  - Dynamic Node Tracking: Automatic identification of animated nodes
-  - Material Animation: Emissive intensity animation support
-- **Lights**:
-  - Directional/infinite lights with ray-traced shadow support and atmosphere-aware intensity
-  - Point/local lights with per-light PDF sampling
-  - Environment lights with PDF-based sampling in ReSTIR DI
-  - Configurable per-light sampling (128 RIS tiles × 1024 samples)
-- **Cameras**: Perspective cameras with configurable field-of-view, near/far planes, manual/auto exposure with EV100 support, and exposure compensation
-- **Texture Formats**: Supports DDS/PNG textures and Bruneton atmosphere precomputed textures
+```
+src/                 engine sources (renderers, RHI, render graph, scene, streaming)
+  Omm/               opacity micromap baker, runtime and debug view
+  Streaming/         sampler-feedback tiles, async tile I/O, residency debug view
+  FidelityFX/        vendored FidelityFX SDK (FSR3 upscaler and SPD)
+  shaders/           HLSL, .sr interface files, shader tables
+external/            dependencies (downloaded or vendored)
+ShaderIDsGenerator/  ShaderIDs code generator
+bin/                 output: executable, shaders, captures, screenshots
+docs/                capture tooling and analysis notes
+```
