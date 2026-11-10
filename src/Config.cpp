@@ -426,9 +426,11 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --disable-sampler-feedback       Disable sampler feedback (streaming requests the finest mip)");
             SDL_Log("  --enable-omm                     Build opacity micromaps (off by default; needs DXR 1.2)");
             SDL_Log("  --omm-max-level <n>              OMM bake subdivision level cap (default 6, valid 1..12)");
-            SDL_Log("  --omm-target-edge <f>            OMM bake micro-triangle edge target in texels (default 3.0)");        SDL_Log("  --omm-debug <primitive>          Open the OMM texel-classification view on this primitive");
-        SDL_Log("  --omm-debug-mip <n>              Alpha mip the OMM debug view classifies (default 0)");
-        SDL_Log("  --omm-dump-mips <primitive>      Dump every alpha mip classification of that primitive to bin/");            SDL_Log("  --renderdoc[=<path>]             Load renderdoc.dll for in-app captures (before the device exists)");
+            SDL_Log("  --omm-target-edge <f>            OMM bake micro-triangle edge target in texels (default 3.0)");
+            SDL_Log("  --omm-debug <primitive>          Open the OMM texel-classification view on this primitive");
+            SDL_Log("  --omm-debug-mip <n>              Alpha mip the OMM debug view classifies (default 0)");
+            SDL_Log("  --omm-dump-mips <primitive>      Dump every alpha mip classification of that primitive to bin/");
+            SDL_Log("  --renderdoc[=<path>]             Load renderdoc.dll for in-app captures (before the device exists)");
             SDL_Log("  --renderdoc-capture-frame <n>    Capture frame n and exit (implies --renderdoc)");
             SDL_Log("  --pix[=<path>]                  Load WinPixGpuCapturer.dll for in-app PIX captures");
             SDL_Log("  --pix-capture-frame <n>          Take a PIX GPU capture of frame n and exit (implies --pix)");
