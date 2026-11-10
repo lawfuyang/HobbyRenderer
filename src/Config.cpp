@@ -65,6 +65,24 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_HalfResDI = false;
             SDL_Log("[Config] RTXDI + denoising at full resolution");
         }
+        else if (std::strcmp(arg, "--cluster") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_EnableClusterLod = std::atoi(argv[++i]) != 0;
+                SDL_Log("[Config] Cluster LOD %s via command line",
+                    s_Instance.m_EnableClusterLod ? "enabled" : "disabled");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster", "[Config] Missing value for --cluster");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-stats") == 0)
+        {
+            s_Instance.m_bClusterStats = true;
+            SDL_Log("[Config] Cluster LOD statistics and checks enabled via command line");
+        }
         else if (std::strcmp(arg, "--restir-preset") == 0)
         {
             if (i + 1 < argc)
@@ -350,6 +368,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --taa-sharpness <0..1>           Sharpening applied by the TAA resolve");
             SDL_Log("  --half-res-di                    Run RTXDI and NRD at half the render resolution");
             SDL_Log("  --full-res-di                    Override: run RTXDI and NRD at full render resolution (default)");
+            SDL_Log("  --cluster <0|1>                  Cook the per-primitive cluster LOD into the cooked mesh (default 1)");
+            SDL_Log("  --cluster-stats                  Dump the cluster LOD of every primitive and run the phase 0 checks");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
             SDL_Log("  --fov <degrees>                  Override the vertical field of view; default is the scene camera's");
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");

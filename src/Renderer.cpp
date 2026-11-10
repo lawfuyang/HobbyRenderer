@@ -1,6 +1,7 @@
 #include "Renderer.h"
 #include "Utilities.h"
 #include "Config.h"
+#include "ClusterLodScene.h"
 #include "CommonResources.h"
 #include "Omm/OmmSceneBaker.h"
 #include "PixCapture.h"
@@ -393,6 +394,7 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
+    m_EnableClusterRendering = Config::Get().m_EnableClusterLod;
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
     {
         m_OmmDebugMode = 1;
@@ -479,6 +481,13 @@ void Renderer::Initialize()
 
     m_TaskScheduler = std::make_unique<TaskScheduler>();
 
+    // Loading is one CPU-bound burst (mesh cook, acceleration structures, OMM bakes) that should use the whole
+    // machine; the frame loop goes back to the fixed pool below so per-frame scheduling cost stays predictable.
+    const uint32_t loadThreadCount = std::max(1u, std::thread::hardware_concurrency());
+    m_TaskScheduler->SetThreadCount(loadThreadCount);
+    SDL_Log("[TaskScheduler] Loading with %u worker threads (runtime pool: %u)",
+        loadThreadCount, TaskScheduler::kRuntimeThreadCount);
+
     InitSDL();
 
     m_Window = CreateWindowScaled();
@@ -540,6 +549,11 @@ void Renderer::Initialize()
     // Load scene (if configured) after all renderer resources are ready
     m_Scene.LoadScene();
 
+    if (Config::Get().m_bClusterStats)
+    {
+        LogSceneClusterStats(m_Scene);
+    }
+
     // Restore saved camera state (overrides GLTF camera if present)
     {
         const std::string& scenePath = Config::Get().m_ScenePath;
@@ -580,6 +594,11 @@ void Renderer::Initialize()
     }
 
     ExecutePendingCommandLists();
+
+    // Everything that loads is done: hand the extra workers back before the first frame is recorded, because a
+    // burst of 28 idle workers waiting on the queue costs more than the 12 the frame loop is tuned for.
+    m_TaskScheduler->SetThreadCount(TaskScheduler::kRuntimeThreadCount);
+    SDL_Log("[TaskScheduler] Runtime pool: %u worker threads", m_TaskScheduler->GetThreadCount());
 }
 
 void Renderer::Run()

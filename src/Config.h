@@ -32,6 +32,12 @@ struct Config
     uint32_t m_OmmMaxLevel = 0;      // 0 = default, else 1..12
     float m_OmmTargetEdge = 0.0f;    // 0 = default, else texels per micro-triangle edge
 
+    // Dumps the cooked cluster LOD of every primitive (clusters, groups, levels, triangles and worst error per
+    // level, plus the phase 0 DAG and cut checks) once the scene is loaded.
+    bool m_bClusterStats = false;
+    // Cooks the per-primitive cluster LOD into the cooked mesh file. Nothing draws it yet.
+    bool m_EnableClusterLod = true;
+
     // Opens the Phase 5 texel-classification view on this primitive index (0 = the first primitive). The panel
     // exposes the same controls; this exists so a screenshot run can be scripted.
     int m_OmmDebugPrimitive = -1;    // -1 = view closed

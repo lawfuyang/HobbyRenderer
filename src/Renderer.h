@@ -382,6 +382,9 @@ public:
     // Rendering options
     bool m_UseMeshletRendering = true;
     int m_ForcedLOD = -1;
+    // Cluster LOD: cooks the per-primitive cluster DAG and caches it in the cooked mesh file. Nothing draws it
+    // yet, so this only decides whether the offline build runs.
+    bool m_EnableClusterRendering = true;
     int m_ForcedTextureMip = -1; // -1 = auto, 0-15 = forced mip level
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;
