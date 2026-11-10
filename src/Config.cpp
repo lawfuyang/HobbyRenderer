@@ -83,6 +83,81 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_bClusterStats = true;
             SDL_Log("[Config] Cluster LOD statistics and checks enabled via command line");
         }
+        else if (std::strcmp(arg, "--cluster-stats-frame") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterStatsFrame = std::atoi(argv[++i]);
+                SDL_Log("[Config] Cluster counters printed on frame %d", s_Instance.m_ClusterStatsFrame);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-stats-frame", "[Config] Missing value for --cluster-stats-frame");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-error") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterPixelError = static_cast<float>(std::atof(argv[++i]));
+                SDL_Log("[Config] Cluster pixel error threshold: %.3f px", s_Instance.m_ClusterPixelError);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-error", "[Config] Missing value for --cluster-error");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-force-lod") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterForcedLOD = std::atoi(argv[++i]);
+                SDL_Log("[Config] Cluster LOD level forced to %d", s_Instance.m_ClusterForcedLOD);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-force-lod", "[Config] Missing value for --cluster-force-lod");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-max") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterMaxClusters = std::atoi(argv[++i]);
+                SDL_Log("[Config] Cluster count capped at %d", s_Instance.m_ClusterMaxClusters);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-max", "[Config] Missing value for --cluster-max");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-no-culling") == 0)
+        {
+            s_Instance.m_ClusterDisableCulling = true;
+            SDL_Log("[Config] Cluster culling disabled: every cluster of a visible instance is requested");
+        }
+        else if (std::strcmp(arg, "--cluster-debug") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterDebugMode = static_cast<uint32_t>(std::atoi(argv[++i]));
+                SDL_Log("[Config] Cluster debug view mode %u", s_Instance.m_ClusterDebugMode);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-debug", "[Config] Missing value for --cluster-debug");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-freeze-culling") == 0)
+        {
+            s_Instance.m_ClusterFreezeCulling = true;
+            SDL_Log("[Config] Cluster culling camera frozen");
+        }
+        else if (std::strcmp(arg, "--no-taa") == 0)
+        {
+            s_Instance.m_bNoTAA = true;
+            SDL_Log("[Config] TAA disabled via command line");
+        }
         else if (std::strcmp(arg, "--restir-preset") == 0)
         {
             if (i + 1 < argc)
@@ -370,6 +445,14 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --full-res-di                    Override: run RTXDI and NRD at full render resolution (default)");
             SDL_Log("  --cluster <0|1>                  Cook the per-primitive cluster LOD into the cooked mesh (default 1)");
             SDL_Log("  --cluster-stats                  Dump the cluster LOD of every primitive and run the phase 0 checks");
+            SDL_Log("  --cluster-stats-frame <n>        Print the GPU cluster counters on frame n");
+            SDL_Log("  --cluster-error <px>             Cluster LOD threshold in pixels (default 1.0)");
+            SDL_Log("  --cluster-force-lod <n>          Force one cluster LOD level; -1 = pick from the metric");
+            SDL_Log("  --cluster-max <n>                Cap the number of clusters drawn (0 = scene-derived)");
+            SDL_Log("  --cluster-no-culling             Request every cluster of every visible instance");
+            SDL_Log("  --cluster-debug <n>              Cluster debug view: 1 ids, 2 lod level, 3 bounds, 4 counters");
+            SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
+            SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
             SDL_Log("  --fov <degrees>                  Override the vertical field of view; default is the scene camera's");
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");

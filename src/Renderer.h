@@ -385,6 +385,15 @@ public:
     // Cluster LOD: cooks the per-primitive cluster DAG and caches it in the cooked mesh file. Nothing draws it
     // yet, so this only decides whether the offline build runs.
     bool m_EnableClusterRendering = true;
+
+    // Cluster traversal (phase 1): the threshold is a screen-space error in pixels, everything else exists so a
+    // run can be scripted or A/B'd the way the panel does it.
+    float m_ClusterPixelError = 1.0f;
+    int m_ClusterForcedLOD = -1;     // -1 = pick per group from the metric, >= 0 = force one level
+    uint32_t m_ClusterMaxClusters = 0; // 0 = the scene-derived worst case
+    bool m_ClusterDisableCulling = false;
+    bool m_ClusterFreezeCullingCamera = false;
+    uint32_t m_ClusterDebugMode = 0;
     int m_ForcedTextureMip = -1; // -1 = auto, 0-15 = forced mip level
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;

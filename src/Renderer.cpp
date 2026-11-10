@@ -395,6 +395,14 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
     m_EnableClusterRendering = Config::Get().m_EnableClusterLod;
+    m_ClusterPixelError = Config::Get().m_ClusterPixelError;
+    m_ClusterForcedLOD = Config::Get().m_ClusterForcedLOD;
+    m_ClusterMaxClusters = uint32_t(std::max(Config::Get().m_ClusterMaxClusters, 0));
+    m_ClusterDisableCulling = Config::Get().m_ClusterDisableCulling;
+    m_ClusterFreezeCullingCamera = Config::Get().m_ClusterFreezeCulling;
+    m_ClusterDebugMode = Config::Get().m_ClusterDebugMode;
+    if (Config::Get().m_bNoTAA)
+        m_bTAAEnabled = false;
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
     {
         m_OmmDebugMode = 1;

@@ -37,6 +37,19 @@ struct Config
     bool m_bClusterStats = false;
     // Cooks the per-primitive cluster LOD into the cooked mesh file. Nothing draws it yet.
     bool m_EnableClusterLod = true;
+    // Frame on which --cluster-stats prints the GPU cluster counters. -1 = never.
+    int m_ClusterStatsFrame = -1;
+
+    // Cluster traversal (phase 1). The values mirror the ImGui controls so a capture run can be scripted.
+    float m_ClusterPixelError = 1.0f;
+    int m_ClusterForcedLOD = -1;      // -1 = from the metric, >= 0 = one level for every instance
+    int m_ClusterMaxClusters = 0;     // 0 = scene-derived
+    bool m_ClusterDisableCulling = false;
+    uint32_t m_ClusterDebugMode = 0;
+    bool m_ClusterFreezeCulling = false;
+
+    // TAA is on by default; a pixel-exact A/B needs it off, and the panel was the only way to turn it off.
+    bool m_bNoTAA = false;
 
     // Opens the Phase 5 texel-classification view on this primitive index (0 = the first primitive). The panel
     // exposes the same controls; this exists so a screenshot run can be scripted.
