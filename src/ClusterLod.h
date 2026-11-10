@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shaders/srrhi/cpp/Cluster.h"
+
 // Offline cluster-LOD representation of one primitive (docs/cluster-lod-implementation-plan.md §3).
 //
 // Level 0 is the original mesh, clusterised into fixed-size clusters. A group of clusters is decimated to
@@ -18,46 +20,28 @@ namespace ClusterLod
     constexpr uint32_t kMaxGroupChildren    = 32;   // the child-count field of a Node is 5 bits wide
     constexpr uint32_t kNoGroup             = 0xFFFFFFFFu;
 
-    // 20 B. Everything traversal needs about a group.
-    struct TraversalMetric
-    {
-        float m_SphereX = 0.0f;
-        float m_SphereY = 0.0f;
-        float m_SphereZ = 0.0f;
-        float m_SphereRadius = 0.0f;
-        float m_MaxQuadricError = 0.0f;
-    };
-    static_assert(sizeof(TraversalMetric) == 20);
+    // ── The records the GPU reads are the shader's own ────────────────────────────────────────────
+    //
+    // src/shaders/Cluster.sr generates these through srrhi, so the CPU and the traversal cannot drift and there
+    // is no layout to police with sizeof asserts. `Cluster` is the exception, see below.
+    using TraversalMetric = srrhi::ClusterTraversalMetric;   // 20 B: sphere xyz + radius, then the quadric error
+    using Bounds          = srrhi::ClusterBounds;            // 32 B: min/shortest edge, max/longest edge
+    using Node            = srrhi::ClusterNode;              // 4 B packed tree node
+    using Group           = srrhi::ClusterGroup;             // 64 B: cluster range, level, metric, bounds
 
-    // 32 B. Culling bounds: the shortest/longest edge drive cone and backface rejection on the GPU.
-    struct Bounds
-    {
-        Vector3 m_Min = {};
-        float m_ShortestEdge = 0.0f;
-        Vector3 m_Max = {};
-        float m_LongestEdge = 0.0f;
-    };
-    static_assert(sizeof(Bounds) == 32);
-
-    // 4 B. Bit 0 is the leaf flag: interior nodes carry (childOffset:26, childCount-1:5), leaves carry
-    // (groupIndex:23, groupClusterCount-1:8).
-    struct Node
-    {
-        uint32_t m_Packed = 0;
-
-        bool IsLeaf() const { return (m_Packed & 1u) != 0; }
-        uint32_t GetChildOffset() const { return m_Packed >> 6; }
-        uint32_t GetChildCount() const { return ((m_Packed >> 1) & 0x1Fu) + 1u; }
-        uint32_t GetGroupIndex() const { return (m_Packed >> 1) & 0x7FFFFFu; }
-        uint32_t GetGroupClusterCount() const { return ((m_Packed >> 24) & 0xFFu) + 1u; }
-
-        static Node MakeChildren(uint32_t childOffset, uint32_t childCount);
-        static Node MakeLeaf(uint32_t groupIndex, uint32_t clusterCount);
-    };
-    static_assert(sizeof(Node) == 4);
+    // The node packing the generated struct cannot carry: bit 0 is the leaf flag, an interior node holds
+    // (childOffset:26, childCount-1:5) and a leaf holds (groupIndex:23, groupClusterCount-1:8).
+    inline bool IsLeaf(const Node& node) { return (node.m_Packed & 1u) != 0; }
+    inline uint32_t GetChildOffset(const Node& node) { return node.m_Packed >> 6; }
+    inline uint32_t GetChildCount(const Node& node) { return ((node.m_Packed >> 1) & 0x1Fu) + 1u; }
+    inline uint32_t GetGroupIndex(const Node& node) { return (node.m_Packed >> 1) & 0x7FFFFFu; }
+    inline uint32_t GetGroupClusterCount(const Node& node) { return ((node.m_Packed >> 24) & 0xFFu) + 1u; }
+    Node MakeChildNode(uint32_t childOffset, uint32_t childCount);
+    Node MakeLeafNode(uint32_t groupIndex, uint32_t clusterCount);
 
     // 12 B. A cluster's geometry is a cluster-local vertex range plus 8-bit micro indices into it. The offsets
-    // are element offsets while the data lives on the CPU; the GPU blob (phase 1) stores byte offsets instead.
+    // are element offsets while the data lives on the CPU; the GPU blob (phase 2) stores byte offsets instead,
+    // and HLSL has no bitfields, so this record stays CPU-only.
     struct Cluster
     {
         uint32_t m_TriangleCountMinusOne : 8;
@@ -72,22 +56,12 @@ namespace ClusterLod
     };
     static_assert(sizeof(Cluster) == 12);
 
-    // A group owns a contiguous run of clusters and is the unit of the cut decision.
-    struct Group
-    {
-        uint32_t m_ClusterOffset = 0;  // into PrimitiveClusters::m_Clusters
-        uint32_t m_ClusterCount = 0;
-        uint32_t m_LODLevel = 0;
-        TraversalMetric m_Metric;
-        Bounds m_Bounds;
-    };
-
     // Everything the offline builder produced for one primitive, in primitive-local vertex indices.
     struct PrimitiveClusters
     {
         std::vector<Node> m_Nodes;                 // node[0] is the root, its children are the level roots
         std::vector<Bounds> m_NodeBounds;          // parallel to m_Nodes
-        std::vector<Group> m_Groups;
+        std::vector<Group> m_Groups;               // group.m_ClusterOffset indexes m_Clusters
         std::vector<Cluster> m_Clusters;
         std::vector<uint32_t> m_GeneratingGroups;  // per cluster: the group that replaced it at the next level
         std::vector<uint8_t> m_Triangles;          // micro indices, 3 per triangle

@@ -49,8 +49,8 @@ namespace
     Sphere ToSphere(const TraversalMetric& metric)
     {
         Sphere sphere;
-        sphere.Center = Vector3{ metric.m_SphereX, metric.m_SphereY, metric.m_SphereZ };
-        sphere.Radius = metric.m_SphereRadius;
+        sphere.Center = Vector3{ metric.m_Sphere.x, metric.m_Sphere.y, metric.m_Sphere.z };
+        sphere.Radius = metric.m_Sphere.w;
         return sphere;
     }
 
@@ -60,10 +60,10 @@ namespace
         Sphere merged;
         Sphere::CreateMerged(merged, ToSphere(outer), ToSphere(inner));
 
-        outer.m_SphereX = merged.Center.x;
-        outer.m_SphereY = merged.Center.y;
-        outer.m_SphereZ = merged.Center.z;
-        outer.m_SphereRadius = merged.Radius;
+        outer.m_Sphere.x = merged.Center.x;
+        outer.m_Sphere.y = merged.Center.y;
+        outer.m_Sphere.z = merged.Center.z;
+        outer.m_Sphere.w = merged.Radius;
     }
 
 
@@ -267,10 +267,10 @@ namespace
         }
 
         TraversalMetric metric;
-        metric.m_SphereX = center.x;
-        metric.m_SphereY = center.y;
-        metric.m_SphereZ = center.z;
-        metric.m_SphereRadius = radius;
+        metric.m_Sphere.x = center.x;
+        metric.m_Sphere.y = center.y;
+        metric.m_Sphere.z = center.z;
+        metric.m_Sphere.w = radius;
         metric.m_MaxQuadricError = error;
         return metric;
     }
@@ -318,8 +318,8 @@ namespace
             {
                 const Group& ga = clusters.m_Groups[a];
                 const Group& gb = clusters.m_Groups[b];
-                const float ca = axis == 0 ? ga.m_Metric.m_SphereX : axis == 1 ? ga.m_Metric.m_SphereY : ga.m_Metric.m_SphereZ;
-                const float cb = axis == 0 ? gb.m_Metric.m_SphereX : axis == 1 ? gb.m_Metric.m_SphereY : gb.m_Metric.m_SphereZ;
+                const float ca = axis == 0 ? ga.m_Metric.m_Sphere.x : axis == 1 ? ga.m_Metric.m_Sphere.y : ga.m_Metric.m_Sphere.z;
+                const float cb = axis == 0 ? gb.m_Metric.m_Sphere.x : axis == 1 ? gb.m_Metric.m_Sphere.y : gb.m_Metric.m_Sphere.z;
                 return ca < cb;
             });
 
@@ -360,12 +360,12 @@ namespace
             if (node.m_Group >= 0)
             {
                 outClusters.m_Nodes[finalIndex[temp]] =
-                    Node::MakeLeaf(uint32_t(node.m_Group), outClusters.m_Groups[node.m_Group].m_ClusterCount);
+                    MakeLeafNode(uint32_t(node.m_Group), outClusters.m_Groups[node.m_Group].m_ClusterCount);
                 continue;
             }
 
             const uint32_t childOffset = uint32_t(outClusters.m_Nodes.size());
-            outClusters.m_Nodes[finalIndex[temp]] = Node::MakeChildren(childOffset, uint32_t(node.m_Children.size()));
+            outClusters.m_Nodes[finalIndex[temp]] = MakeChildNode(childOffset, uint32_t(node.m_Children.size()));
 
             for (uint32_t child : node.m_Children)
             {
@@ -466,25 +466,6 @@ namespace
 
 }
 
-Node Node::MakeChildren(uint32_t childOffset, uint32_t childCount)
-{
-    SDL_assert(childCount >= 1 && childCount <= kMaxGroupChildren);
-    SDL_assert((childOffset >> 26) == 0);
-
-    Node node;
-    node.m_Packed = (childOffset << 6) | ((childCount - 1) << 1);
-    return node;
-}
-
-Node Node::MakeLeaf(uint32_t groupIndex, uint32_t clusterCount)
-{
-    SDL_assert(clusterCount >= 1 && clusterCount <= kMaxClustersPerGroup);
-    SDL_assert((groupIndex >> 23) == 0);
-
-    Node node;
-    node.m_Packed = (groupIndex << 1) | ((clusterCount - 1) << 24) | 1u;
-    return node;
-}
 
 bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& outClusters, BuildStats& outStats)
 {

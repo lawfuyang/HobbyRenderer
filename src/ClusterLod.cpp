@@ -2,6 +2,34 @@
 
 #include "Utilities.h"
 
+namespace ClusterLod
+{
+
+// The packed-node contract. The struct itself is generated from src/shaders/Cluster.sr, which has no place for
+// these helpers.
+Node MakeChildNode(uint32_t childOffset, uint32_t childCount)
+{
+    SDL_assert(childCount >= 1 && childCount <= kMaxGroupChildren);
+    SDL_assert((childOffset >> 26) == 0);
+
+    Node node;
+    node.m_Packed = (childOffset << 6) | ((childCount - 1) << 1);
+    return node;
+}
+
+Node MakeLeafNode(uint32_t groupIndex, uint32_t clusterCount)
+{
+    SDL_assert(clusterCount >= 1 && clusterCount <= kMaxClustersPerGroup);
+    SDL_assert((groupIndex >> 23) == 0);
+
+    Node node;
+    node.m_Packed = (groupIndex << 1) | ((clusterCount - 1) << 24) | 1u;
+    return node;
+}
+
+} // namespace ClusterLod
+
+
 #include "meshoptimizer.h"
 
 namespace ClusterLod
@@ -51,10 +79,10 @@ size_t HashPosition(const float* positions, size_t stride, uint32_t vertex)
 
 float GetGroupPixelError(const Group& group, const CutParams& params)
 {
-    const float dx = group.m_Metric.m_SphereX - params.m_ViewPosition.x;
-    const float dy = group.m_Metric.m_SphereY - params.m_ViewPosition.y;
-    const float dz = group.m_Metric.m_SphereZ - params.m_ViewPosition.z;
-    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) - group.m_Metric.m_SphereRadius * params.m_WorldScale;
+    const float dx = group.m_Metric.m_Sphere.x - params.m_ViewPosition.x;
+    const float dy = group.m_Metric.m_Sphere.y - params.m_ViewPosition.y;
+    const float dz = group.m_Metric.m_Sphere.z - params.m_ViewPosition.z;
+    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) - group.m_Metric.m_Sphere.w * params.m_WorldScale;
     const float nearest = std::max(distance, 1e-4f);
     return group.m_Metric.m_MaxQuadricError * params.m_WorldScale * params.m_FocalPixels / nearest;
 }
@@ -138,7 +166,7 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
         outError = "node/bounds arrays are not parallel or empty";
         return false;
     }
-    if (clusters.m_Nodes[0].IsLeaf() || clusters.m_Nodes[0].GetChildCount() != clusters.m_LODLevelCount)
+    if (IsLeaf(clusters.m_Nodes[0]) || GetChildCount(clusters.m_Nodes[0]) != clusters.m_LODLevelCount)
     {
         outError = "root node does not have one child per LOD level";
         return false;
@@ -148,15 +176,15 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
     for (size_t n = 0; n < clusters.m_Nodes.size(); ++n)
     {
         const Node& node = clusters.m_Nodes[n];
-        if (node.IsLeaf())
+        if (IsLeaf(node))
         {
-            const uint32_t groupIndex = node.GetGroupIndex();
+            const uint32_t groupIndex = GetGroupIndex(node);
             if (groupIndex >= clusters.m_Groups.size())
             {
                 outError = "leaf node references group " + std::to_string(groupIndex);
                 return false;
             }
-            if (node.GetGroupClusterCount() != clusters.m_Groups[groupIndex].m_ClusterCount)
+            if (GetGroupClusterCount(node) != clusters.m_Groups[groupIndex].m_ClusterCount)
             {
                 outError = "leaf node cluster count disagrees with group " + std::to_string(groupIndex);
                 return false;
@@ -164,8 +192,8 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
             continue;
         }
 
-        const uint64_t childEnd = uint64_t(node.GetChildOffset()) + node.GetChildCount();
-        if (childEnd > clusters.m_Nodes.size() || node.GetChildCount() > kMaxGroupChildren)
+        const uint64_t childEnd = uint64_t(GetChildOffset(node)) + GetChildCount(node);
+        if (childEnd > clusters.m_Nodes.size() || GetChildCount(node) > kMaxGroupChildren)
         {
             outError = "node " + std::to_string(n) + " has children outside the node array";
             return false;
@@ -271,13 +299,13 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
     std::vector<uint32_t> nodeLevel(clusters.m_Nodes.size(), UINT32_MAX);
 
     const Node& root = clusters.m_Nodes[0];
-    for (uint32_t i = 0; i < root.GetChildCount(); ++i)
+    for (uint32_t i = 0; i < GetChildCount(root); ++i)
     {
-        const uint32_t child = root.GetChildOffset() + i;
+        const uint32_t child = GetChildOffset(root) + i;
         nodeLevel[child] = i;
         stack.push_back(child);
     }
-    if (root.GetChildCount() != clusters.m_LODLevelCount)
+    if (GetChildCount(root) != clusters.m_LODLevelCount)
     {
         outError = "level roots do not match the level count";
         return false;
@@ -290,9 +318,9 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
         const Node& node = clusters.m_Nodes[nodeIndex];
         const uint32_t level = nodeLevel[nodeIndex];
 
-        if (node.IsLeaf())
+        if (IsLeaf(node))
         {
-            const uint32_t groupIndex = node.GetGroupIndex();
+            const uint32_t groupIndex = GetGroupIndex(node);
             if (clusters.m_Groups[groupIndex].m_LODLevel != level)
             {
                 outError = "leaf node of level " + std::to_string(level) + " wraps a group of another level";
@@ -307,9 +335,9 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
             continue;
         }
 
-        for (uint32_t i = 0; i < node.GetChildCount(); ++i)
+        for (uint32_t i = 0; i < GetChildCount(node); ++i)
         {
-            const uint32_t child = node.GetChildOffset() + i;
+            const uint32_t child = GetChildOffset(node) + i;
             nodeLevel[child] = level;
             stack.push_back(child);
         }

@@ -10,15 +10,22 @@
 //
 // The 8-bit cluster header of the reference is a packed uint here: srrhi (and HLSL) have no bitfields, and
 // the traversal only needs the group ranges, which live in the group record.
-
-// 20 B. Everything the cut decision needs about a group.
+// ── These records are also the cooked-mesh layout ────────────────────────────────────────────────────────
+//
+// ClusterLod aliases them (src/ClusterLod.h: Node, Bounds, TraversalMetric, Group) instead of declaring its own
+// copies, and SceneCache writes them byte for byte into `<scene>_mesh.bin`. Changing a field of
+// ClusterTraversalMetric, ClusterBounds, ClusterNode or ClusterGroup therefore changes the on-disk format:
+// bump SceneCache::kCookedMeshVersion in the same commit, or an old cache will be read as the new layout.
+// The records below that are traversal-only (jobs, queue entries, counters, per-geometry ranges) have no CPU
+// copy and are free to change.
+// 20 B. Everything the cut decision needs about a group. Cooked-mesh record (see the note above).
 struct ClusterTraversalMetric
 {
     float4 m_Sphere;             // xyz = centre, w = radius (inflated past the groups it replaces)
     float  m_MaxQuadricError;    // error of using this level instead of the original mesh
 };
 
-// 32 B. Culling bounds; the edge lengths drive cone/backface rejection in later phases.
+// 32 B. Culling bounds; the edge lengths drive cone/backface rejection in later phases. Cooked-mesh record.
 struct ClusterBounds
 {
     float3 m_Min;
@@ -28,19 +35,19 @@ struct ClusterBounds
 };
 
 // 4 B. Bit 0 is the leaf flag: interior nodes carry (childOffset:26, childCount-1:5), leaves carry
-// (groupIndex:23, groupClusterCount-1:8). Mirrors ClusterLod::Node.
+// (groupIndex:23, groupClusterCount-1:8). Mirrors ClusterLod::Node, which packs and unpacks it.
+// Cooked-mesh record.
 struct ClusterNode
 {
     uint m_Packed;
 };
 
-// One per group. Groups own a contiguous run of clusters and are the unit of the cut decision.
+// 64 B. One per group: a contiguous run of clusters, the unit of the cut decision. Cooked-mesh record.
 struct ClusterGroup
 {
-    uint                   m_ClusterOffset;  // local to the geometry's cluster range
+    uint                   m_ClusterOffset;  // global, see ClusterGeometry::m_ClusterOffset
     uint                   m_ClusterCount;
     uint                   m_LODLevel;
-    uint                   m_ReplaceGroup;   // coarser group that replaced this one, 0xFFFFFFFF = none
     ClusterTraversalMetric m_Metric;
     ClusterBounds          m_Bounds;
 };
@@ -59,17 +66,24 @@ struct ClusterNodeRef
     uint m_NodeIndex;       // global node index
 };
 
+// 8 B. An entry of the group queue: a leaf the traversal kept and the culling pass still has to test.
+struct ClusterGroupRef
+{
+    uint m_InstanceIndex;
+    uint m_GroupIndex;      // global group index
+};
+
 // 32 B. One per MeshData: where this primitive's ranges start in the global arrays.
 struct ClusterGeometry
 {
     uint m_NodeOffset;
+    uint m_NodeCount;
     uint m_GroupOffset;
+    uint m_GroupCount;
     uint m_ClusterOffset;
+    uint m_ClusterCount;
     uint m_LODLevelCount;
     uint m_MaxTreeDepth;
-    uint m_Pad0;
-    uint m_Pad1;
-    uint m_Pad2;
 };
 
 // 32 B, read back by the CPU for the counters panel and --cluster-stats-frame.
@@ -77,19 +91,19 @@ struct ClusterCounters
 {
     uint m_InstanceCount;    // instances that passed the instance tests
     uint m_NodeCount;        // nodes visited
-    uint m_GroupCount;       // groups visited
+    uint m_GroupCount;       // groups queued by the node passes
     uint m_ClusterCount;     // clusters requested
-    uint m_ClusterCapped;    // requests dropped by the cluster cap
-    uint m_NodePassCount;    // traversal passes the run phase needed
+    uint m_ClusterCapped;    // cluster requests dropped by the cap
     uint m_Pad0;
     uint m_Pad1;
+    uint m_Pad2;
 };
 
 cbuffer ClusterTraversalConstants
 {
     float4x4 m_View;
-    float4x4 m_ViewProj;
     float4   m_FrustumPlanes[6];
+    float4   m_CameraPosition;   // xyz = world-space view position, the metric's distance origin
 
     uint  m_NumInstances;
     uint  m_InstanceBaseIndex;
@@ -107,9 +121,9 @@ cbuffer ClusterTraversalConstants
     float m_FocalPixels;
 
     uint  m_DisableCulling;
-    uint  m_NodePass;            // which traversal pass this dispatch is
     uint  m_Pad0;
     uint  m_Pad1;
+    uint  m_Pad2;
 };
 
 srinput ClusterTraversalInputs
@@ -117,22 +131,21 @@ srinput ClusterTraversalInputs
     ClusterTraversalConstants m_TraversalCB;
 
     StructuredBuffer<PerInstanceData>  InstanceData;       // t0
-    StructuredBuffer<MeshData>         MeshData;           // t1
-    StructuredBuffer<ClusterGeometry>  Geometry;           // t2
-    StructuredBuffer<ClusterNode>      Nodes;              // t3
-    StructuredBuffer<ClusterBounds>    NodeBounds;         // t4
-    StructuredBuffer<ClusterGroup>     Groups;             // t5
+    StructuredBuffer<ClusterGeometry>  Geometry;           // t1
+    StructuredBuffer<ClusterNode>      Nodes;              // t2
+    StructuredBuffer<ClusterBounds>    NodeBounds;         // t3
+    StructuredBuffer<ClusterGroup>     Groups;             // t4
+    StructuredBuffer<uint>             GeneratingGroups;   // t5, per cluster: coarser group that replaced it
     Texture2D<float>                   HZB;                // t6
 
     RWStructuredBuffer<ClusterNodeRef> NodeQueueIn;        // u0
     RWStructuredBuffer<ClusterNodeRef> NodeQueueOut;       // u1
     RWStructuredBuffer<uint>           NodeQueueCountIn;   // u2
     RWStructuredBuffer<uint>           NodeQueueCountOut;  // u3
-    RWStructuredBuffer<ClusterNodeRef> GroupQueue;         // u4
+    RWStructuredBuffer<ClusterGroupRef> GroupQueue;        // u4
     RWStructuredBuffer<uint>           GroupQueueCount;    // u5
     RWStructuredBuffer<ClusterJob>     ClusterJobs;        // u6
     RWStructuredBuffer<uint>           ClusterJobCount;    // u7
-    RWStructuredBuffer<DispatchIndirectArguments> NodeIndirectArgs;    // u8
-    RWStructuredBuffer<DispatchIndirectArguments> ClusterIndirectArgs; // u9
-    RWStructuredBuffer<ClusterCounters> Counters;          // u10
+    RWStructuredBuffer<DispatchIndirectArguments> ClusterIndirectArgs; // u8
+    RWStructuredBuffer<ClusterCounters> Counters;          // u9
 };

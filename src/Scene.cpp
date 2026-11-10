@@ -1,6 +1,7 @@
-﻿#include "Scene.h"
+#include "Scene.h"
 #include "SceneLoader.h"
 #include "SceneCache.h"
+#include "ClusterLodGpu.h"
 #include "Config.h"
 #include "Renderer.h"
 #include "PixCapture.h"
@@ -403,6 +404,35 @@ void Scene::FinalizeLoadedScene()
 		m_MaxMeshletJobCount += DivideAndRoundUp(maxMeshlets, srrhi::CommonConsts::kThreadsPerGroup);
 	}
 	m_MaxMeshletJobCount = std::max(m_MaxMeshletJobCount, 1u);
+
+	// Worst-case cluster traversal work: every instance drawing every cluster, group and node of its
+	// primitive. The primitive is found through its MeshDataIndex, which is what the traversal indexes too.
+	std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData;
+	for (const Mesh& mesh : m_Meshes)
+	{
+		for (size_t pi = 0; pi < mesh.m_Primitives.size() && pi < mesh.m_Clusters.size(); ++pi)
+			clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
+	}
+
+	m_MaxClusterJobCount = 0;
+	m_MaxClusterGroupCount = 0;
+	m_MaxClusterNodeCount = 0;
+	m_MaxClusterTreeDepth = 0;
+	for (const srrhi::PerInstanceData& inst : m_InstanceData)
+	{
+		const auto it = clustersByMeshData.find(inst.m_MeshDataIndex);
+		if (it == clustersByMeshData.end())
+			continue;
+
+		const ClusterLod::Counts counts = ClusterLod::GetCounts(*it->second);
+		m_MaxClusterJobCount += counts.m_ClusterCount;
+		m_MaxClusterGroupCount += counts.m_GroupCount;
+		m_MaxClusterNodeCount += counts.m_NodeCount;
+		m_MaxClusterTreeDepth = std::max(m_MaxClusterTreeDepth, counts.m_MaxTreeDepth);
+	}
+	m_MaxClusterJobCount = std::max(m_MaxClusterJobCount, 1u);
+	m_MaxClusterGroupCount = std::max(m_MaxClusterGroupCount, 1u);
+	m_MaxClusterNodeCount = std::max(m_MaxClusterNodeCount, 1u);
 
 	m_SceneBoundingSphere = DirectX::BoundingSphere{};
 	for (const Scene::Node& node : m_Nodes)
