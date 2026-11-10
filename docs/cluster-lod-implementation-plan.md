@@ -358,6 +358,79 @@ Two gotchas that cost a run each: `--pix-capture-dir` is used as a **file-name p
 `bin/screenshot.png` when the frame completes — an empty `screenshot.png` is the cheapest proof that a
 frame rendered at all.
 
+**Phase 1 landing notes (2026-11-10).** What the traversal actually looks like once built, and where it
+departs from the task list above:
+
+* `Cluster.sr` carries the node tree, the group records (metric + bounds), the per-cluster
+  generating-group array, the `ClusterGeometry` ranges, the two queue entry types and the counters.
+  Clusters themselves and the micro-index blob wait for phase 2's mesh shader, so `ClusterGeometry` is
+  32 B, not the reference's per-geometry header with `m_LODMinSphere[32]`.
+* **One definition per record.** `ClusterNode`, `ClusterBounds`, `ClusterTraversalMetric` and
+  `ClusterGroup` are the shader's own structs: `ClusterLod.h` aliases them (`Node`, `Bounds`,
+  `TraversalMetric`, `Group`) instead of redeclaring them, so nothing can drift and `ClusterLodGpu.cpp`
+  no longer needs `sizeof` asserts to police two copies. The node packing lives in free functions in
+  `ClusterLod.h`/`.cpp` because a generated struct cannot carry them. `Cluster` stays CPU-only — it packs
+  four 8-bit counts into one `uint` with bitfields, which HLSL does not have, so phase 2's GPU geometry
+  record will be its own wider struct. The consequence to remember: **editing `Cluster.sr` now changes the
+  cooked-mesh layout**, so `kCookedMeshVersion` has to be bumped whenever it does.
+* `ClusterLod::BuildGpuData` (`src/ClusterLodGpu.{h,cpp}`) flattens every primitive's DAG into five global
+  arrays and rebases every index the traversal follows (node children, leaf group indices, group cluster
+  offsets, generating groups).
+* One shader file, `ClusterTraversal.hlsl`, holds all four entries instead of the four files listed in the
+  task list: they share the cut rule and the culling helpers, and splitting them would duplicate both.
+* The node passes are dispatched with the **worst-case grid** and exit on the queue counter, instead of
+  writing indirect args: a pass cannot know its own thread count before it runs, so the alternative is an
+  extra one-thread dispatch per level. The idle threads are a fraction of a percent of the pass.
+* Node and group culling reuse `FrustumSphereTest` / `OcclusionSphereTest` on the bounding sphere of the
+  bounds box. That is conservative (never rejects something visible) and needs no new culling code; real
+  box tests belong to phase 4, where the culling budget starts to matter.
+* The node tree prunes **spatially only**; the cut itself is `EvaluateCut`'s rule applied to every group
+  the tree reaches. Two corrections came out of validating it on Sponza, where the first cut was 3× too
+  large:
+  * The rule is **per cluster, not per group**: a group holds clusters that were replaced by *different*
+    coarser groups, so the "replacement is already detailed enough" test has to read
+    `m_GeneratingGroups[clusterIndex]`. That array is uploaded as its own buffer
+    (`m_ClusterGeneratingGroupsBuffer`); the collapsed `m_ReplaceGroup` field is gone.
+  * The comparison happens in **world space** with the instance's uniform scale (the builder's spheres are
+    in the primitive's own space), and the pixel error is `error * worldScale * focalPixels / distance`.
+    A CPU reference that skips this only agrees for identity-transform instances.
+* `--cluster-force-lod <n>` clamps to the primitive's own coarsest level, like `EvaluateCut` does, so a
+  sweep never silently draws nothing for a primitive with fewer levels than the forced one.
+* `--cluster-stats-frame <n>` reads the counters of **both** buckets back on that frame (one staging
+  buffer each) and logs them against a CPU reference that mirrors the shader rule:
+
+  ```
+  HobbyRenderer.exe --scene "GLTF Scenes/Bistro/bistrox.gltf" --hide-ui --cluster 1 --cluster-no-culling \
+      --cluster-stats-frame 4
+  [ClusterLod] Opaque traversal: 2404 instances, 9631 nodes, 6252 groups, 23907 clusters (0 capped) | CPU cut reference: 23907 clusters (match)
+  [ClusterLod] Masked traversal:  163 instances, 1132 nodes,  621 groups,  9005 clusters (0 capped) | CPU cut reference:  9005 clusters (match)
+  ```
+
+  Verified exact (`match`) with culling off on Bistro, Sponza and DragonAttenuation, for the metric cut
+  and for forced levels 0/1/2/3. Bistro worst case: 11 910 node refs, 7 678 groups, 82 283 clusters,
+  6 node passes.
+
+**Phase 1 status (2026-11-10).** V1.1 (exact equality with the CPU cut), V1.2 (forced level 0/1/3
+counts), V1.3 (`--rhidebug`: 0 D3D12 errors, 0 nvrhi messages) and V1.4 (`rdc-tools deps`: no
+read-before-write on any `Cluster*` resource, and `rdc-tools hazards` reports 0 findings on them) are
+green on all three scenes. Measured on the captures below:
+
+| Capture | Buckets traversed | `Cluster Traversal Preparation` | `… Run` (6 passes) | `… Build Args` | total | T1 ≤ 0.25 ms |
+|---|---|---|---|---|---|---|
+| `bin/captures/DragonAttenuation-frame775.wpix` | opaque | 17.7 µs | 143.7 µs | 13.7 µs | **0.175 ms** | pass |
+| `bin/captures/Sponza-frame60.wpix` | opaque + masked | 18.4 / 18.6 µs | 118.6 / 107.7 µs | 13.7 / 13.5 µs | **0.30 ms** | per bucket 0.15 ms |
+| `bin/captures/bistrox-cluster-frame60.wpix` | opaque + masked | 17.7 / 17.0 µs | 134.8 / 80.6 µs | 13.8 / 13.9 µs | **0.28 ms** | per bucket 0.17 / 0.11 ms |
+
+`gpu__time_duration.sum` from a counter-collecting replay is instrumented, so the totals rank the passes
+rather than time a shipped frame; each Run dispatch costs a flat ~11-18 µs because the grid is the
+worst-case node count. RenderDoc captures of the same frames
+(`DragonAttenuation_capture.rdc`, `Sponza_capture.rdc`, `bistrox_capture.rdc`) show the full marker
+sequence for both buckets, `rdc-tools markers`.
+
+The captures also showed the transparent pass declaring ~0.9 MB of traversal buffers it never touches
+(82283 cluster jobs + both node queues on Bistro), so `BasePassResources::DeclareResources` now takes a
+`bTraversesClusters` flag that only the opaque and masked renderers set.
+
 ### Phase 2 — Cluster mesh shader for the Opaque bucket
 
 **Goal**: draw the cluster list instead of the meshlet job list; image must be *identical* when the
