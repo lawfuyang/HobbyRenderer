@@ -248,6 +248,33 @@ void Renderer::LoadShaders()
             loadedCount, ShaderID::COUNT, fileToIDs.size());
 }
 
+void NvrhiErrorCallback::message(nvrhi::MessageSeverity severity, const char* messageText)
+{
+    const char* severityStr = "Unknown";
+    switch (severity)
+    {
+    case nvrhi::MessageSeverity::Info:
+        severityStr = "Info";
+        break;
+    case nvrhi::MessageSeverity::Warning:
+        severityStr = "Warning";
+        break;
+    case nvrhi::MessageSeverity::Error:
+        severityStr = "Error";
+        break;
+    case nvrhi::MessageSeverity::Fatal:
+        severityStr = "Fatal";
+        break;
+    }
+    SDL_Log("[NVRHI %s] %s", severityStr, messageText);
+
+    // Assert on warning and above
+    if (severity >= nvrhi::MessageSeverity::Warning)
+    {
+        SDL_assert(false && messageText);
+    }
+}
+
 void Renderer::UnloadShaders()
 {
     SDL_Log("[Shutdown] Unloading shaders");
