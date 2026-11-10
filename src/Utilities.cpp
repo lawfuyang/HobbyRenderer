@@ -185,6 +185,11 @@ size_t HashBytes(size_t hash, const void* data, size_t size)
     return hash * 1099511628211ull + std::hash<std::string_view>{}(bytes);
 }
 
+size_t HashCombine(size_t hash, size_t value)
+{
+    return hash * 1099511628211ull + std::hash<size_t>{}(value);
+}
+
 void ChooseWindowSize(int* outWidth, int* outHeight)
 {
     int windowW = 1280;

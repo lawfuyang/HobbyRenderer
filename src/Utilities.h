@@ -28,6 +28,9 @@ uint32_t HashToUint(size_t hash);
 // Folds a byte run into a running hash so several buffers can be digested together.
 size_t HashBytes(size_t hash, const void* data, size_t size);
 
+// Folds one more value into a running hash. HashBytes is the byte-run variant of the same fold.
+size_t HashCombine(size_t hash, size_t value);
+
 void ChooseWindowSize(int* outWidth, int* outHeight);
 
 struct SimpleTimer
