@@ -432,7 +432,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --omm-dump-mips <primitive>      Dump every alpha mip classification of that primitive to bin/");
             SDL_Log("  --renderdoc[=<path>]             Load renderdoc.dll for in-app captures (before the device exists)");
             SDL_Log("  --renderdoc-capture-frame <n>    Capture frame n and exit (implies --renderdoc)");
-            SDL_Log("  --pix[=<path>]                  Load WinPixGpuCapturer.dll for in-app PIX captures");
+            SDL_Log("  --pix[=<path>]                   Load WinPixGpuCapturer.dll for in-app PIX captures");
             SDL_Log("  --pix-capture-frame <n>          Take a PIX GPU capture of frame n and exit (implies --pix)");
             SDL_Log("  --pix-capture-load               Take a PIX GPU capture of the scene load: micromap and BLAS builds (implies --pix)");
             SDL_Log("  --pix-capture-dir <dir>          Where PIX captures are written (default bin/captures/<scene>)");
