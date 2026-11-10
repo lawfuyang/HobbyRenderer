@@ -959,15 +959,23 @@ public:
         // ---- TLAS History (for temporal effects) -------------------
         const uint32_t maxInstances = static_cast<uint32_t>(g_Renderer.m_Scene.m_InstanceData.size());
 
-        nvrhi::rt::AccelStructDesc tlasHistoryDesc;
-        tlasHistoryDesc.topLevelMaxInstances = maxInstances;
-        tlasHistoryDesc.debugName = "RTXDI_TLAS_History";
-        tlasHistoryDesc.isTopLevel = true;
-        m_TLASHistory = device->createAccelStruct(tlasHistoryDesc);
-
         nvrhi::CommandListHandle cl = g_Renderer.AcquireCommandList();
         ScopedCommandList scopeCl{ cl, "RTXDI::Initialize" };
-        scopeCl->buildTopLevelAccelStructFromBuffer(m_TLASHistory, g_Renderer.m_Scene.m_RTInstanceDescBuffer, 0, (uint32_t)g_Renderer.m_Scene.m_RTInstanceDescs.size());
+
+        // A scene whose RT setup produced no instance descriptors has no BLAS to mirror: Scene only creates the
+        // instance buffer in that case, so building a TLAS from it would hand the device a null input. Stay inert
+        // the way TLASRenderer::Setup() does, and let the resampling inputs fall back to the scene TLAS.
+        if (g_Renderer.m_Scene.m_RTInstanceDescBuffer && !g_Renderer.m_Scene.m_RTInstanceDescs.empty())
+        {
+            nvrhi::rt::AccelStructDesc tlasHistoryDesc;
+            tlasHistoryDesc.topLevelMaxInstances = maxInstances;
+            tlasHistoryDesc.debugName = "RTXDI_TLAS_History";
+            tlasHistoryDesc.isTopLevel = true;
+            m_TLASHistory = device->createAccelStruct(tlasHistoryDesc);
+
+            scopeCl->buildTopLevelAccelStructFromBuffer(m_TLASHistory, g_Renderer.m_Scene.m_RTInstanceDescBuffer, 0,
+                (uint32_t)g_Renderer.m_Scene.m_RTInstanceDescs.size());
+        }
 
         // Build and cache light buffer params — analytical scene lights are static
         // so this only needs to happen once after the scene is loaded.
@@ -2068,7 +2076,7 @@ public:
         resamplingInputs.SetLocalLightPdfTexture(localLightPDFTex);
         resamplingInputs.SetEnvironmentPdfTexture(envLightPDFTex);
         resamplingInputs.SetSceneBVH(g_Renderer.m_Scene.m_TLAS);
-        resamplingInputs.SetPrevSceneBVH(m_TLASHistory);
+        resamplingInputs.SetPrevSceneBVH(m_TLASHistory ? m_TLASHistory : g_Renderer.m_Scene.m_TLAS);
         resamplingInputs.SetLightDataBuffer(lightDataBuf);
         resamplingInputs.SetGBufferEmissive(emissiveTex);
         resamplingInputs.SetGeometryInstanceToLight(geoInstToLightBuf);
