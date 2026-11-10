@@ -9,6 +9,8 @@
 #include "SceneLoader.h"
 #include "Streaming/FeedbackTexture.h"
 
+#include "shaders/srrhi/cpp/Cluster.h"
+
 #include <ShaderMake/ShaderBlob.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -827,6 +829,8 @@ void Renderer::Run()
         // Execute any queued GPU work in submission order
         ExecutePendingCommandLists();
         const uint64_t markExecuteNs = SDL_GetTicksNS();
+
+        LogClusterCounters();
 
         // Present swapchain
         SDL_assert(bSwapChainImageAcquireSuccess);
@@ -2339,6 +2343,78 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(bool bImmediatelyQueue)
     return handle;
 }
 
+void Renderer::RequestClusterCountersReadback(nvrhi::BufferHandle counters, nvrhi::CommandListHandle commandList,
+                                             uint32_t bucketIndex, const char* bucketName, float focalPixels)
+{
+    SDL_assert(counters != nullptr);
+    SDL_assert(bucketName != nullptr);
+    SDL_assert(bucketIndex < 2);
+
+    ClusterCountersReadback& readback = m_ClusterCountersReadback[bucketIndex];
+
+    if (!readback.m_Staging)
+    {
+        nvrhi::BufferDesc desc;
+        desc.byteSize = sizeof(srrhi::ClusterCounters);
+        desc.structStride = sizeof(srrhi::ClusterCounters);
+        desc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        desc.debugName = bucketIndex == 0 ? "ClusterCountersStagingOpaque" : "ClusterCountersStagingMasked";
+        readback.m_Staging = m_RHI->m_NvrhiDevice->createBuffer(desc);
+    }
+
+    commandList->copyBuffer(readback.m_Staging, 0, counters, 0, sizeof(srrhi::ClusterCounters));
+
+    readback.m_BucketName = bucketName;
+    readback.m_FocalPixels = focalPixels;
+}
+
+void Renderer::LogClusterCounters()
+{
+    if (m_ClusterCountersReadback[0].m_BucketName == nullptr && m_ClusterCountersReadback[1].m_BucketName == nullptr)
+        return;
+
+    // The copies went out with this frame's command lists, so the GPU has to be done before the staging buffers
+    // are read.
+    m_RHI->m_NvrhiDevice->waitForIdle();
+
+    Vector3 viewPosition = m_Scene.m_Camera.GetPosition();
+    if (m_ClusterFreezeCullingCamera)
+        viewPosition = m_Scene.m_FrozenCullingCameraPos;
+
+    for (uint32_t bucketIndex = 0; bucketIndex < 2; ++bucketIndex)
+    {
+        ClusterCountersReadback& readback = m_ClusterCountersReadback[bucketIndex];
+        if (readback.m_BucketName == nullptr)
+            continue;
+
+        const void* data = m_RHI->m_NvrhiDevice->mapBuffer(readback.m_Staging, nvrhi::CpuAccessMode::Read);
+        SDL_assert(data != nullptr);
+        if (data == nullptr)
+            continue;
+
+        srrhi::ClusterCounters counters;
+        memcpy(&counters, data, sizeof(counters));
+        m_RHI->m_NvrhiDevice->unmapBuffer(readback.m_Staging);
+
+        const Scene::BucketInfo& bucket = bucketIndex == 0 ? m_Scene.m_OpaqueBucket : m_Scene.m_MaskedBucket;
+
+        ClusterLod::CutParams params;
+        params.m_ViewPosition = viewPosition;
+        params.m_FocalPixels = readback.m_FocalPixels;
+        params.m_PixelErrorThreshold = m_ClusterPixelError;
+        params.m_ForcedLODLevel = m_ClusterForcedLOD;
+
+        const uint32_t reference = CountReferenceCutClusters(m_Scene, bucket, params);
+
+        SDL_Log("[ClusterLod] %s traversal: %u instances, %u nodes, %u groups, %u clusters (%u capped) | "
+            "CPU cut reference: %u clusters (%s)",
+            readback.m_BucketName, counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount,
+            counters.m_ClusterCount, counters.m_ClusterCapped, reference,
+            counters.m_ClusterCount == reference ? "match" : "differs");
+
+        readback.m_BucketName = nullptr;
+    }
+}
 void Renderer::ExecutePendingCommandLists()
 {
     PROFILE_FUNCTION();

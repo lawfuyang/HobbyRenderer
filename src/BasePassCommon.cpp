@@ -2,6 +2,9 @@
 #include "Renderer.h"
 #include "Utilities.h"
 
+// The cluster traversal's buffer sizes are sizeof() their srrhi types, which src/shaders/Cluster.sr defines.
+#include "shaders/srrhi/cpp/Cluster.h"
+
 // The base pass uses nvrhi's stock command signatures, so these structs have to match the D3D12
 // argument layouts those signatures are built from
 // (d3d12-device.cpp: 16 for DRAW, 20 for DRAW_INDEXED, 12 for DISPATCH / DISPATCH_MESH).
@@ -17,7 +20,7 @@ void BasePassResources::Initialize()
     m_PipelineQueries[1] = g_Renderer.m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
 }
 
-void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rendererName)
+void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rendererName, bool bTraversesClusters)
 {
     uint32_t numPrimitives = (uint32_t)g_Renderer.m_Scene.m_InstanceData.size();
     numPrimitives = std::max(numPrimitives, 1u); // avoid zero-sized buffers
@@ -128,5 +131,111 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
             rg.DeclareBuffer(desc, m_MeshletJobBuffer);
         }
     }
-}
+
+    if (g_Renderer.m_EnableClusterRendering && bTraversesClusters)
+    {
+        const Scene& scene = g_Renderer.m_Scene;
+
+        // The queues are sized by the worst case computed in Scene::FinalizeLoadedScene(): every instance
+        // visiting every node / group of its primitive.
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterNodeCount * sizeof(srrhi::ClusterNodeRef))
+                .setStructStride(sizeof(srrhi::ClusterNodeRef))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterNodeQueue" + std::to_string(i)).c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterNodeQueue[i]);
+        }
+
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterNodeQueueCount" + std::to_string(i)).c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterNodeQueueCount[i]);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterGroupCount * sizeof(srrhi::ClusterGroupRef))
+                .setStructStride(sizeof(srrhi::ClusterGroupRef))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterGroupQueue").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterGroupQueue);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterGroupQueueCount").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterGroupQueueCount);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterJobCount * sizeof(srrhi::ClusterJob))
+                .setStructStride(sizeof(srrhi::ClusterJob))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterJobs").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterJobs);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterJobCount").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterJobCount);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(srrhi::DispatchIndirectArguments))
+                .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
+                .setIsDrawIndirectArgs(true)
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterIndirectBuffer").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterIndirectBuffer);
+        }
+
+        {
+            // Read back for the ImGui counters panel and --cluster-stats-frame.
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(srrhi::ClusterCounters))
+                .setStructStride(sizeof(srrhi::ClusterCounters))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterCounters").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterCountersBuffer);
+        }
+    }}
 

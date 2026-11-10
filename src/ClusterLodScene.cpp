@@ -67,3 +67,95 @@ void LogSceneClusterStats(const Scene& scene)
 
     SDL_Log("[ClusterLod] phase 0 DAG gate: %s (%u failures)", dagFailures == 0 ? "PASS" : "FAIL", dagFailures);
 }
+
+uint32_t CountReferenceCutClusters(const Scene& scene, const Scene::BucketInfo& bucket, const ClusterLod::CutParams& params)
+{
+    // The traversal indexes its primitive through the instance's MeshDataIndex, so the reference has to do the same.
+    std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData;
+    for (const Scene::Mesh& mesh : scene.m_Meshes)
+    {
+        for (size_t pi = 0; pi < mesh.m_Primitives.size() && pi < mesh.m_Clusters.size(); ++pi)
+        {
+            clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
+        }
+    }
+
+    // ClusterLod::EvaluateCut's rule, but with the group sphere taken to world space and the error scaled by the
+    // instance's uniform scale. That is what the traversal compares; EvaluateCut works on untransformed primitive
+    // data and is only valid for the identity instance.
+    const auto groupPixelError = [&params](const ClusterLod::Group& group, const Matrix& world, float worldScale)
+    {
+        const DirectX::XMVECTOR local = DirectX::XMVectorSet(
+            group.m_Metric.m_Sphere.x, group.m_Metric.m_Sphere.y, group.m_Metric.m_Sphere.z, 0.0f);
+        const DirectX::XMVECTOR center = DirectX::XMVector3Transform(local, DirectX::XMLoadFloat4x4(&world));
+
+        const float dx = DirectX::XMVectorGetX(center) - params.m_ViewPosition.x;
+        const float dy = DirectX::XMVectorGetY(center) - params.m_ViewPosition.y;
+        const float dz = DirectX::XMVectorGetZ(center) - params.m_ViewPosition.z;
+        const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) - group.m_Metric.m_Sphere.w * worldScale;
+        const float nearest = std::max(distance, 1e-4f);
+
+        return group.m_Metric.m_MaxQuadricError * worldScale * params.m_FocalPixels / nearest;
+    };
+
+    std::vector<uint8_t> tooCoarse;
+    uint32_t total = 0;
+
+    for (uint32_t i = 0; i < bucket.m_Count; ++i)
+    {
+        const srrhi::PerInstanceData& instance = scene.m_InstanceData[bucket.m_BaseIndex + i];
+
+        const auto it = clustersByMeshData.find(instance.m_MeshDataIndex);
+        if (it == clustersByMeshData.end() || it->second->IsEmpty())
+            continue;
+
+        const ClusterLod::PrimitiveClusters& clusters = *it->second;
+        const Matrix& world = instance.m_World;
+
+        const float worldScale = std::max({ std::sqrt(world._11 * world._11 + world._12 * world._12 + world._13 * world._13),
+            std::sqrt(world._21 * world._21 + world._22 * world._22 + world._23 * world._23),
+            std::sqrt(world._31 * world._31 + world._32 * world._32 + world._33 * world._33) });
+
+        const bool bForcedLevel = params.m_ForcedLODLevel >= 0;
+        const uint32_t forcedLevel = bForcedLevel
+            ? std::min(uint32_t(params.m_ForcedLODLevel), clusters.m_LODLevelCount - 1)
+            : 0u;
+
+        tooCoarse.assign(clusters.m_Groups.size(), 0);
+        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+        {
+            tooCoarse[g] = groupPixelError(clusters.m_Groups[g], world, worldScale) >= params.m_PixelErrorThreshold ? 1 : 0;
+        }
+
+        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+        {
+            const ClusterLod::Group& group = clusters.m_Groups[g];
+
+            if (bForcedLevel)
+            {
+                if (group.m_LODLevel != forcedLevel)
+                    continue;
+            }
+            else if (tooCoarse[g])
+            {
+                continue;
+            }
+
+            for (uint32_t c = 0; c < group.m_ClusterCount; ++c)
+            {
+                const uint32_t clusterIndex = group.m_ClusterOffset + c;
+
+                if (!bForcedLevel)
+                {
+                    const uint32_t generating = clusters.m_GeneratingGroups[clusterIndex];
+                    if (generating != ClusterLod::kNoGroup && !tooCoarse[generating])
+                        continue;
+                }
+
+                total++;
+            }
+        }
+    }
+
+    return total;
+}

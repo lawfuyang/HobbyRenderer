@@ -231,6 +231,14 @@ public:
     // a consumer can poll it instead of calling waitForIdle() and stalling the CPU.
     void SignalEventAfterFrame(nvrhi::EventQueryHandle event) { m_EventsToSignal.push_back(std::move(event)); }
 
+    // ─── Cluster traversal counters ───
+    // A base pass hands its traversal counters over on the --cluster-stats-frame frame; LogClusterCounters() then
+    // reads them back after the frame is submitted and compares them with the CPU cut. One slot per bucket
+    // (0 = opaque, 1 = masked), because both buckets traverse every frame.
+    void RequestClusterCountersReadback(nvrhi::BufferHandle counters, nvrhi::CommandListHandle commandList,
+                                        uint32_t bucketIndex, const char* bucketName, float focalPixels);
+    void LogClusterCounters();
+
     // ─── Swapchain / backbuffer ───
     nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
     void SaveBackBufferScreenshot();
@@ -394,6 +402,15 @@ public:
     bool m_ClusterDisableCulling = false;
     bool m_ClusterFreezeCullingCamera = false;
     uint32_t m_ClusterDebugMode = 0;
+
+    // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
+    struct ClusterCountersReadback
+    {
+        nvrhi::BufferHandle m_Staging;
+        const char* m_BucketName = nullptr;
+        float m_FocalPixels = 0.0f;
+    };
+    ClusterCountersReadback m_ClusterCountersReadback[2];
     int m_ForcedTextureMip = -1; // -1 = auto, 0-15 = forced mip level
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;

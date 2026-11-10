@@ -1,11 +1,13 @@
-﻿#include "Renderer.h"
+#include "Renderer.h"
 #include "CommonResources.h"
 #include "BasePassCommon.h"
 #include "Camera.h"
+#include "Config.h"
 #include "Utilities.h"
 
 #include "shaders/srrhi/cpp/BasePass.h"
 #include "shaders/srrhi/cpp/GPUCulling.h"
+#include "shaders/srrhi/cpp/Cluster.h"
 #include "shaders/srrhi/cpp/ResizeToNextLowestPowerOfTwo.h"
 
 extern RGTextureHandle g_RG_DepthTexture;
@@ -119,6 +121,15 @@ public:
         nvrhi::BufferHandle meshletJob;
         nvrhi::BufferHandle meshletJobCount;
         nvrhi::BufferHandle meshletIndirect;
+
+        nvrhi::BufferHandle clusterNodeQueue[2];
+        nvrhi::BufferHandle clusterNodeQueueCount[2];
+        nvrhi::BufferHandle clusterGroupQueue;
+        nvrhi::BufferHandle clusterGroupQueueCount;
+        nvrhi::BufferHandle clusterJobs;
+        nvrhi::BufferHandle clusterJobCount;
+        nvrhi::BufferHandle clusterIndirect;
+        nvrhi::BufferHandle clusterCounters;
 
         nvrhi::TextureHandle depth;
         nvrhi::TextureHandle hzb;
@@ -273,6 +284,166 @@ protected:
             params.bindingSetDesc = cullBset;
             params.dispatchParams = { .x = 1, .y = 1, .z = 1 };
             g_Renderer.AddComputePass(params);
+        }
+    }
+
+    // The traversal's buffers are written every frame and none of them outlive it, so every renderer that runs
+    // a traversal declares them as writes.
+    void WriteClusterBuffers(RenderGraph& renderGraph)
+    {
+        BasePassResources& res = m_BasePassResources;
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            renderGraph.WriteBuffer(res.m_ClusterNodeQueue[i]);
+            renderGraph.WriteBuffer(res.m_ClusterNodeQueueCount[i]);
+        }
+        renderGraph.WriteBuffer(res.m_ClusterGroupQueue);
+        renderGraph.WriteBuffer(res.m_ClusterGroupQueueCount);
+        renderGraph.WriteBuffer(res.m_ClusterJobs);
+        renderGraph.WriteBuffer(res.m_ClusterJobCount);
+        renderGraph.WriteBuffer(res.m_ClusterIndirectBuffer);
+        renderGraph.WriteBuffer(res.m_ClusterCountersBuffer);
+    }
+
+    void FetchClusterHandles(const RenderGraph& renderGraph, ResourceHandles& handles)
+    {
+        BasePassResources& res = m_BasePassResources;
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            handles.clusterNodeQueue[i] = renderGraph.GetBuffer(res.m_ClusterNodeQueue[i], RGResourceAccessMode::Write);
+            handles.clusterNodeQueueCount[i] = renderGraph.GetBuffer(res.m_ClusterNodeQueueCount[i], RGResourceAccessMode::Write);
+        }
+        handles.clusterGroupQueue = renderGraph.GetBuffer(res.m_ClusterGroupQueue, RGResourceAccessMode::Write);
+        handles.clusterGroupQueueCount = renderGraph.GetBuffer(res.m_ClusterGroupQueueCount, RGResourceAccessMode::Write);
+        handles.clusterJobs = renderGraph.GetBuffer(res.m_ClusterJobs, RGResourceAccessMode::Write);
+        handles.clusterJobCount = renderGraph.GetBuffer(res.m_ClusterJobCount, RGResourceAccessMode::Write);
+        handles.clusterIndirect = renderGraph.GetBuffer(res.m_ClusterIndirectBuffer, RGResourceAccessMode::Write);
+        handles.clusterCounters = renderGraph.GetBuffer(res.m_ClusterCountersBuffer, RGResourceAccessMode::Write);
+    }
+
+    // Builds this bucket's visible-cluster list. Phase 1 does not draw from it yet: the base pass still renders
+    // through the meshlet path, so the image is unchanged and the list is checked against the CPU cut instead
+    // (docs/cluster-lod-implementation-plan.md §3.3, §4 phase 1).
+    void PerformClusterTraversal(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args, const ResourceHandles& handles)
+    {
+        PROFILE_FUNCTION();
+
+        const Scene& scene = g_Renderer.m_Scene;
+
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            commandList->clearBufferUInt(handles.clusterNodeQueueCount[i], 0);
+        }
+        commandList->clearBufferUInt(handles.clusterGroupQueueCount, 0);
+        commandList->clearBufferUInt(handles.clusterJobCount, 0);
+        commandList->clearBufferUInt(handles.clusterCounters, 0);
+
+        const nvrhi::BufferDesc cbDesc = nvrhi::utils::CreateVolatileConstantBufferDesc(
+            sizeof(srrhi::ClusterTraversalConstants), "ClusterTraversalCB", 1);
+        const nvrhi::BufferHandle cb = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(cbDesc);
+
+        const Matrix& projectionMatrix = scene.m_Camera.GetProjMatrix();
+        const nvrhi::TextureHandle hzb = handles.hzb;
+
+        Vector3 cullingCameraPosition = scene.m_Camera.GetPosition();
+        if (g_Renderer.m_ClusterFreezeCullingCamera)
+        {
+            cullingCameraPosition = scene.m_FrozenCullingCameraPos;
+        }
+
+        // The metric is defined in pixels of the full-resolution view, which is also the HZB's mip 0.
+        const float focalPixels = projectionMatrix.m[1][1] * float(handles.depth->getDesc().height) * 0.5f;
+
+        srrhi::ClusterTraversalConstants data{};
+        data.SetView(args.m_View);
+        data.SetFrustumPlanes(args.m_FrustumPlanes);
+        data.SetCameraPosition(DirectX::XMFLOAT4{ cullingCameraPosition.x, cullingCameraPosition.y, cullingCameraPosition.z, 1.0f });
+        data.SetNumInstances(args.m_NumInstances);
+        data.SetInstanceBaseIndex(args.m_InstanceBaseIndex);
+        data.SetEnableFrustumCulling(g_Renderer.m_EnableFrustumCulling ? 1u : 0u);
+        data.SetEnableOcclusionCulling((g_Renderer.m_EnableOcclusionCulling && hzb) ? 1u : 0u);
+        data.SetHZBWidth(hzb ? hzb->getDesc().width : 0);
+        data.SetHZBHeight(hzb ? hzb->getDesc().height : 0);
+        data.SetForcedLOD(g_Renderer.m_ClusterForcedLOD >= 0 ? uint32_t(g_Renderer.m_ClusterForcedLOD) : 0xFFFFFFFFu);
+        data.SetMaxClusters(g_Renderer.m_ClusterMaxClusters > 0 ? uint32_t(g_Renderer.m_ClusterMaxClusters) : 0u);
+        data.SetP00(projectionMatrix.m[0][0]);
+        data.SetP11(projectionMatrix.m[1][1]);
+        data.SetPixelErrorThreshold(g_Renderer.m_ClusterPixelError);
+        data.SetFocalPixels(focalPixels);
+        data.SetDisableCulling(g_Renderer.m_ClusterDisableCulling ? 1u : 0u);
+        commandList->writeBuffer(cb, &data, sizeof(data), 0);
+
+        auto dispatchTraversalPass = [&](uint32_t shaderID, uint32_t queueIn, uint32_t queueOut, uint32_t gridX)
+        {
+            srrhi::ClusterTraversalInputs inputs;
+            inputs.SetTraversalCB(cb);
+            inputs.SetInstanceData(scene.m_InstanceDataBuffer);
+            inputs.SetGeometry(scene.m_ClusterGeometryBuffer);
+            inputs.SetNodes(scene.m_ClusterNodeBuffer);
+            inputs.SetNodeBounds(scene.m_ClusterNodeBoundsBuffer);
+            inputs.SetGroups(scene.m_ClusterGroupBuffer);
+            inputs.SetGeneratingGroups(scene.m_ClusterGeneratingGroupsBuffer);
+            inputs.SetHZB(hzb ? hzb : CommonResources::GetInstance().DefaultTextureBlack);
+            inputs.SetNodeQueueIn(handles.clusterNodeQueue[queueIn]);
+            inputs.SetNodeQueueOut(handles.clusterNodeQueue[queueOut]);
+            inputs.SetNodeQueueCountIn(handles.clusterNodeQueueCount[queueIn]);
+            inputs.SetNodeQueueCountOut(handles.clusterNodeQueueCount[queueOut]);
+            inputs.SetGroupQueue(handles.clusterGroupQueue);
+            inputs.SetGroupQueueCount(handles.clusterGroupQueueCount);
+            inputs.SetClusterJobs(handles.clusterJobs);
+            inputs.SetClusterJobCount(handles.clusterJobCount);
+            inputs.SetClusterIndirectArgs(handles.clusterIndirect);
+            inputs.SetCounters(handles.clusterCounters);
+
+            Renderer::RenderPassParams params;
+            params.commandList = commandList;
+            params.shaderID = shaderID;
+            params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
+            params.dispatchParams = { .x = gridX, .y = 1, .z = 1 };
+            g_Renderer.AddComputePass(params);
+        };
+
+        {
+            PROFILE_GPU_SCOPED("Cluster Traversal Preparation", commandList);
+
+            // Seeds go into queue 0; queue 1 is the first pass's output.
+            dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALINIT_CSMAIN, 1u, 0u,
+                DivideAndRoundUp(args.m_NumInstances, srrhi::CommonConsts::kThreadsPerGroup));
+        }
+
+        {
+            PROFILE_GPU_SCOPED("Cluster Traversal Run", commandList);
+
+            const uint32_t nodeGridX = DivideAndRoundUp(scene.m_MaxClusterNodeCount, srrhi::CommonConsts::kThreadsPerGroup);
+
+            // One pass per tree level. The grid is the worst case because a pass cannot know its own count
+            // before it runs; every idle thread exits on the first read of the counter.
+            const uint32_t passCount = scene.m_MaxClusterTreeDepth + 1;
+            for (uint32_t pass = 0; pass < passCount; ++pass)
+            {
+                const uint32_t queueIn = pass & 1u;
+                const uint32_t queueOut = 1u - queueIn;
+
+                commandList->clearBufferUInt(handles.clusterNodeQueueCount[queueOut], 0);
+                dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALRUN_CSMAIN, queueIn, queueOut, nodeGridX);
+            }
+
+            dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALGROUPS_CSMAIN, 0u, 1u,
+                DivideAndRoundUp(scene.m_MaxClusterGroupCount, srrhi::CommonConsts::kThreadsPerGroup));
+        }
+
+        {
+            PROFILE_GPU_SCOPED("Cluster Build Args", commandList);
+
+            dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERBUILDARGS_CSMAIN, 0u, 1u, 1u);
+        }
+
+        if (Config::Get().m_ClusterStatsFrame == int(g_Renderer.m_FrameNumber))
+        {
+            // One readback per bucket: both blocks traverse every frame and each has its own counters buffer.
+            const bool bOpaque = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
+            g_Renderer.RequestClusterCountersReadback(handles.clusterCounters, commandList, bOpaque ? 0u : 1u,
+                bOpaque ? "Opaque" : "Masked", focalPixels);
         }
     }
 
@@ -510,7 +681,7 @@ public:
     bool Setup(RenderGraph& renderGraph) override
     {
         BasePassResources& res = m_BasePassResources;
-        res.DeclareResources(renderGraph, GetName());
+        res.DeclareResources(renderGraph, GetName(), true);
 
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
@@ -528,6 +699,11 @@ public:
             renderGraph.WriteBuffer(res.m_MeshletJobBuffer);
             renderGraph.WriteBuffer(res.m_MeshletJobCountBuffer);
             renderGraph.WriteBuffer(res.m_MeshletIndirectBuffer);
+        }
+
+        if (g_Renderer.m_EnableClusterRendering)
+        {
+            WriteClusterBuffers(renderGraph);
         }
 
         renderGraph.WriteTexture(g_RG_DepthTexture);
@@ -577,6 +753,11 @@ public:
         handles.emissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
         handles.motion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
 
+        if (g_Renderer.m_EnableClusterRendering)
+        {
+            FetchClusterHandles(renderGraph, handles);
+        }
+
         ClearAllCounters(commandList, handles);
 
         BasePassRenderingArgs args;
@@ -590,6 +771,12 @@ public:
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
 
         PerformOcclusionCulling(commandList, args, handles);
+
+        if (g_Renderer.m_EnableClusterRendering)
+        {
+            PerformClusterTraversal(commandList, args, handles);
+        }
+
         RenderInstances(commandList, args, handles);
 
         args.m_BucketName = "Opaque (Occluded)";
@@ -612,7 +799,7 @@ public:
         
 
         BasePassResources& res = m_BasePassResources;
-        res.DeclareResources(renderGraph, GetName());
+        res.DeclareResources(renderGraph, GetName(), true);
 
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
@@ -629,6 +816,11 @@ public:
             renderGraph.WriteBuffer(res.m_MeshletJobBuffer);
             renderGraph.WriteBuffer(res.m_MeshletJobCountBuffer);
             renderGraph.WriteBuffer(res.m_MeshletIndirectBuffer);
+        }
+
+        if (g_Renderer.m_EnableClusterRendering)
+        {
+            WriteClusterBuffers(renderGraph);
         }
 
         renderGraph.WriteTexture(g_RG_DepthTexture);
@@ -673,6 +865,11 @@ public:
         handles.emissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
         handles.motion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
 
+        if (g_Renderer.m_EnableClusterRendering)
+        {
+            FetchClusterHandles(renderGraph, handles);
+        }
+
         ClearAllCounters(commandList, handles);
 
         BasePassRenderingArgs args;
@@ -686,6 +883,12 @@ public:
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_MASK;
 
         PerformOcclusionCulling(commandList, args, handles);
+
+        if (g_Renderer.m_EnableClusterRendering)
+        {
+            PerformClusterTraversal(commandList, args, handles);
+        }
+
         RenderInstances(commandList, args, handles);
     }
 

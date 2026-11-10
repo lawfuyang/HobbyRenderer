@@ -8,3 +8,7 @@
 // `--cluster-stats` calls this once after the scene is loaded. The primitive geometry is rebuilt from the level-0
 // meshlets, so it needs no CPU index buffer to still be alive.
 void LogSceneClusterStats(const Scene& scene);
+
+// The CPU reference for V1.1: how many clusters ClusterLod::EvaluateCut draws for `bucket` at this camera. The
+// GPU traversal applies the cut rule per group, so with culling off the two counts have to match exactly.
+uint32_t CountReferenceCutClusters(const Scene& scene, const Scene::BucketInfo& bucket, const ClusterLod::CutParams& baseParams);
