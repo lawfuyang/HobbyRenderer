@@ -11,8 +11,10 @@ namespace SceneCache
     // ------  ----   -----
     // 0       4      Magic: 0x59464C52 ("RLFY")
     // 4       4      Version: uint32_t
-    // 8       var    Meshes:    [count:uint32_t][Mesh * count]
+    // 8       8      Cluster config hash: uint64_t (ClusterLod::GetCacheConfigHash)
+    // 16      var    Meshes:    [count:uint32_t][Mesh * count]
     //                          Mesh = [primCount:uint32_t][Primitive * primCount][m_Center:Vector3][m_Radius:float]
+    //                                 [clusterCount:uint32_t][PrimitiveClusters * clusterCount]
     //                          Primitive = [m_VertexOffset:uint32_t][m_VertexCount:uint32_t][m_MaterialIndex:int32_t][m_MeshDataIndex:uint32_t]
     // var     var    MeshData:  [count:uint64_t][srrhi::MeshData * count]
     // var     var    Meshlets:  [count:uint64_t][srrhi::Meshlet * count]
@@ -30,7 +32,8 @@ namespace SceneCache
     // - ProcessMeshes algorithm changes (new passes, different quantization)
     // - VertexQuantized or Meshlet struct layout changes
     // - LOD generation parameters change
-    constexpr uint32_t kCookedMeshVersion = 2;
+    // 3: cluster LOD data written per primitive, plus the cluster config hash in the header.
+    constexpr uint32_t kCookedMeshVersion = 3;
 
     // ── Binary I/O helpers ────────────────────────────────────────────────────
 
@@ -77,7 +80,8 @@ namespace SceneCache
         const std::vector<uint32_t>&              meshletVertices,
         const std::vector<uint32_t>&              meshletTriangles,
         const std::vector<srrhi::VertexQuantized>& allVerticesQuantized,
-        const std::vector<uint32_t>&              allIndices);
+        const std::vector<uint32_t>&              allIndices,
+        bool                                      bCookClusters);
 
     // Load mesh-processed data from a binary file.
     // Returns true on success; false if file is missing, corrupt, or wrong version.
@@ -89,7 +93,8 @@ namespace SceneCache
         std::vector<uint32_t>&               outMeshletVertices,
         std::vector<uint32_t>&               outMeshletTriangles,
         std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
-        std::vector<uint32_t>&               outIndices);
+        std::vector<uint32_t>&               outIndices,
+        bool                                 bCookClusters);
 
     // Check whether the cached file exists and is newer than the source file.
     bool IsCacheValid(const std::filesystem::path& cachePath,
@@ -102,6 +107,7 @@ namespace SceneCache
         const std::filesystem::path& scenePath,
         Scene& scene,
         std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
-        std::vector<uint32_t>& outIndices);
+        std::vector<uint32_t>& outIndices,
+        bool bCookClusters);
 
 } // namespace SceneCache

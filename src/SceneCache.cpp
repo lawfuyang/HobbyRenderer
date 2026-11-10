@@ -27,7 +27,8 @@ bool SaveCookedMesh(
     const std::vector<uint32_t>&              meshletVertices,
     const std::vector<uint32_t>&              meshletTriangles,
     const std::vector<srrhi::VertexQuantized>& allVerticesQuantized,
-    const std::vector<uint32_t>&              allIndices)
+    const std::vector<uint32_t>&              allIndices,
+    bool                                      bCookClusters)
 {
     std::ofstream os(cachePath, std::ios::binary | std::ios::trunc);
     if (!os.is_open())
@@ -39,6 +40,8 @@ bool SaveCookedMesh(
     // Header
     WritePOD(os, kCookedMeshMagic);
     WritePOD(os, kCookedMeshVersion);
+    WritePOD(os, ClusterLod::GetCacheConfigHash(ClusterLod::GetActiveConfig()));
+    WritePOD(os, uint32_t(bCookClusters ? 1 : 0));
 
     // Meshes — serialize field-by-field (Scene::Mesh is not trivially copyable)
     const uint32_t meshCount = static_cast<uint32_t>(meshes.size());
@@ -56,6 +59,11 @@ bool SaveCookedMesh(
         }
         WritePOD(os, mesh.m_Center);
         WritePOD(os, mesh.m_Radius);
+
+        const uint32_t clusterCount = static_cast<uint32_t>(mesh.m_Clusters.size());
+        WritePOD(os, clusterCount);
+        for (const ClusterLod::PrimitiveClusters& clusters : mesh.m_Clusters)
+            ClusterLod::WriteToStream(os, clusters);
     }
 
     // POD arrays
@@ -83,7 +91,8 @@ bool LoadCookedMesh(
     std::vector<uint32_t>&               outMeshletVertices,
     std::vector<uint32_t>&               outMeshletTriangles,
     std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
-    std::vector<uint32_t>&               outIndices)
+    std::vector<uint32_t>&               outIndices,
+    bool                                 bCookClusters)
 {
     std::ifstream is(cachePath, std::ios::binary);
     if (!is.is_open())
@@ -107,6 +116,27 @@ bool LoadCookedMesh(
         return false;
     }
 
+    // The clusterisation parameters are part of the cache identity: a version number cannot express them.
+    uint64_t configHash = 0;
+    ReadPOD(is, configHash);
+    const uint64_t expectedConfigHash = ClusterLod::GetCacheConfigHash(ClusterLod::GetActiveConfig());
+    if (configHash != expectedConfigHash)
+    {
+        SDL_Log("[SceneCache] Cache cluster config mismatch (file=%llx, expected=%llx): %s",
+            static_cast<unsigned long long>(configHash), static_cast<unsigned long long>(expectedConfigHash),
+            cachePath.string().c_str());
+        return false;
+    }
+
+    uint32_t clustersCooked = 0;
+    ReadPOD(is, clustersCooked);
+    if ((clustersCooked != 0) != bCookClusters)
+    {
+        SDL_Log("[SceneCache] Cache was cooked with cluster LOD %s, this run wants %s: %s",
+            clustersCooked ? "on" : "off", bCookClusters ? "on" : "off", cachePath.string().c_str());
+        return false;
+    }
+
     // Meshes
     uint32_t meshCount = 0;
     ReadPOD(is, meshCount);
@@ -126,6 +156,12 @@ bool LoadCookedMesh(
         }
         ReadPOD(is, mesh.m_Center);
         ReadPOD(is, mesh.m_Radius);
+
+        uint32_t clusterCount = 0;
+        ReadPOD(is, clusterCount);
+        mesh.m_Clusters.resize(clusterCount);
+        for (ClusterLod::PrimitiveClusters& clusters : mesh.m_Clusters)
+            ClusterLod::ReadFromStream(is, clusters);
     }
 
     // POD arrays
@@ -149,7 +185,8 @@ bool LoadOrCookMeshData(
     const std::filesystem::path& scenePath,
     Scene& scene,
     std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
-    std::vector<uint32_t>& outIndices)
+    std::vector<uint32_t>& outIndices,
+    bool bCookClusters)
 {
     // Compute cache path: <scene_stem>_mesh.bin alongside the glTF
     const std::filesystem::path cachePath = scenePath.parent_path() / (scenePath.stem().string() + "_mesh.bin");
@@ -164,7 +201,8 @@ bool LoadOrCookMeshData(
             scene.m_MeshletVertices,
             scene.m_MeshletTriangles,
             outVerticesQuantized,
-            outIndices);
+            outIndices,
+            bCookClusters);
         if (loaded)
         {
             SDL_Log("[SceneCache] Loaded cooked mesh from cache: %s", cachePath.string().c_str());
@@ -184,7 +222,7 @@ bool LoadOrCookMeshData(
 
     // 2. Cache miss — process meshes from glTF
     bool success = SceneLoader::ProcessMeshesFromGLTF(
-        scenePath.string(), scene, outVerticesQuantized, outIndices);
+        scenePath.string(), scene, outVerticesQuantized, outIndices, bCookClusters);
     if (!success)
     {
         SDL_Log("[SceneCache] Failed to process meshes from glTF");
@@ -205,7 +243,8 @@ bool LoadOrCookMeshData(
         scene.m_MeshletVertices,
         scene.m_MeshletTriangles,
         outVerticesQuantized,
-        outIndices))
+        outIndices,
+        bCookClusters))
     {
         SDL_Log("[SceneCache] Saved cooked mesh to cache: %s", cachePath.string().c_str());
     }

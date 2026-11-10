@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cfloat>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>

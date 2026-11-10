@@ -42,7 +42,8 @@ void Scene::LoadScene()
 		if (success)
 		{
 			// Load or cook mesh data (cache-aware)
-			success = SceneCache::LoadOrCookMeshData(sceneFilePath, *this, allVerticesQuantized, allIndices);
+			success = SceneCache::LoadOrCookMeshData(sceneFilePath, *this, allVerticesQuantized, allIndices,
+				g_Renderer.m_EnableClusterRendering);
 		}
 	}
 

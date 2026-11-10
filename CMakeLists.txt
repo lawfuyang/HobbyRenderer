@@ -521,6 +521,33 @@ else()
 endif()
 
 # ============================================================================
+# ClusterLodTests - the offline cluster LOD builder's phase 0 gates
+# (tests/ClusterLodTests.cpp, docs/cluster-lod-implementation-plan.md V0.1-V0.5)
+#
+# Only the builder and the CPU reference cut are compiled, so this runs without a device or a scene.
+# ============================================================================
+enable_testing()
+
+add_executable(ClusterLodTests
+    tests/ClusterLodTests.cpp
+    src/ClusterLod.cpp
+    src/ClusterLodBuilder.cpp
+    src/Utilities.cpp)
+target_precompile_headers(ClusterLodTests PRIVATE src/pch.h)
+target_compile_definitions(ClusterLodTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN MICROPROFILE_USE_CONFIG=0)
+target_include_directories(ClusterLodTests PRIVATE src)
+target_include_directories(ClusterLodTests PRIVATE "${CMAKE_SOURCE_DIR}/external/nvrhi/include")
+target_include_directories(ClusterLodTests PRIVATE "${CMAKE_SOURCE_DIR}/external/meshoptimizer/src")
+target_include_directories(ClusterLodTests PRIVATE "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/include")
+target_link_directories(ClusterLodTests PRIVATE "${SDL3_INSTALL_DIR}/SDL3-${SDL3_VERSION}/lib/x64")
+target_link_libraries(ClusterLodTests PRIVATE meshoptimizer SDL3)
+set_target_properties(ClusterLodTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/bin")
+add_test(NAME ClusterLodTests COMMAND ClusterLodTests)
+
+# ============================================================================
 # ShaderMake Integration (offline HLSL compilation)
 # ============================================================================
 
