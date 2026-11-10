@@ -344,6 +344,20 @@ Perf (measured, not gated yet): `Cluster Traversal` ≤ 0.25 ms (T1).
 Gate **M1**: V1.1–V1.4 green; **baseline capture archived** (`bin/captures/bistro-baseline-frame<N>.wpix`
 taken with `--pix-capture-frame`, plus the rdc-tools bundle) so later phases have a fixed reference.
 
+**Baseline recorded (2026-11-10, build `2bfa960`).** Deterministic flag set for every capture and A/B:
+`--scene "GLTF Scenes/Bistro/bistrox.gltf" --hide-ui --no-taa --no-indirect --no-denoise --no-sky`.
+
+| Artefact | Size | Command |
+|---|---|---|
+| `bin/captures/bistrox-baseline-frame90.wpix` | 560 MB | `--pix --pix-capture-frame 90 --pix-capture-dir "bin/captures/bistrox-baseline"` |
+| `bin/captures/baseline_events.csv` | 1137 rows | `pixtool open-capture <wpix> save-event-list <csv>` |
+| `bin/captures/bistrox-baseline-frame90.rdc` | 958 MB | `--renderdoc --renderdoc-capture-frame 90` |
+
+Two gotchas that cost a run each: `--pix-capture-dir` is used as a **file-name prefix**
+(`<prefix>-frame<N>.wpix`), not as a directory, and a `--screenshot-frame`/capture run only writes
+`bin/screenshot.png` when the frame completes — an empty `screenshot.png` is the cheapest proof that a
+frame rendered at all.
+
 ### Phase 2 — Cluster mesh shader for the Opaque bucket
 
 **Goal**: draw the cluster list instead of the meshlet job list; image must be *identical* when the
