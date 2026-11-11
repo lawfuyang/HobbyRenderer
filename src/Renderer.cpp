@@ -831,6 +831,7 @@ void Renderer::Run()
         const uint64_t markExecuteNs = SDL_GetTicksNS();
 
         LogClusterCounters();
+        PollClusterCounters();
 
         // Present swapchain
         SDL_assert(bSwapChainImageAcquireSuccess);
@@ -2341,6 +2342,69 @@ nvrhi::CommandListHandle Renderer::AcquireCommandList(bool bImmediatelyQueue)
     }
 
     return handle;
+}
+
+void Renderer::CopyClusterCountersForPanel(nvrhi::BufferHandle counters, nvrhi::CommandListHandle commandList, uint32_t bucketIndex)
+{
+    SDL_assert(counters != nullptr);
+    SDL_assert(bucketIndex < 2);
+
+    ClusterCountersReadback& readback = m_ClusterCountersReadback[bucketIndex];
+    const uint32_t writeIndex = m_FrameNumber % kClusterCounterReadbackBuffers;
+
+    if (!readback.m_PanelStaging[writeIndex])
+    {
+        nvrhi::BufferDesc desc;
+        desc.byteSize = sizeof(srrhi::ClusterCounters);
+        desc.structStride = sizeof(srrhi::ClusterCounters);
+        desc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        desc.debugName = bucketIndex == 0 ? "ClusterCountersPanelOpaque" : "ClusterCountersPanelMasked";
+        readback.m_PanelStaging[writeIndex] = m_RHI->m_NvrhiDevice->createBuffer(desc);
+        readback.m_PanelEvent[writeIndex] = m_RHI->m_NvrhiDevice->createEventQuery();
+    }
+
+    commandList->copyBuffer(readback.m_PanelStaging[writeIndex], 0, counters, 0, sizeof(srrhi::ClusterCounters));
+
+    // The value is read a frame later, after the submission that wrote it has been signalled, so the frame that
+    // is being measured never waits for it.
+    SignalEventAfterFrame(readback.m_PanelEvent[writeIndex]);
+}
+
+void Renderer::PollClusterCounters()
+{
+    for (uint32_t bucketIndex = 0; bucketIndex < 2; ++bucketIndex)
+    {
+        ClusterCountersReadback& readback = m_ClusterCountersReadback[bucketIndex];
+
+        // The other half of the double buffer: this frame writes one, the previous frame's copy becomes readable.
+        const uint32_t readIndex = (m_FrameNumber + 1) % kClusterCounterReadbackBuffers;
+        if (!readback.m_PanelEvent[readIndex] ||
+            !m_RHI->m_NvrhiDevice->pollEventQuery(readback.m_PanelEvent[readIndex].Get()))
+        {
+            continue;
+        }
+
+        const void* data = m_RHI->m_NvrhiDevice->mapBuffer(readback.m_PanelStaging[readIndex], nvrhi::CpuAccessMode::Read);
+        SDL_assert(data != nullptr);
+        if (data == nullptr)
+            continue;
+
+        memcpy(&readback.m_Latest, data, sizeof(readback.m_Latest));
+        readback.m_bHasLatest = true;
+        m_RHI->m_NvrhiDevice->unmapBuffer(readback.m_PanelStaging[readIndex]);
+    }
+}
+
+const srrhi::ClusterCounters& Renderer::GetClusterCounters(uint32_t bucketIndex) const
+{
+    SDL_assert(bucketIndex < 2);
+    return m_ClusterCountersReadback[bucketIndex].m_Latest;
+}
+
+bool Renderer::ClusterCountersValid(uint32_t bucketIndex) const
+{
+    SDL_assert(bucketIndex < 2);
+    return m_ClusterCountersReadback[bucketIndex].m_bHasLatest;
 }
 
 void Renderer::RequestClusterCountersReadback(nvrhi::BufferHandle counters, nvrhi::CommandListHandle commandList,

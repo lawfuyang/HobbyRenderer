@@ -142,6 +142,14 @@ void Config::ParseCommandLine(int argc, char* argv[])
             {
                 s_Instance.m_ClusterDebugMode = static_cast<uint32_t>(std::atoi(argv[++i]));
                 SDL_Log("[Config] Cluster debug view mode %u", s_Instance.m_ClusterDebugMode);
+                // Only 4 exists today: it opens the Cluster LOD panel's counters and arms their readback. The
+                // per-cluster views (1 ids, 2 lod level, 3 bounds) shade clusters, so they arrive with the phase-2
+                // mesh shader that draws them.
+                if (s_Instance.m_ClusterDebugMode != 0 && s_Instance.m_ClusterDebugMode != 4)
+                {
+                    SDL_Log("[Config] Cluster debug view %u is not implemented yet (only 4, the traversal counters)",
+                        s_Instance.m_ClusterDebugMode);
+                }
             }
             else
             {
@@ -452,7 +460,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-force-lod <n>          Force one cluster LOD level; -1 = pick from the metric");
             SDL_Log("  --cluster-max <n>                Cap the number of clusters drawn (0 = scene-derived)");
             SDL_Log("  --cluster-no-culling             Request every cluster of every visible instance");
-            SDL_Log("  --cluster-debug <n>              Cluster debug view: 1 ids, 2 lod level, 3 bounds, 4 counters");
+            SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 4 traversal counters (1-3 need phase 2)");
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");

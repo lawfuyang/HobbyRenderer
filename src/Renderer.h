@@ -11,6 +11,7 @@
 #include "TaskScheduler.h"
 
 #include "shaders/ShaderIDs.h"
+#include "shaders/srrhi/cpp/Cluster.h"
 
 // Streaming
 #include "Streaming/FeedbackManager.h"
@@ -232,12 +233,24 @@ public:
     void SignalEventAfterFrame(nvrhi::EventQueryHandle event) { m_EventsToSignal.push_back(std::move(event)); }
 
     // ─── Cluster traversal counters ───
-    // A base pass hands its traversal counters over on the --cluster-stats-frame frame; LogClusterCounters() then
-    // reads them back after the frame is submitted and compares them with the CPU cut. One slot per bucket
-    // (0 = opaque, 1 = masked), because both buckets traverse every frame.
+    // --cluster-stats-frame hands one frame's counters to LogClusterCounters(), which stalls on purpose so the
+    // values can be compared with the CPU cut. The panel path (the Cluster LOD section, or --cluster-debug 4)
+    // instead copies every frame into a double-buffered staging buffer and reads it one frame later, so it never
+    // stalls the frame it measures. One slot per bucket: 0 = opaque, 1 = masked, because both traverse.
     void RequestClusterCountersReadback(nvrhi::BufferHandle counters, nvrhi::CommandListHandle commandList,
                                         uint32_t bucketIndex, const char* bucketName, float focalPixels);
     void LogClusterCounters();
+
+    void CopyClusterCountersForPanel(nvrhi::BufferHandle counters, nvrhi::CommandListHandle commandList, uint32_t bucketIndex);
+    void PollClusterCounters();
+    const srrhi::ClusterCounters& GetClusterCounters(uint32_t bucketIndex) const;
+    bool ClusterCountersValid(uint32_t bucketIndex) const;
+
+    // True only while the counters are actually on screen: the Cluster LOD section open and its debug view set
+    // to "Traversal counters" (mode 4). Nothing is copied otherwise, so an idle panel costs nothing. Modes 1-3 of
+    // that switch visualise clusters being drawn, which needs phase 2's mesh shader.
+    bool IsClusterCountersLive() const { return m_bClusterCountersPanelOpen && m_ClusterDebugMode == 4; }
+    void SetClusterCountersPanelOpen(bool bOpen) { m_bClusterCountersPanelOpen = bOpen; }
 
     // ─── Swapchain / backbuffer ───
     nvrhi::TextureHandle GetCurrentBackBufferTexture() const;
@@ -404,13 +417,22 @@ public:
     uint32_t m_ClusterDebugMode = 0;
 
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
+    static constexpr uint32_t kClusterCounterReadbackBuffers = 2;
     struct ClusterCountersReadback
     {
+        // --cluster-stats-frame: one copy, read back after a wait-for-idle.
         nvrhi::BufferHandle m_Staging;
         const char* m_BucketName = nullptr;
         float m_FocalPixels = 0.0f;
+
+        // Panel path: copied every frame while live, read one frame behind once its event has fired.
+        nvrhi::BufferHandle m_PanelStaging[kClusterCounterReadbackBuffers];
+        nvrhi::EventQueryHandle m_PanelEvent[kClusterCounterReadbackBuffers];
+        srrhi::ClusterCounters m_Latest = {};
+        bool m_bHasLatest = false;
     };
     ClusterCountersReadback m_ClusterCountersReadback[2];
+    bool m_bClusterCountersPanelOpen = false;
     int m_ForcedTextureMip = -1; // -1 = auto, 0-15 = forced mip level
     bool m_EnableAnimations = true;
     bool m_EnableRTShadows = true;

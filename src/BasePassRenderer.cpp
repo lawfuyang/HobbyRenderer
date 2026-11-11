@@ -438,12 +438,19 @@ protected:
             dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERBUILDARGS_CSMAIN, 0u, 1u, 1u);
         }
 
+        // One readback per bucket: both blocks traverse every frame and each has its own counters buffer.
+        const uint32_t bucketIndex = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE ? 0u : 1u;
+
         if (Config::Get().m_ClusterStatsFrame == int(g_Renderer.m_FrameNumber))
         {
-            // One readback per bucket: both blocks traverse every frame and each has its own counters buffer.
-            const bool bOpaque = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
-            g_Renderer.RequestClusterCountersReadback(handles.clusterCounters, commandList, bOpaque ? 0u : 1u,
-                bOpaque ? "Opaque" : "Masked", focalPixels);
+            g_Renderer.RequestClusterCountersReadback(handles.clusterCounters, commandList, bucketIndex,
+                bucketIndex == 0 ? "Opaque" : "Masked", focalPixels);
+        }
+
+        if (g_Renderer.IsClusterCountersLive())
+        {
+            // The panel path copies every frame and is read one frame late, so it never stalls.
+            g_Renderer.CopyClusterCountersForPanel(handles.clusterCounters, commandList, bucketIndex);
         }
     }
 

@@ -402,6 +402,100 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
+        // Cluster LOD: the traversal's switches, plus the counters the GPU wrote for the frame being measured.
+        // The readback is one frame behind, and the copy only runs while this section is open (or with
+        // --cluster-debug 4, which opens it), so a closed panel costs nothing.
+        const ImGuiTreeNodeFlags clusterPanelFlags =
+            g_Renderer.m_ClusterDebugMode == 4 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        const bool bClusterPanelOpen = ImGui::TreeNodeEx("Cluster LOD", clusterPanelFlags);
+        g_Renderer.SetClusterCountersPanelOpen(bClusterPanelOpen);
+        if (bClusterPanelOpen)
+        {
+            ImGui::Text("Traversal: %s (--cluster 0|1 needs a restart)",
+                g_Renderer.m_EnableClusterRendering ? "on" : "off");
+
+            // The debug views that exist today. Phase 2 adds the per-cluster ones (id, LOD level, bounds), which
+            // need the mesh shader that draws them; until then they would be entries that do nothing.
+            static const char* const kClusterDebugViewNames[] = { "Off", "Traversal counters" };
+            static constexpr uint32_t kClusterDebugViewModes[] = { 0, 4 };
+
+            int clusterDebugView = 0;
+            for (uint32_t i = 0; i < uint32_t(IM_ARRAYSIZE(kClusterDebugViewNames)); ++i)
+            {
+                if (kClusterDebugViewModes[i] == g_Renderer.m_ClusterDebugMode)
+                    clusterDebugView = int(i);
+            }
+
+            if (ImGui::Combo("Debug View", &clusterDebugView, kClusterDebugViewNames, IM_ARRAYSIZE(kClusterDebugViewNames)))
+            {
+                g_Renderer.m_ClusterDebugMode = kClusterDebugViewModes[clusterDebugView];
+            }
+
+            ImGui::SliderFloat("Pixel Error", &g_Renderer.m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
+            ImGui::SliderInt("Forced LOD", &g_Renderer.m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,
+                g_Renderer.m_ClusterForcedLOD < 0 ? "metric" : "%d");
+
+            int maxClusters = static_cast<int>(g_Renderer.m_ClusterMaxClusters);
+            if (ImGui::DragInt("Max Clusters (0 = no cap)", &maxClusters, 512.0f, 0, 1 << 20))
+            {
+                g_Renderer.m_ClusterMaxClusters = static_cast<uint32_t>(std::max(maxClusters, 0));
+            }
+
+            ImGui::Checkbox("Disable Culling", &g_Renderer.m_ClusterDisableCulling);
+
+            const bool bPrevFreeze = g_Renderer.m_ClusterFreezeCullingCamera;
+            ImGui::Checkbox("Freeze Culling Camera", &g_Renderer.m_ClusterFreezeCullingCamera);
+            if (!bPrevFreeze && g_Renderer.m_ClusterFreezeCullingCamera)
+            {
+                scene.m_FrozenCullingViewMatrix = scene.m_Camera.GetViewMatrix();
+                scene.m_FrozenCullingCameraPos = scene.m_Camera.GetPosition();
+            }
+
+            ImGui::Separator();
+
+            if (g_Renderer.m_ClusterDebugMode != 4)
+            {
+                ImGui::TextDisabled("Debug view off: pick Traversal counters above to read the GPU's counters.");
+            }
+            else
+            {
+                for (uint32_t bucketIndex = 0; bucketIndex < 2; ++bucketIndex)
+                {
+                    const char* bucketName = bucketIndex == 0 ? "Opaque" : "Masked";
+                    const Scene::BucketInfo& bucket = bucketIndex == 0 ? scene.m_OpaqueBucket : scene.m_MaskedBucket;
+
+                    // A bucket with no instances never runs a traversal, so its counters would stay on "waiting".
+                    if (bucket.m_Count == 0)
+                    {
+                        ImGui::Text("%s: no instances", bucketName);
+                        continue;
+                    }
+
+                    if (!g_Renderer.ClusterCountersValid(bucketIndex))
+                    {
+                        ImGui::Text("%s: (waiting for the first readback)", bucketName);
+                        continue;
+                    }
+
+                    const srrhi::ClusterCounters& counters = g_Renderer.GetClusterCounters(bucketIndex);
+                    ImGui::Text("%s: %u instances, %u nodes, %u groups", bucketName,
+                        counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount);
+                    ImGui::Text("    %u clusters, %u capped", counters.m_ClusterCount, counters.m_ClusterCapped);
+                }
+
+                // The traversal's own scopes, as GpuPassTimers recorded them for the frame the counters came from.
+                float traversalMilliseconds = 0.0f;
+                for (const GpuPassTimers::Entry& entry : g_Renderer.m_GpuPassTimers.GetEntries())
+                {
+                    if (entry.m_Name.rfind("Cluster Traversal", 0) == 0 || entry.m_Name == "Cluster Build Args")
+                        traversalMilliseconds += entry.m_Milliseconds;
+                }
+                ImGui::Text("GPU: %.3f ms", static_cast<double>(traversalMilliseconds));
+            }
+
+            ImGui::TreePop();
+        }
+
         // Opacity micromaps: the toggle relinks every BLAS, so it is a load-time cost rather than a frame knob.
         if (ImGui::TreeNode("Opacity Micromaps"))
         {

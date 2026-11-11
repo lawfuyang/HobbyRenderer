@@ -240,7 +240,7 @@ UI in `ImGuiLayer.cpp` ("Cluster LOD" section):
 | `m_ClusterDisableCulling` | `--cluster-no-culling` | 0 | draw every cluster (correctness only) |
 | `m_ClusterTwoPass` | `--cluster-twopass` | 1 | two-phase occlusion |
 | `m_ClusterRejectLists` | `--cluster-rejectlists` | 1 | phase 4 |
-| `m_ClusterDebugMode` | `--cluster-debug <n>` | 0 | 0 off, 1 cluster id, 2 LOD level, 3 cluster bounds, 4 traversal cost heatmap |
+| `m_ClusterDebugMode` | `--cluster-debug <n>` | 0 | 0 off, 4 traversal counters (phase 1); 1 cluster id, 2 LOD level and 3 cluster bounds shade or draw clusters, so they land with phase 2's mesh shader |
 | `m_ClusterGeometryStreaming` | `--cluster-streaming` | 0 until phase 5 | group streaming |
 | `m_ClusterFreezeCullingCamera` | `--cluster-freeze-culling` (new) | 0 | A/B determinism (the member already exists, the switch does not) |
 
@@ -328,6 +328,13 @@ Tasks
    test target today, so this is new build machinery (plain `add_executable`, exit code = verdict).
 
 Deliverables: traversal runs; ImGui counters; `m_ClusterDebugMode` 4 is usable.
+
+Both are in place: the property grid has a **Cluster LOD** section (`ImGuiLayer.cpp`) carrying the §3.4
+switches (pixel error, forced level, cluster cap, no-culling, freeze-culling) and the per-bucket counters,
+and `--cluster-debug 4` opens it and keeps it live without the mouse. The counters are copied every frame
+only while the section is open and read one frame later through `SignalEventAfterFrame`, so nothing stalls;
+the `--cluster-stats-frame` path keeps its wait-for-idle readback because that one is a one-shot
+measurement compared against the CPU cut. Modes 1-3 stay open until phase 2 draws clusters.
 
 Validation
 
