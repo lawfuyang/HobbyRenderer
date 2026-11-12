@@ -233,20 +233,23 @@ UI in `ImGuiLayer.cpp` ("Cluster LOD" section):
 
 | Member | CLI | Default | Meaning |
 |---|---|---|---|
-| `m_EnableClusterRendering` | `--cluster 0/1` | 1 (after phase 2) | master switch; off = today's meshlet path |
+| `m_EnableClusterRendering` | `--cluster-draw 0/1` | 1 | which path draws; the panel's "Enable Cluster LOD" checkbox owns it at runtime |
+| `Config::m_EnableClusterLod` | `--cluster 0/1` | 1 | load-time half: cooks the cluster DAG into the cooked mesh. A scene cooked with `--cluster 0` has no cluster data, so the panel's checkbox is disabled for it |
 | `m_ClusterPixelError` | `--cluster-error <px>` | 1.0 | LOD threshold in pixels |
 | `m_ClusterForcedLOD` | `--cluster-force-lod <n>` | −1 | −1 = metric, ≥0 = fixed level (validation) |
 | `m_ClusterMaxClusters` | `--cluster-max <n>` | scene-derived | clamp, mirrors `maxRenderClusters` |
 | `m_ClusterDisableCulling` | `--cluster-no-culling` | 0 | draw every cluster (correctness only) |
 | `m_ClusterTwoPass` | `--cluster-twopass` | 1 | two-phase occlusion |
 | `m_ClusterRejectLists` | `--cluster-rejectlists` | 1 | phase 4 |
-| `m_ClusterDebugMode` | `--cluster-debug <n>` | 0 | 0 off, 4 traversal counters (phase 1); 1 cluster id, 2 LOD level and 3 cluster bounds shade or draw clusters, so they land with phase 2's mesh shader |
+| `m_ClusterDebugMode` | `--cluster-debug <n>` | 0 | 4 = traversal counters; 1-3 select Debug Modes 12-14 |
 | `m_ClusterGeometryStreaming` | `--cluster-streaming` | 0 until phase 5 | group streaming |
 | `m_ClusterFreezeCullingCamera` | `--cluster-freeze-culling` (new) | 0 | A/B determinism (the member already exists, the switch does not) |
 
-Debug views are an output override in `ClusterBasePass` (modes 1–2) plus an optional
-`ClusterDebug` mesh-shader pass (mode 3, cluster bboxes as lines) and an ImGui readback panel (mode 4
-shows the counters below).
+Debug views are an output override in `ClusterBasePass` (modes 12–13, colouring the clusters the pass draws),
+a `ClusterDebug` line-topology mesh pass (mode 14, cluster bboxes over the shaded image) and an ImGui
+readback panel (`m_ClusterDebugMode` 4 shows the counters). `--cluster-draw 0` keeps the legacy meshlet draw while the
+cluster data stays cooked, so an A/B of the two paths runs on one cache; `--force-lod` and `--debug` mirror
+the panel's LOD and debug-view controls for scripted runs.
 
 ---
 
@@ -479,6 +482,149 @@ Perf gate (first real one):
 Gate **M2**: V2.1–V2.5 green and T1–T3 met on Bistro (with the cluster size chosen by V2.5); if T2/T3
 miss, the phase does not close — tune cluster size / group size / error propagation first (both are
 asset-side knobs, so no renderer churn).
+
+**Phase 2 landing notes (2026-11-12).** What the draw actually looks like, and the two bugs the exactness
+gates found:
+
+* `Cluster.sr` gained `ClusterRecord` (24 B: triangle/vertex counts, LOD level, group index, and element
+  offsets into the two new shared arrays) plus, on the CPU side, `GpuData::m_Records`, `m_Triangles` (one
+  packed micro-index triple per triangle) and `m_Vertices` (scene-wide vertex indices: the cooked clusters
+  index their primitive's own vertex block, so `Scene::Mesh::m_Primitives[pi].m_VertexOffset` is added once,
+  at load). None of them are cooked-mesh records — they are built from the cooked `Cluster` in
+  `ClusterLodGpu.cpp`, so `kCookedMeshVersion` is untouched.
+* `ClusterBasePass.hlsl` is AS + MS only; the G-buffer / alpha-test pixel shaders are the base pass's own.
+  The vertex output (`VSOut`, `PrepareVSOut`, the per-frame CB and the instance/vertex buffers) moved to
+  `BasePassCommon.hlsli` so the vertex path, the meshlet path and the cluster path share one definition of
+  it — a new interpolant (the `clusterID` the debug views read) lands in one place.
+* `BasePassInputs` carries the five cluster buffers (jobs, records, triangles, vertices, groups). They are
+  bound to dummies when the cluster path is not drawing, which keeps one binding layout for every base-pass
+  pipeline instead of two.
+* The job list now allocates **one slot per kept cluster**. Reserving a whole group's range up front (what
+  phase 1 did) left holes where the cut rule skipped a cluster, and phase 1 only *counted* the list, so
+  nothing noticed; the draw reads the list by index, so a hole is a garbage cluster. The counter and the
+  list length now always agree.
+* The second culling phase still runs when clusters draw; only its draw is skipped. It is what refreshes the
+  per-instance LOD that `TLASPatch` patches the ray-tracing structures with, and leaving it out makes the
+  raster and ray-traced paths disagree (the plan's phase 6 topic, visible immediately as different shadow
+  acne).
+* **The traversal transformed the instance sphere by the instance's world matrix.** `PerInstanceData`'s
+  `m_Center`/`m_Radius` are already world space — `GPUCulling.hlsl` tests them against the view matrix alone
+  — so every instance that is not near the origin was culled, and on Bistro that was 66 % of the frame.
+  Sponza and the dragon hid it because their instance transforms are close to identity, and phase 1 only
+  validated cuts with `--cluster-no-culling`, which skips the test entirely. The sphere test is now split
+  into `SphereVisibleWorld` (instance, already world space) and `SphereVisible` (node/group bounds, in the
+  primitive's space). The CPU reference in `CountReferenceCutClusters` deliberately tests no culling at all,
+  so `--cluster-stats-frame` is only meaningful together with `--cluster-no-culling`.
+* **The builder split a finer group across several coarser groups, and the cut rule cannot survive that.**
+  `meshopt_partitionClusters` partitions individual clusters, so the decimated output of one level-L group
+  routinely landed in two to six level-(L+1) groups. `m_GeneratingGroups` can only record one replacement per
+  cluster, so the cut dropped a finer group as soon as *that* group was detailed enough - while the parts that
+  went to the other coarser groups were still too coarse and were skipped too. The result was bands of missing
+  surface that appeared and moved as the camera changed the cut, worst at medium distance (66 % of a Bistro
+  frame disappeared at one point for a different reason, see the sphere fix above, and the DragonAttenuation
+  floor lost stripes at the `captures/DragonAttenuation_capture {near,medium,far}.rdc` cameras). Phase 0 could
+  not see it: `ValidateCut` walks the *selected* clusters' edges, so a region that no cluster covers has no
+  edges to check.
+  Fix: `AssignGroups` merges the partitions that share a finer group (union-find keyed by `m_SourceGroup`) and
+  chunks whole finer groups, so a group's replacement is a function. `ValidateDag` now refuses a DAG where one
+  group's clusters point at different replacements, and `kCookedMeshVersion` is 4 so every cooked cache re-cooks
+  once. The side effect is fewer, larger groups (DragonAttenuation: 251 groups → 74) and a slightly coarser cut
+  (Bistro: 23 907 → 24 439 clusters at the same camera).
+* Debug views: they are `DEBUG_MODE_CLUSTERS` / `DEBUG_MODE_CLUSTER_LOD` / `DEBUG_MODE_CLUSTER_BOUNDS`
+  (12-14) in `Common.sr`, i.e. entries of the general Debug Mode combo, so `Renderer::HandleDebugModeSettings`
+  applies to them the way it does to every other view (bloom and auto exposure off, exposure locked) and the
+  deferred pass knows to pass them through unlit. `--cluster-debug 1|2|3` still selects them, it now maps onto
+  those Debug Modes; `--cluster-debug 4` stays the traversal's counter readback, which is not a view.
+  Mode 12 hashes the cluster index into the albedo target, 13 ramps over the cluster's LOD level (32 levels,
+  not the 8 meshlet colours), 14 draws the group bounds the cut and culling used as wireframe boxes through a
+  second, line-topology mesh pipeline in the same framebuffer (depth test read-only, so the HZB built from the
+  same depth stays honest) and colours them into the emissive target, which the deferred pass adds back for
+  that mode alone. 15 is the per-triangle view: a mesh shader writes each vertex once and indexes it from its
+  primitives, and a pixel shader in a mesh pipeline is not given `SV_PrimitiveID`, so the triangle index cannot
+  ride the base pass; instead a mesh-shader overlay re-emits every visible cluster's triangles with each corner
+  written separately, two meshes per cluster so a 128-triangle cluster stays inside the 256-vertex output limit,
+  and hashes the triangle index into the albedo target with the depth test read-equal and the depth write off.
+* Validation harness: `--debug <n>` selects a base-pass debug view from the command line, `--force-lod <n>`
+  forces the legacy meshlet path's LOD, `--cluster-draw <0|1>` keeps the cooked cache while switching which
+  path draws, and `--no-rt-shadows` isolates the draw path from the ray-traced shadow noise. A pixel A/B must
+  not use `--cluster-stats-frame`: its wait-for-idle readback changes the frame timing enough that texture
+  streaming and the auto-exposure history diverge, and the same configuration then differs by up to 219.
+
+**Phase 2 status (2026-11-12).** Measured on the Debug build, 1080p, TAA off, `--no-indirect --no-denoise
+--no-sky`, frame 40, compared against `--cluster-draw 0 --force-lod 0`:
+
+| Scene | V2.1 albedo G-buffer, forced level 0 | V2.2 metric cut: coverage / holes |
+|---|---|---|
+| DragonAttenuation | max 0 on every channel | 100.000 % / 0 |
+| Sponza | max 0 on every channel | 100.000 % / 0 |
+| Bistro | 205 px differ (0.010 %), max 133 | 99.999 % / 14 px (0.001 %), 16 px extra |
+
+Dragon and Sponza are bit-identical at forced level 0, and so is the *composite* (max per-channel diff 2,
+which is the run-to-run noise floor of this renderer: the same configuration twice also differs by 2 on
+~70 % of the pixels). Bistro's residual is the alpha-tested bucket: the meshlet path cone-culls a meshlet
+that faces away, the cluster path draws it, and where an alpha test discards the front face the back face
+shows through — 205 pixels in the albedo view and 14 single-pixel holes on the silhouette. Everything else
+(opaque, and the masked bucket where the leaf faces the camera) matches exactly.
+
+The cut is hole-free across distance as well: with the DragonAttenuation camera moved to 35 %, 65 % and 100 %
+of its saved ray (`bin/captures/DragonAttenuation_capture {near,medium,far}.rdc`), the cluster path and the
+meshlet path at LOD 0 cover the same pixels (808 797 / 240 677 / 95 143 lit on both) with 0 interior holes,
+and differ on 0.014 % / 0.027 % / 0.001 % of the screen — LOD-boundary edge pixels, not missing surface.
+
+### LOD generation is meshoptimizer's, and a triangle soup gets a chain
+
+The builder (`ClusterLodBuilder.cpp`) forms its working vertex buffer the way meshoptimizer's own
+`clusterlod` example does: `meshopt_generateVertexRemapMulti` (positions + normals + uvs) or, for a primitive
+without attributes, `meshopt_generateVertexRemap` on the positions, followed by `meshopt_remapVertexBuffer`
+and `meshopt_remapIndexBuffer`. That pass drops the vertices the index buffer never references and merges the
+ones whose attributes are all identical, and it is what makes level 0 share edges at all. The inverse of the
+remap is kept because the emitted clusters index the primitive's own vertex block.
+
+Simplification is `meshopt_simplifyWithAttributes` with `Sparse | ErrorAbsolute | ErrorClamped | Permissive |
+LockBorder | Regularize`. Permissive mode is load-bearing: the simplifier classifies a vertex that sits on an
+attribute discontinuity as a seam and refuses to collapse it, so a primitive whose every corner carries its own
+normal has nothing collapsible at all and its chain stops at level 0 - which is exactly what a scanned mesh like
+`GLTF Scenes/bunny/scene.gltf` (208 353 vertices, 34 834 distinct positions, 69 451 distinct normals) is.
+Attribute seams are **not** protected (`meshopt_SimplifyVertex_Protect` stays clear): marking every uv seam
+protected on a per-corner-uv primitive protects nearly every vertex, which turned permissive mode back into a
+no-op and pushed 19 of 25 groups at level 1 into the sloppy path. The attribute weights in the error metric are
+what keep uv distortion down instead.
+
+A group that keeps more than `Config::m_SimplifyThreshold` (0.85) of its triangles is **stuck**: it stays a
+terminal group, its clusters keep `kNoGroup` as their replacement, and the cut draws them at any distance. That
+is the reference's own rule (`simplified.size() > merged.size() * simplify_threshold` -> terminal group with
+`error = FLT_MAX`), and it is what keeps the coarse end honest: forcing every group to keep halving is what fed
+the topology-free `meshopt_simplifySloppy` fallback, and sloppy is topology-blind, so it produced the spikes and
+the blobby silhouette the bunny showed at levels 3-5. The sloppy fallback now exists behind
+`Config::m_bSloppyFallback` and is **off**.
+
+`meshopt_SimplifyRegularize` is on: with the group borders locked, the interior collapses tend to fan into
+slivers, and even density is worth the small triangle-count cost. On the bunny it also lengthened the chain from
+5 to 7 levels and lowered the error of the middle levels (level 3: 0.039 -> 0.013) - the bunny now runs 1 654
+clusters / 69 451 triangles down to 22 clusters / 1 499 triangles in a single group.
+
+`--cluster-force-lod <n>` is a **level comparison**, not an equality test: a cluster is drawn when its group is
+at or under level `n` and no coarser group at or above `n` replaced it. An equality test leaves holes once a
+group is terminal, because the forced level then does not exist for that region (that is what the triangle view
+showed first: black wedges at forced level 4).
+
+The bunny's cut passes the edge check at every level and follows the camera: 1 654 clusters at the saved camera
+(all level 0), 259 at 8x the distance and 160 at 32x, matching the CPU cut in all three.
+
+`rdc-tools` on a RenderDoc capture of the Bistro frame (`bin/captures/bistrox_capture.rdc`): the marker tree
+carries `Cluster Traversal Preparation` / `Run` / `Build Args` for both buckets followed by
+`Base Pass Render (Phase 1)` with a single dispatch, `deps` reports no read-before-write on any
+`*_Cluster*` resource, and `hazards` reports 8 findings, all of them the pre-existing HZB and
+RTXDI/OpaqueColor ones (none on a cluster buffer). PIX could not capture this frame: the capturer aborts with
+"Invalid/Uninitialized descriptor used in command list event", on the legacy draw path as well, so T1–T3 are
+not measured yet.
+
+What the traversal costs, from the panel's own GPU timer queries at the Bistro camera above: **0.31 ms** for
+both buckets (opaque 14 279 clusters, masked 5 421, culling on the previous frame's HZB). Frame rate on the
+Debug build at the same camera is 57.5 fps with clusters against 68.0 fps on the legacy meshlet path — but
+Debug is CPU-bound (17.4 ms CPU per frame), and the cluster path deliberately drops the meshlet path's cone
+culling and its per-meshlet sort, so this is a shape check, not T2. A trustworthy T2/T3 needs the PIX capture
+above or a Release run with the GPU timers, which is the first item of phase 3's follow-up work.
 
 ### Phase 3 — Masked bucket (Transparent stays legacy)
 
@@ -745,7 +891,8 @@ time on 4–6.
 | `ClusterBuildArgs.hlsl` | CS | `DispatchMeshIndirect` args, counter clamps, second-pass setup | 1 / 4 |
 | `ClusterRejectClusters.hlsl` | CS | second-pass re-test of recorded clusters | 4 |
 | `ClusterBasePass.hlsl` | AS+MS | one workgroup per cluster, G-buffer/alpha PS reuse (Opaque + Masked) | 2 / 3 |
-| `ClusterDebug.hlsl` | MS+PS | cluster bboxes, id/LOD colouring | 1 / 2 |
+| `ClusterDebug.hlsl` | AS+MS+PS | cluster bboxes as line-topology mesh output | 2 |
+| `BasePassCommon.hlsli` | hlsli | `VSOut`/`PrepareVSOut` + base-pass bindings, shared by the vertex, meshlet and cluster paths | 2 |
 | `ClusterStreamAgeFilter.hlsl`, `ClusterStreamUpdate.hlsl` | CS | age filter, residency + patch | 5 |
 
 Build: add entries to `src/shaders/shaders.cfg`, then `build_srrhi → build_shaderids →
