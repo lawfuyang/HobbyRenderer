@@ -117,7 +117,11 @@ void ImGuiLayer::UpdateFrame()
                 "LOD",
                 "Motion Vectors",
                 "ReGIR Cells",
-                "Streaming Mip"
+                "Streaming Mip",
+                "Cluster IDs",
+                "Cluster LOD Level",
+                "Cluster Bounds",
+                "Triangles"
             };
             ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 
@@ -403,20 +407,29 @@ void ImGuiLayer::UpdateFrame()
         }
 
         // Cluster LOD: the traversal's switches, plus the counters the GPU wrote for the frame being measured.
-        // The readback is one frame behind, and the copy only runs while this section is open (or with
-        // --cluster-debug 4, which opens it), so a closed panel costs nothing.
+        // The readback is one frame behind, and the copy only runs while the counters are on screen, so a
+        // closed panel or an unselected view costs nothing.
         const ImGuiTreeNodeFlags clusterPanelFlags =
-            g_Renderer.m_ClusterDebugMode == 4 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+            g_Renderer.m_ClusterDebugMode != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
         const bool bClusterPanelOpen = ImGui::TreeNodeEx("Cluster LOD", clusterPanelFlags);
         g_Renderer.SetClusterCountersPanelOpen(bClusterPanelOpen);
         if (bClusterPanelOpen)
         {
-            ImGui::Text("Traversal: %s (--cluster 0|1 needs a restart)",
-                g_Renderer.m_EnableClusterRendering ? "on" : "off");
+            // The path switch is live: the cluster DAG is cooked at load time (on by default), so this only chooses
+            // which path draws. A scene cooked with --cluster 0 has no cluster data to draw from, and then there is
+            // nothing to switch to. The worst-case job/group/node counts are clamped to at least one so their
+            // buffers are never empty, so the depth (which has no such clamp) is what tells the two apart.
+            const bool bHasClusterData = g_Renderer.m_Scene.m_MaxClusterTreeDepth > 0;
+            ImGui::BeginDisabled(!bHasClusterData);
+            ImGui::Checkbox("Enable Cluster LOD", &g_Renderer.m_EnableClusterRendering);
+            ImGui::EndDisabled();
+            if (!bHasClusterData)
+                ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
 
-            // The debug views that exist today. Phase 2 adds the per-cluster ones (id, LOD level, bounds), which
-            // need the mesh shader that draws them; until then they would be entries that do nothing.
-            static const char* const kClusterDebugViewNames[] = { "Off", "Traversal counters" };
+            // The three views that colour or outline the clusters the base pass draws live in the Debug Mode combo,
+            // so they get the debug mode's own settings (no bloom, no auto exposure); this combo keeps the
+            // traversal's counters, which are a readback rather than a view.
+            static const char* const kClusterDebugViewNames[] = { "Off", "Traversal Counters" };
             static constexpr uint32_t kClusterDebugViewModes[] = { 0, 4 };
 
             int clusterDebugView = 0;
@@ -455,7 +468,7 @@ void ImGuiLayer::UpdateFrame()
 
             if (g_Renderer.m_ClusterDebugMode != 4)
             {
-                ImGui::TextDisabled("Debug view off: pick Traversal counters above to read the GPU's counters.");
+                ImGui::TextDisabled("Pick 'Traversal Counters' above to read the GPU's counters for the traversal.");
             }
             else
             {
