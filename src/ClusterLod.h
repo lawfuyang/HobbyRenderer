@@ -90,6 +90,9 @@ namespace ClusterLod
         float m_ErrorMergePrev = 1.5f;
         float m_NormalWeight = 1.0f;
         float m_UvWeight = 1.0f;
+        // A group that keeps more than this fraction of its triangles is stuck: it stays terminal instead of
+        // producing a coarser level that would only cost error without buying much of a reduction.
+        float m_SimplifyThreshold = 0.85f;
         uint32_t m_MaxLODLevels = kMaxLODLevels;
     };
 

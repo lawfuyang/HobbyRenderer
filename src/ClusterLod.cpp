@@ -99,16 +99,28 @@ void EvaluateCut(const PrimitiveClusters& clusters, const CutParams& params, Cut
 
     if (params.m_ForcedLODLevel >= 0)
     {
+        // The forced level is a level comparison, not an equality test: a cluster is drawn when it is at or under
+        // the forced level and no coarser group at or above that level replaced it. A group that was too stuck to
+        // produce a coarser level keeps its own clusters drawn, so a region never goes uncovered.
         const uint32_t forced = std::min(uint32_t(params.m_ForcedLODLevel), clusters.m_LODLevelCount - 1);
-        for (uint32_t c = 0; c < uint32_t(clusters.m_Clusters.size()); ++c)
+        for (const Group& group : clusters.m_Groups)
         {
-            const Cluster& cluster = clusters.m_Clusters[c];
-            if (cluster.m_LODLevel != forced)
+            if (group.m_LODLevel > forced)
                 continue;
-            outCut.m_Clusters.push_back(c);
-            outCut.m_TriangleCount += cluster.GetTriangleCount();
-            outCut.m_MinLODLevel = std::min(outCut.m_MinLODLevel, uint32_t(cluster.m_LODLevel));
-            outCut.m_MaxLODLevel = std::max(outCut.m_MaxLODLevel, uint32_t(cluster.m_LODLevel));
+
+            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+            {
+                const uint32_t clusterIndex = group.m_ClusterOffset + i;
+                const uint32_t generating = clusters.m_GeneratingGroups[clusterIndex];
+                if (generating != kNoGroup && clusters.m_Groups[generating].m_LODLevel <= forced)
+                    continue;
+
+                const Cluster& cluster = clusters.m_Clusters[clusterIndex];
+                outCut.m_Clusters.push_back(clusterIndex);
+                outCut.m_TriangleCount += cluster.GetTriangleCount();
+                outCut.m_MinLODLevel = std::min(outCut.m_MinLODLevel, uint32_t(cluster.m_LODLevel));
+                outCut.m_MaxLODLevel = std::max(outCut.m_MaxLODLevel, uint32_t(cluster.m_LODLevel));
+            }
         }
         if (outCut.m_MinLODLevel == UINT32_MAX)
             outCut.m_MinLODLevel = 0;
@@ -277,6 +289,26 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
         {
             outError = "cluster " + std::to_string(c) + " is replaced by a group with a smaller error";
             return false;
+        }
+    }
+
+    // A group is replaced by exactly one group. The cut rule drops a group's clusters as soon as *the* group that
+    // replaced them is detailed enough for the camera, so a finer group whose output was spread over several
+    // coarser groups would leave the parts that went elsewhere uncovered: holes that move with the camera.
+    for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+    {
+        const Group& group = clusters.m_Groups[g];
+        if (group.m_ClusterCount == 0)
+            continue;
+
+        const uint32_t replacement = clusters.m_GeneratingGroups[group.m_ClusterOffset];
+        for (uint32_t i = 1; i < group.m_ClusterCount; ++i)
+        {
+            if (clusters.m_GeneratingGroups[group.m_ClusterOffset + i] != replacement)
+            {
+                outError = "group " + std::to_string(g) + " is split across several replacement groups";
+                return false;
+            }
         }
     }
 
@@ -520,6 +552,7 @@ uint64_t GetCacheConfigHash(const Config& config)
     hash = HashCombine(hash, size_t(config.m_ErrorMergePrev * 100000.0f));
     hash = HashCombine(hash, size_t(config.m_NormalWeight * 100000.0f));
     hash = HashCombine(hash, size_t(config.m_UvWeight * 100000.0f));
+    hash = HashCombine(hash, size_t(config.m_SimplifyThreshold * 100000.0f));
     hash = HashCombine(hash, size_t(MESHOPTIMIZER_VERSION));
     return hash;
 }

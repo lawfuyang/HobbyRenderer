@@ -33,7 +33,8 @@ namespace SceneCache
     // - VertexQuantized or Meshlet struct layout changes
     // - LOD generation parameters change
     // 3: cluster LOD data written per primitive, plus the cluster config hash in the header.
-    constexpr uint32_t kCookedMeshVersion = 3;
+    // 5: terminal (stuck) groups, regularised simplification and the meshoptimizer vertex dedup.
+    constexpr uint32_t kCookedMeshVersion = 6;
 
     // ── Binary I/O helpers ────────────────────────────────────────────────────
 
