@@ -2,6 +2,7 @@
 #include "Instance.sr"
 #include "Mesh.sr"
 #include "GPULight.sr"
+#include "Cluster.sr"
 
 cbuffer BasePassConstants
 {
@@ -44,4 +45,13 @@ srinput BasePassInputs
     StructuredBuffer<uint> Indices;                       // t10
     Texture2D<float4> OpaqueColor;                        // t11
     StructuredBuffer<GPULight> Lights;                    // t12
+
+    // Cluster LOD (phase 2). The cluster mesh shader reads the visible-cluster list the traversal wrote and
+    // resolves each cluster's geometry through these; the pixel shader only reads ClusterGroups, for the
+    // cluster-bounds debug view. All five are bound to dummies when cluster rendering is off.
+    StructuredBuffer<ClusterJob>    ClusterJobs;          // t13
+    StructuredBuffer<ClusterRecord> ClusterRecords;       // t14
+    StructuredBuffer<uint>          ClusterTriangles;     // t15
+    StructuredBuffer<uint>          ClusterVertices;      // t16
+    StructuredBuffer<ClusterGroup>  ClusterGroups;        // t17
 };

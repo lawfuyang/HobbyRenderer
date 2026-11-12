@@ -4,9 +4,9 @@
 
 // Cluster LOD traversal data (docs/cluster-lod-implementation-plan.md §3.1).
 //
-// Phase 1 only carries what the traversal reads: the node tree, the group records and the per-geometry
-// ranges. Geometry (micro indices, cluster-local vertex ranges) arrives in phase 2 with the cluster mesh
-// shader, and materials in phase 3.
+// Phase 1 carried what the traversal reads: the node tree, the group records and the per-geometry ranges.
+// Phase 2 adds what the mesh shader reads to draw a visible cluster: its own record and the two shared arrays
+// its geometry lives in (packed micro indices, scene-wide vertex indices). Materials arrive in phase 3.
 //
 // The 8-bit cluster header of the reference is a packed uint here: srrhi (and HLSL) have no bitfields, and
 // the traversal only needs the group ranges, which live in the group record.
@@ -57,6 +57,19 @@ struct ClusterJob
 {
     uint m_InstanceIndex;
     uint m_ClusterIndex;    // global, the geometry's cluster offset already added
+};
+
+// 24 B. The draw-side view of one cluster. ClusterLod::Cluster packs four 8-bit counts into one uint, which
+// HLSL cannot read, so the mesh shader gets plain fields and element offsets into the two shared arrays
+// below. Built at load from the cooked record (ClusterLodGpu.cpp), so this is not part of the cooked layout.
+struct ClusterRecord
+{
+    uint m_TriangleCount;
+    uint m_VertexCount;
+    uint m_LODLevel;         // 0 = original mesh
+    uint m_GroupIndex;       // global, for the culling bounds the debug view draws
+    uint m_TriangleOffset;   // into ClusterTriangles, one packed micro-index triple per triangle
+    uint m_VertexOffset;     // into ClusterVertices, one scene-wide vertex index per cluster vertex
 };
 
 // 8 B. An entry of the node traversal queue.

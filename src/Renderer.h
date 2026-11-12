@@ -403,8 +403,8 @@ public:
     // Rendering options
     bool m_UseMeshletRendering = true;
     int m_ForcedLOD = -1;
-    // Cluster LOD: cooks the per-primitive cluster DAG and caches it in the cooked mesh file. Nothing draws it
-    // yet, so this only decides whether the offline build runs.
+    // Cluster LOD: draws through the cluster mesh path. The panel's "Enable Cluster LOD" checkbox owns this at
+    // runtime; --cluster-draw sets its A/B start value (see Config::m_ClusterDrawEnabled).
     bool m_EnableClusterRendering = true;
 
     // Cluster traversal (phase 1): the threshold is a screen-space error in pixels, everything else exists so a

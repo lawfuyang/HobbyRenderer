@@ -124,9 +124,20 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 
         if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES ||
             g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS ||
+            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS ||
+            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD ||
+            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES ||
             g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
             {
+                // These views write their colour into the albedo target, so passing it through unlit is what makes
+                // them readable; lighting them would mix in the noise the views exist to see past.
                 color = baseColor;
+            }
+        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
+            {
+                // The bounds overlay draws its lines into the emissive target instead of the albedo one, so the
+                // lines only survive this pass if the debug view adds that target back.
+                color = baseColor + emissive;
             }
     }
 

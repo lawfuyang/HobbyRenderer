@@ -73,29 +73,42 @@ void GetBoundsSphere(srrhi::ClusterBounds bounds, out float3 centerLocal, out fl
 	radiusLocal = length(bounds.m_Max - bounds.m_Min) * 0.5f;
 }
 
+// A sphere that is already in world space. PerInstanceData::m_Center/m_Radius are, which is why the instance
+// culling pass tests them against the view matrix alone - transforming them again by the instance's own world
+// matrix rejects every instance that is not sitting at the origin.
+bool SphereVisibleWorld(float3 centerWorld, float radiusWorld)
+{
+	if (g_Traversal.m_DisableCulling)
+		return true;
+
+	const float3 centerView = MatrixMultiply(float4(centerWorld, 1.0f), g_Traversal.m_View).xyz;
+
+	bool bVisible = true;
+	if (g_Traversal.m_EnableFrustumCulling)
+	{
+		bVisible = FrustumSphereTest(centerView, radiusWorld, g_Traversal.m_FrustumPlanes);
+	}
+
+	if (bVisible && g_Traversal.m_EnableOcclusionCulling)
+	{
+		const SamplerState minSampler = SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX];
+		bVisible = OcclusionSphereTest(centerView, radiusWorld, uint2(g_Traversal.m_HZBWidth, g_Traversal.m_HZBHeight),
+			g_Traversal.m_P00, g_Traversal.m_P11, g_HZB, minSampler);
+	}
+
+	return bVisible;
+}
+
+// A sphere in the primitive's own space (node and group bounds), which the instance's world matrix carries into
+// world space first.
 bool SphereVisible(float3 centerLocal, float radiusLocal, float4x4 world)
 {
 	if (g_Traversal.m_DisableCulling)
 		return true;
 
 	const float worldScale = GetMaxScale(world);
-	const float3 centerView = MatrixMultiply(MatrixMultiply(float4(centerLocal, 1.0f), world), g_Traversal.m_View).xyz;
-	const float radiusView = radiusLocal * worldScale;
-
-	bool bVisible = true;
-	if (g_Traversal.m_EnableFrustumCulling)
-	{
-		bVisible = FrustumSphereTest(centerView, radiusView, g_Traversal.m_FrustumPlanes);
-	}
-
-	if (bVisible && g_Traversal.m_EnableOcclusionCulling)
-	{
-		const SamplerState minSampler = SamplerDescriptorHeap[srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX];
-		bVisible = OcclusionSphereTest(centerView, radiusView, uint2(g_Traversal.m_HZBWidth, g_Traversal.m_HZBHeight),
-			g_Traversal.m_P00, g_Traversal.m_P11, g_HZB, minSampler);
-	}
-
-	return bVisible;
+	const float3 centerWorld = MatrixMultiply(float4(centerLocal, 1.0f), world).xyz;
+	return SphereVisibleWorld(centerWorld, radiusLocal * worldScale);
 }
 
 // ClusterLod::GetGroupPixelError: the quadric error of the group, projected to pixels at this camera.
@@ -125,7 +138,7 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	if (geometry.m_LODLevelCount == 0)
 		return;
 
-	if (!SphereVisible(instance.m_Center, instance.m_Radius, instance.m_World))
+	if (!SphereVisibleWorld(instance.m_Center, instance.m_Radius))
 		return;
 
 	InterlockedAdd(g_Counters[0].m_InstanceCount, 1);
@@ -210,7 +223,11 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	if (bForcedLevel)
 	{
-		if (group.m_LODLevel != forcedLevel)
+		// Above the forced level nothing is drawn; at or below it, a cluster is drawn unless a coarser group that
+		// is still at or above the forced level replaced it. That is the same rule as the metric cut with "the
+		// group is too coarse" standing in for a level comparison, and unlike an equality test it keeps regions
+		// covered when a group was too stuck to produce a coarser level.
+		if (group.m_LODLevel > forcedLevel)
 			return;
 	}
 	else if (GroupTooCoarse(groupRef.m_GroupIndex, instance.m_World))
@@ -224,9 +241,6 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	if (!SphereVisible(centerLocal, radiusLocal, instance.m_World))
 		return;
 
-	uint firstJob;
-	InterlockedAdd(g_ClusterJobCount[0], group.m_ClusterCount, firstJob);
-
 	for (uint i = 0; i < group.m_ClusterCount; ++i)
 	{
 		const uint clusterIndex = group.m_ClusterOffset + i;
@@ -234,14 +248,20 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		// A coarser group that replaced this cluster covers its region already when that group is detailed
 		// enough for this camera. This is per cluster, not per group: one group holds clusters that were
 		// replaced by different coarser groups.
-		if (!bForcedLevel)
+		const uint generating = g_GeneratingGroups[clusterIndex];
+		if (generating != kNoGroup)
 		{
-			const uint generating = g_GeneratingGroups[clusterIndex];
-			if (generating != kNoGroup && !GroupTooCoarse(generating, instance.m_World))
+			const bool bReplacedByCoarser = bForcedLevel ?
+				(g_Groups[generating].m_LODLevel <= forcedLevel) :
+				!GroupTooCoarse(generating, instance.m_World);
+			if (bReplacedByCoarser)
 				continue;
 		}
 
-		const uint jobIndex = firstJob + i;
+		// Every kept cluster takes its own slot. Reserving the whole group up front would leave the skipped
+		// clusters as holes, and the mesh dispatch draws the list by index.
+		uint jobIndex;
+		InterlockedAdd(g_ClusterJobCount[0], 1, jobIndex);
 		if (g_Traversal.m_MaxClusters != 0 && jobIndex >= g_Traversal.m_MaxClusters)
 		{
 			InterlockedAdd(g_Counters[0].m_ClusterCapped, 1);

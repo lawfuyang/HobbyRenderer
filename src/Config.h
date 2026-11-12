@@ -35,8 +35,15 @@ struct Config
     // Dumps the cooked cluster LOD of every primitive (clusters, groups, levels, triangles and worst error per
     // level, plus the phase 0 DAG and cut checks) once the scene is loaded.
     bool m_bClusterStats = false;
-    // Cooks the per-primitive cluster LOD into the cooked mesh file. Nothing draws it yet.
+    // Cooks the per-primitive cluster LOD into the cooked mesh file. This is the load-time half of the switch: the
+    // panel's "Enable Cluster LOD" checkbox only chooses the draw path at runtime, so a scene cooked with
+    // --cluster 0 has no cluster data to draw from.
     bool m_EnableClusterLod = true;
+    // Draws through the cluster mesh shader. -1 = follow m_EnableClusterLod, 0 = keep drawing through the legacy
+    // meshlet path while the cluster data is still cooked, which is what an A/B needs: the cooked cache is the
+    // same file for both legs, so neither run has to re-cook the scene. The panel's "Enable Cluster LOD" checkbox
+    // continues this value at runtime.
+    int m_ClusterDrawEnabled = -1;
     // Frame on which --cluster-stats prints the GPU cluster counters. -1 = never.
     int m_ClusterStatsFrame = -1;
 
@@ -50,6 +57,18 @@ struct Config
 
     // TAA is on by default; a pixel-exact A/B needs it off, and the panel was the only way to turn it off.
     bool m_bNoTAA = false;
+
+    // srrhi::CommonConsts::DEBUG_MODE_*: the base pass' debug visualisation. Lighting noise hides a G-buffer
+    // difference, so an exactness A/B compares one of these views instead of the composite.
+    int m_DebugMode = 0;
+
+    // Ray-traced sun shadows are the noisiest part of the composite; an A/B that isolates the draw path turns
+    // them off (the panel toggle does the same at runtime).
+    bool m_bNoRTShadows = false;
+
+    // The legacy meshlet path's LOD override: -1 = automatic. A cluster A/B compares the cluster cut at
+    // forced level 0 against the meshlet path at LOD 0, and the panel was the only way to set it.
+    int m_ForcedLOD = -1;
 
     // Opens the Phase 5 texel-classification view on this primitive index (0 = the first primitive). The panel
     // exposes the same controls; this exists so a screenshot run can be scripted.

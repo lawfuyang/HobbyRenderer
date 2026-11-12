@@ -479,6 +479,12 @@ protected:
         const bool bUseAlphaTest = (args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK);
         const bool bUseAlphaBlend = (args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_BLEND);
 
+        // The cluster path serves the opaque and masked buckets only: the transparent bucket keeps the plain
+        // vertex-shader path, which can still be sorted per surface (docs/cluster-lod-implementation-plan.md §7).
+        const bool bDrawClusters = g_Renderer.m_EnableClusterRendering && !bUseAlphaBlend;
+
+        const uint32_t effectiveDebugMode = uint32_t(g_Renderer.m_DebugMode);
+
         const nvrhi::FramebufferHandle framebuffer = bUseAlphaBlend ? 
             g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor).setDepthAttachment(depthTexture)) :
             g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(
@@ -538,7 +544,7 @@ protected:
         cb.SetCullingCameraPos(DirectX::XMFLOAT4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f });
         cb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
         cb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
-        cb.SetDebugMode((uint32_t)g_Renderer.m_DebugMode);
+        cb.SetDebugMode(effectiveDebugMode);
         cb.SetEnableFrustumCulling(g_Renderer.m_EnableFrustumCulling ? 1 : 0);
         cb.SetEnableConeCulling((g_Renderer.m_EnableConeCulling && args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? 1 : 0);
         cb.SetEnableOcclusionCulling((g_Renderer.m_EnableOcclusionCulling && handles.hzb) ? 1 : 0);
@@ -570,6 +576,16 @@ protected:
         inputs.SetOpaqueColor(opaqueColor);
         inputs.SetLights(g_Renderer.m_Scene.m_LightBuffer);
 
+        // The cluster draw's own inputs. Every one of them is a dummy when the cluster path is not drawing, so
+        // the binding layout stays the same for the transparent and legacy paths.
+        const Scene& scene = g_Renderer.m_Scene;
+        const nvrhi::BufferHandle dummyStructured = CommonResources::GetInstance().DummySRVStructuredBuffer;
+        inputs.SetClusterJobs(bDrawClusters ? handles.clusterJobs : dummyStructured);
+        inputs.SetClusterRecords(scene.m_ClusterRecordBuffer ? scene.m_ClusterRecordBuffer : dummyStructured);
+        inputs.SetClusterTriangles(scene.m_ClusterTriangleBuffer ? scene.m_ClusterTriangleBuffer : dummyStructured);
+        inputs.SetClusterVertices(scene.m_ClusterVertexBuffer ? scene.m_ClusterVertexBuffer : dummyStructured);
+        inputs.SetClusterGroups(scene.m_ClusterGroupBuffer ? scene.m_ClusterGroupBuffer : dummyStructured);
+
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
         const nvrhi::BindingLayoutHandle layout = g_Renderer.GetOrCreateBindingLayoutFromBindingSetDesc(bset);
@@ -598,7 +614,82 @@ protected:
                             bUseAlphaBlend ? ShaderID::BASEPASS_FORWARD_PSMAIN_FORWARD_TRANSPARENT_FORWARD_TRANSPARENT_1 : 
                             ShaderID::BASEPASS_GBUFFER_PSMAIN;
 
-        if (g_Renderer.m_UseMeshletRendering)
+        if (bDrawClusters)
+        {
+            nvrhi::MeshletPipelineDesc clusterPipelineDesc;
+            clusterPipelineDesc.AS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERBASEPASS_ASMAIN);
+            clusterPipelineDesc.MS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERBASEPASS_MSMAIN);
+            clusterPipelineDesc.PS = g_Renderer.GetShaderHandle(psID);
+            clusterPipelineDesc.renderState = renderState;
+            clusterPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
+
+            nvrhi::MeshletState meshState;
+            meshState.framebuffer = framebuffer;
+            meshState.pipeline = g_Renderer.GetOrCreateMeshletPipeline(clusterPipelineDesc, fbInfo);
+            meshState.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
+            meshState.viewport = viewportState;
+            meshState.indirectParams = handles.clusterIndirect;
+
+            commandList->setMeshletState(meshState);
+            // One DispatchMesh over the visible-cluster list; ClusterBuildArgs wrote that count into the args.
+            commandList->dispatchMeshIndirect(0, 1);
+
+            if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
+            {
+                // The bounds overlay shares this dispatch list, framebuffer and depth buffer, but it must not
+                // write depth: the HZB built from it at the end of the opaque pass decides the next frame's
+                // occlusion, and a wireframe in the depth buffer would cull real geometry behind it.
+                nvrhi::RenderState overlayState = renderState;
+                overlayState.rasterState = CommonResources::GetInstance().RasterCullNone;
+                overlayState.blendState.targets[0] = CommonResources::GetInstance().BlendTargetOpaque;
+                overlayState.depthStencilState = CommonResources::GetInstance().DepthRead;
+
+                nvrhi::MeshletPipelineDesc overlayPipelineDesc;
+                overlayPipelineDesc.AS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERDEBUG_ASMAIN);
+                overlayPipelineDesc.MS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERDEBUG_MSMAIN);
+                overlayPipelineDesc.PS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERDEBUG_PSMAIN);
+                overlayPipelineDesc.primType = nvrhi::PrimitiveType::LineList;
+                overlayPipelineDesc.renderState = overlayState;
+                overlayPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
+
+                nvrhi::MeshletState overlayMeshState;
+                overlayMeshState.framebuffer = framebuffer;
+                overlayMeshState.pipeline = g_Renderer.GetOrCreateMeshletPipeline(overlayPipelineDesc, fbInfo);
+                overlayMeshState.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
+                overlayMeshState.viewport = viewportState;
+                overlayMeshState.indirectParams = handles.clusterIndirect;
+
+                commandList->setMeshletState(overlayMeshState);
+                commandList->dispatchMeshIndirect(0, 1);
+            }
+            else if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES)
+            {
+                // Per-triangle view: the same triangles again, one vertex triple each, so the pixel shader can
+                // colour them by index. The depth test is read-equal (identical positions, so identical depth)
+                // and the albedo target is overwritten; the deferred pass passes this mode through unlit.
+                nvrhi::RenderState overlayState = renderState;
+                overlayState.depthStencilState = CommonResources::GetInstance().DepthRead;
+
+                nvrhi::MeshletPipelineDesc trianglePipelineDesc;
+                trianglePipelineDesc.AS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERDEBUG_TRIANGLESASMAIN);
+                trianglePipelineDesc.MS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERDEBUG_TRIANGLESMSMAIN);
+                trianglePipelineDesc.PS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERDEBUG_TRIANGLESPSMAIN);
+                trianglePipelineDesc.primType = nvrhi::PrimitiveType::TriangleList;
+                trianglePipelineDesc.renderState = overlayState;
+                trianglePipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
+
+                nvrhi::MeshletState triangleMeshState;
+                triangleMeshState.framebuffer = framebuffer;
+                triangleMeshState.pipeline = g_Renderer.GetOrCreateMeshletPipeline(trianglePipelineDesc, fbInfo);
+                triangleMeshState.bindings = { bindingSet, g_Renderer.GetStaticTextureDescriptorTable(), g_Renderer.GetStaticSamplerDescriptorTable() };
+                triangleMeshState.viewport = viewportState;
+                triangleMeshState.indirectParams = handles.clusterIndirect;
+
+                commandList->setMeshletState(triangleMeshState);
+                commandList->dispatchMeshIndirect(0, 1);
+            }
+        }
+        else if (g_Renderer.m_UseMeshletRendering)
         {
             nvrhi::MeshletPipelineDesc meshPipelineDesc;
             meshPipelineDesc.AS = g_Renderer.GetShaderHandle(ShaderID::BASEPASS_ASMAIN);
@@ -786,10 +877,17 @@ public:
 
         RenderInstances(commandList, args, handles);
 
+        // The cluster path draws the whole visible-cluster list in that one dispatch, so a second draw would
+        // shade every visible cluster twice. The second culling phase still runs: it is what refreshes the
+        // per-instance LOD that TLASPatch patches the ray-tracing structures with, and leaving it out makes the
+        // raster and ray-traced paths disagree. The reject-list second pass of phase 4 replaces this.
         args.m_BucketName = "Opaque (Occluded)";
         args.m_CullingPhase = 1;
         PerformOcclusionCulling(commandList, args, handles);
-        RenderInstances(commandList, args, handles);
+        if (!g_Renderer.m_EnableClusterRendering)
+        {
+            RenderInstances(commandList, args, handles);
+        }
 
         nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
         GenerateHZBMips(commandList, renderGraph, spdAtomicCounter);

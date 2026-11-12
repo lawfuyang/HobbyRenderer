@@ -423,13 +423,18 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
-    m_EnableClusterRendering = Config::Get().m_EnableClusterLod;
+    m_EnableClusterRendering = Config::Get().m_ClusterDrawEnabled < 0 ? Config::Get().m_EnableClusterLod
+                                                                     : Config::Get().m_ClusterDrawEnabled != 0;
     m_ClusterPixelError = Config::Get().m_ClusterPixelError;
     m_ClusterForcedLOD = Config::Get().m_ClusterForcedLOD;
     m_ClusterMaxClusters = uint32_t(std::max(Config::Get().m_ClusterMaxClusters, 0));
     m_ClusterDisableCulling = Config::Get().m_ClusterDisableCulling;
     m_ClusterFreezeCullingCamera = Config::Get().m_ClusterFreezeCulling;
     m_ClusterDebugMode = Config::Get().m_ClusterDebugMode;
+    m_ForcedLOD = Config::Get().m_ForcedLOD;
+    m_DebugMode = Config::Get().m_DebugMode;
+    if (Config::Get().m_bNoRTShadows)
+        m_EnableRTShadows = false;
     if (Config::Get().m_bNoTAA)
         m_bTAAEnabled = false;
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)

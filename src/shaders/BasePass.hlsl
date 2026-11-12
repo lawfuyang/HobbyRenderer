@@ -2,16 +2,12 @@
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
-#include "MeshCommon.hlsli"
+#include "BasePassCommon.hlsli"
 #include "StreamingMipLUT.hlsli"
 
 #include "srrhi/hlsl/BasePass.hlsli"
 
-static const srrhi::BasePassConstants g_PerFrame = srrhi::BasePassInputs::GetPerFrameCB();
-
-static const StructuredBuffer<srrhi::PerInstanceData>  g_Instances        = srrhi::BasePassInputs::GetInstances();
 static const StructuredBuffer<srrhi::MaterialConstants> g_Materials        = srrhi::BasePassInputs::GetMaterials();
-static const StructuredBuffer<srrhi::VertexQuantized>   g_Vertices         = srrhi::BasePassInputs::GetVertices();
 static const StructuredBuffer<srrhi::Meshlet>           g_Meshlets         = srrhi::BasePassInputs::GetMeshlets();
 static const StructuredBuffer<uint>                     g_MeshletVertices  = srrhi::BasePassInputs::GetMeshletVertices();
 static const StructuredBuffer<uint>                     g_MeshletTriangles = srrhi::BasePassInputs::GetMeshletTriangles();
@@ -25,37 +21,6 @@ static const StructuredBuffer<srrhi::GPULight>          g_Lights           = srr
 
 
 
-
-struct VSOut
-{
-    float4 Position : SV_POSITION;
-    float3 normal : NORMAL;
-    float4 tangent : TANGENT;
-    float2 uv : TEXCOORD0;
-    float3 worldPos : TEXCOORD1;
-    float3 prevWorldPos : TEXCOORD5;
-    nointerpolation uint instanceID : TEXCOORD2;
-    nointerpolation uint meshletID : TEXCOORD3;
-    nointerpolation uint lodIndex : TEXCOORD4;
-};
-
-VSOut PrepareVSOut(srrhi::Vertex v, srrhi::PerInstanceData inst, uint instanceID, uint meshletID, uint lodIndex)
-{
-    VSOut o;
-    float4 worldPos = MatrixMultiply(float4(v.m_Pos, 1.0f), inst.m_World);
-    o.Position = MatrixMultiply(worldPos, g_PerFrame.m_View.m_MatWorldToClip);
-
-    o.normal = TransformNormal(v.m_Normal, inst.m_World);
-    o.tangent.xyz = TransformNormal(v.m_Tangent.xyz, inst.m_World);
-    o.tangent.w = v.m_Tangent.w;
-    o.uv = v.m_Uv;
-    o.worldPos = worldPos.xyz;
-    o.prevWorldPos = MatrixMultiply(float4(v.m_Pos, 1.0f), inst.m_PrevWorld).xyz;
-    o.instanceID = instanceID;
-    o.meshletID = meshletID;
-    o.lodIndex = lodIndex;
-    return o;
-}
 
 VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLocation)
 {
@@ -166,17 +131,6 @@ void MSMain(
         triangles[outputIdx] = UnpackTriangle(g_MeshletTriangles[m.m_TriangleOffset + outputIdx]);
 }
 
-float3 HashColor(uint id)
-{
-    uint h = id * 0x27D4EB2Du;
-    h = h ^ (h >> 15);
-    h = h * 0x85EBCA6Bu;
-    h = h ^ (h >> 13);
-    h = h * 0xC2B2AE35u;
-    h = h ^ (h >> 16);
-    return float3((h & 0xFF) / 255.0f, ((h >> 8) & 0xFF) / 255.0f, ((h >> 16) & 0xFF) / 255.0f);
-}
-
 struct GBufferOut
 {
     float4 Albedo        : SV_TARGET0;
@@ -187,7 +141,7 @@ struct GBufferOut
     float2 GeoNormal     : SV_TARGET5;  // World-space geometric normal (no normal map), oct-encoded
 };
 
-float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIndex)
+float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIndex, uint clusterID)
 {
     if (debugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES)
     {
@@ -197,6 +151,19 @@ float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIn
     {
         // Color by meshlet ID
         return HashColor(meshletID);
+    }
+    else if (debugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS)
+    {
+        // Neighbouring clusters of one level are numbered consecutively, so the hash is what makes the
+        // boundaries between them readable.
+        return HashColor(clusterID);
+    }
+    else if (debugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD)
+    {
+        // A 32-level ramp instead of the 8 fixed LOD colours: a cluster cut can reach level 31, and the
+        // interesting thing about the view is how many levels are on screen at once.
+        const float level = saturate(float(lodIndex) / 15.0f);
+        return saturate(float3(level * 2.0f, 1.0f - abs(level * 2.0f - 1.0f), 2.0f - level * 2.0f));
     }
     else if (debugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
     {
@@ -211,7 +178,9 @@ float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIn
             float3(0.0, 0.5, 0.0)  // 7: Dark Green
         };
         
-        return lodColors[lodIndex];
+        // A cluster's LOD level rides in lodIndex and can go past the eight meshlet LODs, so wrap instead of
+        // reading past the table.
+        return lodColors[lodIndex % srrhi::CommonConsts::MAX_LOD_COUNT];
     }
     return float3(0.0f, 0.0f, 0.0f); // Should not reach here
 }
@@ -446,9 +415,11 @@ GBufferOut GBuffer_PSMain(VSOut input)
     {
         if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS ||
+            g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS ||
+            g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
         {
-            color = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex);
+            color = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex, input.clusterID);
         }
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_WORLD_NORMALS)
             color = N * 0.5f + 0.5f;
@@ -481,9 +452,11 @@ GBufferOut GBuffer_PSMain(VSOut input)
     {
         if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS ||
+            g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS ||
+            g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
         {
-            float3 debugColor = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex);
+            float3 debugColor = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex, input.clusterID);
             output.Albedo = float4(debugColor, alpha);
             output.Normal = float2(0.5f, 0.5f); // Default normal
             output.ORM = float2(0.5f, 0.0f); // Default ORM

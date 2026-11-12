@@ -60,6 +60,11 @@ srinput CommonConsts
     static const uint kMaxMeshletVertices = 64;
     static const uint kMaxMeshletTriangles = 96;
 
+    // Cluster limits: ClusterLod::Config builds 128-triangle / 128-vertex clusters, so the mesh shader has to
+    // declare that many outputs and run that many threads.
+    static const uint kMaxClusterVertices = 128;
+    static const uint kMaxClusterTriangles = 128;
+
     // Max LOD count
     static const uint MAX_LOD_COUNT = 8;
 
@@ -92,6 +97,12 @@ srinput CommonConsts
     static const int DEBUG_MODE_MOTION_VECTORS = 9;
     static const int DEBUG_MODE_REGIR_CELLS = 10;
     static const int DEBUG_MODE_STREAMING_MIP = 11;
+    // The cluster views read what the cluster mesh shader wrote into the vertex output, so they show nothing
+    // when the base pass draws through the legacy meshlet path.
+    static const int DEBUG_MODE_CLUSTERS = 12;        // hash colour per visible cluster
+    static const int DEBUG_MODE_CLUSTER_LOD = 13;     // ramp over the cluster cut's LOD level
+    static const int DEBUG_MODE_CLUSTER_BOUNDS = 14;  // the culling bounds of every visible cluster, as boxes
+static const int DEBUG_MODE_CLUSTER_TRIANGLES = 15; // hash colour per triangle, to read the cluster's triangulation
 
     // Rendering modes
     static const int RENDERING_MODE_NORMAL = 0;

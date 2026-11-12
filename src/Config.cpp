@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "shaders/srrhi/cpp/Common.h"
 
 void Config::ParseCommandLine(int argc, char* argv[])
 {
@@ -136,19 +137,68 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_ClusterDisableCulling = true;
             SDL_Log("[Config] Cluster culling disabled: every cluster of a visible instance is requested");
         }
+        else if (std::strcmp(arg, "--cluster-draw") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterDrawEnabled = std::atoi(argv[++i]);
+                SDL_Log("[Config] Cluster draw %s", s_Instance.m_ClusterDrawEnabled ? "enabled" : "disabled (legacy meshlet path)");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-draw", "[Config] Missing value for --cluster-draw");
+            }
+        }
+        else if (std::strcmp(arg, "--force-lod") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ForcedLOD = std::atoi(argv[++i]);
+                SDL_Log("[Config] Meshlet LOD forced to %d", s_Instance.m_ForcedLOD);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --force-lod", "[Config] Missing value for --force-lod");
+            }
+        }
+        else if (std::strcmp(arg, "--no-rt-shadows") == 0)
+        {
+            s_Instance.m_bNoRTShadows = true;
+            SDL_Log("[Config] Ray-traced shadows disabled");
+        }
+        else if (std::strcmp(arg, "--debug") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_DebugMode = std::atoi(argv[++i]);
+                SDL_Log("[Config] Debug view mode %d", s_Instance.m_DebugMode);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --debug", "[Config] Missing value for --debug");
+            }
+        }
         else if (std::strcmp(arg, "--cluster-debug") == 0)
         {
             if (i + 1 < argc)
             {
-                s_Instance.m_ClusterDebugMode = static_cast<uint32_t>(std::atoi(argv[++i]));
-                SDL_Log("[Config] Cluster debug view mode %u", s_Instance.m_ClusterDebugMode);
-                // Only 4 exists today: it opens the Cluster LOD panel's counters and arms their readback. The
-                // per-cluster views (1 ids, 2 lod level, 3 bounds) shade clusters, so they arrive with the phase-2
-                // mesh shader that draws them.
-                if (s_Instance.m_ClusterDebugMode != 0 && s_Instance.m_ClusterDebugMode != 4)
+                const int clusterDebugMode = std::atoi(argv[++i]);
+                // The cluster views are Debug Modes of their own now, so 1-3 select them there and get the debug
+                // mode's settings (no bloom, no auto exposure); 4 is the traversal's own counters.
+                if (clusterDebugMode == 4)
                 {
-                    SDL_Log("[Config] Cluster debug view %u is not implemented yet (only 4, the traversal counters)",
-                        s_Instance.m_ClusterDebugMode);
+                    s_Instance.m_ClusterDebugMode = 4;
+                    SDL_Log("[Config] Cluster debug view mode 4 (traversal counters)");
+                }
+                else if (clusterDebugMode >= 1 && clusterDebugMode <= 3)
+                {
+                    s_Instance.m_DebugMode = srrhi::CommonConsts::DEBUG_MODE_CLUSTERS + (clusterDebugMode - 1);
+                    SDL_Log("[Config] Cluster debug view mode %d maps to Debug Mode %d", clusterDebugMode, s_Instance.m_DebugMode);
+                }
+                else if (clusterDebugMode != 0)
+                {
+                    SDL_Log("[Config] Cluster debug view %d does not exist (0 off, 1 clusters, 2 lod level, 3 bounds, 4 counters)",
+                        clusterDebugMode);
                 }
             }
             else
@@ -460,7 +510,11 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-force-lod <n>          Force one cluster LOD level; -1 = pick from the metric");
             SDL_Log("  --cluster-max <n>                Cap the number of clusters drawn (0 = scene-derived)");
             SDL_Log("  --cluster-no-culling             Request every cluster of every visible instance");
-            SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 4 traversal counters (1-3 need phase 2)");
+            SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 1 clusters, 2 lod level, 3 bounds (these are Debug Modes 12-14), 4 counters");
+            SDL_Log("  --force-lod <n>                  Force the meshlet path's LOD index; -1 = automatic (A/B against the cluster cut)");
+            SDL_Log("  --cluster-draw <0|1>             Draw through the cluster mesh shader; 0 keeps the legacy meshlet draw");
+            SDL_Log("  --debug <n>                      Base pass debug view (0 none, 4 albedo, 3 world normals, 12-15 cluster views)");
+            SDL_Log("  --no-rt-shadows                  Disable ray-traced sun shadows (isolates the draw path in an A/B)");
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");

@@ -18,6 +18,16 @@ namespace ClusterLod
         std::vector<uint32_t> m_GeneratingGroups;          // per cluster, global cluster order
         std::vector<srrhi::ClusterGeometry> m_Geometry;   // one per Scene::m_MeshData entry
 
+        // The draw side: one record per cluster, the micro indices of every cluster's triangles and the
+        // scene-wide vertex index of every cluster vertex. The mesh shader reads these through ClusterRecord.
+        std::vector<srrhi::ClusterRecord> m_Records;
+        std::vector<uint32_t> m_Triangles;   // one packed micro-index triple per triangle
+        std::vector<uint32_t> m_Vertices;    // scene-wide vertex indices, one per cluster vertex
+
+        // Primitives the cluster path cannot draw, because they have no cluster data (fewer than three indices,
+        // or a failed build). They disappear once the cluster base pass replaces the meshlet draw.
+        uint32_t m_PrimitivesWithoutData = 0;
+
         uint64_t GetMemoryBytes() const;
     };
 

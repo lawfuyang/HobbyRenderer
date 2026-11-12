@@ -44,7 +44,10 @@ uint64_t GpuData::GetMemoryBytes() const
         uint64_t(m_NodeBounds.size()) * sizeof(srrhi::ClusterBounds) +
         uint64_t(m_Groups.size()) * sizeof(srrhi::ClusterGroup) +
         uint64_t(m_GeneratingGroups.size()) * sizeof(uint32_t) +
-        uint64_t(m_Geometry.size()) * sizeof(srrhi::ClusterGeometry);
+        uint64_t(m_Geometry.size()) * sizeof(srrhi::ClusterGeometry) +
+        uint64_t(m_Records.size()) * sizeof(srrhi::ClusterRecord) +
+        uint64_t(m_Triangles.size()) * sizeof(uint32_t) +
+        uint64_t(m_Vertices.size()) * sizeof(uint32_t);
 }
 
 Counts GetCounts(const PrimitiveClusters& clusters)
@@ -63,6 +66,10 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
     outData.m_NodeBounds.clear();
     outData.m_Groups.clear();
     outData.m_GeneratingGroups.clear();
+    outData.m_Records.clear();
+    outData.m_Triangles.clear();
+    outData.m_Vertices.clear();
+    outData.m_PrimitivesWithoutData = 0;
     outData.m_Geometry.assign(meshDataCount, srrhi::ClusterGeometry{});
 
     uint32_t clusterBase = 0;
@@ -77,7 +84,10 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
         {
             const PrimitiveClusters& clusters = mesh.m_Clusters[pi];
             if (clusters.IsEmpty())
+            {
+                outData.m_PrimitivesWithoutData++;
                 continue;
+            }
 
             const uint32_t meshDataIndex = mesh.m_Primitives[pi].m_MeshDataIndex;
             SDL_assert(meshDataIndex < outData.m_Geometry.size());
@@ -122,6 +132,67 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
             {
                 const uint32_t generating = clusters.m_GeneratingGroups[c];
                 outData.m_GeneratingGroups.push_back(generating == kNoGroup ? 0xFFFFFFFFu : geometry.m_GroupOffset + generating);
+            }
+
+            // The draw side: the cooked Cluster packs its counts into bitfields, so it is expanded into the
+            // shader's own record, and its element offsets become offsets into the two scene-wide arrays. The
+            // micro indices stay 8-bit in the asset but are packed one triple per uint here, which is the same
+            // layout UnpackTriangle already reads for meshlets.
+            const uint32_t vertexBase = mesh.m_Primitives[pi].m_VertexOffset;
+            for (uint32_t c = 0; c < counts.m_ClusterCount; ++c)
+            {
+                const Cluster& cluster = clusters.m_Clusters[c];
+
+                srrhi::ClusterRecord record;
+                record.m_TriangleCount = cluster.GetTriangleCount();
+                record.m_VertexCount = cluster.GetVertexCount();
+                record.m_LODLevel = cluster.m_LODLevel;
+                record.m_GroupIndex = 0;   // filled in below, from the group that owns the cluster
+                record.m_TriangleOffset = uint32_t(outData.m_Triangles.size());
+                record.m_VertexOffset = uint32_t(outData.m_Vertices.size());
+
+                SDL_assert(record.m_TriangleCount <= srrhi::CommonConsts::kMaxClusterTriangles);
+                SDL_assert(record.m_VertexCount <= srrhi::CommonConsts::kMaxClusterVertices);
+
+                for (uint32_t t = 0; t < record.m_TriangleCount; ++t)
+                {
+                    const size_t source = cluster.m_TriangleOffset + size_t(t) * 3;
+                    outData.m_Triangles.push_back(uint32_t(clusters.m_Triangles[source]) |
+                        (uint32_t(clusters.m_Triangles[source + 1]) << 8) |
+                        (uint32_t(clusters.m_Triangles[source + 2]) << 16));
+                }
+
+                for (uint32_t v = 0; v < record.m_VertexCount; ++v)
+                {
+                    const uint32_t index = clusters.m_VertexIndices[cluster.m_VertexOffset + v];
+
+                    // The cooked clusters index the primitive's own vertex block, and the CPU is the only place
+                    // that rebasing can be wrong without anyone noticing: a bad index turns the cluster's
+                    // triangles into something that covers nothing, and the mesh shader draws nothing at all.
+                    SDL_assert(index < mesh.m_Primitives[pi].m_VertexCount);
+
+                    outData.m_Vertices.push_back(vertexBase + index);
+                }
+
+                for (uint32_t t = 0; t < record.m_TriangleCount * 3; ++t)
+                {
+                    SDL_assert(clusters.m_Triangles[cluster.m_TriangleOffset + t] < record.m_VertexCount);
+                }
+
+                outData.m_Records.push_back(record);
+            }
+
+            // A group names its clusters as a contiguous range of the primitive's own cluster array, so the
+            // cluster record can point back at the bounds its cut decision was made with.
+            for (uint32_t g = 0; g < counts.m_GroupCount; ++g)
+            {
+                const Group& group = clusters.m_Groups[g];
+                for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+                {
+                    const uint32_t localCluster = group.m_ClusterOffset + i;
+                    SDL_assert(localCluster < counts.m_ClusterCount);
+                    outData.m_Records[geometry.m_ClusterOffset + localCluster].m_GroupIndex = geometry.m_GroupOffset + g;
+                }
             }
 
             clusterBase += counts.m_ClusterCount;
