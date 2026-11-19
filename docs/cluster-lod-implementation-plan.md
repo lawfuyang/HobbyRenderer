@@ -229,7 +229,7 @@ replaces the bucket. Its instances therefore still need the per-instance LOD pic
 ### 3.4 Toggles and debug views
 
 `Renderer.h` (next to `m_UseMeshletRendering` / `m_ForcedLOD`), CLI in `Config.cpp` (`--cluster*`),
-UI in `ImGuiLayer.cpp` ("Cluster LOD" section):
+UI in `ImGuiLayer.cpp` ("Level of Detail" section):
 
 | Member | CLI | Default | Meaning |
 |---|---|---|---|
@@ -319,7 +319,7 @@ Tasks
 5. `Culling.hlsli`: add `FrustumBoxTest` / `OcclusionBoxTest` (8-corner clip-AABB, `ceil(log2)`
    mip selection + the fine-mip fix, min-reduction sampler already used by the sphere path).
 6. `ClusterBuildArgs.hlsl` (+ readback of counters through the existing event-query pattern).
-7. ImGui "Cluster LOD" section: toggles (§3.4) + counters (instances considered, nodes/ groups
+7. ImGui "Level of Detail" section: toggles (§3.4) + counters (instances considered, nodes/ groups
    visited, clusters requested vs capped, milliseconds from `GpuPassTimers`).
 8. PIX markers: `Cluster Traversal Preparation`, `Cluster Traversal Run`, `Cluster Build Args`.
 9. Validation switches the harness needs (the renderer's current CLI has no equivalent):
@@ -917,7 +917,7 @@ build_shaders → ${PROJECT_NAME}` (the AGENTS.md order). Never edit `src/shader
 | `src/BasePassRenderer.cpp` (`TransparentPassRenderer`) | **unchanged** — keeps the vertex-shader path, blend, and the per-instance LOD |
 | `src/Renderer.h/.cpp` | toggles, per-frame pixel-error threshold, streaming hookup |
 | `src/Config.{h,cpp}` | `--cluster*` switches |
-| `src/ImGuiLayer.cpp` | "Cluster LOD" section, counters, debug modes |
+| `src/ImGuiLayer.cpp` | "Level of Detail" section, counters, debug modes |
 | `src/GeometryStreaming.{h,cpp}` | new (phase 5) |
 | `tests/ClusterLodTests.cpp`, `CMakeLists.txt` | new CPU test target (phase 0) |
 

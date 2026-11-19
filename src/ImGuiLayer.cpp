@@ -90,6 +90,28 @@ void ImGuiLayer::UpdateFrame()
         // Target FPS control
         ImGui::DragInt("Target FPS", (int*)&g_Renderer.m_TargetFPS, 1.0f, 10, 200);
 
+        // The global view switch stays outside the nodes: it is what an inspection session changes constantly, and
+        // everything below it is a setting rather than a view.
+        static const char* kDebugModes[] = {
+            "None",
+            "Instances",
+            "Meshlets",
+            "World Normals",
+            "Albedo",
+            "Roughness",
+            "Metallic",
+            "Emissive",
+            "LOD",
+            "Motion Vectors",
+            "ReGIR Cells",
+            "Streaming Mip",
+            "Cluster IDs",
+            "Cluster LOD Level",
+            "Cluster Bounds",
+            "Triangles"
+        };
+        ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
+
         // Rendering options
         if (ImGui::TreeNode("Rendering"))
         {
@@ -101,56 +123,19 @@ void ImGuiLayer::UpdateFrame()
                 g_Renderer.ApplyRenderingModeDefaults(g_Renderer.m_Mode);
             }
 
-            ImGui::Checkbox("Use Meshlet Rendering", &g_Renderer.m_UseMeshletRendering);
-            ImGui::Checkbox("Enable RT Shadows", &g_Renderer.m_EnableRTShadows);
             ImGui::Checkbox("Enable Sky", &g_Renderer.m_EnableSky);
+            ImGui::Checkbox("Enable Animations", &g_Renderer.m_EnableAnimations);
+            ImGui::Checkbox("Enable RT Shadows", &g_Renderer.m_EnableRTShadows);
 
-            static const char* kDebugModes[] = {
-                "None",
-                "Instances",
-                "Meshlets",
-                "World Normals",
-                "Albedo",
-                "Roughness",
-                "Metallic",
-                "Emissive",
-                "LOD",
-                "Motion Vectors",
-                "ReGIR Cells",
-                "Streaming Mip",
-                "Cluster IDs",
-                "Cluster LOD Level",
-                "Cluster Bounds",
-                "Triangles"
-            };
-            ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
-
-            const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
-            int forcedLODIdx = g_Renderer.m_ForcedLOD + 1;
-            if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, srrhi::CommonConsts::MAX_LOD_COUNT))
+            if (ImGui::TreeNode("Path Tracer"))
             {
-                g_Renderer.m_ForcedLOD = forcedLODIdx - 1;
+                int maxBounces = (int)g_Renderer.m_PathTracerMaxBounces;
+                if (ImGui::SliderInt("Max Bounces", &maxBounces, 1, 12))
+                {
+                    g_Renderer.m_PathTracerMaxBounces = (uint32_t)maxBounces;
+                }
+                ImGui::TreePop();
             }
-            ImGui::SameLine();
-            ImGui::Text("%s", lodNames[forcedLODIdx]);
-
-            static const char* kMipNames[] = { "Auto", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15" };
-            int forcedMipIdx = g_Renderer.m_ForcedTextureMip + 1;
-            if (ImGui::SliderInt("Forced Texture Mip", &forcedMipIdx, 0, 16))
-            {
-                g_Renderer.m_ForcedTextureMip = forcedMipIdx - 1;
-            }
-            ImGui::SameLine();
-            ImGui::Text("%s", kMipNames[forcedMipIdx]);
-
-            ImGui::Checkbox("ReSTIR DI", &g_Renderer.m_EnableReSTIRDI);
-            if (g_Renderer.m_EnableReSTIRDI)
-            {
-                extern void RTXDIIMGUISettings();
-                RTXDIIMGUISettings();
-            }
-
-            ImGui::Separator();
 
             // ── Indirect Lighting Technique ─────────────────────────────────
             if (ImGui::TreeNodeEx("Indirect Lighting", ImGuiTreeNodeFlags_None))
@@ -196,70 +181,161 @@ void ImGuiLayer::UpdateFrame()
                         g_Renderer.m_SHARCDebugMode = static_cast<uint32_t>(debugMode);
                 }
 
+                // ReSTIR DI is the direct-lighting half of the same technique choice, so it lives here rather than
+                // with the shadowing switches.
+                ImGui::Checkbox("ReSTIR DI", &g_Renderer.m_EnableReSTIRDI);
+                if (g_Renderer.m_EnableReSTIRDI)
+                {
+                    extern void RTXDIIMGUISettings();
+                    RTXDIIMGUISettings();
+                }
+
                 ImGui::TreePop();
             }
-
-            ImGui::Checkbox("Enable Animations", &g_Renderer.m_EnableAnimations);
 
             ImGui::TreePop();
         }
 
-        // Path Tracer settings
-        if (ImGui::TreeNode("Path Tracer"))
+        // Level of detail: which path draws geometry and how much of it. Both paths keep a forced-level control, so
+        // the two carry the path they belong to in their labels instead of being two identically named sliders in
+        // two different nodes.
+        const ImGuiTreeNodeFlags lodPanelFlags =
+            g_Renderer.m_ClusterDebugMode != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+        const bool bLodPanelOpen = ImGui::TreeNodeEx("Level of Detail", lodPanelFlags);
+        g_Renderer.SetClusterCountersPanelOpen(bLodPanelOpen);
+        if (bLodPanelOpen)
         {
-            int maxBounces = (int)g_Renderer.m_PathTracerMaxBounces;
-            if (ImGui::SliderInt("Max Bounces", &maxBounces, 1, 12))
+            ImGui::Checkbox("Use Meshlet Rendering", &g_Renderer.m_UseMeshletRendering);
+
+            // The cluster switch is live: the DAG is cooked at load time (on by default), so this only chooses
+            // which path draws. A scene cooked with --cluster 0 has no cluster data to draw from, and then there is
+            // nothing to switch to. The worst-case job/group/node counts are clamped to at least one so their
+            // buffers are never empty, so the depth (which has no such clamp) is what tells the two apart.
+            const bool bHasClusterData = g_Renderer.m_Scene.m_MaxClusterTreeDepth > 0;
+            ImGui::BeginDisabled(!bHasClusterData);
+            ImGui::Checkbox("Enable Cluster LOD", &g_Renderer.m_EnableClusterRendering);
+            ImGui::EndDisabled();
+            if (!bHasClusterData)
+                ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
+
+            ImGui::SeparatorText("Cluster traversal");
+            ImGui::SliderFloat("LOD pixel error", &g_Renderer.m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
+            ImGui::SliderInt("Forced cluster LOD", &g_Renderer.m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,
+                g_Renderer.m_ClusterForcedLOD < 0 ? "metric" : "%d");
+
+            int maxClusters = static_cast<int>(g_Renderer.m_ClusterMaxClusters);
+            if (ImGui::DragInt("Max clusters (0 = no cap)", &maxClusters, 512.0f, 0, 1 << 20))
             {
-                g_Renderer.m_PathTracerMaxBounces = (uint32_t)maxBounces;
+                g_Renderer.m_ClusterMaxClusters = static_cast<uint32_t>(std::max(maxClusters, 0));
             }
+
+            // The three cluster views are Debug Modes, so this combo is only the traversal's counter readback.
+            // The copy runs while the counters are on screen, so a closed panel costs nothing.
+            static const char* const kClusterDebugViewNames[] = { "Off", "Traversal Counters" };
+            static constexpr uint32_t kClusterDebugViewModes[] = { 0, 4 };
+
+            int clusterDebugView = 0;
+            for (uint32_t i = 0; i < uint32_t(IM_ARRAYSIZE(kClusterDebugViewNames)); ++i)
+            {
+                if (kClusterDebugViewModes[i] == g_Renderer.m_ClusterDebugMode)
+                    clusterDebugView = int(i);
+            }
+
+            if (ImGui::Combo("Counters", &clusterDebugView, kClusterDebugViewNames, IM_ARRAYSIZE(kClusterDebugViewNames)))
+            {
+                g_Renderer.m_ClusterDebugMode = kClusterDebugViewModes[clusterDebugView];
+            }
+
+            if (g_Renderer.m_ClusterDebugMode != 4)
+            {
+                ImGui::TextDisabled("Pick 'Traversal Counters' above to read the GPU's counters for the traversal.");
+            }
+            else
+            {
+                for (uint32_t bucketIndex = 0; bucketIndex < 2; ++bucketIndex)
+                {
+                    const char* bucketName = bucketIndex == 0 ? "Opaque" : "Masked";
+                    const Scene::BucketInfo& bucket = bucketIndex == 0 ? scene.m_OpaqueBucket : scene.m_MaskedBucket;
+
+                    // A bucket with no instances never runs a traversal, so its counters would stay on "waiting".
+                    if (bucket.m_Count == 0)
+                    {
+                        ImGui::Text("%s: no instances", bucketName);
+                        continue;
+                    }
+
+                    if (!g_Renderer.ClusterCountersValid(bucketIndex))
+                    {
+                        ImGui::Text("%s: (waiting for the first readback)", bucketName);
+                        continue;
+                    }
+
+                    const srrhi::ClusterCounters& counters = g_Renderer.GetClusterCounters(bucketIndex);
+                    ImGui::Text("%s: %u instances, %u nodes, %u groups", bucketName,
+                        counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount);
+                    ImGui::Text("    %u clusters, %u capped", counters.m_ClusterCount, counters.m_ClusterCapped);
+                }
+
+                // The traversal's own scopes, as GpuPassTimers recorded them for the frame the counters came from.
+                float traversalMilliseconds = 0.0f;
+                for (const GpuPassTimers::Entry& entry : g_Renderer.m_GpuPassTimers.GetEntries())
+                {
+                    if (entry.m_Name.rfind("Cluster Traversal", 0) == 0 || entry.m_Name == "Cluster Build Args")
+                        traversalMilliseconds += entry.m_Milliseconds;
+                }
+                ImGui::Text("GPU: %.3f ms", static_cast<double>(traversalMilliseconds));
+            }
+
+            ImGui::SeparatorText("Meshlet path");
+            const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
+            int forcedLODIdx = g_Renderer.m_ForcedLOD + 1;
+            if (ImGui::SliderInt("Forced meshlet LOD", &forcedLODIdx, 0, srrhi::CommonConsts::MAX_LOD_COUNT))
+            {
+                g_Renderer.m_ForcedLOD = forcedLODIdx - 1;
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", lodNames[forcedLODIdx]);
+
             ImGui::TreePop();
         }
 
         // Post-processing settings
         if (ImGui::TreeNode("Post-Processing"))
         {
-            ImGui::Checkbox("Enable Bloom", &g_Renderer.m_EnableBloom);
-            ImGui::Checkbox("Debug Bloom Only", &g_Renderer.m_DebugBloom);
-            ImGui::DragFloat("Bloom Intensity", &g_Renderer.m_BloomIntensity, 0.001f, 0.0f, 1.0f);
-            ImGui::DragFloat("Bloom Knee", &g_Renderer.m_BloomKnee, 0.01f, 0.0f, 1.0f);
-            ImGui::DragFloat("Bloom Threshold", &g_Renderer.m_BloomThreshold, 0.01f, 0.0f, 10.0f);
-            ImGui::DragFloat("Bloom Upsample Radius", &g_Renderer.m_UpsampleRadius, 0.01f, 0.1f, 2.0f);
-
-            ImGui::Separator();
-
-            ImGui::Checkbox("Auto Exposure", &g_Renderer.m_EnableAutoExposure);
-            if (g_Renderer.m_EnableAutoExposure)
+            if (ImGui::TreeNode("Bloom"))
             {
-                ImGui::DragFloat("EV Min", &scene.m_Camera.m_ExposureValueMin, 0.1f, -20.0f, 20.0f);
-                ImGui::DragFloat("EV Max", &scene.m_Camera.m_ExposureValueMax, 0.1f, -20.0f, 20.0f);
-                ImGui::DragFloat("Adaptation Speed", &g_Renderer.m_AdaptationSpeed, 0.1f, 0.0f, 20.0f);
+                ImGui::Checkbox("Enable Bloom", &g_Renderer.m_EnableBloom);
+                ImGui::Checkbox("Debug Bloom Only", &g_Renderer.m_DebugBloom);
+                ImGui::DragFloat("Bloom Intensity", &g_Renderer.m_BloomIntensity, 0.001f, 0.0f, 1.0f);
+                ImGui::DragFloat("Bloom Knee", &g_Renderer.m_BloomKnee, 0.01f, 0.0f, 1.0f);
+                ImGui::DragFloat("Bloom Threshold", &g_Renderer.m_BloomThreshold, 0.01f, 0.0f, 10.0f);
+                ImGui::DragFloat("Bloom Upsample Radius", &g_Renderer.m_UpsampleRadius, 0.01f, 0.1f, 2.0f);
+                ImGui::TreePop();
             }
-            else
+
+            if (ImGui::TreeNode("Exposure"))
             {
-                ImGui::DragFloat("Exposure Value (EV100)", &scene.m_Camera.m_ExposureValue, 0.1f, -20.0f, 20.0f);
-            }
-            ImGui::DragFloat("Exposure Compensation", &scene.m_Camera.m_ExposureCompensation, 0.1f, -10.0f, 10.0f);
-            ImGui::Text("Current Multiplier: %.4f", scene.m_Camera.m_Exposure);
-
-            ImGui::TreePop();
-        }
-
-        // TAA (FSR3) controls
-        if (ImGui::TreeNode("TAA"))
-        {
-            ImGui::Checkbox("Enable TAA", &g_Renderer.m_bTAAEnabled);
-
-            if (g_Renderer.m_bTAAEnabled)
-            {
-                ImGui::Checkbox("Debug View", &g_Renderer.m_bTAADebugView);
-                ImGui::SliderFloat("Sharpness", &g_Renderer.m_TAASharpness, 0.0f, 1.0f);
+                ImGui::Checkbox("Auto Exposure", &g_Renderer.m_EnableAutoExposure);
+                if (g_Renderer.m_EnableAutoExposure)
+                {
+                    ImGui::DragFloat("EV Min", &scene.m_Camera.m_ExposureValueMin, 0.1f, -20.0f, 20.0f);
+                    ImGui::DragFloat("EV Max", &scene.m_Camera.m_ExposureValueMax, 0.1f, -20.0f, 20.0f);
+                    ImGui::DragFloat("Adaptation Speed", &g_Renderer.m_AdaptationSpeed, 0.1f, 0.0f, 20.0f);
+                }
+                else
+                {
+                    ImGui::DragFloat("Exposure Value (EV100)", &scene.m_Camera.m_ExposureValue, 0.1f, -20.0f, 20.0f);
+                }
+                ImGui::DragFloat("Exposure Compensation", &scene.m_Camera.m_ExposureCompensation, 0.1f, -10.0f, 10.0f);
+                ImGui::Text("Current Multiplier: %.4f", scene.m_Camera.m_Exposure);
+                ImGui::TreePop();
             }
 
             ImGui::TreePop();
         }
 
-        // Lights controls
-        if (ImGui::TreeNode("Lights"))
+        // Lighting: the sun's orientation and every light's own settings
+        if (ImGui::TreeNode("Lighting"))
         {
             // the last light is guaranteed to be the sun light
             Scene::Light& sun = scene.m_Lights.back();
@@ -309,6 +385,20 @@ void ImGuiLayer::UpdateFrame()
             }
             ImGui::TreePop();
         }
+        // Anti-aliasing (FSR3): the temporal resolve, kept with the other image-quality settings.
+        if (ImGui::TreeNode("Temporal Anti-Aliasing"))
+        {
+            ImGui::Checkbox("Enable TAA", &g_Renderer.m_bTAAEnabled);
+
+            if (g_Renderer.m_bTAAEnabled)
+            {
+                ImGui::Checkbox("TAA debug view", &g_Renderer.m_bTAADebugView);
+                ImGui::SliderFloat("Sharpness", &g_Renderer.m_TAASharpness, 0.0f, 1.0f);
+            }
+
+            ImGui::TreePop();
+        }
+
         // Camera controls
         if (ImGui::TreeNode("Camera"))
         {
@@ -356,39 +446,39 @@ void ImGuiLayer::UpdateFrame()
                 }
             }
 
-            ImGui::TreePop();
-        }
-
-        // Selected Node Highlight
-        if (ImGui::TreeNode("Node Highlight"))
-        {
-            const char* currentLabel = g_Renderer.m_SelectedNodeIndex == -1 ? "None" : scene.m_Nodes[g_Renderer.m_SelectedNodeIndex].m_Name.c_str();
-
-            if (ImGui::BeginCombo("Highlighted Node", currentLabel))
+            // Highlighting is a viewer aid for the node the camera is looking at, so it belongs with the camera.
+            if (ImGui::TreeNode("Node Highlight"))
             {
-                if (ImGui::Selectable("None", g_Renderer.m_SelectedNodeIndex == -1))
-                    g_Renderer.m_SelectedNodeIndex = -1;
+                const char* currentLabel = g_Renderer.m_SelectedNodeIndex == -1 ? "None" : scene.m_Nodes[g_Renderer.m_SelectedNodeIndex].m_Name.c_str();
 
-                for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+                if (ImGui::BeginCombo("Highlighted Node", currentLabel))
                 {
-                    const Scene::Node& node = scene.m_Nodes[i];
+                    if (ImGui::Selectable("None", g_Renderer.m_SelectedNodeIndex == -1))
+                        g_Renderer.m_SelectedNodeIndex = -1;
 
-                    bool isSelected = (g_Renderer.m_SelectedNodeIndex == i);
-                    const std::string& nodeName = node.m_Name;
-                    std::string label = std::to_string(i) + ": " + (nodeName.empty() ? "Unnamed Node" : nodeName);
+                    for (int i = 0; i < (int)scene.m_Nodes.size(); ++i)
+                    {
+                        const Scene::Node& node = scene.m_Nodes[i];
 
-                    if (ImGui::Selectable(label.c_str(), isSelected))
-                        g_Renderer.m_SelectedNodeIndex = i;
+                        bool isSelected = (g_Renderer.m_SelectedNodeIndex == i);
+                        const std::string& nodeName = node.m_Name;
+                        std::string label = std::to_string(i) + ": " + (nodeName.empty() ? "Unnamed Node" : nodeName);
 
-                    if (isSelected)
-                        ImGui::SetItemDefaultFocus();
+                        if (ImGui::Selectable(label.c_str(), isSelected))
+                            g_Renderer.m_SelectedNodeIndex = i;
+
+                        if (isSelected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
                 }
-                ImGui::EndCombo();
+                ImGui::TreePop();
             }
+
             ImGui::TreePop();
         }
 
-        // Culling controls
+        // Culling controls: both paths' switches, so a validation run can find all of them in one place.
         if (ImGui::TreeNode("Culling"))
         {
             ImGui::Checkbox("Enable Frustum Culling", &g_Renderer.m_EnableFrustumCulling);
@@ -403,107 +493,16 @@ void ImGuiLayer::UpdateFrame()
                 scene.m_FrozenCullingCameraPos = scene.m_Camera.GetPosition();
             }
 
-            ImGui::TreePop();
-        }
+            // The cluster traversal culls from its own bounds, so it keeps its own pair of switches.
+            ImGui::SeparatorText("Cluster traversal");
+            ImGui::Checkbox("Disable Cluster Culling", &g_Renderer.m_ClusterDisableCulling);
 
-        // Cluster LOD: the traversal's switches, plus the counters the GPU wrote for the frame being measured.
-        // The readback is one frame behind, and the copy only runs while the counters are on screen, so a
-        // closed panel or an unselected view costs nothing.
-        const ImGuiTreeNodeFlags clusterPanelFlags =
-            g_Renderer.m_ClusterDebugMode != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
-        const bool bClusterPanelOpen = ImGui::TreeNodeEx("Cluster LOD", clusterPanelFlags);
-        g_Renderer.SetClusterCountersPanelOpen(bClusterPanelOpen);
-        if (bClusterPanelOpen)
-        {
-            // The path switch is live: the cluster DAG is cooked at load time (on by default), so this only chooses
-            // which path draws. A scene cooked with --cluster 0 has no cluster data to draw from, and then there is
-            // nothing to switch to. The worst-case job/group/node counts are clamped to at least one so their
-            // buffers are never empty, so the depth (which has no such clamp) is what tells the two apart.
-            const bool bHasClusterData = g_Renderer.m_Scene.m_MaxClusterTreeDepth > 0;
-            ImGui::BeginDisabled(!bHasClusterData);
-            ImGui::Checkbox("Enable Cluster LOD", &g_Renderer.m_EnableClusterRendering);
-            ImGui::EndDisabled();
-            if (!bHasClusterData)
-                ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
-
-            // The three views that colour or outline the clusters the base pass draws live in the Debug Mode combo,
-            // so they get the debug mode's own settings (no bloom, no auto exposure); this combo keeps the
-            // traversal's counters, which are a readback rather than a view.
-            static const char* const kClusterDebugViewNames[] = { "Off", "Traversal Counters" };
-            static constexpr uint32_t kClusterDebugViewModes[] = { 0, 4 };
-
-            int clusterDebugView = 0;
-            for (uint32_t i = 0; i < uint32_t(IM_ARRAYSIZE(kClusterDebugViewNames)); ++i)
-            {
-                if (kClusterDebugViewModes[i] == g_Renderer.m_ClusterDebugMode)
-                    clusterDebugView = int(i);
-            }
-
-            if (ImGui::Combo("Debug View", &clusterDebugView, kClusterDebugViewNames, IM_ARRAYSIZE(kClusterDebugViewNames)))
-            {
-                g_Renderer.m_ClusterDebugMode = kClusterDebugViewModes[clusterDebugView];
-            }
-
-            ImGui::SliderFloat("Pixel Error", &g_Renderer.m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
-            ImGui::SliderInt("Forced LOD", &g_Renderer.m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,
-                g_Renderer.m_ClusterForcedLOD < 0 ? "metric" : "%d");
-
-            int maxClusters = static_cast<int>(g_Renderer.m_ClusterMaxClusters);
-            if (ImGui::DragInt("Max Clusters (0 = no cap)", &maxClusters, 512.0f, 0, 1 << 20))
-            {
-                g_Renderer.m_ClusterMaxClusters = static_cast<uint32_t>(std::max(maxClusters, 0));
-            }
-
-            ImGui::Checkbox("Disable Culling", &g_Renderer.m_ClusterDisableCulling);
-
-            const bool bPrevFreeze = g_Renderer.m_ClusterFreezeCullingCamera;
-            ImGui::Checkbox("Freeze Culling Camera", &g_Renderer.m_ClusterFreezeCullingCamera);
-            if (!bPrevFreeze && g_Renderer.m_ClusterFreezeCullingCamera)
+            const bool bPrevClusterFreeze = g_Renderer.m_ClusterFreezeCullingCamera;
+            ImGui::Checkbox("Freeze Cluster Culling Camera", &g_Renderer.m_ClusterFreezeCullingCamera);
+            if (!bPrevClusterFreeze && g_Renderer.m_ClusterFreezeCullingCamera)
             {
                 scene.m_FrozenCullingViewMatrix = scene.m_Camera.GetViewMatrix();
                 scene.m_FrozenCullingCameraPos = scene.m_Camera.GetPosition();
-            }
-
-            ImGui::Separator();
-
-            if (g_Renderer.m_ClusterDebugMode != 4)
-            {
-                ImGui::TextDisabled("Pick 'Traversal Counters' above to read the GPU's counters for the traversal.");
-            }
-            else
-            {
-                for (uint32_t bucketIndex = 0; bucketIndex < 2; ++bucketIndex)
-                {
-                    const char* bucketName = bucketIndex == 0 ? "Opaque" : "Masked";
-                    const Scene::BucketInfo& bucket = bucketIndex == 0 ? scene.m_OpaqueBucket : scene.m_MaskedBucket;
-
-                    // A bucket with no instances never runs a traversal, so its counters would stay on "waiting".
-                    if (bucket.m_Count == 0)
-                    {
-                        ImGui::Text("%s: no instances", bucketName);
-                        continue;
-                    }
-
-                    if (!g_Renderer.ClusterCountersValid(bucketIndex))
-                    {
-                        ImGui::Text("%s: (waiting for the first readback)", bucketName);
-                        continue;
-                    }
-
-                    const srrhi::ClusterCounters& counters = g_Renderer.GetClusterCounters(bucketIndex);
-                    ImGui::Text("%s: %u instances, %u nodes, %u groups", bucketName,
-                        counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount);
-                    ImGui::Text("    %u clusters, %u capped", counters.m_ClusterCount, counters.m_ClusterCapped);
-                }
-
-                // The traversal's own scopes, as GpuPassTimers recorded them for the frame the counters came from.
-                float traversalMilliseconds = 0.0f;
-                for (const GpuPassTimers::Entry& entry : g_Renderer.m_GpuPassTimers.GetEntries())
-                {
-                    if (entry.m_Name.rfind("Cluster Traversal", 0) == 0 || entry.m_Name == "Cluster Build Args")
-                        traversalMilliseconds += entry.m_Milliseconds;
-                }
-                ImGui::Text("GPU: %.3f ms", static_cast<double>(traversalMilliseconds));
             }
 
             ImGui::TreePop();
@@ -551,7 +550,7 @@ void ImGuiLayer::UpdateFrame()
             // The classification view is mode 1; the micromap grid and the candidate heatmap are not implemented.
             static const char* kDebugViews[] = { "Off", "Texel classification" };
             int debugMode = std::min(g_Renderer.m_OmmDebugMode, 1);
-            if (ImGui::Combo("Debug view", &debugMode, kDebugViews, IM_ARRAYSIZE(kDebugViews)))
+            if (ImGui::Combo("OMM debug view", &debugMode, kDebugViews, IM_ARRAYSIZE(kDebugViews)))
             {
                 g_Renderer.m_OmmDebugMode = debugMode;
                 g_Renderer.m_bOmmDebugDirty = true;
@@ -811,6 +810,17 @@ void ImGuiLayer::UpdateFrame()
         if (ImGui::TreeNode("Texture Streaming"))
         {
             const nvfeedback::FeedbackManagerStats& stats = g_Renderer.m_FeedbackManager->GetStats();
+
+            // The sample override and the packed-mips switch are the two controls that make the stats below move on
+            // demand, so they sit above the numbers rather than with the rendering features.
+            static const char* kMipNames[] = { "Auto", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15" };
+            int forcedMipIdx = g_Renderer.m_ForcedTextureMip + 1;
+            if (ImGui::SliderInt("Forced texture mip", &forcedMipIdx, 0, 16))
+            {
+                g_Renderer.m_ForcedTextureMip = forcedMipIdx - 1;
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", kMipNames[forcedMipIdx]);
 
             // Test switch: stream every standard tile out so only the packed (mip-tail) levels stay
             // resident; "Heap Allocated" and the VRAM readout below should drop within a second.
