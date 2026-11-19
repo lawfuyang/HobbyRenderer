@@ -69,11 +69,13 @@ void ImGuiLayer::UpdateFrame()
 
     if (ImGui::BeginMainMenuBar())
     {
-        ImGui::Text("FPS: %.1f", g_Renderer.m_FPS);
+        // The readouts change every frame, so each value is padded to a fixed field: the default font is fixed
+        // pitch, which keeps the numbers from shifting and the separators from sliding as digits come and go.
+        ImGui::Text("FPS: %7.1f", g_Renderer.m_FPS);
         ImGui::Separator();
-        ImGui::Text("CPU Time: %.3f ms", g_Renderer.m_FrameTime);
+        ImGui::Text("CPU Time: %8.3f ms", g_Renderer.m_FrameTime);
         ImGui::Separator();
-        ImGui::Text("VRAM: %.1f MB", g_Renderer.m_RHI->GetVRAMUsageMB());
+        ImGui::Text("VRAM: %8.1f MB", g_Renderer.m_RHI->GetVRAMUsageMB());
         ImGui::EndMainMenuBar();
     }
 
