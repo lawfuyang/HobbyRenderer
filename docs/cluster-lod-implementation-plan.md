@@ -615,9 +615,9 @@ The bunny's cut passes the edge check at every level and follows the camera: 1 6
 carries `Cluster Traversal Preparation` / `Run` / `Build Args` for both buckets followed by
 `Base Pass Render (Phase 1)` with a single dispatch, `deps` reports no read-before-write on any
 `*_Cluster*` resource, and `hazards` reports 8 findings, all of them the pre-existing HZB and
-RTXDI/OpaqueColor ones (none on a cluster buffer). PIX could not capture this frame: the capturer aborts with
-"Invalid/Uninitialized descriptor used in command list event", on the legacy draw path as well, so T1–T3 are
-not measured yet.
+RTXDI/OpaqueColor ones (none on a cluster buffer). PIX emits "Invalid/Uninitialized descriptor used in command
+list event" on this scene (the capturer's sampler-feedback blind spot, see `docs/pix-capture-debugging.md` §6)
+but the capture is still written and replays cleanly, so it is usable.
 
 What the traversal costs, from the panel's own GPU timer queries at the Bistro camera above: **0.31 ms** for
 both buckets (opaque 14 279 clusters, masked 5 421, culling on the previous frame's HZB). Frame rate on the
@@ -626,33 +626,67 @@ Debug is CPU-bound (17.4 ms CPU per frame), and the cluster path deliberately dr
 culling and its per-meshlet sort, so this is a shape check, not T2. A trustworthy T2/T3 needs the PIX capture
 above or a Release run with the GPU timers, which is the first item of phase 3's follow-up work.
 
-### Phase 3 — Masked bucket (Transparent stays legacy)
+### Phase 3 — Masked bucket (Transparent stays legacy) — **landed**
 
 **Goal**: the cluster path serves Opaque **and** Masked. Transparent is deliberately left alone until OIT.
 
 Tasks
 
-1. Masked: reuse the existing `ALPHATEST` PS variant; per-triangle material palette from the cluster
-   blob (a cluster mixes at most 2–3 materials in practice); keep the stencil write.
-2. Leave `TransparentPassRenderer` untouched: vertex-shader path, `drawIndexedIndirect` from
-   `GPUCulling`, per-instance LOD kept for that bucket only. Record the reason in the code comment —
-   correct blending needs a sorted surface order that a per-cluster mesh-shader list cannot give, and
-   OIT will replace the bucket anyway.
-3. Per-bucket cluster buffers for Opaque and Masked only (each bucket already owns a
-   `BasePassResources`); note the memory trade-off in the code comment and keep `m_ClusterMaxClusters`
-   per bucket.
+1. Masked: reuse the existing `ALPHATEST` PS variant and keep the stencil write. The per-triangle material
+   palette the task originally called for turned out to be unnecessary: a cluster belongs to exactly one
+   instance, and the base pass already resolves that instance's material per draw, so a mixed-material cluster
+   cannot arise. `RenderInstances` picks `psID = ALPHATEST` when `ALPHA_MODE_MASK` and feeds the same
+   `renderState` (stencil replace, ref 1) to `clusterPipelineDesc` as to the legacy pipeline.
+2. `TransparentPassRenderer` is untouched apart from the comment that records why: vertex-shader path,
+   `drawIndexedIndirect` from `GPUCulling`, per-instance LOD kept for that bucket only, because correct
+   blending needs a sorted surface order that a per-cluster mesh-shader list cannot give and OIT will replace
+   the bucket anyway. `bDrawClusters` is `g_Renderer.m_EnableClusterRendering && !bUseAlphaBlend`, so the
+   cluster block is dead for `ALPHA_MODE_BLEND`.
+3. Per-bucket cluster buffers. `Scene` carries `m_MaxClusterJobCount` / `m_MaxClusterGroupCount` /
+   `m_MaxClusterNodeCount` **per bucket** (`kClusterBucketOpaque`, `kClusterBucketMasked`), computed in
+   `FinalizeLoadedScene()` by walking both bucket infos and clamped with `std::max(count, 1u)`. Each bucket
+   sizes its own structured buffers from its own worst case, so a bucket cannot borrow another's headroom - the
+   trade-off is more total memory for exact capacity. `m_ClusterMaxClusters` therefore stays a *global debug
+   clamp* rather than a capacity: each bucket's job buffer is already exact. `DeclareResources` takes the
+   bucket index (`-1` = legacy/no cluster buffers) and `PerformClusterTraversal` derives it once from
+   `args.m_AlphaMode`.
 
-Validation
+Validation (Debug build, 1080p, TAA/RTXDI/denoise/sky off, frame 40, `ab_scene.ps1`)
 
-* **V3.1** masked: `--cluster-force-lod 0` vs legacy masked path, max diff ≤ 1; then the pixel-error
-  cut with the same no-holes/no-double-surfaces checks as V2.2.
-* **V3.2** transparent is **unchanged**: the transparent pixels of a frame before and after the cluster
-  work must be bit-identical at the same camera with TAA/RTXDI off (the bucket runs the same code and
-  the same per-instance LOD as the baseline).
-* **V3.3** stencil: opaque stencil writes still happen (check via `rdc-tools` depth/stencil views).
+* **V3.1** masked, forced level 0 against the legacy path: Sponza **0 px differ** (max 0); Bistro
+  **205 px = 0.0099 %** of 2.07 M, max channel delta 133; FlyingWorld (5 BLEND materials) 23 px = 0.0011 %,
+  max 177. The residue is on masked foliage edges where the two paths' triangle order differs under
+  `ALPHATEST`, not a missing or doubled surface.
+* **V3.1b** counters agree per bucket: Sponza opaque 1 911 / masked 303 and Bistro opaque 24 929 /
+  masked 9 210, GPU and CPU cut both `(match)`.
+* **V3.2** transparent is unchanged. It cannot be measured as a pixel test in this harness (the shared
+  lighting noise floor is ±1 on ~10 % of pixels even with both runs forced to level 0, and the opaque
+  G-buffer feeds the transparent depth test). The defensible evidence: `git diff` touches
+  `TransparentPassRenderer` only in a comment; `bDrawClusters` is false for `ALPHA_MODE_BLEND`; and `deps` on
+  the cluster capture shows the traversal writing only `*_Cluster*` buffers - `TransparentPass_VisibleIndirect`
+  is written by `GPUCulling` alone (5 times) and `Scene_InstanceLODBuffer` is not written by any cluster
+  dispatch.
+* **V3.3** stencil. `rdc-tools` cannot read depth-stencil state (`psos` prints kind/shader hashes only, and the
+  PSO descriptors are not in the chunk stream it decodes), so this closes on consumer evidence instead: the
+  deferred lighting pass draws with `stencilEnable`/`StencilFunc::Equal`/`refValue = 1`, i.e. a masked pixel
+  whose stencil was not written renders *unlit*, and Bistro's 9 210 masked clusters land in the 0.0099 % of
+  V3.1. `stencilEnable` is also part of the PSO cache hash, so a cluster PSO with and without the stencil
+  write can never alias.
 
-Gate **M3**: V3.1–V3.3 green; Opaque and Masked draw through `ClusterBasePass` with the master toggle
-on, Transparent is untouched, and the legacy meshlet path remains selectable for A/B.
+PIX, `bin/captures/bistro-frame40.wpix` (520 MB, `--pix-capture-frame 40`, this build): replays with exit 0;
+the event list holds `Cluster Traversal Preparation` / `Run` / `Build Args` for **both** buckets, then
+`Base Pass Render (Phase 1) - Opaque`, `- Masked` and `- Transparent`. Hardware counters put the whole
+cluster traversal (all four dispatch kinds, both buckets, Bistro) at **0.289 ms** of a 37.6 ms timed frame:
+`Run` 0.172, `Groups` 0.071, `Init` 0.027, `BuildArgs` 0.020. For scale in the same frame: `Opaque Renderer`
+6.43 ms, `Base Pass Render (Phase 1) - Opaque` 2.92 ms, `MaskedPass` 0.92 ms, `TransparentPass` 0.58 ms.
+
+Two `pixtool` gotchas found while doing this, both now in `docs/pix-capture-debugging.md` §6: an unsupported
+counter name in the request (e.g. `gpu__cycles_elapsed.avg.per_second`) silently empties **every** counter
+cell of the CSV, and PIX writes a leading space in every header and cell, which `Import-Csv` tolerates and
+Python's `csv` does not.
+
+Gate **M3**: green. Opaque and Masked both draw through the cluster path with the master toggle on,
+Transparent is untouched, and the legacy meshlet path is still selectable for A/B.
 
 ### Phase 4 — Two-pass culling with reject lists
 
