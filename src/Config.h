@@ -50,7 +50,7 @@ struct Config
     // Cluster traversal (phase 1). The values mirror the ImGui controls so a capture run can be scripted.
     float m_ClusterPixelError = 1.0f;
     int m_ClusterForcedLOD = -1;      // -1 = from the metric, >= 0 = one level for every instance
-    int m_ClusterMaxClusters = 0;     // 0 = scene-derived
+    int m_ClusterMaxClusters = 0;     // 0 = no clamp; each bucket's buffers are sized by its own worst case
     bool m_ClusterDisableCulling = false;
     uint32_t m_ClusterDebugMode = 0;
     bool m_ClusterFreezeCulling = false;

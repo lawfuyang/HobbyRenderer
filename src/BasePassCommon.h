@@ -29,7 +29,8 @@ struct BasePassResources
     nvrhi::PipelineStatisticsQueryHandle m_PipelineQueries[2];
 
     void Initialize();
-    // bTraversesClusters: only the buckets that run a cluster traversal declare its buffers, so the transparent
-    // pass does not pay for a visible-cluster list it never builds.
-    void DeclareResources(RenderGraph& rg, std::string_view rendererName, bool bTraversesClusters = false);
+    // clusterBucket: which bucket's cluster traversal buffers to declare (-1, Scene::kClusterBucketNone, for a
+    // bucket that does not traverse). Only the traversing buckets pay for the buffers, and each is sized by its
+    // own worst case rather than the scene's.
+    void DeclareResources(RenderGraph& rg, std::string_view rendererName, int clusterBucket = -1);
 };

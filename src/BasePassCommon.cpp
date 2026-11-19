@@ -20,7 +20,7 @@ void BasePassResources::Initialize()
     m_PipelineQueries[1] = g_Renderer.m_RHI->m_NvrhiDevice->createPipelineStatisticsQuery();
 }
 
-void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rendererName, bool bTraversesClusters)
+void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rendererName, int clusterBucket)
 {
     uint32_t numPrimitives = (uint32_t)g_Renderer.m_Scene.m_InstanceData.size();
     numPrimitives = std::max(numPrimitives, 1u); // avoid zero-sized buffers
@@ -132,16 +132,24 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
         }
     }
 
-    if (g_Renderer.m_EnableClusterRendering && bTraversesClusters)
+    if (g_Renderer.m_EnableClusterRendering && clusterBucket >= 0)
     {
         const Scene& scene = g_Renderer.m_Scene;
+        SDL_assert(clusterBucket < int(Scene::kClusterBucketCount));
+
+        // The traversal's transient buffers are per bucket, so they are sized by that bucket's own worst case
+        // (Scene::FinalizeLoadedScene). Sizing them from the scene-wide bound instead would reserve the opaque
+        // bucket's capacity a second time for the masked bucket, which is typically a small fraction of it: the
+        // trade-off is that a bucket cannot borrow another's headroom, which is what a per-bucket
+        // m_ClusterMaxClusters in the traversal constants already assumes.
+        const uint32_t bucket = uint32_t(clusterBucket);
 
         // The queues are sized by the worst case computed in Scene::FinalizeLoadedScene(): every instance
         // visiting every node / group of its primitive.
         for (uint32_t i = 0; i < 2; ++i)
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterNodeCount * sizeof(srrhi::ClusterNodeRef))
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterNodeCount[bucket] * sizeof(srrhi::ClusterNodeRef))
                 .setStructStride(sizeof(srrhi::ClusterNodeRef))
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
@@ -166,7 +174,7 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterGroupCount * sizeof(srrhi::ClusterGroupRef))
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterGroupCount[bucket] * sizeof(srrhi::ClusterGroupRef))
                 .setStructStride(sizeof(srrhi::ClusterGroupRef))
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
@@ -190,7 +198,7 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterJobCount * sizeof(srrhi::ClusterJob))
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterJobCount[bucket] * sizeof(srrhi::ClusterJob))
                 .setStructStride(sizeof(srrhi::ClusterJob))
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)

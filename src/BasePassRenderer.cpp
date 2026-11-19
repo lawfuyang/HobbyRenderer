@@ -403,6 +403,10 @@ protected:
             g_Renderer.AddComputePass(params);
         };
 
+        // Both traversal blocks are opaque-or-masked, and each bucket's bounds come from its own instances.
+        const uint32_t bucketIndex = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE ?
+            Scene::kClusterBucketOpaque : Scene::kClusterBucketMasked;
+
         {
             PROFILE_GPU_SCOPED("Cluster Traversal Preparation", commandList);
 
@@ -414,7 +418,7 @@ protected:
         {
             PROFILE_GPU_SCOPED("Cluster Traversal Run", commandList);
 
-            const uint32_t nodeGridX = DivideAndRoundUp(scene.m_MaxClusterNodeCount, srrhi::CommonConsts::kThreadsPerGroup);
+            const uint32_t nodeGridX = DivideAndRoundUp(scene.m_MaxClusterNodeCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup);
 
             // One pass per tree level. The grid is the worst case because a pass cannot know its own count
             // before it runs; every idle thread exits on the first read of the counter.
@@ -429,7 +433,7 @@ protected:
             }
 
             dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALGROUPS_CSMAIN, 0u, 1u,
-                DivideAndRoundUp(scene.m_MaxClusterGroupCount, srrhi::CommonConsts::kThreadsPerGroup));
+                DivideAndRoundUp(scene.m_MaxClusterGroupCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup));
         }
 
         {
@@ -439,12 +443,11 @@ protected:
         }
 
         // One readback per bucket: both blocks traverse every frame and each has its own counters buffer.
-        const uint32_t bucketIndex = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE ? 0u : 1u;
-
+        SDL_assert(bucketIndex < Scene::kClusterBucketCount);
         if (Config::Get().m_ClusterStatsFrame == int(g_Renderer.m_FrameNumber))
         {
             g_Renderer.RequestClusterCountersReadback(handles.clusterCounters, commandList, bucketIndex,
-                bucketIndex == 0 ? "Opaque" : "Masked", focalPixels);
+                bucketIndex == Scene::kClusterBucketOpaque ? "Opaque" : "Masked", focalPixels);
         }
 
         if (g_Renderer.IsClusterCountersLive())
@@ -779,7 +782,7 @@ public:
     bool Setup(RenderGraph& renderGraph) override
     {
         BasePassResources& res = m_BasePassResources;
-        res.DeclareResources(renderGraph, GetName(), true);
+        res.DeclareResources(renderGraph, GetName(), Scene::kClusterBucketOpaque);
 
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
@@ -904,7 +907,7 @@ public:
         
 
         BasePassResources& res = m_BasePassResources;
-        res.DeclareResources(renderGraph, GetName(), true);
+        res.DeclareResources(renderGraph, GetName(), Scene::kClusterBucketMasked);
 
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
@@ -1003,6 +1006,13 @@ public:
 class TransparentPassRenderer : public BasePassRendererBase
 {
 public:
+    // The transparent bucket stays on the vertex-shader path, on purpose:
+    // - Correct blending needs a back-to-front surface order, and a per-cluster mesh-shader list is unordered: the
+    //   clusters would blend into each other in whatever order the traversal happened to append them.
+    // - The bucket is where per-instance LOD still makes sense: one instance is one draw, so it can be sorted and
+    //   LOD'd as a whole without splitting it into clusters.
+    // Phase 5's geometry streaming and the OIT pass this bucket is slated for will replace it; until then it runs
+    // the same code and the same per-instance LOD as the pre-cluster baseline, which is what V3.2 checks.
     bool Setup(RenderGraph& renderGraph) override
     {
         

@@ -414,25 +414,36 @@ void Scene::FinalizeLoadedScene()
 			clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
 	}
 
-	m_MaxClusterJobCount = 0;
-	m_MaxClusterGroupCount = 0;
-	m_MaxClusterNodeCount = 0;
+	// Bounded per bucket rather than over the whole scene: each bucket owns its own traversal buffers, and the
+	// masked bucket is usually a small fraction of the opaque one, so a scene-wide bound would reserve that
+	// capacity a second time (see BasePassResources::DeclareResources for the trade-off this buys).
+	const BucketInfo* const bucketInfos[kClusterBucketCount] = { &m_OpaqueBucket, &m_MaskedBucket };
 	m_MaxClusterTreeDepth = 0;
-	for (const srrhi::PerInstanceData& inst : m_InstanceData)
+	for (uint32_t bucket = 0; bucket < kClusterBucketCount; ++bucket)
 	{
-		const auto it = clustersByMeshData.find(inst.m_MeshDataIndex);
-		if (it == clustersByMeshData.end())
-			continue;
+		uint32_t jobCount = 0;
+		uint32_t groupCount = 0;
+		uint32_t nodeCount = 0;
 
-		const ClusterLod::Counts counts = ClusterLod::GetCounts(*it->second);
-		m_MaxClusterJobCount += counts.m_ClusterCount;
-		m_MaxClusterGroupCount += counts.m_GroupCount;
-		m_MaxClusterNodeCount += counts.m_NodeCount;
-		m_MaxClusterTreeDepth = std::max(m_MaxClusterTreeDepth, counts.m_MaxTreeDepth);
+		for (uint32_t i = 0; i < bucketInfos[bucket]->m_Count; ++i)
+		{
+			const srrhi::PerInstanceData& inst = m_InstanceData[bucketInfos[bucket]->m_BaseIndex + i];
+			const auto it = clustersByMeshData.find(inst.m_MeshDataIndex);
+			if (it == clustersByMeshData.end())
+				continue;
+
+			const ClusterLod::Counts counts = ClusterLod::GetCounts(*it->second);
+			jobCount += counts.m_ClusterCount;
+			groupCount += counts.m_GroupCount;
+			nodeCount += counts.m_NodeCount;
+			m_MaxClusterTreeDepth = std::max(m_MaxClusterTreeDepth, counts.m_MaxTreeDepth);
+		}
+
+		// At least one: these size structured buffers, and a zero-sized one is invalid.
+		m_MaxClusterJobCount[bucket] = std::max(jobCount, 1u);
+		m_MaxClusterGroupCount[bucket] = std::max(groupCount, 1u);
+		m_MaxClusterNodeCount[bucket] = std::max(nodeCount, 1u);
 	}
-	m_MaxClusterJobCount = std::max(m_MaxClusterJobCount, 1u);
-	m_MaxClusterGroupCount = std::max(m_MaxClusterGroupCount, 1u);
-	m_MaxClusterNodeCount = std::max(m_MaxClusterNodeCount, 1u);
 
 	m_SceneBoundingSphere = DirectX::BoundingSphere{};
 	for (const Scene::Node& node : m_Nodes)

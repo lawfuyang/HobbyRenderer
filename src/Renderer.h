@@ -411,7 +411,10 @@ public:
     // run can be scripted or A/B'd the way the panel does it.
     float m_ClusterPixelError = 1.0f;
     int m_ClusterForcedLOD = -1;     // -1 = pick per group from the metric, >= 0 = force one level
-    uint32_t m_ClusterMaxClusters = 0; // 0 = the scene-derived worst case
+    // Debug clamp on the visible-cluster list, applied to each bucket's traversal. 0 = no clamp: the job buffer is
+    // already sized by that bucket's own worst case (Scene::m_MaxClusterJobCount), so an unclamped run cannot
+    // overrun it and the two buckets do not compete for the same headroom.
+    uint32_t m_ClusterMaxClusters = 0;
     bool m_ClusterDisableCulling = false;
     bool m_ClusterFreezeCullingCamera = false;
     uint32_t m_ClusterDebugMode = 0;
