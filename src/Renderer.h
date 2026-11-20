@@ -301,6 +301,11 @@ public:
     // ─── Queries ───
 
     double GetFrameTimeMs() const { return m_FrameTime; }
+
+    // Every top-level GPU scope of the last resolved frame added up: a renderer's dispatches are recorded with
+    // that renderer as their group and already sit inside its own scope, so the empty-group entries are exactly
+    // the outer scopes. One frame behind, like every other value the timer queries produce.
+    float GetTotalGpuTimeMs() const;
     void SetCameraFromSceneCamera(const Scene::Camera& sceneCam);
 
     // Returns the swapchain extent (width, height) as a pair.

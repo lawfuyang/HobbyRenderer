@@ -1582,6 +1582,19 @@ void Renderer::ScheduleAndRunAllRenderers()
     m_RenderGraph.Compile();
 }
 
+float Renderer::GetTotalGpuTimeMs() const
+{
+    const uint32_t frame = m_GpuPassTimers.GetLastResolvedFrame();
+
+    float total = 0.0f;
+    for (const GpuPassTimers::Entry& entry : m_GpuPassTimers.GetEntries())
+    {
+        if (entry.m_Frame == frame && entry.m_Group.empty())
+            total += entry.m_Milliseconds;
+    }
+    return total;
+}
+
 void Renderer::SetCameraFromSceneCamera(const Scene::Camera& sceneCam)
 {
     if (sceneCam.m_NodeIndex >= 0 && sceneCam.m_NodeIndex < static_cast<int>(m_Scene.m_Nodes.size()))

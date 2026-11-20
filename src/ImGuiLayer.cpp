@@ -75,6 +75,10 @@ void ImGuiLayer::UpdateFrame()
         ImGui::Separator();
         ImGui::Text("CPU Time: %8.3f ms", g_Renderer.m_FrameTime);
         ImGui::Separator();
+        // Summed from the frame's top-level GPU scopes, so it is the timed GPU work of a whole frame rather than
+        // one pass, and it arrives one frame late like every other timer-query value.
+        ImGui::Text("GPU Time: %8.3f ms", static_cast<double>(g_Renderer.GetTotalGpuTimeMs()));
+        ImGui::Separator();
         ImGui::Text("VRAM: %8.1f MB", g_Renderer.m_RHI->GetVRAMUsageMB());
         ImGui::EndMainMenuBar();
     }
