@@ -116,7 +116,7 @@ void ImGuiLayer::UpdateFrame()
             "Cluster Bounds",
             "Triangles"
         };
-        ImGui::Combo("Debug Mode", &g_Renderer.m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
+        ImGui::Combo("Debug Mode", &Config::Get().m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
 
         // Rendering options
         if (ImGui::TreeNode("Rendering"))
@@ -206,7 +206,7 @@ void ImGuiLayer::UpdateFrame()
         // the two carry the path they belong to in their labels instead of being two identically named sliders in
         // two different nodes.
         const ImGuiTreeNodeFlags lodPanelFlags =
-            g_Renderer.m_ClusterDebugMode != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+            Config::Get().m_ClusterDebugMode != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
         const bool bLodPanelOpen = ImGui::TreeNodeEx("Level of Detail", lodPanelFlags);
         g_Renderer.SetClusterCountersPanelOpen(bLodPanelOpen);
         if (bLodPanelOpen)
@@ -225,19 +225,19 @@ void ImGuiLayer::UpdateFrame()
                 ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
 
             ImGui::SeparatorText("Cluster traversal");
-            ImGui::SliderFloat("LOD pixel error", &g_Renderer.m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
-            ImGui::SliderInt("Forced cluster LOD", &g_Renderer.m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,
-                g_Renderer.m_ClusterForcedLOD < 0 ? "metric" : "%d");
+            ImGui::SliderFloat("LOD pixel error", &Config::Get().m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
+            ImGui::SliderInt("Forced cluster LOD", &Config::Get().m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,
+                Config::Get().m_ClusterForcedLOD < 0 ? "metric" : "%d");
 
-            int maxClusters = static_cast<int>(g_Renderer.m_ClusterMaxClusters);
+            int maxClusters = Config::Get().m_ClusterMaxClusters;
             if (ImGui::DragInt("Max clusters (0 = no cap)", &maxClusters, 512.0f, 0, 1 << 20))
             {
-                g_Renderer.m_ClusterMaxClusters = static_cast<uint32_t>(std::max(maxClusters, 0));
+                Config::Get().m_ClusterMaxClusters = std::max(maxClusters, 0);
             }
 
             // Needs both buckets' depth to be worth re-testing, so it reads as off when occlusion culling is off.
             ImGui::BeginDisabled(!g_Renderer.m_EnableOcclusionCulling);
-            ImGui::Checkbox("Two-pass culling", &g_Renderer.m_ClusterTwoPass);
+            ImGui::Checkbox("Two-pass culling", &Config::Get().m_ClusterTwoPass);
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
@@ -254,16 +254,16 @@ void ImGuiLayer::UpdateFrame()
             int clusterDebugView = 0;
             for (uint32_t i = 0; i < uint32_t(IM_ARRAYSIZE(kClusterDebugViewNames)); ++i)
             {
-                if (kClusterDebugViewModes[i] == g_Renderer.m_ClusterDebugMode)
+                if (kClusterDebugViewModes[i] == Config::Get().m_ClusterDebugMode)
                     clusterDebugView = int(i);
             }
 
             if (ImGui::Combo("Counters", &clusterDebugView, kClusterDebugViewNames, IM_ARRAYSIZE(kClusterDebugViewNames)))
             {
-                g_Renderer.m_ClusterDebugMode = kClusterDebugViewModes[clusterDebugView];
+                Config::Get().m_ClusterDebugMode = kClusterDebugViewModes[clusterDebugView];
             }
 
-            if (g_Renderer.m_ClusterDebugMode != 4)
+            if (Config::Get().m_ClusterDebugMode != 4)
             {
                 ImGui::TextDisabled("Pick 'Traversal Counters' above to read the GPU's counters for the traversal.");
             }
@@ -307,10 +307,10 @@ void ImGuiLayer::UpdateFrame()
 
             ImGui::SeparatorText("Meshlet path");
             const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
-            int forcedLODIdx = g_Renderer.m_ForcedLOD + 1;
+            int forcedLODIdx = Config::Get().m_ForcedLOD + 1;
             if (ImGui::SliderInt("Forced meshlet LOD", &forcedLODIdx, 0, srrhi::CommonConsts::MAX_LOD_COUNT))
             {
-                g_Renderer.m_ForcedLOD = forcedLODIdx - 1;
+                Config::Get().m_ForcedLOD = forcedLODIdx - 1;
             }
             ImGui::SameLine();
             ImGui::Text("%s", lodNames[forcedLODIdx]);
@@ -514,11 +514,11 @@ void ImGuiLayer::UpdateFrame()
 
             // The cluster traversal culls from its own bounds, so it keeps its own pair of switches.
             ImGui::SeparatorText("Cluster traversal");
-            ImGui::Checkbox("Disable Cluster Culling", &g_Renderer.m_ClusterDisableCulling);
+            ImGui::Checkbox("Disable Cluster Culling", &Config::Get().m_ClusterDisableCulling);
 
-            const bool bPrevClusterFreeze = g_Renderer.m_ClusterFreezeCullingCamera;
-            ImGui::Checkbox("Freeze Cluster Culling Camera", &g_Renderer.m_ClusterFreezeCullingCamera);
-            if (!bPrevClusterFreeze && g_Renderer.m_ClusterFreezeCullingCamera)
+            const bool bPrevClusterFreeze = Config::Get().m_ClusterFreezeCulling;
+            ImGui::Checkbox("Freeze Cluster Culling Camera", &Config::Get().m_ClusterFreezeCulling);
+            if (!bPrevClusterFreeze && Config::Get().m_ClusterFreezeCulling)
             {
                 scene.m_FrozenCullingViewMatrix = scene.m_Camera.GetViewMatrix();
                 scene.m_FrozenCullingCameraPos = scene.m_Camera.GetPosition();
@@ -577,9 +577,9 @@ void ImGuiLayer::UpdateFrame()
 
             if (g_Renderer.m_OmmDebugMode == 1)
             {
-                if (ImGui::SliderInt("Primitive", &g_Renderer.m_OmmDebugPrimitive, 0, std::max(0, primitiveCount - 1)))
+                if (ImGui::SliderInt("Primitive", &Config::Get().m_OmmDebugPrimitive, 0, std::max(0, primitiveCount - 1)))
                     g_Renderer.m_bOmmDebugDirty = true;
-                if (ImGui::SliderInt("Alpha mip", &g_Renderer.m_OmmDebugMip, 0, 6))
+                if (ImGui::SliderInt("Alpha mip", &Config::Get().m_OmmDebugMip, 0, 6))
                     g_Renderer.m_bOmmDebugDirty = true;
                 ImGui::Checkbox("Mixed only", &g_Renderer.m_bOmmShowOnlyMixed);
                 if (ImGui::Button("Refresh"))

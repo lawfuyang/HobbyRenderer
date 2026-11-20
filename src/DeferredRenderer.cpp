@@ -70,7 +70,7 @@ public:
         dcb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
         // RT shadows are ray-traced against the scene TLAS
         dcb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
-        dcb.SetDebugMode(g_Renderer.m_DebugMode);
+        dcb.SetDebugMode(Config::Get().m_DebugMode);
         dcb.SetUseReSTIRDI(g_Renderer.m_EnableReSTIRDI ? 1u : 0u);
         dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
         dcb.SetIndirectLightingMode(g_Renderer.m_IndirectLightingTechnique);

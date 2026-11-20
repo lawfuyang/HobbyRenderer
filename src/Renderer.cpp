@@ -425,15 +425,6 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
     m_EnableClusterRendering = Config::Get().m_ClusterDrawEnabled < 0 ? Config::Get().m_EnableClusterLod
                                                                      : Config::Get().m_ClusterDrawEnabled != 0;
-    m_ClusterPixelError = Config::Get().m_ClusterPixelError;
-    m_ClusterForcedLOD = Config::Get().m_ClusterForcedLOD;
-    m_ClusterMaxClusters = uint32_t(std::max(Config::Get().m_ClusterMaxClusters, 0));
-    m_ClusterDisableCulling = Config::Get().m_ClusterDisableCulling;
-    m_ClusterFreezeCullingCamera = Config::Get().m_ClusterFreezeCulling;
-    m_ClusterDebugMode = Config::Get().m_ClusterDebugMode;
-    m_ClusterTwoPass = Config::Get().m_ClusterTwoPass;
-    m_ForcedLOD = Config::Get().m_ForcedLOD;
-    m_DebugMode = Config::Get().m_DebugMode;
     if (Config::Get().m_bNoRTShadows)
         m_EnableRTShadows = false;
     if (Config::Get().m_bNoTAA)
@@ -441,8 +432,6 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
     {
         m_OmmDebugMode = 1;
-        m_OmmDebugPrimitive = std::max(Config::Get().m_OmmDebugPrimitive, 0);
-        m_OmmDebugMip = Config::Get().m_OmmDebugMip;
     }
     SDL_Log("[Init] Opacity micromaps: %s", m_bOmmSupported ? (m_bEnableOmm ? "supported" : "supported, disabled")
                                                             : "unsupported");
@@ -1391,7 +1380,7 @@ void Renderer::ApplyRenderingModeDefaults(RenderingMode mode)
 
 void Renderer::HandleDebugModeSettings()
 {
-    const bool bAnyDebugActive = (m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE);
+    const bool bAnyDebugActive = (Config::Get().m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE);
 
     auto SaveState = [this]()
     {
@@ -1418,7 +1407,7 @@ void Renderer::HandleDebugModeSettings()
     }
 
     // m_ActiveDebugMode is read externally (e.g. RTXDIRenderer), keep it in sync.
-    m_ActiveDebugMode = m_DebugMode;
+    m_ActiveDebugMode = Config::Get().m_DebugMode;
 
     // Lock settings every frame while any debug overlay is active.
     if (bAnyDebugActive)
@@ -1468,7 +1457,7 @@ void Renderer::UpdateOmmDebugTexture()
     if (!m_bEnableOmm)
         return;
 
-    if (!ClassifyPrimitiveAlpha(m_Scene, uint32_t(m_OmmDebugPrimitive), uint32_t(m_OmmDebugMip), m_OmmDebugStats))
+    if (!ClassifyPrimitiveAlpha(m_Scene, uint32_t(Config::Get().m_OmmDebugPrimitive), uint32_t(Config::Get().m_OmmDebugMip), m_OmmDebugStats))
         return;
 
     // A 4096^2 classification is 64 MiB of RGBA8 and the view is never larger than a few hundred pixels, so the
@@ -1531,7 +1520,7 @@ void Renderer::UpdateOmmDebugTexture()
 
     const double texels = double(m_OmmDebugStats.m_Width) * double(m_OmmDebugStats.m_Height);
     SDL_Log("[OMM] Debug view: primitive %d, mip %u, %ux%u -> %ux%u: %.1f%% opaque, %.1f%% transparent, %.1f%% mixed",
-            m_OmmDebugPrimitive, m_OmmDebugMip, m_OmmDebugStats.m_Width, m_OmmDebugStats.m_Height, outWidth, outHeight,
+            Config::Get().m_OmmDebugPrimitive, Config::Get().m_OmmDebugMip, m_OmmDebugStats.m_Width, m_OmmDebugStats.m_Height, outWidth, outHeight,
             100.0 * m_OmmDebugStats.m_OpaqueCount / texels,
             100.0 * m_OmmDebugStats.m_TransparentCount / texels,
             100.0 * m_OmmDebugStats.m_MixedCount / texels);
@@ -2482,7 +2471,7 @@ void Renderer::LogClusterCounters()
     m_RHI->m_NvrhiDevice->waitForIdle();
 
     Vector3 viewPosition = m_Scene.m_Camera.GetPosition();
-    if (m_ClusterFreezeCullingCamera)
+    if (Config::Get().m_ClusterFreezeCulling)
         viewPosition = m_Scene.m_FrozenCullingCameraPos;
 
     for (uint32_t bucketIndex = 0; bucketIndex < 2; ++bucketIndex)
@@ -2505,8 +2494,8 @@ void Renderer::LogClusterCounters()
         ClusterLod::CutParams params;
         params.m_ViewPosition = viewPosition;
         params.m_FocalPixels = readback.m_FocalPixels;
-        params.m_PixelErrorThreshold = m_ClusterPixelError;
-        params.m_ForcedLODLevel = m_ClusterForcedLOD;
+        params.m_PixelErrorThreshold = Config::Get().m_ClusterPixelError;
+        params.m_ForcedLODLevel = Config::Get().m_ClusterForcedLOD;
 
         const uint32_t reference = CountReferenceCutClusters(m_Scene, bucket, params);
 

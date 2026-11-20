@@ -248,7 +248,7 @@ protected:
         cullData.SetUseMeshletRendering(g_Renderer.m_UseMeshletRendering ? 1 : 0);
         cullData.SetP00(projectionMatrix.m[0][0]);
         cullData.SetP11(projectionMatrix.m[1][1]);
-        cullData.SetForcedLOD(g_Renderer.m_ForcedLOD);
+        cullData.SetForcedLOD(Config::Get().m_ForcedLOD);
         cullData.SetInstanceBaseIndex(args.m_InstanceBaseIndex);
         commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
@@ -417,7 +417,7 @@ protected:
         const nvrhi::TextureHandle hzb = handles.hzb;
 
         Vector3 cullingCameraPosition = scene.m_Camera.GetPosition();
-        if (g_Renderer.m_ClusterFreezeCullingCamera)
+        if (Config::Get().m_ClusterFreezeCulling)
         {
             cullingCameraPosition = scene.m_FrozenCullingCameraPos;
         }
@@ -435,15 +435,15 @@ protected:
         data.SetEnableOcclusionCulling((g_Renderer.m_EnableOcclusionCulling && hzb) ? 1u : 0u);
         data.SetHZBWidth(hzb ? hzb->getDesc().width : 0);
         data.SetHZBHeight(hzb ? hzb->getDesc().height : 0);
-        data.SetForcedLOD(g_Renderer.m_ClusterForcedLOD >= 0 ? uint32_t(g_Renderer.m_ClusterForcedLOD) : 0xFFFFFFFFu);
-        data.SetMaxClusters(g_Renderer.m_ClusterMaxClusters > 0 ? uint32_t(g_Renderer.m_ClusterMaxClusters) : 0u);
+        data.SetForcedLOD(Config::Get().m_ClusterForcedLOD >= 0 ? uint32_t(Config::Get().m_ClusterForcedLOD) : 0xFFFFFFFFu);
+        data.SetMaxClusters(Config::Get().m_ClusterMaxClusters > 0 ? uint32_t(Config::Get().m_ClusterMaxClusters) : 0u);
         data.SetP00(projectionMatrix.m[0][0]);
         data.SetP11(projectionMatrix.m[1][1]);
-        data.SetPixelErrorThreshold(g_Renderer.m_ClusterPixelError);
+        data.SetPixelErrorThreshold(Config::Get().m_ClusterPixelError);
         data.SetFocalPixels(focalPixels);
-        data.SetDisableCulling(g_Renderer.m_ClusterDisableCulling ? 1u : 0u);
+        data.SetDisableCulling(Config::Get().m_ClusterDisableCulling ? 1u : 0u);
         data.SetCullPass(cullPass);
-        data.SetEnableRejectLists(g_Renderer.m_ClusterTwoPass ? 1u : 0u);
+        data.SetEnableRejectLists(Config::Get().m_ClusterTwoPass ? 1u : 0u);
         commandList->writeBuffer(cb, &data, sizeof(data), 0);
 
         return cb;
@@ -498,7 +498,7 @@ protected:
 
         // The reject machinery is only written and read when a second pass follows, and every one of these is a
         // separate clear command: with the feature off they would cost more than the traversal itself.
-        if (g_Renderer.m_ClusterTwoPass)
+        if (Config::Get().m_ClusterTwoPass)
         {
             commandList->clearBufferUInt(handles.clusterJobCountSecond, 0);
             commandList->clearBufferUInt(handles.clusterRejectNodeCount, 0);
@@ -633,7 +633,7 @@ protected:
         // vertex-shader path, which can still be sorted per surface (docs/cluster-lod-implementation-plan.md §7).
         const bool bDrawClusters = g_Renderer.m_EnableClusterRendering && !bUseAlphaBlend;
 
-        const uint32_t effectiveDebugMode = uint32_t(g_Renderer.m_DebugMode);
+        const uint32_t effectiveDebugMode = uint32_t(Config::Get().m_DebugMode);
 
         const nvrhi::FramebufferHandle framebuffer = bUseAlphaBlend ? 
             g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor).setDepthAttachment(depthTexture)) :
@@ -1018,7 +1018,7 @@ public:
         args.m_CullingPhase = 0;
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
 
-        const bool bClusterTwoPass = g_Renderer.m_EnableClusterRendering && g_Renderer.m_ClusterTwoPass;
+        const bool bClusterTwoPass = g_Renderer.m_EnableClusterRendering && Config::Get().m_ClusterTwoPass;
 
         PerformOcclusionCulling(commandList, args, handles);
 

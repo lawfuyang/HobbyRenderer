@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "CameraStateManager.h"
 #include "CommonResources.h"
+#include "Config.h"
 #include "GpuPassTimers.h"
 #include "GraphicRHI.h"
 #include "RenderGraph.h"
@@ -249,7 +250,7 @@ public:
     // True only while the counters are actually on screen: the Cluster LOD section open and its debug view set
     // to "Traversal counters" (mode 4). Nothing is copied otherwise, so an idle panel costs nothing. Modes 1-3 of
     // that switch visualise clusters being drawn, which needs phase 2's mesh shader.
-    bool IsClusterCountersLive() const { return m_bClusterCountersPanelOpen && m_ClusterDebugMode == 4; }
+    bool IsClusterCountersLive() const { return m_bClusterCountersPanelOpen && Config::Get().m_ClusterDebugMode == 4; }
     void SetClusterCountersPanelOpen(bool bOpen) { m_bClusterCountersPanelOpen = bOpen; }
 
     // ─── Swapchain / backbuffer ───
@@ -407,25 +408,9 @@ public:
 
     // Rendering options
     bool m_UseMeshletRendering = true;
-    int m_ForcedLOD = -1;
     // Cluster LOD: draws through the cluster mesh path. The panel's "Enable Cluster LOD" checkbox owns this at
     // runtime; --cluster-draw sets its A/B start value (see Config::m_ClusterDrawEnabled).
     bool m_EnableClusterRendering = true;
-
-    // Cluster traversal (phase 1): the threshold is a screen-space error in pixels, everything else exists so a
-    // run can be scripted or A/B'd the way the panel does it.
-    float m_ClusterPixelError = 1.0f;
-    int m_ClusterForcedLOD = -1;     // -1 = pick per group from the metric, >= 0 = force one level
-    // Debug clamp on the visible-cluster list, applied to each bucket's traversal. 0 = no clamp: the job buffer is
-    // already sized by that bucket's own worst case (Scene::m_MaxClusterJobCount), so an unclamped run cannot
-    // overrun it and the two buckets do not compete for the same headroom.
-    uint32_t m_ClusterMaxClusters = 0;
-    bool m_ClusterDisableCulling = false;
-    bool m_ClusterFreezeCullingCamera = false;
-    uint32_t m_ClusterDebugMode = 0;
-    // Two-pass culling: after the opaque pass rebuilds the HZB, re-test what the first pass rejected on the
-    // previous frame's depth and draw what survives (docs/cluster-lod-implementation-plan.md §4 phase 4).
-    bool m_ClusterTwoPass = false;
 
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
     static constexpr uint32_t kClusterCounterReadbackBuffers = 2;
@@ -473,7 +458,6 @@ public:
     float m_BloomThreshold = 1.0f;
     float m_UpsampleRadius = 0.85f;
 
-    int      m_DebugMode = 0;
     int      m_ActiveDebugMode = 0;
     bool     m_bAnyDebugWasActive = false;
     struct {
@@ -493,8 +477,6 @@ public:
     bool m_bEnableOmm = false;           // User toggle; off rebuilds the BLASes without the micromap linkage
     bool m_bOmmRebuildRequested = false; // Set by the panel, serviced by the frame loop
     int  m_OmmDebugMode = 0;             // 0 = off, 1 = texel classification, 2 = micromap grid, 3 = candidate heatmap
-    int  m_OmmDebugPrimitive = 0;        // flat index over Scene::Mesh::m_Primitives
-    int  m_OmmDebugMip = 0;              // alpha mip the classification is taken from
     bool m_bOmmShowOnlyMixed = false;    // classification view: draw mixed texels only
     bool m_bOmmDebugDirty = true;        // set by the panel, serviced by UpdateOmmDebugTexture
     OmmDebugTexelStats m_OmmDebugStats;  // classification of the selected primitive, read by the panel
