@@ -425,8 +425,6 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
     m_EnableClusterRendering = Config::Get().m_ClusterDrawEnabled < 0 ? Config::Get().m_EnableClusterLod
                                                                      : Config::Get().m_ClusterDrawEnabled != 0;
-    if (Config::Get().m_bNoRTShadows)
-        m_EnableRTShadows = false;
     if (Config::Get().m_bNoTAA)
         m_bTAAEnabled = false;
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
@@ -564,6 +562,18 @@ void Renderer::Initialize()
 
     // Ablations for comparison runs: switch one pass off and see which way the image moves. They have to be
     // applied after the mode defaults, which otherwise put the switches back.
+    if (Config::Get().m_bNoRTShadows)
+    {
+        m_EnableRTShadows = false;
+    }
+    if (Config::Get().m_bNoReSTIRDI)
+    {
+        m_EnableReSTIRDI = false;
+    }
+    if (Config::Get().m_bNoAutoExposure)
+    {
+        m_EnableAutoExposure = false;
+    }
     if (Config::Get().m_bNoIndirect)
     {
         m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE;
@@ -911,10 +921,11 @@ void Renderer::Run()
             const double ms = 1.0 / 1000000.0;
             const uint64_t marks[] = { frameStart, markAcquireNs, markImGuiNs, markStreamingPreNs, markRecordNs,
                                        markStreamingPostNs, markExecuteNs, markPresentNs };
-            SDL_Log("[Hitch] frame %llu took %.1f ms | cpu: swapchain %.1f, imgui %.1f, streaming-pre %.1f, record %.1f,"
+            SDL_Log("[Hitch] frame %llu took %.1f ms | gpu %.1f | cpu: swapchain %.1f, imgui %.1f, streaming-pre %.1f, record %.1f,"
                     " streaming-post %.1f, submit %.1f, present %.1f, tail %.1f | tiles submitted %u | tile memory %.1f MB"
                     " in %u heaps | tiles %u/%u (standby %u) | mappings %.2f ms | VRAM %.1f MB",
                     static_cast<unsigned long long>(m_FrameNumber), m_FrameTime,
+                    static_cast<double>(GetTotalGpuTimeMs()),
                     static_cast<double>(marks[1] - marks[0]) * ms, static_cast<double>(marks[2] - marks[1]) * ms,
                     static_cast<double>(marks[3] - marks[2]) * ms, static_cast<double>(marks[4] - marks[3]) * ms,
                     static_cast<double>(marks[5] - marks[4]) * ms, static_cast<double>(marks[6] - marks[5]) * ms,

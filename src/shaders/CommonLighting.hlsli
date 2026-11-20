@@ -387,9 +387,15 @@ float CalculateRTShadow(LightingInputs inputs, float3 L, float maxDist)
     ray.TMin      = kShadowBias;
     ray.TMax      = max(kShadowBias, maxDist - kShadowBias * 2.0f);
 
+    // TraceRayInline's ray flag argument is what the traversal honours, and it has to agree with the RayQuery
+    // template. It used to pass RAY_FLAG_NONE, which silently asked for a closest-hit traversal of every shadow
+    // ray: no early-out on an opaque hit, which is exactly the early-out a micromap-resolved opaque micro-triangle
+    // produces.
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | (bWithTransmission ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH),
              RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS> q;
-    q.TraceRayInline(inputs.sceneAS, RAY_FLAG_NONE, 0xFF, ray);
+    q.TraceRayInline(inputs.sceneAS,
+                     RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | (bWithTransmission ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH),
+                     0xFF, ray);
 
     float transmission = 1.0f; // Accumulate transmission through translucent surfaces
     bool inVolume = false;

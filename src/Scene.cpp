@@ -204,7 +204,15 @@ void Scene::BuildAccelerationStructures()
 		instanceDesc.setTransform(transform);
 
         nvrhi::rt::InstanceFlags instanceFlags = nvrhi::rt::InstanceFlags::None;
-        instanceFlags = instanceFlags | ((alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? nvrhi::rt::InstanceFlags::ForceOpaque : nvrhi::rt::InstanceFlags::ForceNonOpaque);
+        // A linked opacity micromap replaces the geometry-wide opacity state, and the force flags are applied
+        // *after* the micromap classification: FORCE_NON_OPAQUE would turn every opaque micro-triangle back into
+        // a candidate and send it through the shader's alpha test, which is the work the micromap exists to
+        // remove. An instance whose BLAS carries masks therefore leaves both flags clear.
+        const bool bHasOmm = g_Renderer.m_bEnableOmm && !primitive->m_Omm.empty() && primitive->m_Omm[0].m_Array != nullptr;
+        if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE)
+            instanceFlags = instanceFlags | nvrhi::rt::InstanceFlags::ForceOpaque;
+        else if (!bHasOmm)
+            instanceFlags = instanceFlags | nvrhi::rt::InstanceFlags::ForceNonOpaque;
 
         instanceDesc.instanceID = instanceID;
         instanceDesc.instanceMask = 1;

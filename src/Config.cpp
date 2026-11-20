@@ -166,6 +166,16 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_bNoRTShadows = true;
             SDL_Log("[Config] Ray-traced shadows disabled");
         }
+        else if (std::strcmp(arg, "--no-restir-di") == 0)
+        {
+            s_Instance.m_bNoReSTIRDI = true;
+            SDL_Log("[Config] ReSTIR DI disabled: sun shadow from the deferred pass' own ray");
+        }
+        else if (std::strcmp(arg, "--no-auto-exposure") == 0)
+        {
+            s_Instance.m_bNoAutoExposure = true;
+            SDL_Log("[Config] Auto exposure disabled: fixed exposure, so an A/B is not history dependent");
+        }
         else if (std::strcmp(arg, "--debug") == 0)
         {
             if (i + 1 < argc)
@@ -528,6 +538,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
         SDL_Log("  --cluster-two-pass <0|1>         Re-test what the first cluster pass rejected against this frame's depth");
             SDL_Log("  --debug <n>                      Base pass debug view (0 none, 4 albedo, 3 world normals, 12-15 cluster views)");
             SDL_Log("  --no-rt-shadows                  Disable ray-traced sun shadows (isolates the draw path in an A/B)");
+            SDL_Log("  --no-restir-di                   Disable ReSTIR DI, so the sun shadow is one hard ray per pixel");
+            SDL_Log("  --no-auto-exposure              Fixed exposure (no adaptation history in an exactness A/B)");
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");

@@ -67,6 +67,14 @@ struct Config
     // them off (the panel toggle does the same at runtime).
     bool m_bNoRTShadows = false;
 
+    // ReSTIR DI off: the sun shadow then comes from the deferred pass' own single shadow ray (hard shadows)
+    // instead of the RTXDI chain, which is the path an OMM A/B compares on both sides.
+    bool m_bNoReSTIRDI = false;
+
+    // Auto exposure off: the adaptation history makes two runs of the SAME configuration differ by ~0.6/255 on
+    // mean, which is larger than the shadow difference an exactness A/B is looking for.
+    bool m_bNoAutoExposure = false;
+
     // The legacy meshlet path's LOD override: -1 = automatic. A cluster A/B compares the cluster cut at
     // forced level 0 against the meshlet path at LOD 0, and the panel was the only way to set it.
     int m_ForcedLOD = -1;
