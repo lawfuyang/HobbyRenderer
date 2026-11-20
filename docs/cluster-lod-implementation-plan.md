@@ -688,33 +688,165 @@ Python's `csv` does not.
 Gate **M3**: green. Opaque and Masked both draw through the cluster path with the master toggle on,
 Transparent is untouched, and the legacy meshlet path is still selectable for A/B.
 
-### Phase 4 — Two-pass culling with reject lists
+### Phase 4 — Two-pass culling with reject lists — **landed**
 
 **Goal**: recover the disocclusion case without repeating the traversal.
 
-Tasks
+Tasks — as built
 
-1. Record in pass 0: rejected instances (compacted), rejected inner nodes, rejected group leaves, and a
-   per-group cluster bitmask — all filtered by the cheap `intersectFrustumOnly` test first.
-2. `setupSecondPass` equivalent in `ClusterBuildArgs` / a small `ClusterSetup.hlsl`: point the seed
-   arrays at the reject buffers and reset counters.
-3. `ClusterRejectClusters.hlsl`: second pass re-tests only the recorded clusters (no traversal, no
-   metric evaluation).
-4. `ClusterTraversalInit/Groups` gain a `cullPass` constant; the HZB is rebuilt between passes through
-   the existing `GenerateHZBMips` path.
+1. The first pass records what occlusion (and only occlusion) rejected: instance roots, inner nodes and
+   group leaves, into `RejectNodes` / `RejectGroups` with their own counters. The frustum test is evaluated
+   first and a frustum rejection is never recorded, because it can only be rejected again next pass.
+   `SphereVisible`/`SphereVisibleWorld` became `SphereTests`/`SphereTestsWorld`, which report the two
+   verdicts separately.
+2. The second pass seeds the node queue from `RejectNodes` inside `ClusterTraversalInit` under
+   `m_CullPass != 0` — no `ClusterSetup.hlsl`, and the kernels are shared rather than duplicated into
+   `ClusterRejectClusters.hlsl`. A rejected group needs no seeding: in pass 1 the group queue *is* the
+   reject group list, and the node passes append to the same list, which the group pass then walks.
+3. `ClusterTraversalConstants` gained `m_CullPass` and `m_EnableRejectLists`; `ClusterCounters` traded its
+   three pad words for `m_RejectNodeCount`, `m_RejectGroupCount` and `m_SecondPassClusterCount`. The HZB is
+   rebuilt by the existing `GenerateHZBMips` call, which already sat between the two passes.
+4. Each pass appends to its own job list, so the first pass' `DispatchMesh` is free to consume what it wrote
+   while the second pass fills `ClusterJobsSecond`. `ClusterIndirectArgs` grew from one grid to three: slot 0
+   the first pass' mesh dispatch, slot 1 the second pass' seed grid, slot 2 its mesh dispatch. `ClusterBuildArgs`
+   writes slot 0 and slot 1 in pass 0 and slot 2 in pass 1.
+5. One switch, `m_ClusterTwoPass` (`--cluster-two-pass <0|1>`, panel: **Two-pass culling**), not the plan's two:
+   the reject lists have no meaning without the second pass. Default off — it changes no pixels, so it stays a
+   tool until something needs it.
 
 Validation
 
-* **V4.1** image identical to phase 3 (single pass) for a *static* camera; for a moving camera the
-  two-pass path must be ≥ the single-pass path in covered-pixel count (no regressions on disocclusion).
-* **V4.2** reject accounting: `rejected + drawn == requested` per pass, and pass-1 traversal work is
-  strictly smaller than pass-0 (counters in ImGui).
-* **V4.3** the phase-2/3 gates still hold (regression run).
+* **V4.1** static camera: forced level 0, two-pass against single pass, albedo G-buffer is **0 differing
+  pixels** on Sponza and Bistro. Moving camera (`--camera-spin`, 15°/frame, frame 46): 0 differing pixels,
+  0 holes, 0 extra — the second pass adds clusters (196 on Bistro) that this frame's depth still hides, which
+  is the property that matters: it can add surface, never shade one twice.
+* **V4.2** at that spin: pass 0 rejected 643 nodes, the second pass re-tested 730 nodes and 80 groups
+  (against 1 904 nodes / 1 257 groups in pass 0, i.e. 38 % and 6 % of the work) and revived 196 clusters of
+  8 368 drawn. Static camera: 0 rejected, 0 revived, and the second pass costs one indirect dispatch with an
+  empty grid.
+* **V4.3** the phase-2/3 gates hold on the phase-4 build: Sponza 0 px, Bistro 4 px (0.0002 %), 100 % cut
+  coverage with 0 holes on both, and every bucket's counters still `(match)` the CPU cut.
+
+Two harness rules learned the hard way, both encoded in `bin/ab_phase4.ps1`:
+
+* `bin/camera_state.json` restores the last pose per scene, so a spinning A/B run starts wherever the last
+  run ended. Delete it before each shot, or the two runs are not looking at the same view. `--camera-spin` now
+  also steps by a fixed 1/60 s instead of the measured frame time, so the same frame means the same pose.
+* On a streamed scene the mip state follows the frame time, so a slower build shows a texture difference that
+  looks like a draw-path bug: Bistro at forced level 0 differed on 28 % of pixels until
+  `--disable-sampler-feedback` pinned the mips, after which it is exactly 0.
 
 Perf: expected small gain on static cameras (study §4.2 shows phase 2 finds ~0.1 %) — **not** gated.
 The gate is "no regression on T2/T3 and correct disocclusion".
 
-Gate **M4**: V4.1–V4.3 green; the feature stays behind `m_ClusterTwoPass` / `m_ClusterRejectLists`.
+What it costs, from PIX hardware counters (Bistro, frame 60, same camera, Debug build): the second pass adds
+**0.165 ms** of traversal plus a 0.031 ms mesh dispatch, i.e. 0.14 ms on a 39.3 ms frame (~0.4 %). The
+single-pass traversal is 0.275 ms.
+
+### Where the cluster path stands against the legacy meshlet path
+
+Measured, not assumed: the cluster path is **not yet faster** than the meshlet path, and the reason is
+visible in the counters.
+
+| Bistro, forced level 0 (same triangles, same image ±205 px) | legacy meshlet | cluster, 1 pass | cluster, 2 pass |
+|---|---|---|---|
+| own frame | 24.90 ms | 29.04 ms | 30.14 ms |
+| `Base Pass Render (Phase 1) - Opaque` | 1.93 ms | 2.41 ms | 2.41 ms |
+| `Opaque Renderer` (inclusive) | 4.18 ms | 5.47 ms | 5.79 ms |
+| texture sectors, base pass | 98 962 k | 113 939 k | 113 939 k |
+| instructions, base pass | 301 M | 355 M | 355 M |
+
+At its own metric cut the cluster path draws more detail than the meshlet path's per-instance LOD, so the
+end-to-end gap there is larger (38.2 ms against 33.6 ms).
+
+### Why the cluster path is slower: measured
+
+Both suspects are wrong, and the counters say so. `--cluster-stats-frame` now also prints the opaque
+renderer's pipeline statistics (the query is armed on that renderer for a scripted run), so one line per run
+says how much geometry each draw path actually pushed. Bistro, the saved camera, frame 40:
+
+| | meshlet primitives | mesh-shader threads | pixel invocations | `Opaque Renderer` |
+|---|---|---|---|---|
+| meshlet, automatic LOD | 90 311 | 158 304 | 8 448 851 | 4.18 ms |
+| meshlet, forced LOD 0 | 96 896 | 166 752 | 8 412 428 | 4.18 ms |
+| cluster, automatic cut | 395 054 | 500 608 | 9 213 939 | 5.47 ms |
+| cluster, forced level 0 | 405 128 | 511 232 | 9 214 053 | 5.47 ms |
+| cluster, all culling off | 3 092 047 | 3 778 304 | 9 255 404 | — |
+
+1. **It is not the extra dispatches.** The whole traversal is 0.275 ms of a 1.29 ms gap, and phases 4's second
+   pass adds 0.165 ms on top. Even a free traversal would leave the cluster path slower.
+2. **It is not the meshlet path's LOD being more aggressive.** Forcing *both* paths to their finest level
+   changes each path's primitive count by 2-7 % and the gap by nothing: the meshlet path draws 96 896
+   triangles at LOD 0, the cluster path 405 128, for the same image (4 px apart).
+3. **It is how much geometry survives culling.** The cluster path launches 3.2× the mesh-shader workgroups and
+   pushes **4.2× the triangles** for a 9 % difference in shaded pixels: the extra triangles are behind other
+   surfaces and die in the depth test, so they cost the geometry stage and buy nothing. The traversal rejects
+   87 % of the scene's 3.09 M triangles, but what it keeps is 13 % against the meshlet path's 3 %.
+
+The reason is granularity. `ClusterTraversalGroups` tested one bounding sphere per *group* — 561 groups over
+3 911 clusters, i.e. ~7 clusters and ~700 triangles per sphere — while the meshlet path's amplification shader
+tests every *meshlet* (~73 triangles). A sphere that has to bound 700 triangles is rarely occluded, so whole
+groups of hidden clusters were queued and drawn.
+
+### Per-cluster occlusion test — landed
+
+The fix is the shape `vk_lod_clusters` uses in `traversal_reject_clusters.comp.glsl`:
+
+1. **Cook**: each cluster stores `meshopt_computeClusterBounds`'s sphere (`m_CenterRadius[2]`, halves) in the
+   cooked `Cluster` record and in the shader's `ClusterRecord`. `kCookedMeshVersion` 6 → 7.
+2. **Pass 0 groups pass**: after a group passes its own sphere test, each cluster of it is tested on its own
+   sphere against the HZB. A hidden cluster is dropped, and — when a second pass will run — its bit is left in
+   `ClusterRejectMasks` (one bit per cluster, indexed by global cluster index, so a group needs no list of its
+   own) and counted in `m_RejectClusterCount`. The test is tighter than the group's, never looser, so it cannot
+   create holes.
+3. **Pass 1** gained `ClusterRejectClusters_CSMain`: one thread per group the first pass walked (its queue is
+   left intact for this), skipping groups whose mask words are all clear, re-testing only the deferred clusters
+   against the depth the first pass just wrote and appending survivors to the second job list. Its grid is
+   indirect slot 3, written by `ClusterBuildArgs`; the indirect buffer grew from three grids to four.
+
+Bistro, same camera and flags, against the same build without it:
+
+| | clusters drawn | mesh primitives | pixel invocations | base pass | `Opaque Renderer` |
+|---|---|---|---|---|---|
+| before | 3 911 | 395 054 | 9 213 939 | 2.40 ms | 5.45 ms |
+| after | 2 043 | 201 925 | 8 559 116 | 2.06 ms | 4.88 ms |
+
+Half the drawn geometry, −14 % on the base pass and −10 % on the whole opaque renderer. Two-pass against
+single-pass stays **0 differing pixels** with 1 928 clusters deferred and 21 revived, and the phase-2/3 gates
+still pass (Sponza 0 px, Bistro 4 px, 100 % cut coverage, 0 holes, counters `(match)`).
+
+### What is still missing, measured
+
+Root cause of the geometry gap: **unit size**. Our clusters were built with `m_MaxTriangles = 128`,
+`m_MaxVertices = 128` and a partition target of 32, while the meshlet path builds 96-triangle / 64-vertex
+units (`kMaxMeshletTriangles` / `kMaxMeshletVertices`). A cluster's bounding sphere is what the HZB test sees,
+and a sphere that has to cover 128 triangles pokes past an occluder that a 96-triangle meshlet's does not, so
+the traversal kept twice the geometry for the same image. Matching the meshlet path's granularity — and the
+reference's other defaults (`min_triangles = max/3`, partition target 16, error-merge 1.0) — fixed it:
+
+| Bistro, same camera, same flags | meshlet | cluster 128-tri units | cluster 96-tri units |
+|---|---|---|---|
+| mesh primitives | 96 896 | 201 925 | **120 418** |
+| `Base Pass Render (Phase 1) - Opaque` | 1.928 ms | 2.056 ms | **2.014 ms** |
+| instructions, base pass | 301.2 M | 311.9 M | **303.2 M** |
+| `Opaque Renderer` | 4.179 ms | 4.826 ms | **4.724 ms** |
+
+The draw is now at parity: +0.7 % instructions against the meshlet path for the same image. The gates also
+improved (Bistro forced-level-0 difference 4 px → 2 px, Sponza still 0 px, coverage 100 %, 0 holes, counters
+`(match)` on both buckets).
+
+What is left is the traversal itself: `Opaque Renderer` is still +0.55 ms, and the draw accounts for only
+0.09 ms of it. That residue is **dispatch-count bound**: 18 compute dispatches per frame (two buckets × init +
+6 node passes + groups + build args) at ~18 µs each, for 2 074 visited nodes. Each grid is only ~160-330
+groups, so idle threads are not the cost; the per-dispatch overhead is. Cutting it means either dispatching
+node passes indirectly so empty queue levels cost nothing, or merging the two buckets' traversals into one set
+of dispatches (a unified bucket buffer layout).
+
+The numbers above come from the Debug build because **Release crashes at HEAD already**: it exits with
+`0xC0000005` on the first frame of a scene, with the cluster path on or off, so it is not a phase-4
+regression. No Release performance claim can be made until that is fixed.
+
+Gate **M4**: V4.1–V4.3 green; the feature stays behind `m_ClusterTwoPass`.
 
 ### Phase 5 — Geometry streaming (groups)
 
