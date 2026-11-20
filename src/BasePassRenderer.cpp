@@ -21,6 +21,13 @@ extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_HDRColor;
 RGTextureHandle g_RG_OpaqueColor;
 
+// ClusterTraversal.hlsl writes three grids into the cluster indirect buffer; these are their slots, in the same
+// order the shader's kIndirectSlot* constants use. The first pass' mesh grid is slot 0, which is the offset every
+// cluster draw that does not set one uses.
+static constexpr uint32_t kClusterSecondPassInitSlot = 1;
+static constexpr uint32_t kClusterSecondPassMeshSlot = 2;
+static constexpr uint32_t kClusterRejectClustersSlot = 3;
+
 struct ScopedBasePassPipelineQuery
 {
     nvrhi::CommandListHandle m_CommandList;
@@ -130,6 +137,13 @@ public:
         nvrhi::BufferHandle clusterJobCount;
         nvrhi::BufferHandle clusterIndirect;
         nvrhi::BufferHandle clusterCounters;
+        nvrhi::BufferHandle clusterRejectNodes;
+        nvrhi::BufferHandle clusterRejectNodeCount;
+        nvrhi::BufferHandle clusterRejectGroups;
+        nvrhi::BufferHandle clusterRejectGroupCount;
+        nvrhi::BufferHandle clusterJobsSecond;
+        nvrhi::BufferHandle clusterJobCountSecond;
+        nvrhi::BufferHandle clusterRejectMasks;
 
         nvrhi::TextureHandle depth;
         nvrhi::TextureHandle hzb;
@@ -165,6 +179,8 @@ protected:
         uint32_t m_AlphaMode;
         const char* m_BucketName;
         bool m_BackFaceCull = false;
+        // Byte offset into the cluster indirect buffer of the grid this draw consumes.
+        uint32_t m_ClusterIndirectOffset = 0;
     };
 
     void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[6])
@@ -303,6 +319,13 @@ protected:
         renderGraph.WriteBuffer(res.m_ClusterJobCount);
         renderGraph.WriteBuffer(res.m_ClusterIndirectBuffer);
         renderGraph.WriteBuffer(res.m_ClusterCountersBuffer);
+        renderGraph.WriteBuffer(res.m_ClusterRejectNodes);
+        renderGraph.WriteBuffer(res.m_ClusterRejectNodeCount);
+        renderGraph.WriteBuffer(res.m_ClusterRejectGroups);
+        renderGraph.WriteBuffer(res.m_ClusterRejectGroupCount);
+        renderGraph.WriteBuffer(res.m_ClusterJobsSecond);
+        renderGraph.WriteBuffer(res.m_ClusterJobCountSecond);
+        renderGraph.WriteBuffer(res.m_ClusterRejectMasks);
     }
 
     void FetchClusterHandles(const RenderGraph& renderGraph, ResourceHandles& handles)
@@ -319,25 +342,73 @@ protected:
         handles.clusterJobCount = renderGraph.GetBuffer(res.m_ClusterJobCount, RGResourceAccessMode::Write);
         handles.clusterIndirect = renderGraph.GetBuffer(res.m_ClusterIndirectBuffer, RGResourceAccessMode::Write);
         handles.clusterCounters = renderGraph.GetBuffer(res.m_ClusterCountersBuffer, RGResourceAccessMode::Write);
+        handles.clusterRejectNodes = renderGraph.GetBuffer(res.m_ClusterRejectNodes, RGResourceAccessMode::Write);
+        handles.clusterRejectNodeCount = renderGraph.GetBuffer(res.m_ClusterRejectNodeCount, RGResourceAccessMode::Write);
+        handles.clusterRejectGroups = renderGraph.GetBuffer(res.m_ClusterRejectGroups, RGResourceAccessMode::Write);
+        handles.clusterRejectGroupCount = renderGraph.GetBuffer(res.m_ClusterRejectGroupCount, RGResourceAccessMode::Write);
+        handles.clusterJobsSecond = renderGraph.GetBuffer(res.m_ClusterJobsSecond, RGResourceAccessMode::Write);
+        handles.clusterJobCountSecond = renderGraph.GetBuffer(res.m_ClusterJobCountSecond, RGResourceAccessMode::Write);
+        handles.clusterRejectMasks = renderGraph.GetBuffer(res.m_ClusterRejectMasks, RGResourceAccessMode::Write);
     }
 
-    // Builds this bucket's visible-cluster list. Phase 1 does not draw from it yet: the base pass still renders
-    // through the meshlet path, so the image is unchanged and the list is checked against the CPU cut instead
-    // (docs/cluster-lod-implementation-plan.md §3.3, §4 phase 1).
-    void PerformClusterTraversal(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args, const ResourceHandles& handles)
+    // Both passes read the same buffers and differ only in the constant buffer, except for the group queue: in the
+    // second pass that IS the reject group list, which the node passes append to and Groups then walks.
+    // `indirectArgs` overrides the linear grid when the grid comes from a count only the GPU knows.
+    void DispatchTraversalPass(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args,
+                               const ResourceHandles& handles, nvrhi::BufferHandle cb, uint32_t cullPass,
+                               uint32_t shaderID, uint32_t queueIn, uint32_t queueOut, uint32_t gridX,
+                               nvrhi::BufferHandle indirectArgs = nullptr, uint32_t indirectOffsetBytes = 0)
     {
-        PROFILE_FUNCTION();
-
         const Scene& scene = g_Renderer.m_Scene;
+        const nvrhi::TextureHandle hzb = handles.hzb;
+        const bool bSecondPass = cullPass != 0;
 
-        for (uint32_t i = 0; i < 2; ++i)
-        {
-            commandList->clearBufferUInt(handles.clusterNodeQueueCount[i], 0);
-        }
-        commandList->clearBufferUInt(handles.clusterGroupQueueCount, 0);
-        commandList->clearBufferUInt(handles.clusterJobCount, 0);
-        commandList->clearBufferUInt(handles.clusterCounters, 0);
+        srrhi::ClusterTraversalInputs inputs;
+        inputs.SetTraversalCB(cb);
+        inputs.SetInstanceData(scene.m_InstanceDataBuffer);
+        inputs.SetGeometry(scene.m_ClusterGeometryBuffer);
+        inputs.SetNodes(scene.m_ClusterNodeBuffer);
+        inputs.SetNodeBounds(scene.m_ClusterNodeBoundsBuffer);
+        inputs.SetGroups(scene.m_ClusterGroupBuffer);
+        inputs.SetGeneratingGroups(scene.m_ClusterGeneratingGroupsBuffer);
+        inputs.SetClusterRecords(scene.m_ClusterRecordBuffer);
+        inputs.SetHZB(hzb ? hzb : CommonResources::GetInstance().DefaultTextureBlack);
+        inputs.SetNodeQueueIn(handles.clusterNodeQueue[queueIn]);
+        inputs.SetNodeQueueOut(handles.clusterNodeQueue[queueOut]);
+        inputs.SetNodeQueueCountIn(handles.clusterNodeQueueCount[queueIn]);
+        inputs.SetNodeQueueCountOut(handles.clusterNodeQueueCount[queueOut]);
+        inputs.SetGroupQueue(bSecondPass ? handles.clusterRejectGroups : handles.clusterGroupQueue);
+        inputs.SetGroupQueueCount(bSecondPass ? handles.clusterRejectGroupCount : handles.clusterGroupQueueCount);
+        inputs.SetClusterJobs(handles.clusterJobs);
+        inputs.SetClusterJobCount(handles.clusterJobCount);
+        inputs.SetClusterIndirectArgs(handles.clusterIndirect);
+        inputs.SetCounters(handles.clusterCounters);
+        inputs.SetRejectNodes(handles.clusterRejectNodes);
+        inputs.SetRejectNodeCount(handles.clusterRejectNodeCount);
+        inputs.SetRejectGroups(handles.clusterRejectGroups);
+        inputs.SetRejectGroupCount(handles.clusterRejectGroupCount);
+        inputs.SetClusterJobsSecond(handles.clusterJobsSecond);
+        inputs.SetClusterJobCountSecond(handles.clusterJobCountSecond);
+        inputs.SetRejectClusterMasks(handles.clusterRejectMasks);
+        // The first pass' group queue stays bound for both passes: its length is the grid the per-cluster
+        // reject pass runs over, and pass 1 only repurposes the *other* queue (the reject group list).
+        inputs.SetPass0Groups(handles.clusterGroupQueue);
+        inputs.SetPass0GroupCount(handles.clusterGroupQueueCount);
 
+        Renderer::RenderPassParams params;
+        params.commandList = commandList;
+        params.shaderID = shaderID;
+        params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
+        params.dispatchParams = indirectArgs ?
+            Renderer::ComputeDispatchParams{ .indirectBuffer = indirectArgs, .indirectOffsetBytes = indirectOffsetBytes } :
+            Renderer::ComputeDispatchParams{ .x = gridX, .y = 1, .z = 1 };
+        g_Renderer.AddComputePass(params);
+    }
+
+    nvrhi::BufferHandle WriteClusterTraversalConstants(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args,
+                                                       const ResourceHandles& handles, uint32_t cullPass)
+    {
+        const Scene& scene = g_Renderer.m_Scene;
         const nvrhi::BufferDesc cbDesc = nvrhi::utils::CreateVolatileConstantBufferDesc(
             sizeof(srrhi::ClusterTraversalConstants), "ClusterTraversalCB", 1);
         const nvrhi::BufferHandle cb = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(cbDesc);
@@ -371,52 +442,82 @@ protected:
         data.SetPixelErrorThreshold(g_Renderer.m_ClusterPixelError);
         data.SetFocalPixels(focalPixels);
         data.SetDisableCulling(g_Renderer.m_ClusterDisableCulling ? 1u : 0u);
+        data.SetCullPass(cullPass);
+        data.SetEnableRejectLists(g_Renderer.m_ClusterTwoPass ? 1u : 0u);
         commandList->writeBuffer(cb, &data, sizeof(data), 0);
 
-        auto dispatchTraversalPass = [&](uint32_t shaderID, uint32_t queueIn, uint32_t queueOut, uint32_t gridX)
-        {
-            srrhi::ClusterTraversalInputs inputs;
-            inputs.SetTraversalCB(cb);
-            inputs.SetInstanceData(scene.m_InstanceDataBuffer);
-            inputs.SetGeometry(scene.m_ClusterGeometryBuffer);
-            inputs.SetNodes(scene.m_ClusterNodeBuffer);
-            inputs.SetNodeBounds(scene.m_ClusterNodeBoundsBuffer);
-            inputs.SetGroups(scene.m_ClusterGroupBuffer);
-            inputs.SetGeneratingGroups(scene.m_ClusterGeneratingGroupsBuffer);
-            inputs.SetHZB(hzb ? hzb : CommonResources::GetInstance().DefaultTextureBlack);
-            inputs.SetNodeQueueIn(handles.clusterNodeQueue[queueIn]);
-            inputs.SetNodeQueueOut(handles.clusterNodeQueue[queueOut]);
-            inputs.SetNodeQueueCountIn(handles.clusterNodeQueueCount[queueIn]);
-            inputs.SetNodeQueueCountOut(handles.clusterNodeQueueCount[queueOut]);
-            inputs.SetGroupQueue(handles.clusterGroupQueue);
-            inputs.SetGroupQueueCount(handles.clusterGroupQueueCount);
-            inputs.SetClusterJobs(handles.clusterJobs);
-            inputs.SetClusterJobCount(handles.clusterJobCount);
-            inputs.SetClusterIndirectArgs(handles.clusterIndirect);
-            inputs.SetCounters(handles.clusterCounters);
+        return cb;
+    }
 
-            Renderer::RenderPassParams params;
-            params.commandList = commandList;
-            params.shaderID = shaderID;
-            params.bindingSetDesc = Renderer::CreateBindingSetDesc(inputs);
-            params.dispatchParams = { .x = gridX, .y = 1, .z = 1 };
-            g_Renderer.AddComputePass(params);
-        };
-
+    uint32_t ClusterBucketIndex(const BasePassRenderingArgs& args)
+    {
         // Both traversal blocks are opaque-or-masked, and each bucket's bounds come from its own instances.
         const uint32_t bucketIndex = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE ?
             Scene::kClusterBucketOpaque : Scene::kClusterBucketMasked;
+        SDL_assert(bucketIndex < Scene::kClusterBucketCount);
+        return bucketIndex;
+    }
 
+    void CopyClusterCounters(nvrhi::CommandListHandle commandList, const ResourceHandles& handles, uint32_t bucketIndex)
+    {
+        const Scene& scene = g_Renderer.m_Scene;
+        const Matrix& projectionMatrix = scene.m_Camera.GetProjMatrix();
+        const float focalPixels = projectionMatrix.m[1][1] * float(handles.depth->getDesc().height) * 0.5f;
+
+        // One readback per bucket: both blocks traverse every frame and each has its own counters buffer.
+        if (Config::Get().m_ClusterStatsFrame == int(g_Renderer.m_FrameNumber))
         {
-            PROFILE_GPU_SCOPED("Cluster Traversal Preparation", commandList);
-
-            // Seeds go into queue 0; queue 1 is the first pass's output.
-            dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALINIT_CSMAIN, 1u, 0u,
-                DivideAndRoundUp(args.m_NumInstances, srrhi::CommonConsts::kThreadsPerGroup));
+            g_Renderer.RequestClusterCountersReadback(handles.clusterCounters, commandList, bucketIndex,
+                bucketIndex == Scene::kClusterBucketOpaque ? "Opaque" : "Masked", focalPixels);
         }
 
+        if (g_Renderer.IsClusterCountersLive())
         {
-            PROFILE_GPU_SCOPED("Cluster Traversal Run", commandList);
+            // The panel path copies every frame and is read one frame late, so it never stalls.
+            g_Renderer.CopyClusterCountersForPanel(handles.clusterCounters, commandList, bucketIndex);
+        }
+    }
+
+    // The first pass builds this bucket's visible-cluster list from the roots, using the previous frame's depth.
+    // Whatever the occlusion test rejects is recorded instead of dropped, so the second pass can pick it up once
+    // this frame's depth exists (docs/cluster-lod-implementation-plan.md §4 phase 4).
+    void PerformClusterTraversal(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args,
+                                 const ResourceHandles& handles, bool bSecondPassFollows)
+    {
+        PROFILE_FUNCTION();
+
+        const Scene& scene = g_Renderer.m_Scene;
+
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            commandList->clearBufferUInt(handles.clusterNodeQueueCount[i], 0);
+        }
+        commandList->clearBufferUInt(handles.clusterGroupQueueCount, 0);
+        commandList->clearBufferUInt(handles.clusterJobCount, 0);
+        commandList->clearBufferUInt(handles.clusterCounters, 0);
+
+        // The reject machinery is only written and read when a second pass follows, and every one of these is a
+        // separate clear command: with the feature off they would cost more than the traversal itself.
+        if (g_Renderer.m_ClusterTwoPass)
+        {
+            commandList->clearBufferUInt(handles.clusterJobCountSecond, 0);
+            commandList->clearBufferUInt(handles.clusterRejectNodeCount, 0);
+            commandList->clearBufferUInt(handles.clusterRejectGroupCount, 0);
+            commandList->clearBufferUInt(handles.clusterRejectMasks, 0);
+        }
+
+        const nvrhi::BufferHandle cb = WriteClusterTraversalConstants(commandList, args, handles, 0u);
+        const uint32_t cullPass = 0u;
+        const uint32_t bucketIndex = ClusterBucketIndex(args);
+
+        // One scope for the whole traversal: every nested scope is two more query resolves, and the shapes this
+        // pass could plausibly split into are all in the 0.02-0.3 ms range where a resolve is a real tax.
+        {
+            PROFILE_GPU_SCOPED("Cluster Traversal", commandList);
+
+            // Seeds go into queue 0; queue 1 is the first pass's output.
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALINIT_CSMAIN,
+                1u, 0u, DivideAndRoundUp(args.m_NumInstances, srrhi::CommonConsts::kThreadsPerGroup));
 
             const uint32_t nodeGridX = DivideAndRoundUp(scene.m_MaxClusterNodeCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup);
 
@@ -429,32 +530,78 @@ protected:
                 const uint32_t queueOut = 1u - queueIn;
 
                 commandList->clearBufferUInt(handles.clusterNodeQueueCount[queueOut], 0);
-                dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALRUN_CSMAIN, queueIn, queueOut, nodeGridX);
+                DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALRUN_CSMAIN,
+                    queueIn, queueOut, nodeGridX);
             }
 
-            dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALGROUPS_CSMAIN, 0u, 1u,
-                DivideAndRoundUp(scene.m_MaxClusterGroupCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup));
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALGROUPS_CSMAIN,
+                0u, 1u, DivideAndRoundUp(scene.m_MaxClusterGroupCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup));
+
+            // Writes the first pass' mesh grid and the second pass' seed grids.
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERBUILDARGS_CSMAIN, 0u, 1u, 1u);
         }
+
+        // The second pass appends to the same counters, so the readback has to wait for it when it runs.
+        if (!bSecondPassFollows)
+        {
+            CopyClusterCounters(commandList, handles, bucketIndex);
+        }
+    }
+
+    // The second pass continues from what the first pass rejected, against the depth the first pass just wrote.
+    // The traversal kernels are the same ones: the queues are seeded from the reject lists and the constant
+    // buffer says "cull pass 1", which stops the recording and sends the clusters to the second job list.
+    void PerformClusterTraversalSecondPass(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args,
+                                           const ResourceHandles& handles)
+    {
+        PROFILE_FUNCTION();
+
+        const Scene& scene = g_Renderer.m_Scene;
+        const uint32_t bucketIndex = ClusterBucketIndex(args);
+
+        commandList->clearBufferUInt(handles.clusterNodeQueueCount[0], 0);
+        commandList->clearBufferUInt(handles.clusterNodeQueueCount[1], 0);
+        commandList->clearBufferUInt(handles.clusterJobCountSecond, 0);
+        // The group queue is NOT cleared: in this pass it is the reject group list, which the seed step below and
+        // the node passes both append to.
+
+        const nvrhi::BufferHandle cb = WriteClusterTraversalConstants(commandList, args, handles, 1u);
+        const uint32_t cullPass = 1u;
 
         {
-            PROFILE_GPU_SCOPED("Cluster Build Args", commandList);
+            PROFILE_GPU_SCOPED("Cluster Traversal Second Pass", commandList);
 
-            dispatchTraversalPass(ShaderID::CLUSTERTRAVERSAL_CLUSTERBUILDARGS_CSMAIN, 0u, 1u, 1u);
+            // One thread per entry of the larger reject list. The grid comes from the first pass' counters
+            // through the indirect slot ClusterBuildArgs filled in, so nothing can be rejected there and the
+            // grid is empty, the second pass costs one indirect dispatch.
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALINIT_CSMAIN,
+                1u, 0u, 1u, handles.clusterIndirect, kClusterSecondPassInitSlot * sizeof(srrhi::DispatchIndirectArguments));
+
+            const uint32_t nodeGridX = DivideAndRoundUp(scene.m_MaxClusterNodeCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup);
+
+            const uint32_t passCount = scene.m_MaxClusterTreeDepth + 1;
+            for (uint32_t pass = 0; pass < passCount; ++pass)
+            {
+                const uint32_t queueIn = pass & 1u;
+                const uint32_t queueOut = 1u - queueIn;
+
+                commandList->clearBufferUInt(handles.clusterNodeQueueCount[queueOut], 0);
+                DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALRUN_CSMAIN,
+                    queueIn, queueOut, nodeGridX);
+            }
+
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERTRAVERSALGROUPS_CSMAIN,
+                0u, 1u, DivideAndRoundUp(scene.m_MaxClusterGroupCount[bucketIndex], srrhi::CommonConsts::kThreadsPerGroup));
+
+            // Per-cluster rejects: the first pass' group walk only tested each group's sphere, and this re-tests
+            // the individual clusters it deferred against the depth the first pass has now filled in.
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERREJECTCLUSTERS_CSMAIN,
+                0u, 1u, 1u, handles.clusterIndirect, kClusterRejectClustersSlot * sizeof(srrhi::DispatchIndirectArguments));
+
+            DispatchTraversalPass(commandList, args, handles, cb, cullPass, ShaderID::CLUSTERTRAVERSAL_CLUSTERBUILDARGS_CSMAIN, 0u, 1u, 1u);
         }
 
-        // One readback per bucket: both blocks traverse every frame and each has its own counters buffer.
-        SDL_assert(bucketIndex < Scene::kClusterBucketCount);
-        if (Config::Get().m_ClusterStatsFrame == int(g_Renderer.m_FrameNumber))
-        {
-            g_Renderer.RequestClusterCountersReadback(handles.clusterCounters, commandList, bucketIndex,
-                bucketIndex == Scene::kClusterBucketOpaque ? "Opaque" : "Masked", focalPixels);
-        }
-
-        if (g_Renderer.IsClusterCountersLive())
-        {
-            // The panel path copies every frame and is read one frame late, so it never stalls.
-            g_Renderer.CopyClusterCountersForPanel(handles.clusterCounters, commandList, bucketIndex);
-        }
+        CopyClusterCounters(commandList, handles, bucketIndex);
     }
 
     void RenderInstances(nvrhi::CommandListHandle commandList, const BasePassRenderingArgs& args, const ResourceHandles& handles)
@@ -635,7 +782,7 @@ protected:
 
             commandList->setMeshletState(meshState);
             // One DispatchMesh over the visible-cluster list; ClusterBuildArgs wrote that count into the args.
-            commandList->dispatchMeshIndirect(0, 1);
+            commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
 
             if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
             {
@@ -663,7 +810,7 @@ protected:
                 overlayMeshState.indirectParams = handles.clusterIndirect;
 
                 commandList->setMeshletState(overlayMeshState);
-                commandList->dispatchMeshIndirect(0, 1);
+                commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
             }
             else if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES)
             {
@@ -689,7 +836,7 @@ protected:
                 triangleMeshState.indirectParams = handles.clusterIndirect;
 
                 commandList->setMeshletState(triangleMeshState);
-                commandList->dispatchMeshIndirect(0, 1);
+                commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
             }
         }
         else if (g_Renderer.m_UseMeshletRendering)
@@ -871,11 +1018,13 @@ public:
         args.m_CullingPhase = 0;
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
 
+        const bool bClusterTwoPass = g_Renderer.m_EnableClusterRendering && g_Renderer.m_ClusterTwoPass;
+
         PerformOcclusionCulling(commandList, args, handles);
 
         if (g_Renderer.m_EnableClusterRendering)
         {
-            PerformClusterTraversal(commandList, args, handles);
+            PerformClusterTraversal(commandList, args, handles, bClusterTwoPass);
         }
 
         RenderInstances(commandList, args, handles);
@@ -883,7 +1032,7 @@ public:
         // The cluster path draws the whole visible-cluster list in that one dispatch, so a second draw would
         // shade every visible cluster twice. The second culling phase still runs: it is what refreshes the
         // per-instance LOD that TLASPatch patches the ray-tracing structures with, and leaving it out makes the
-        // raster and ray-traced paths disagree. The reject-list second pass of phase 4 replaces this.
+        // raster and ray-traced paths disagree.
         args.m_BucketName = "Opaque (Occluded)";
         args.m_CullingPhase = 1;
         PerformOcclusionCulling(commandList, args, handles);
@@ -894,6 +1043,26 @@ public:
 
         nvrhi::BufferHandle spdAtomicCounter = renderGraph.GetBuffer(m_RG_SPDAtomicCounter, RGResourceAccessMode::Write);
         GenerateHZBMips(commandList, renderGraph, spdAtomicCounter);
+
+        // Two-pass culling: everything the first pass rejected on last frame's depth is re-tested against the
+        // depth this frame just wrote, and what survives is drawn from its own list. It can only add clusters,
+        // so with an unchanged camera it draws nothing and the image is the single-pass one.
+        if (bClusterTwoPass)
+        {
+            PerformClusterTraversalSecondPass(commandList, args, handles);
+
+            // The second pass fills its own job list and its own grid slot, so the first pass' draw was free to
+            // consume what it wrote.
+            ResourceHandles secondPassHandles = handles;
+            secondPassHandles.clusterJobs = handles.clusterJobsSecond;
+            secondPassHandles.clusterJobCount = handles.clusterJobCountSecond;
+
+            BasePassRenderingArgs secondPassArgs = args;
+            secondPassArgs.m_BucketName = "Opaque (Revived)";
+            secondPassArgs.m_ClusterIndirectOffset = kClusterSecondPassMeshSlot * sizeof(srrhi::DispatchIndirectArguments);
+
+            RenderInstances(commandList, secondPassArgs, secondPassHandles);
+        }
     }
 
     const char* GetName() const override { return "Opaque Renderer"; }
@@ -994,7 +1163,7 @@ public:
 
         if (g_Renderer.m_EnableClusterRendering)
         {
-            PerformClusterTraversal(commandList, args, handles);
+            PerformClusterTraversal(commandList, args, handles, false);
         }
 
         RenderInstances(commandList, args, handles);

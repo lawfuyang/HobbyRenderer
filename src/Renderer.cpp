@@ -431,6 +431,7 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_ClusterDisableCulling = Config::Get().m_ClusterDisableCulling;
     m_ClusterFreezeCullingCamera = Config::Get().m_ClusterFreezeCulling;
     m_ClusterDebugMode = Config::Get().m_ClusterDebugMode;
+    m_ClusterTwoPass = Config::Get().m_ClusterTwoPass;
     m_ForcedLOD = Config::Get().m_ForcedLOD;
     m_DebugMode = Config::Get().m_DebugMode;
     if (Config::Get().m_bNoRTShadows)
@@ -503,6 +504,21 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
         renderer->Initialize();
         
         m_Renderers.push_back(renderer);
+    }
+
+    // A stats frame is a scripted comparison run, where nothing can open the panel. Arm the pipeline-statistics
+    // query on the opaque renderer so the same log line can say how much geometry each draw path pushed, which
+    // is the whole question when one path is slower than the other.
+    if (Config::Get().m_ClusterStatsFrame >= 0)
+    {
+        for (size_t i = 0; i < m_Renderers.size(); ++i)
+        {
+            if (std::string_view(m_Renderers[i]->GetName()) == "Opaque Renderer")
+            {
+                m_SelectedRendererIndexForPipelineStatistics = int(i);
+                break;
+            }
+        }
     }
 
     // Flush any pending uploads from CommonResources::Initialize().
@@ -696,11 +712,13 @@ void Renderer::Run()
         }
 
         // Scripted camera motion: the streaming and masked-shadow problems only show up while the camera moves,
-        // and a scripted run has no way to drive the mouse.
+        // and a scripted run has no way to drive the mouse. The step is a fixed 1/60 s rather than the measured
+        // frame time: a comparison run has to reach the same pose on the same frame whatever the frame rate was,
+        // which is the whole point of the switch.
         if (const float spinDegreesPerSecond = Config::Get().m_CameraSpinDegreesPerSecond; spinDegreesPerSecond != 0.0f)
         {
-            const float deltaSeconds = static_cast<float>(m_FrameTime / 1000.0);
-            m_Scene.m_Camera.SetYaw(m_Scene.m_Camera.GetYaw() + DirectX::XMConvertToRadians(spinDegreesPerSecond) * deltaSeconds);
+            constexpr float kSpinStepSeconds = 1.0f / 60.0f;
+            m_Scene.m_Camera.SetYaw(m_Scene.m_Camera.GetYaw() + DirectX::XMConvertToRadians(spinDegreesPerSecond) * kSpinStepSeconds);
         }
 
         // A comparison run stops as soon as its frame is on disk. This sits before the swapchain acquire, so
@@ -2439,8 +2457,12 @@ void Renderer::RequestClusterCountersReadback(nvrhi::BufferHandle counters, nvrh
 
 void Renderer::LogClusterCounters()
 {
-    if (m_ClusterCountersReadback[0].m_BucketName == nullptr && m_ClusterCountersReadback[1].m_BucketName == nullptr)
+    // A legacy-path stats run has no cluster counters to log, but its base pass statistics are the point of it.
+    if (m_ClusterCountersReadback[0].m_BucketName == nullptr && m_ClusterCountersReadback[1].m_BucketName == nullptr &&
+        m_SelectedRendererIndexForPipelineStatistics == -1)
+    {
         return;
+    }
 
     // The copies went out with this frame's command lists, so the GPU has to be done before the staging buffers
     // are read.
@@ -2475,13 +2497,35 @@ void Renderer::LogClusterCounters()
 
         const uint32_t reference = CountReferenceCutClusters(m_Scene, bucket, params);
 
-        SDL_Log("[ClusterLod] %s traversal: %u instances, %u nodes, %u groups, %u clusters (%u capped) | "
-            "CPU cut reference: %u clusters (%s)",
+        // The second pass adds to what is drawn, not to what the first pass requested, so the cut comparison has
+        // to see both lists.
+        const uint32_t drawnClusters = counters.m_ClusterCount + counters.m_SecondPassClusterCount;
+
+        SDL_Log("[ClusterLod] %s traversal: %u instances, %u nodes, %u groups, %u clusters (%u capped, %u above "
+            "level 0), %u revived | rejected %u nodes, %u groups and %u clusters | CPU cut reference: %u clusters (%s)",
             readback.m_BucketName, counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount,
-            counters.m_ClusterCount, counters.m_ClusterCapped, reference,
-            counters.m_ClusterCount == reference ? "match" : "differs");
+            counters.m_ClusterCount, counters.m_ClusterCapped, counters.m_CoarseClusterCount,
+            counters.m_SecondPassClusterCount,
+            counters.m_RejectNodeCount, counters.m_RejectGroupCount, counters.m_RejectClusterCount, reference,
+            drawnClusters == reference ? "match" : "differs");
 
         readback.m_BucketName = nullptr;
+    }
+
+    // The opaque renderer's own query, i.e. the draw path under test: meshlets report IA primitives, the cluster
+    // path reports mesh-shader primitives, and the pixel-shader invocations say whether both shaded the same
+    // surface. One line per run, two frames after the stats frame so the double-buffered query has resolved.
+    if (m_SelectedRendererIndexForPipelineStatistics != -1 && Config::Get().m_ClusterStatsFrame >= 0 &&
+        m_FrameNumber == uint64_t(Config::Get().m_ClusterStatsFrame) + 2)
+    {
+        const nvrhi::PipelineStatistics& stats = m_SelectedBasePassPipelineStatistics;
+        SDL_Log("[ClusterLod] base pass: %llu IA primitives, %llu mesh-shader primitives, %llu mesh-shader threads, "
+            "%llu pixel invocations, %llu vertex invocations, %llu compute invocations",
+            static_cast<unsigned long long>(stats.IAPrimitives), static_cast<unsigned long long>(stats.MSPrimitives),
+            static_cast<unsigned long long>(stats.MSInvocations), static_cast<unsigned long long>(stats.PSInvocations),
+            static_cast<unsigned long long>(stats.VSInvocations), static_cast<unsigned long long>(stats.CSInvocations));
+
+        m_SelectedRendererIndexForPipelineStatistics = -1;
     }
 }
 void Renderer::ExecutePendingCommandLists()

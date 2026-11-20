@@ -54,6 +54,7 @@ struct Config
     bool m_ClusterDisableCulling = false;
     uint32_t m_ClusterDebugMode = 0;
     bool m_ClusterFreezeCulling = false;
+    bool m_ClusterTwoPass = false;
 
     // TAA is on by default; a pixel-exact A/B needs it off, and the panel was the only way to turn it off.
     bool m_bNoTAA = false;

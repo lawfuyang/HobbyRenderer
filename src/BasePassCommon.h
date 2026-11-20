@@ -20,6 +20,15 @@ struct BasePassResources
     RGBufferHandle m_ClusterIndirectBuffer;
     RGBufferHandle m_ClusterCountersBuffer;
 
+    // Two-pass culling: what the first pass dropped on occlusion alone, and the list the second pass draws from.
+    RGBufferHandle m_ClusterRejectNodes;
+    RGBufferHandle m_ClusterRejectNodeCount;
+    RGBufferHandle m_ClusterRejectGroups;
+    RGBufferHandle m_ClusterRejectGroupCount;
+    RGBufferHandle m_ClusterJobsSecond;
+    RGBufferHandle m_ClusterJobCountSecond;
+    RGBufferHandle m_ClusterRejectMasks;
+
     RGBufferHandle m_VisibleIndirectBuffer;
     RGBufferHandle m_VisibleCountBuffer;
     RGBufferHandle m_OccludedIndicesBuffer;

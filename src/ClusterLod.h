@@ -39,9 +39,12 @@ namespace ClusterLod
     Node MakeChildNode(uint32_t childOffset, uint32_t childCount);
     Node MakeLeafNode(uint32_t groupIndex, uint32_t clusterCount);
 
-    // 12 B. A cluster's geometry is a cluster-local vertex range plus 8-bit micro indices into it. The offsets
+    // 20 B. A cluster's geometry is a cluster-local vertex range plus 8-bit micro indices into it. The offsets
     // are element offsets while the data lives on the CPU; the GPU blob (phase 2) stores byte offsets instead,
     // and HLSL has no bitfields, so this record stays CPU-only.
+    //
+    // m_CenterRadius is `meshopt_computeClusterBounds`'s bounding sphere, packed as halves. The traversal needs
+    // it because the group's sphere covers several clusters and is far too loose to reject the hidden ones.
     struct Cluster
     {
         uint32_t m_TriangleCountMinusOne : 8;
@@ -51,10 +54,12 @@ namespace ClusterLod
         uint32_t m_VertexOffset   = 0;  // into PrimitiveClusters::m_VertexIndices
         uint32_t m_TriangleOffset = 0;  // into PrimitiveClusters::m_Triangles, 3 micro indices per triangle
 
+        uint32_t m_CenterRadius[2] = {};
+
         uint32_t GetTriangleCount() const { return m_TriangleCountMinusOne + 1u; }
         uint32_t GetVertexCount() const { return m_VertexCountMinusOne + 1u; }
     };
-    static_assert(sizeof(Cluster) == 12);
+    static_assert(sizeof(Cluster) == 20);
 
     // Everything the offline builder produced for one primitive, in primitive-local vertex indices.
     struct PrimitiveClusters

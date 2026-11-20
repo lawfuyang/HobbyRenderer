@@ -13,6 +13,10 @@ static_assert(sizeof(srrhi::DrawIndexedIndirectArguments) == 20,
 static_assert(sizeof(srrhi::DispatchIndirectArguments) == 12,
               "must match D3D12_DISPATCH_MESH_ARGUMENTS (the stock dispatchMeshIndirectSignature stride)");
 
+// ClusterTraversal.hlsl owns four grids in that buffer: the first pass' mesh dispatch, the second pass' INIT
+// grid, its mesh dispatch, and the grid of the pass that re-tests the per-cluster rejections.
+constexpr uint32_t kClusterIndirectSlotCount = 4;
+
 void BasePassResources::Initialize()
 {
     // Create pipeline statistics queries for double buffering
@@ -222,7 +226,7 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
 
         {
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(sizeof(srrhi::DispatchIndirectArguments))
+            desc.m_NvrhiDesc.setByteSize(kClusterIndirectSlotCount * sizeof(srrhi::DispatchIndirectArguments))
                 .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
                 .setIsDrawIndirectArgs(true)
                 .setCanHaveUAVs(true)
@@ -244,6 +248,97 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
                 .setDebugName((std::string(rendererName) + "_ClusterCounters").c_str());
 
             rg.DeclareBuffer(desc, m_ClusterCountersBuffer);
+        }
+
+        // The reject lists hold what the first pass dropped on occlusion: at most one entry per node it visited,
+        // or one per group, so the same worst cases the traversal queues are sized by cover them.
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterNodeCount[bucket] * sizeof(srrhi::ClusterNodeRef))
+                .setStructStride(sizeof(srrhi::ClusterNodeRef))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterRejectNodes").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterRejectNodes);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterRejectNodeCount").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterRejectNodeCount);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterGroupCount[bucket] * sizeof(srrhi::ClusterGroupRef))
+                .setStructStride(sizeof(srrhi::ClusterGroupRef))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterRejectGroups").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterRejectGroups);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterRejectGroupCount").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterRejectGroupCount);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterJobCount[bucket] * sizeof(srrhi::ClusterJob))
+                .setStructStride(sizeof(srrhi::ClusterJob))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterJobsSecond").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterJobsSecond);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterJobCountSecond").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterJobCountSecond);
+        }
+
+        {
+            // One bit per cluster of this bucket, set when the per-cluster occlusion test defers it. A bitmask
+            // rather than a list: a group has to be able to leave several scattered rejections behind, and pass 1
+            // already knows which groups to look at.
+            const uint32_t wordCount = (scene.m_MaxClusterJobCount[bucket] + 31u) / 32u;
+
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(wordCount * sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterRejectMasks").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterRejectMasks);
         }
     }}
 

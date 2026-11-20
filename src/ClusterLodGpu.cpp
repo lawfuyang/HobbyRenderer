@@ -150,6 +150,8 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
                 record.m_GroupIndex = 0;   // filled in below, from the group that owns the cluster
                 record.m_TriangleOffset = uint32_t(outData.m_Triangles.size());
                 record.m_VertexOffset = uint32_t(outData.m_Vertices.size());
+                record.m_CenterRadius[0] = cluster.m_CenterRadius[0];
+                record.m_CenterRadius[1] = cluster.m_CenterRadius[1];
 
                 SDL_assert(record.m_TriangleCount <= srrhi::CommonConsts::kMaxClusterTriangles);
                 SDL_assert(record.m_VertexCount <= srrhi::CommonConsts::kMaxClusterVertices);

@@ -59,7 +59,7 @@ struct ClusterJob
     uint m_ClusterIndex;    // global, the geometry's cluster offset already added
 };
 
-// 24 B. The draw-side view of one cluster. ClusterLod::Cluster packs four 8-bit counts into one uint, which
+// 32 B. The draw-side view of one cluster. ClusterLod::Cluster packs four 8-bit counts into one uint, which
 // HLSL cannot read, so the mesh shader gets plain fields and element offsets into the two shared arrays
 // below. Built at load from the cooked record (ClusterLodGpu.cpp), so this is not part of the cooked layout.
 struct ClusterRecord
@@ -70,6 +70,9 @@ struct ClusterRecord
     uint m_GroupIndex;       // global, for the culling bounds the debug view draws
     uint m_TriangleOffset;   // into ClusterTriangles, one packed micro-index triple per triangle
     uint m_VertexOffset;     // into ClusterVertices, one scene-wide vertex index per cluster vertex
+    // The cluster's own bounding sphere, as halves: x, y in word 0 and z, radius in word 1. The traversal needs
+    // it because a group's sphere bounds several clusters and is far too loose to reject the hidden ones.
+    uint m_CenterRadius[2];
 };
 
 // 8 B. An entry of the node traversal queue.
@@ -105,11 +108,13 @@ struct ClusterCounters
     uint m_InstanceCount;    // instances that passed the instance tests
     uint m_NodeCount;        // nodes visited
     uint m_GroupCount;       // groups queued by the node passes
-    uint m_ClusterCount;     // clusters requested
+    uint m_ClusterCount;     // clusters requested by the first pass
     uint m_ClusterCapped;    // cluster requests dropped by the cap
-    uint m_Pad0;
-    uint m_Pad1;
-    uint m_Pad2;
+    uint m_RejectNodeCount;  // nodes and instance roots the first pass rejected on occlusion
+    uint m_RejectGroupCount; // groups the first pass rejected on occlusion
+    uint m_RejectClusterCount;     // clusters the per-cluster occlusion test deferred
+    uint m_SecondPassClusterCount;  // clusters the second pass revived
+    uint m_CoarseClusterCount;      // drawn clusters that came from a level other than 0
 };
 
 cbuffer ClusterTraversalConstants
@@ -134,8 +139,8 @@ cbuffer ClusterTraversalConstants
     float m_FocalPixels;
 
     uint  m_DisableCulling;
-    uint  m_Pad0;
-    uint  m_Pad1;
+    uint  m_CullPass;            // 0 = builds the visible list, 1 = re-tests the reject lists against this frame's HZB
+    uint  m_EnableRejectLists;   // 0 keeps the first pass' rejections on the floor, as it did before phase 4
     uint  m_Pad2;
 };
 
@@ -149,7 +154,8 @@ srinput ClusterTraversalInputs
     StructuredBuffer<ClusterBounds>    NodeBounds;         // t3
     StructuredBuffer<ClusterGroup>     Groups;             // t4
     StructuredBuffer<uint>             GeneratingGroups;   // t5, per cluster: coarser group that replaced it
-    Texture2D<float>                   HZB;                // t6
+    StructuredBuffer<ClusterRecord>    ClusterRecords;    // t6, for the per-cluster bounding sphere
+    Texture2D<float>                   HZB;                // t7
 
     RWStructuredBuffer<ClusterNodeRef> NodeQueueIn;        // u0
     RWStructuredBuffer<ClusterNodeRef> NodeQueueOut;       // u1
@@ -161,4 +167,22 @@ srinput ClusterTraversalInputs
     RWStructuredBuffer<uint>           ClusterJobCount;    // u7
     RWStructuredBuffer<DispatchIndirectArguments> ClusterIndirectArgs; // u8
     RWStructuredBuffer<ClusterCounters> Counters;          // u9
+    // The reject lists (phase 4): what the first pass dropped on occlusion alone, so the second pass can
+    // re-test it against the depth the first pass just wrote instead of traversing the tree again.
+    RWStructuredBuffer<ClusterNodeRef>  RejectNodes;       // u10
+    RWStructuredBuffer<uint>            RejectNodeCount;   // u11
+    RWStructuredBuffer<ClusterGroupRef> RejectGroups;      // u12
+    RWStructuredBuffer<uint>            RejectGroupCount;  // u13
+
+    // The second pass appends into its own list, so the first pass' draw can still read its own.
+    RWStructuredBuffer<ClusterJob>      ClusterJobsSecond;      // u14
+    RWStructuredBuffer<uint>            ClusterJobCountSecond;  // u15
+
+    // Per-cluster occlusion rejection: one bit per cluster, set by the first pass and read by the second, so a
+    // group does not need a list of its own deferred clusters.
+    RWStructuredBuffer<uint>           RejectClusterMasks;  // u16
+
+    // The first pass' group queue, left intact for pass 1: its length is the grid the reject pass runs over.
+    RWStructuredBuffer<ClusterGroupRef> Pass0Groups;        // u17
+    RWStructuredBuffer<uint>            Pass0GroupCount;    // u18
 };

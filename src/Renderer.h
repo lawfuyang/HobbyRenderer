@@ -418,6 +418,9 @@ public:
     bool m_ClusterDisableCulling = false;
     bool m_ClusterFreezeCullingCamera = false;
     uint32_t m_ClusterDebugMode = 0;
+    // Two-pass culling: after the opaque pass rebuilds the HZB, re-test what the first pass rejected on the
+    // previous frame's depth and draw what survives (docs/cluster-lod-implementation-plan.md §4 phase 4).
+    bool m_ClusterTwoPass = false;
 
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
     static constexpr uint32_t kClusterCounterReadbackBuffers = 2;

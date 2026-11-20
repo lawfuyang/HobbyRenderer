@@ -801,6 +801,17 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
                 emittedCluster.m_VertexOffset = uint32_t(outClusters.m_VertexIndices.size());
                 emittedCluster.m_TriangleOffset = uint32_t(outClusters.m_Triangles.size());
 
+                // The cluster's own bounding sphere, for the per-cluster occlusion test. `work` holds the
+                // deduplicated positions and the cluster's indices are in that space, so meshopt sees exactly
+                // the triangles it partitioned.
+                const meshopt_Bounds bounds = meshopt_computeClusterBounds(cluster.m_Indices.data(),
+                    cluster.m_Indices.size(), work.m_Positions, work.m_VertexCount, work.m_PositionStride);
+
+                emittedCluster.m_CenterRadius[0] = uint32_t(meshopt_quantizeHalf(bounds.center[0])) |
+                    (uint32_t(meshopt_quantizeHalf(bounds.center[1])) << 16);
+                emittedCluster.m_CenterRadius[1] = uint32_t(meshopt_quantizeHalf(bounds.center[2])) |
+                    (uint32_t(meshopt_quantizeHalf(bounds.radius)) << 16);
+
                 for (uint32_t v : cluster.m_Vertices)
                     outClusters.m_VertexIndices.push_back(dedup.m_Sources[v]);
                 outClusters.m_Triangles.insert(outClusters.m_Triangles.end(),

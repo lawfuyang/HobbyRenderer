@@ -211,6 +211,18 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_ClusterFreezeCulling = true;
             SDL_Log("[Config] Cluster culling camera frozen");
         }
+        else if (std::strcmp(arg, "--cluster-two-pass") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterTwoPass = std::atoi(argv[++i]) != 0;
+                SDL_Log("[Config] Cluster two-pass culling %s", s_Instance.m_ClusterTwoPass ? "enabled" : "disabled");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-two-pass", "[Config] Missing value for --cluster-two-pass");
+            }
+        }
         else if (std::strcmp(arg, "--no-taa") == 0)
         {
             s_Instance.m_bNoTAA = true;
@@ -513,6 +525,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 1 clusters, 2 lod level, 3 bounds (these are Debug Modes 12-14), 4 counters");
             SDL_Log("  --force-lod <n>                  Force the meshlet path's LOD index; -1 = automatic (A/B against the cluster cut)");
             SDL_Log("  --cluster-draw <0|1>             Draw through the cluster mesh shader; 0 keeps the legacy meshlet draw");
+        SDL_Log("  --cluster-two-pass <0|1>         Re-test what the first cluster pass rejected against this frame's depth");
             SDL_Log("  --debug <n>                      Base pass debug view (0 none, 4 albedo, 3 world normals, 12-15 cluster views)");
             SDL_Log("  --no-rt-shadows                  Disable ray-traced sun shadows (isolates the draw path in an A/B)");
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");

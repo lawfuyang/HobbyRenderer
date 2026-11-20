@@ -231,6 +231,17 @@ void ImGuiLayer::UpdateFrame()
                 g_Renderer.m_ClusterMaxClusters = static_cast<uint32_t>(std::max(maxClusters, 0));
             }
 
+            // Needs both buckets' depth to be worth re-testing, so it reads as off when occlusion culling is off.
+            ImGui::BeginDisabled(!g_Renderer.m_EnableOcclusionCulling);
+            ImGui::Checkbox("Two-pass culling", &g_Renderer.m_ClusterTwoPass);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Re-tests what the first cluster pass rejected against this frame's depth and draws\n"
+                    "what survives. If the sweep in panels above shows 0 revived clusters on a moving camera, the\n"
+                    "first pass had nothing left to reject.");
+            }
+
             // The three cluster views are Debug Modes, so this combo is only the traversal's counter readback.
             // The copy runs while the counters are on screen, so a closed panel costs nothing.
             static const char* const kClusterDebugViewNames[] = { "Off", "Traversal Counters" };
@@ -276,13 +287,15 @@ void ImGuiLayer::UpdateFrame()
                     ImGui::Text("%s: %u instances, %u nodes, %u groups", bucketName,
                         counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount);
                     ImGui::Text("    %u clusters, %u capped", counters.m_ClusterCount, counters.m_ClusterCapped);
+                    ImGui::Text("    rejected %u nodes, %u groups -> %u revived", counters.m_RejectNodeCount,
+                        counters.m_RejectGroupCount, counters.m_SecondPassClusterCount);
                 }
 
                 // The traversal's own scopes, as GpuPassTimers recorded them for the frame the counters came from.
                 float traversalMilliseconds = 0.0f;
                 for (const GpuPassTimers::Entry& entry : g_Renderer.m_GpuPassTimers.GetEntries())
                 {
-                    if (entry.m_Name.rfind("Cluster Traversal", 0) == 0 || entry.m_Name == "Cluster Build Args")
+                    if (entry.m_Name.rfind("Cluster Traversal", 0) == 0)
                         traversalMilliseconds += entry.m_Milliseconds;
                 }
                 ImGui::Text("GPU: %.3f ms", static_cast<double>(traversalMilliseconds));
