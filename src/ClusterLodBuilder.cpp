@@ -95,7 +95,9 @@ namespace
 
         const size_t maxVertices = config.m_MaxVertices;
         const size_t maxTriangles = config.m_MaxTriangles;
-        const size_t minTriangles = maxTriangles / 2;
+        // A third rather than a half: the builder is allowed to hand back half-empty clusters when splitting them
+        // that way keeps them spatially compact, which is what the culling wants (the reference uses max/3 too).
+        const size_t minTriangles = maxTriangles / 3;
 
         const size_t maxMeshlets = meshopt_buildMeshletsBound(indices.size(), maxVertices, maxTriangles);
         std::vector<meshopt_Meshlet> meshlets(maxMeshlets);

@@ -88,11 +88,17 @@ namespace ClusterLod
     // invalidates the cache instead of silently mixing formats.
     struct Config
     {
-        uint32_t m_MaxTriangles = 128;
-        uint32_t m_MaxVertices = 128;
-        uint32_t m_GroupSize = 32;
+        // The unit size is what decides how well occlusion culling works: a cluster's bounding sphere is what the
+        // HZB test sees, and a sphere over 128 triangles pokes past an occluder that a meshlet's does not. These
+        // match the meshlet path's own limits (kMaxMeshletVertices / kMaxMeshletTriangles) so both paths cull at
+        // the same granularity.
+        uint32_t m_MaxTriangles = 96;
+        uint32_t m_MaxVertices = 64;
+        // Partition target in clusters; the reference renderer uses 16, and a smaller group also means a tighter
+        // sphere for the group-level test.
+        uint32_t m_GroupSize = 16;
         float m_DecimationFactor = 0.5f;
-        float m_ErrorMergePrev = 1.5f;
+        float m_ErrorMergePrev = 1.0f;
         float m_NormalWeight = 1.0f;
         float m_UvWeight = 1.0f;
         // A group that keeps more than this fraction of its triangles is stuck: it stays terminal instead of
