@@ -31,7 +31,6 @@ extern RTXDI_DIBufferIndices;
 extern RTXDI_DIInitialSamplingParameters;
 extern RTXDI_DITemporalResamplingParameters;
 extern RTXDI_DISpatialResamplingParameters;
-extern RTXDI_DISpatioTemporalResamplingParameters;
 extern RTXDI_ShadingParameters;
 extern RTXDI_Parameters;
 extern ReGIR_OnionLayerGroup;

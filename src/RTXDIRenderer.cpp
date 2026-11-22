@@ -146,8 +146,11 @@ static void ApplyBalancedPreset()
     g_ReSTIRDI_BoilingFilterParams.boilingFilterStrength = 0.2f;
     g_ReSTIRDI_TemporalResamplingParams.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
     g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Basic;
+    // The neighbor offset table is filled with the low-discrepancy layout and the sample
+    // budgets assigned here are tuned to it, so opt out of the stratified sampling default.
     g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
     g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
+    g_ReSTIRDI_SpatialResamplingParams.neighborOffsetSamplingMode = ReSTIRDI_SpatialSamplingMode::LowDiscrepancy;
     g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
     g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
 
@@ -198,6 +201,7 @@ static void ApplyHighPerfPreset()
     g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Off;
     g_ReSTIRDI_SpatialResamplingParams.numSamples = 1;
     g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
+    g_ReSTIRDI_SpatialResamplingParams.neighborOffsetSamplingMode = ReSTIRDI_SpatialSamplingMode::LowDiscrepancy;
     g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
     g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
 
@@ -247,6 +251,7 @@ static void ApplyHighQualityPreset()
     g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
     g_ReSTIRDI_SpatialResamplingParams.numSamples = 4;
     g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 16;
+    g_ReSTIRDI_SpatialResamplingParams.neighborOffsetSamplingMode = ReSTIRDI_SpatialSamplingMode::LowDiscrepancy;
     g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 0u;
     g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
 
@@ -302,11 +307,6 @@ void RTXDIIMGUISettings()
 
     // ---- Resampling mode -------------------------------------------------------
     ImGui::PushItemWidth(200.f);
-    if (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
-    {
-        // Fused spatiotemporal is not implemented in this renderer path.
-        g_ReSTIRDI_ResamplingMode = rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
-    }
     int resamplingMode = static_cast<int>(g_ReSTIRDI_ResamplingMode);
     if (ImGui::Combo("Resampling Mode", &resamplingMode,
         "None\0"
@@ -470,15 +470,12 @@ void RTXDIIMGUISettings()
         g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial;
     if (hasSpatialMode && ImGui::TreeNode("Spatial Resampling"))
     {
-        if (g_ReSTIRDI_ResamplingMode != rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
+        int spatialBiasCorrection = static_cast<int>(g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode);
+        if (ImGui::Combo("Spatial Bias Correction", &spatialBiasCorrection,
+            "Off\0Basic\0Pairwise\0Ray Traced\0"))
         {
-            int spatialBiasCorrection = static_cast<int>(g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode);
-            if (ImGui::Combo("Spatial Bias Correction", &spatialBiasCorrection,
-                "Off\0Basic\0Pairwise\0Ray Traced\0"))
-            {
-                g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode =
-                    static_cast<ReSTIRDI_SpatialBiasCorrectionMode>(spatialBiasCorrection);
-            }
+            g_ReSTIRDI_SpatialResamplingParams.biasCorrectionMode =
+                static_cast<ReSTIRDI_SpatialBiasCorrectionMode>(spatialBiasCorrection);
         }
 
         ImGui::SliderInt("Spatial Samples",
@@ -1652,14 +1649,7 @@ public:
         m_Context->SetFrameIndex(g_Renderer.m_FrameNumber);
 
         // Apply all ReSTIR DI parameters from renderer settings to the context.
-        // Fused spatiotemporal mode is not implemented in this shader path, so map
-        // it to TemporalAndSpatial to keep runtime/UI and dispatch behavior consistent.
-        const rtxdi::ReSTIRDI_ResamplingMode effectiveResamplingMode =
-            (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::FusedSpatiotemporal)
-            ? rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial
-            : g_ReSTIRDI_ResamplingMode;
-
-        m_Context->SetResamplingMode(effectiveResamplingMode);
+        m_Context->SetResamplingMode(g_ReSTIRDI_ResamplingMode);
         m_Context->SetInitialSamplingParameters(g_ReSTIRDI_InitialSamplingParams);
         m_Context->SetTemporalResamplingParameters(g_ReSTIRDI_TemporalResamplingParams);
         m_Context->SetBoilingFilterParameters(g_ReSTIRDI_BoilingFilterParams);
@@ -1815,7 +1805,6 @@ public:
             restirDI.temporalResamplingParams     = m_Context->GetTemporalResamplingParameters();
             restirDI.boilingFilterParams          = m_Context->GetBoilingFilterParameters();
             restirDI.spatialResamplingParams      = m_Context->GetSpatialResamplingParameters();
-            restirDI.spatioTemporalResamplingParams = m_Context->GetSpatioTemporalResamplingParameters();
             restirDI.shadingParams                = m_Context->GetShadingParameters();
 
             // When NRD denoising is active, DI ShadeSamples is the last NRD-packing pass
@@ -2050,7 +2039,8 @@ public:
         {
             const uint32_t count = m_Context->GetStaticParameters().NeighborOffsetCount;
             std::vector<uint8_t> offsets(count * 2);
-            rtxdi::FillNeighborOffsetBuffer(offsets.data(), count);
+            rtxdi::FillNeighborOffsetBuffer(offsets.data(), count,
+                m_Context->GetSpatialResamplingParameters().neighborOffsetSamplingMode);
             commandList->writeBuffer(neighborOffsetsBuf, offsets.data(), offsets.size());
         }
 
@@ -2491,8 +2481,8 @@ public:
         // ------------------------------------------------------------------
         // Temporal Resampling (conditional)
         // ------------------------------------------------------------------
-        const bool doTemporal = (effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Temporal ||
-                      effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
+        const bool doTemporal = (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Temporal ||
+                      g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
         if (doTemporal)
         {
             PROFILE_SCOPED("Temporal Resampling");
@@ -2513,8 +2503,8 @@ public:
         // ------------------------------------------------------------------
         // Spatial Resampling (conditional)
         // ------------------------------------------------------------------
-        const bool doSpatial = (effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Spatial ||
-                     effectiveResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
+        const bool doSpatial = (g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::Spatial ||
+                     g_ReSTIRDI_ResamplingMode == rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
         if (doSpatial)
         {
             PROFILE_SCOPED("Spatial Resampling");
