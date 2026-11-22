@@ -56,6 +56,14 @@ struct Config
     bool m_ClusterFreezeCulling = false;
     bool m_ClusterTwoPass = false;
 
+    // The VRAM budget both streaming systems spend: the texture tile heaps and the cluster group arena. 0 means
+    // "whatever the OS says this application may use", which is the panel slider's default too.
+    uint64_t m_StreamingBudgetMiB = 0;
+    // Frames a resident group may go untouched before the age filter asks for it back.
+    uint32_t m_ClusterStreamAgeThreshold = 16;
+    // Prints the streaming residency stats on this frame. -1 = never.
+    int m_ClusterStreamStatsFrame = -1;
+
     // TAA is on by default; a pixel-exact A/B needs it off, and the panel was the only way to turn it off.
     bool m_bNoTAA = false;
 

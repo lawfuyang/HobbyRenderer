@@ -15,8 +15,6 @@
 static const StructuredBuffer<srrhi::ClusterJob>   g_ClusterJobs    = srrhi::BasePassInputs::GetClusterJobs();
 static const StructuredBuffer<srrhi::ClusterRecord> g_ClusterRecords = srrhi::BasePassInputs::GetClusterRecords();
 static const StructuredBuffer<srrhi::ClusterGroup> g_ClusterGroups  = srrhi::BasePassInputs::GetClusterGroups();
-static const StructuredBuffer<uint>                g_ClusterTriangles = srrhi::BasePassInputs::GetClusterTriangles();
-static const StructuredBuffer<uint>                g_ClusterVertices  = srrhi::BasePassInputs::GetClusterVertices();
 
 // 12 edges over 8 corners, where corner bit 0 is max/min x, bit 1 y and bit 2 z.
 static const uint kBoxEdges[12][2] =
@@ -171,10 +169,10 @@ struct TriangleVertexOut
     nointerpolation uint m_TriangleID : TEXCOORD1;
 };
 
-TriangleVertexOut MakeTriangleVertex(uint microIndex, srrhi::ClusterRecord cluster, srrhi::PerInstanceData instance,
-    uint clusterID, uint triangleID)
+TriangleVertexOut MakeTriangleVertex(uint microIndex, srrhi::ClusterRecord cluster, uint streamBase,
+    srrhi::PerInstanceData instance, uint clusterID, uint triangleID)
 {
-    const uint vertexIndex = g_ClusterVertices[cluster.m_VertexOffset + microIndex];
+    const uint vertexIndex = g_ClusterStreamData[streamBase + cluster.m_VertexOffset + microIndex];
     const srrhi::Vertex vertex = UnpackVertex(g_Vertices[vertexIndex]);
 
     TriangleVertexOut output;
@@ -196,6 +194,7 @@ void TrianglesMSMain(
 )
 {
     const srrhi::ClusterRecord cluster = g_ClusterRecords[payload.m_ClusterIndex];
+    const uint streamBase = ClusterStreamBase(cluster);
     const uint first = groupID.x * kTrianglesPerMesh;
     const uint count = first < cluster.m_TriangleCount ?
         min(kTrianglesPerMesh, cluster.m_TriangleCount - first) : 0;
@@ -208,12 +207,12 @@ void TrianglesMSMain(
     if (triangleIndex < count)
     {
         const srrhi::PerInstanceData instance = g_Instances[payload.m_InstanceIndex];
-        const uint3 corners = UnpackTriangle(g_ClusterTriangles[cluster.m_TriangleOffset + first + triangleIndex]);
+        const uint3 corners = UnpackTriangle(g_ClusterStreamData[streamBase + cluster.m_TriangleOffset + first + triangleIndex]);
         const uint triangleID = first + triangleIndex;
 
-        vout[triangleIndex * 3u + 0u] = MakeTriangleVertex(corners.x, cluster, instance, payload.m_ClusterIndex, triangleID);
-        vout[triangleIndex * 3u + 1u] = MakeTriangleVertex(corners.y, cluster, instance, payload.m_ClusterIndex, triangleID);
-        vout[triangleIndex * 3u + 2u] = MakeTriangleVertex(corners.z, cluster, instance, payload.m_ClusterIndex, triangleID);
+        vout[triangleIndex * 3u + 0u] = MakeTriangleVertex(corners.x, cluster, streamBase, instance, payload.m_ClusterIndex, triangleID);
+        vout[triangleIndex * 3u + 1u] = MakeTriangleVertex(corners.y, cluster, streamBase, instance, payload.m_ClusterIndex, triangleID);
+        vout[triangleIndex * 3u + 2u] = MakeTriangleVertex(corners.z, cluster, streamBase, instance, payload.m_ClusterIndex, triangleID);
 
         triangles[triangleIndex] = uint3(triangleIndex * 3u, triangleIndex * 3u + 1u, triangleIndex * 3u + 2u);
     }

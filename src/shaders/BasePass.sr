@@ -51,7 +51,7 @@ srinput BasePassInputs
     // cluster-bounds debug view. All five are bound to dummies when cluster rendering is off.
     StructuredBuffer<ClusterJob>    ClusterJobs;          // t13
     StructuredBuffer<ClusterRecord> ClusterRecords;       // t14
-    StructuredBuffer<uint>          ClusterTriangles;     // t15
-    StructuredBuffer<uint>          ClusterVertices;      // t16
-    StructuredBuffer<ClusterGroup>  ClusterGroups;        // t17
+    StructuredBuffer<uint>          ClusterStreamData;    // t15, the streaming arena: triangle and vertex words
+    StructuredBuffer<ClusterGroup>  ClusterGroups;        // t16
+    StructuredBuffer<ClusterGroupState> ClusterGroupStates; // t17, resolves a cluster's store through the group
 };

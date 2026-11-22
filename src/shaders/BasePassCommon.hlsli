@@ -14,6 +14,17 @@ static const srrhi::BasePassConstants g_PerFrame = srrhi::BasePassInputs::GetPer
 static const StructuredBuffer<srrhi::PerInstanceData> g_Instances = srrhi::BasePassInputs::GetInstances();
 static const StructuredBuffer<srrhi::VertexQuantized> g_Vertices = srrhi::BasePassInputs::GetVertices();
 
+// The cluster's triangle and vertex words live in the group's blob, so element offsets in the cluster record are
+// group-local and the group's address in the streaming arena is added to them. The traversal only emits a job for
+// a group whose address is valid, so the address is not tested again here.
+static const StructuredBuffer<uint> g_ClusterStreamData = srrhi::BasePassInputs::GetClusterStreamData();
+static const StructuredBuffer<srrhi::ClusterGroupState> g_ClusterGroupStates = srrhi::BasePassInputs::GetClusterGroupStates();
+
+uint ClusterStreamBase(srrhi::ClusterRecord cluster)
+{
+    return g_ClusterGroupStates[cluster.m_GroupIndex].m_Address;
+}
+
 float3 HashColor(uint id)
 {
     uint h = id * 0x27D4EB2Du;

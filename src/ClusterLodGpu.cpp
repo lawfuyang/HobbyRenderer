@@ -47,7 +47,8 @@ uint64_t GpuData::GetMemoryBytes() const
         uint64_t(m_Geometry.size()) * sizeof(srrhi::ClusterGeometry) +
         uint64_t(m_Records.size()) * sizeof(srrhi::ClusterRecord) +
         uint64_t(m_Triangles.size()) * sizeof(uint32_t) +
-        uint64_t(m_Vertices.size()) * sizeof(uint32_t);
+        uint64_t(m_Vertices.size()) * sizeof(uint32_t) +
+        uint64_t(m_StreamGroups.size()) * sizeof(StreamGroup);
 }
 
 Counts GetCounts(const PrimitiveClusters& clusters)
@@ -69,6 +70,7 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
     outData.m_Records.clear();
     outData.m_Triangles.clear();
     outData.m_Vertices.clear();
+    outData.m_StreamGroups.clear();
     outData.m_PrimitivesWithoutData = 0;
     outData.m_Geometry.assign(meshDataCount, srrhi::ClusterGeometry{});
 
@@ -185,17 +187,52 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
             }
 
             // A group names its clusters as a contiguous range of the primitive's own cluster array, so the
-            // cluster record can point back at the bounds its cut decision was made with.
+            // cluster record can point back at the bounds its cut decision was made with. The same loop turns
+            // the record's element offsets group-local and records where the group's blob lives in the source
+            // arrays: a group is the streaming unit, so its cluster data is always one contiguous run.
+            uint32_t groupedClusters = 0;
             for (uint32_t g = 0; g < counts.m_GroupCount; ++g)
             {
                 const Group& group = clusters.m_Groups[g];
+
+                StreamGroup streamGroup;
+                streamGroup.m_LODLevel = group.m_LODLevel;
+                streamGroup.m_bCoarsestLevel = group.m_LODLevel + 1 == clusters.m_LODLevelCount;
+                const uint32_t firstCluster = group.m_ClusterOffset;
+                if (group.m_ClusterCount > 0)
+                {
+                    const srrhi::ClusterRecord& first = outData.m_Records[geometry.m_ClusterOffset + firstCluster];
+                    streamGroup.m_TriangleElement = first.m_TriangleOffset;
+                    streamGroup.m_VertexElement = first.m_VertexOffset;
+                }
+
                 for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
                 {
                     const uint32_t localCluster = group.m_ClusterOffset + i;
                     SDL_assert(localCluster < counts.m_ClusterCount);
-                    outData.m_Records[geometry.m_ClusterOffset + localCluster].m_GroupIndex = geometry.m_GroupOffset + g;
+
+                    srrhi::ClusterRecord& record = outData.m_Records[geometry.m_ClusterOffset + localCluster];
+                    record.m_GroupIndex = geometry.m_GroupOffset + g;
+
+                    streamGroup.m_TriangleCount += record.m_TriangleCount;
+                    streamGroup.m_VertexCount += record.m_VertexCount;
                 }
+
+                for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+                {
+                    srrhi::ClusterRecord& record = outData.m_Records[geometry.m_ClusterOffset + group.m_ClusterOffset + i];
+                    record.m_TriangleOffset -= streamGroup.m_TriangleElement;
+                    // Triangles come first in the blob, so the vertex offsets move past the group's triangles.
+                    record.m_VertexOffset = streamGroup.m_TriangleCount + (record.m_VertexOffset - streamGroup.m_VertexElement);
+                }
+
+                groupedClusters += group.m_ClusterCount;
+                outData.m_StreamGroups.push_back(streamGroup);
             }
+
+            // Every cluster has to belong to exactly one group, or a record's offsets would address a blob that
+            // does not contain it and the mesh shader would read another group's geometry.
+            SDL_assert(groupedClusters == counts.m_ClusterCount);
 
             clusterBase += counts.m_ClusterCount;
         }

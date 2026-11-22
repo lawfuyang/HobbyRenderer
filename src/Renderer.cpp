@@ -420,6 +420,16 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayQuery));
     SDL_assert(m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingAccelStruct));
 
+    // Both streaming systems spend this number, so it starts at what the OS says this application may use rather
+    // than at an arbitrary constant; --stream-budget overrides it, and the panel's slider drives it at runtime.
+    m_StreamingBudgetMB = m_RHI->GetVRAMBudgetBytes() / (1024ull * 1024ull);
+    if (m_StreamingBudgetMB == 0)
+        m_StreamingBudgetMB = m_RHI->GetVRAMTotalBytes() / (1024ull * 1024ull);
+    if (Config::Get().m_StreamingBudgetMiB != 0)
+        m_StreamingBudgetMB = Config::Get().m_StreamingBudgetMiB;
+    SDL_Log("[Streaming] VRAM budget: %llu MB (card has %llu MB)", static_cast<unsigned long long>(m_StreamingBudgetMB),
+            static_cast<unsigned long long>(m_RHI->GetVRAMTotalBytes() / (1024ull * 1024ull)));
+
     // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
@@ -1071,6 +1081,12 @@ void Renderer::ShutdownStreaming()
     m_AsyncTileIO->Flush(nullptr); // discard completed callbacks (resources about to be freed)
     m_AsyncTileIO.reset();
 
+    if (m_GeometryStreaming)
+    {
+        m_GeometryStreaming->Shutdown();
+        m_GeometryStreaming.reset();
+    }
+
     m_FeedbackManager.reset();
     SDL_Log("[Streaming] Shutdown complete.");
 }
@@ -1242,6 +1258,17 @@ void Renderer::UpdateStreamingPreRender(nvrhi::CommandListHandle cmd)
     }
 
     m_TilesSubmittedThisFrame = tilesSubmitted;
+
+    // Geometry streaming runs after the texture exchange: both are "device asks, host serves", and the plan keeps
+    // the geometry patches after the texture patches. The group arena this leaves behind is what this frame's
+    // traversal and cluster draw read. It takes its own command list - the phases above closed the one they were
+    // given, and a list must be executed before it is reopened.
+    if (m_GeometryStreaming)
+    {
+        nvrhi::CommandListHandle streamCmd = AcquireCommandList();
+        ScopedCommandList scopedStreamCmd{ streamCmd, "Cluster Streaming" };
+        m_GeometryStreaming->PreRender(streamCmd);
+    }
 }
 
 void Renderer::UpdateStreamingPostRender()
@@ -1259,6 +1286,15 @@ void Renderer::UpdateStreamingPostRender()
 
     // -- Phase F: EndFrame --
     m_FeedbackManager->EndFrame();
+
+    // The traversal has written this frame's group requests by now, so they can be copied out. The slot's event
+    // makes the readback readable a couple of frames later without ever waiting for the GPU.
+    if (m_GeometryStreaming)
+    {
+        nvrhi::CommandListHandle cmd = AcquireCommandList();
+        ScopedCommandList scopedCmd{ cmd, "Cluster Stream Request Readback" };
+        m_GeometryStreaming->PostRender(cmd);
+    }
 }
 
 void Renderer::UploadDirtyInstanceTransforms()
@@ -2468,8 +2504,31 @@ void Renderer::RequestClusterCountersReadback(nvrhi::BufferHandle counters, nvrh
     readback.m_FocalPixels = focalPixels;
 }
 
+uint64_t Renderer::GetTileStreamingBudgetBytes() const
+{
+    const uint64_t budgetBytes = GetStreamingBudgetBytes();
+    if (budgetBytes == 0)
+        return 0;
+
+    const uint64_t geometryBytes = m_GeometryStreaming ? m_GeometryStreaming->GetReservedBytes() : 0;
+    return budgetBytes > geometryBytes ? budgetBytes - geometryBytes : 0;
+}
+
 void Renderer::LogClusterCounters()
 {
+    // One line per run for the geometry streaming state, with no GPU wait of its own: the counters are the host's.
+    if (m_GeometryStreaming && Config::Get().m_ClusterStreamStatsFrame >= 0 &&
+        m_FrameNumber == uint64_t(Config::Get().m_ClusterStreamStatsFrame))
+    {
+        const GeometryStreaming::Stats& stats = m_GeometryStreaming->GetStats();
+        const double mb = 1.0 / (1024.0 * 1024.0);
+        SDL_Log("[ClusterLod] streaming: %u/%u groups resident (%.2f / %.2f MB, %.2f MB not in a blob), %u active, "
+            "loaded %u, unloaded %u, dropped %u, %u requests last frame",
+            stats.m_ResidentGroups, stats.m_GroupCount, double(stats.m_ResidentBytes) * mb,
+            double(stats.m_ArenaBytes) * mb, double(stats.m_WastedBytes) * mb, stats.m_ActiveGroups,
+            stats.m_LoadedThisFrame, stats.m_UnloadedThisFrame, stats.m_DroppedLoads, stats.m_RequestsLastFrame);
+    }
+
     // A legacy-path stats run has no cluster counters to log, but its base pass statistics are the point of it.
     if (m_ClusterCountersReadback[0].m_BucketName == nullptr && m_ClusterCountersReadback[1].m_BucketName == nullptr &&
         m_SelectedRendererIndexForPipelineStatistics == -1)

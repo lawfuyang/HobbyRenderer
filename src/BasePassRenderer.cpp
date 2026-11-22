@@ -395,6 +395,13 @@ protected:
         inputs.SetPass0Groups(handles.clusterGroupQueue);
         inputs.SetPass0GroupCount(handles.clusterGroupQueueCount);
 
+        // Geometry streaming: the residency table the traversal tests and requests against, plus the list and the
+        // counters a missing group is asked for through.
+        const GeometryStreaming* streaming = g_Renderer.m_GeometryStreaming.get();
+        inputs.SetGroupStates(streaming ? streaming->GetGroupStateBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetLoadRequests(streaming ? streaming->GetLoadRequestBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetStreamCounters(streaming ? streaming->GetStreamCounterBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+
         Renderer::RenderPassParams params;
         params.commandList = commandList;
         params.shaderID = shaderID;
@@ -444,6 +451,13 @@ protected:
         data.SetDisableCulling(Config::Get().m_ClusterDisableCulling ? 1u : 0u);
         data.SetCullPass(cullPass);
         data.SetEnableRejectLists(Config::Get().m_ClusterTwoPass ? 1u : 0u);
+
+        // Streaming is always on: the traversal asks for any group the arena does not hold, and the age filter
+        // hands back the ones the camera has left. Without cluster data there is no table to read, so it is off.
+        const GeometryStreaming* streaming = g_Renderer.m_GeometryStreaming.get();
+        data.SetStreamingEnabled(streaming != nullptr ? 1u : 0u);
+        data.SetFrameIndex(streaming != nullptr ? streaming->GetFrameIndex() : 0u);
+        data.SetMaxLoads(streaming != nullptr ? streaming->GetMaxLoads() : 0u);
         commandList->writeBuffer(cb, &data, sizeof(data), 0);
 
         return cb;
@@ -732,9 +746,9 @@ protected:
         const nvrhi::BufferHandle dummyStructured = CommonResources::GetInstance().DummySRVStructuredBuffer;
         inputs.SetClusterJobs(bDrawClusters ? handles.clusterJobs : dummyStructured);
         inputs.SetClusterRecords(scene.m_ClusterRecordBuffer ? scene.m_ClusterRecordBuffer : dummyStructured);
-        inputs.SetClusterTriangles(scene.m_ClusterTriangleBuffer ? scene.m_ClusterTriangleBuffer : dummyStructured);
-        inputs.SetClusterVertices(scene.m_ClusterVertexBuffer ? scene.m_ClusterVertexBuffer : dummyStructured);
+        inputs.SetClusterStreamData(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetStreamDataBuffer() : dummyStructured);
         inputs.SetClusterGroups(scene.m_ClusterGroupBuffer ? scene.m_ClusterGroupBuffer : dummyStructured);
+        inputs.SetClusterGroupStates(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetGroupStateBuffer() : dummyStructured);
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 

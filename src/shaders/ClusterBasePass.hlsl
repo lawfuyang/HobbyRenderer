@@ -17,8 +17,6 @@
 
 static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobs      = srrhi::BasePassInputs::GetClusterJobs();
 static const StructuredBuffer<srrhi::ClusterRecord> g_ClusterRecords   = srrhi::BasePassInputs::GetClusterRecords();
-static const StructuredBuffer<uint>                 g_ClusterTriangles = srrhi::BasePassInputs::GetClusterTriangles();
-static const StructuredBuffer<uint>                 g_ClusterVertices  = srrhi::BasePassInputs::GetClusterVertices();
 
 struct ClusterMeshPayload
 {
@@ -66,10 +64,11 @@ void MSMain(
     SetMeshOutputCounts(cluster.m_VertexCount, cluster.m_TriangleCount);
 
     const srrhi::PerInstanceData instance = g_Instances[payload.m_InstanceIndex];
+    const uint streamBase = ClusterStreamBase(cluster);
 
     if (outputIndex < cluster.m_VertexCount)
     {
-        const uint vertexIndex = g_ClusterVertices[cluster.m_VertexOffset + outputIndex];
+        const uint vertexIndex = g_ClusterStreamData[streamBase + cluster.m_VertexOffset + outputIndex];
         const srrhi::Vertex vertex = UnpackVertex(g_Vertices[vertexIndex]);
 
         // A cluster has no meshlet and no per-cluster material yet, so meshletID stays invalid; the LOD level
@@ -80,5 +79,5 @@ void MSMain(
     }
 
     if (outputIndex < cluster.m_TriangleCount)
-        triangles[outputIndex] = UnpackTriangle(g_ClusterTriangles[cluster.m_TriangleOffset + outputIndex]);
+        triangles[outputIndex] = UnpackTriangle(g_ClusterStreamData[streamBase + cluster.m_TriangleOffset + outputIndex]);
 }

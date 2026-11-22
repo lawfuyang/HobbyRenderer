@@ -52,6 +52,11 @@ static RWStructuredBuffer<uint>                             g_RejectClusterMasks
 static RWStructuredBuffer<srrhi::ClusterGroupRef>           g_Pass0Groups           = srrhi::ClusterTraversalInputs::GetPass0Groups();
 static RWStructuredBuffer<uint>                             g_Pass0GroupCount       = srrhi::ClusterTraversalInputs::GetPass0GroupCount();
 
+// Geometry streaming: which groups are in the arena, and where a missing one is asked for.
+static RWStructuredBuffer<srrhi::ClusterGroupState>         g_GroupStates      = srrhi::ClusterTraversalInputs::GetGroupStates();
+static RWStructuredBuffer<uint>                             g_LoadRequests     = srrhi::ClusterTraversalInputs::GetLoadRequests();
+static RWStructuredBuffer<srrhi::ClusterStreamCounters>     g_StreamCounters   = srrhi::ClusterTraversalInputs::GetStreamCounters();
+
 // The grid slots the traversal owns in ClusterIndirectArgs: the first pass' mesh dispatch, the second pass'
 // INIT grid, its mesh dispatch, and the grid of the pass that re-tests the per-cluster rejections.
 static const uint kIndirectSlotFirstPassMesh = 0;
@@ -145,6 +150,33 @@ void SphereTests(float3 centerLocal, float radiusLocal, float4x4 world, out bool
 bool RecordsRejects()
 {
 	return g_Traversal.m_CullPass == 0 && g_Traversal.m_EnableRejectLists != 0;
+}
+
+// True when the group's geometry is in the streaming arena. With streaming off every group is resident and this
+// is always true.
+bool GroupIsResident(uint groupIndex)
+{
+	return g_Traversal.m_StreamingEnabled == 0 ||
+		g_GroupStates[groupIndex].m_Address < srrhi::ClusterStream::kInvalidAddressStart;
+}
+
+// Asks the host to stream a group in. The address table doubles as the request ledger: an unresident group's
+// address carries the frame index of the last request, so the second instance to reach the same group in the
+// same frame sees its own tag and stays quiet.
+void RequestGroup(uint groupIndex)
+{
+	const uint tagged = srrhi::ClusterStream::kInvalidAddressStart |
+		(g_Traversal.m_FrameIndex & srrhi::ClusterStream::kInvalidAddressMask);
+
+	uint previousAddress;
+	InterlockedMax(g_GroupStates[groupIndex].m_Address, tagged, previousAddress);
+	if (previousAddress == tagged)
+		return;
+
+	uint slot;
+	InterlockedAdd(g_StreamCounters[0].m_LoadCount, 1, slot);
+	if (slot < g_Traversal.m_MaxLoads)
+		g_LoadRequests[slot] = groupIndex;
 }
 
 // A cluster's own bounding sphere, in view space with the instance's scale folded in. The group's sphere is the
@@ -332,12 +364,23 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
+	const uint groupIndex = NodeGetGroupIndex(packed);
+
+	// A group whose blob is not in the arena cannot be drawn, so it is asked for instead of queued. The levels
+	// around it still cover its region: the groups pass draws a finer cluster while the coarser group that
+	// replaced it is missing.
+	if (!GroupIsResident(groupIndex))
+	{
+		RequestGroup(groupIndex);
+		return;
+	}
+
 	uint slot;
 	InterlockedAdd(g_GroupQueueCount[0], 1, slot);
 
 	srrhi::ClusterGroupRef groupRef;
 	groupRef.m_InstanceIndex = nodeRef.m_InstanceIndex;
-	groupRef.m_GroupIndex = NodeGetGroupIndex(packed);
+	groupRef.m_GroupIndex = groupIndex;
 	g_GroupQueue[slot] = groupRef;
 
 	InterlockedAdd(g_Counters[0].m_GroupCount, 1);
@@ -374,6 +417,11 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
+	// The cut picked this group's level for this region, so it is the level whose geometry is about to be drawn.
+	// That - not merely being visited - is what the age filter counts as use: a level the cut skipped is worth
+	// unloading, and the arena then converges on what is actually on screen when the budget is tight.
+	g_GroupStates[groupRef.m_GroupIndex].m_Age = 0;
+
 	float3 centerLocal;
 	float radiusLocal;
 	GetBoundsSphere(group.m_Bounds, centerLocal, radiusLocal);
@@ -408,9 +456,10 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 		// A coarser group that replaced this cluster covers its region already when that group is detailed
 		// enough for this camera. This is per cluster, not per group: one group holds clusters that were
-		// replaced by different coarser groups.
+		// replaced by different coarser groups. A replacement that is not resident covers nothing, so the
+		// finer cluster stays: that is the "finest available" rule while a level streams in.
 		const uint generating = g_GeneratingGroups[clusterIndex];
-		if (generating != kNoGroup)
+		if (generating != kNoGroup && GroupIsResident(generating))
 		{
 			const bool bReplacedByCoarser = bForcedLevel ?
 				(g_Groups[generating].m_LODLevel <= forcedLevel) :

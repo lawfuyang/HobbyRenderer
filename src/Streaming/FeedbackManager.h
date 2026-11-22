@@ -22,6 +22,10 @@ namespace nvfeedback
         double m_CpuTimeBeginFrame = 0.0;
         double m_CpuTimeUpdateTileMappings = 0.0;
         double m_CpuTimeResolve = 0.0;
+
+        // The tile heaps are spending more than Renderer::GetTileStreamingBudgetBytes() right now; the standby pool and
+        // empty-heap release are forced so the next frames hand it back.
+        bool m_bOverBudget = false;
     };
 
     struct FeedbackTextureUpdate
@@ -119,6 +123,10 @@ namespace nvfeedback
         void UploadMinMipData(nvrhi::ICommandList* commandList);
 
         const FeedbackManagerStats& GetStats() const;
+
+        // What the tile heaps hold right now. The cluster arena shares Renderer::GetStreamingBudgetBytes() with
+        // them and is sized from what is left, so it asks for this while it decides its own capacity.
+        uint64_t GetAllocatedHeapBytes() const;
 
         // Resolve an index (from FeedbackTextureUpdate::m_TextureIdx) to the actual FeedbackTexture pointer.
         // External code uses this after receiving results from BeginFrame.

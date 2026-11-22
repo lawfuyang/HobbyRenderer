@@ -15,6 +15,7 @@
 #include "shaders/srrhi/cpp/Cluster.h"
 
 // Streaming
+#include "GeometryStreaming.h"
 #include "Streaming/FeedbackManager.h"
 #include "Streaming/AsyncTileIO.h"
 
@@ -499,6 +500,20 @@ public:
     bool m_bSamplerFeedbackEnabled = false;
 
     std::unique_ptr<nvfeedback::FeedbackManager> m_FeedbackManager;
+
+    // Cluster group streaming (docs/cluster-lod-implementation-plan.md phase 5). Created by the scene load, since
+    // the arena and the residency table are sized by the cooked cluster data.
+    std::unique_ptr<GeometryStreaming> m_GeometryStreaming;
+
+    // The cap both streaming systems budget against: the texture tile heaps and the cluster group arena. It is the
+    // OS's VRAM budget for this application unless --stream-budget or the "Streaming VRAM" slider overrides it.
+    uint64_t m_StreamingBudgetMB = 0;
+    uint64_t GetStreamingBudgetBytes() const { return m_StreamingBudgetMB * 1024ull * 1024ull; }
+
+    // The tile heaps' share of that cap: everything the cluster arena does not reserve. Geometry is served first
+    // because its reservation is fixed when the scene loads, while tile heaps are allocated on demand and can
+    // therefore give memory back if the arena grows (a raised budget or a bigger scene).
+    uint64_t GetTileStreamingBudgetBytes() const;
 
     std::unique_ptr<nvfeedback::AsyncTileIO> m_AsyncTileIO; // Async tile I/O thread pool
 

@@ -117,6 +117,49 @@ struct ClusterCounters
     uint m_CoarseClusterCount;      // drawn clusters that came from a level other than 0
 };
 
+// ── Geometry streaming ───────────────────────────────────────────────────────────────────────────────
+//
+// A group's triangle and vertex words live in one blob in a device arena (ClusterStreamData), and its
+// address is looked up through ClusterGroupState. A group address below kClusterInvalidAddressStart is an
+// element offset into that arena. At or above it the group is not resident, and the low bits carry the
+// frame index of the last load request - which is how a second request for the same group in the same
+// frame is suppressed without a second buffer (docs/cluster-lod-implementation-plan.md phase 5).
+
+// A group address below kInvalidAddressStart is an element offset into the streaming arena; at or above it the
+// group is not resident and the low bits carry the frame index of the last load request.
+srinput ClusterStream
+{
+    static const uint kInvalidAddressStart = 2147483648u;   // 1 << 31
+    static const uint kInvalidAddressMask = 2147483647u;    // (1 << 31) - 1
+};
+
+// 8 B. Per-group streaming state, indexed by global group index. Not part of the cooked-mesh layout: the
+// host writes the initial state, the traversal requests missing groups and ages touched ones, StreamUpdate
+// patches loads and unloads, and the age filter ages the rest.
+struct ClusterGroupState
+{
+    uint m_Address;   // arena element offset, or kClusterInvalidAddressStart | last request frame
+    uint m_Age;       // frames since the traversal last used this group
+};
+
+// 8 B. One address-table edit, applied by ClusterStreamUpdate. The first m_PatchUnloadCount entries of the
+// list clear their group's address, the rest set it to m_Address.
+struct ClusterStreamPatch
+{
+    uint m_GroupIndex;
+    uint m_Address;
+};
+
+// 16 B, read back after the traversal: how many group requests this frame produced. The request lists
+// themselves follow the counter in the same readback buffer.
+struct ClusterStreamCounters
+{
+    uint m_LoadCount;
+    uint m_UnloadCount;
+    uint m_MaxLoads;      // set by the host before the frame
+    uint m_MaxUnloads;
+};
+
 cbuffer ClusterTraversalConstants
 {
     float4x4 m_View;
@@ -141,7 +184,14 @@ cbuffer ClusterTraversalConstants
     uint  m_DisableCulling;
     uint  m_CullPass;            // 0 = builds the visible list, 1 = re-tests the reject lists against this frame's HZB
     uint  m_EnableRejectLists;   // 0 keeps the first pass' rejections on the floor, as it did before phase 4
-    uint  m_Pad2;
+    uint  m_StreamingEnabled;
+
+    // Streaming: the frame index tags load requests (see ClusterGroupState::m_Address), and the budget caps
+    // how many groups one frame can ask for.
+    uint  m_FrameIndex;
+    uint  m_MaxLoads;
+    uint  m_Pad0;
+    uint  m_Pad1;
 };
 
 srinput ClusterTraversalInputs
@@ -185,4 +235,47 @@ srinput ClusterTraversalInputs
     // The first pass' group queue, left intact for pass 1: its length is the grid the reject pass runs over.
     RWStructuredBuffer<ClusterGroupRef> Pass0Groups;        // u17
     RWStructuredBuffer<uint>            Pass0GroupCount;    // u18
+
+    // Geometry streaming: the residency table the traversal reads and requests against, the list it appends
+    // missing groups to, and the counters that list is read back by.
+    RWStructuredBuffer<ClusterGroupState>     GroupStates;      // u19
+    RWStructuredBuffer<uint>                  LoadRequests;     // u20
+    RWStructuredBuffer<ClusterStreamCounters> StreamCounters;   // u21
+};
+
+// The patch pass (ClusterStreaming.hlsl). One thread per entry of the patch list; the host only writes the
+// entries it actually decided this frame.
+cbuffer ClusterStreamUpdateConstants
+{
+    uint m_PatchCount;
+    uint m_PatchUnloadCount;   // entries [0, m_PatchUnloadCount) clear the address, the rest set it
+    uint m_FrameIndex;
+    uint m_Pad0;
+};
+
+srinput ClusterStreamUpdateInputs
+{
+    ClusterStreamUpdateConstants m_StreamCB;
+
+    StructuredBuffer<ClusterStreamPatch>   Patches;      // t0
+    RWStructuredBuffer<ClusterGroupState>  GroupStates;  // u0
+};
+
+// The age filter (ClusterStreaming.hlsl): one thread per resident group with a non-persistent address.
+cbuffer ClusterStreamAgeConstants
+{
+    uint m_ActiveGroupCount;
+    uint m_AgeThreshold;
+    uint m_FrameIndex;
+    uint m_MaxUnloads;
+};
+
+srinput ClusterStreamAgeInputs
+{
+    ClusterStreamAgeConstants m_StreamCB;
+
+    StructuredBuffer<uint>                    ActiveGroups;     // t0
+    RWStructuredBuffer<ClusterGroupState>     GroupStates;      // u0
+    RWStructuredBuffer<uint>                  UnloadRequests;   // u1
+    RWStructuredBuffer<ClusterStreamCounters> StreamCounters;   // u2
 };

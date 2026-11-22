@@ -233,6 +233,45 @@ void Config::ParseCommandLine(int argc, char* argv[])
                 SDL_LOG_ASSERT_FAIL("Missing value for --cluster-two-pass", "[Config] Missing value for --cluster-two-pass");
             }
         }
+        else if (std::strcmp(arg, "--stream-budget") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                const int value = std::atoi(argv[++i]);
+                s_Instance.m_StreamingBudgetMiB = value > 0 ? uint64_t(value) : 0;
+                SDL_Log("[Config] Streaming VRAM budget %llu MiB%s",
+                    static_cast<unsigned long long>(s_Instance.m_StreamingBudgetMiB),
+                    s_Instance.m_StreamingBudgetMiB == 0 ? " (auto: the OS budget)" : "");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --stream-budget", "[Config] Missing value for --stream-budget");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-stream-age") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterStreamAgeThreshold = std::max(1, std::atoi(argv[++i]));
+                SDL_Log("[Config] Cluster stream age threshold %u frames", s_Instance.m_ClusterStreamAgeThreshold);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-stream-age", "[Config] Missing value for --cluster-stream-age");
+            }
+        }
+        else if (std::strcmp(arg, "--cluster-stream-stats-frame") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ClusterStreamStatsFrame = std::atoi(argv[++i]);
+                SDL_Log("[Config] Cluster streaming stats printed on frame %d", s_Instance.m_ClusterStreamStatsFrame);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-stream-stats-frame", "[Config] Missing value for --cluster-stream-stats-frame");
+            }
+        }
         else if (std::strcmp(arg, "--no-taa") == 0)
         {
             s_Instance.m_bNoTAA = true;
@@ -541,6 +580,9 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --no-restir-di                   Disable ReSTIR DI, so the sun shadow is one hard ray per pixel");
             SDL_Log("  --no-auto-exposure              Fixed exposure (no adaptation history in an exactness A/B)");
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
+            SDL_Log("  --stream-budget <MiB>            VRAM budget for texture + cluster streaming (0 = the OS budget)");
+            SDL_Log("  --cluster-stream-age <frames>    Untouched frames before a resident group is unloaded (default 16)");
+            SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
             SDL_Log("  --fov <degrees>                  Override the vertical field of view; default is the scene camera's");

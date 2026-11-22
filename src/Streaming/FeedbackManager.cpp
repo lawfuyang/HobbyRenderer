@@ -10,6 +10,14 @@ namespace nvfeedback
     // ─── HeapAllocator ───────────────────────────────────────────────────────
     uint32_t HeapAllocator::AllocateHeap()
     {
+        // The streaming budget is shared with the cluster group arena, which reserves its blobs first: a heap that
+        // would take the tile heaps past what is left is refused rather than letting the driver page. The tile that
+        // needed it stays at a coarser mip, which is exactly what the MinMip texture advertises. A total budget of
+        // zero means "no cap", so the remaining share is only consulted when there is one.
+        const uint64_t budgetBytes = g_Renderer.GetStreamingBudgetBytes();
+        if (budgetBytes != 0 && m_TotalAllocatedBytes + kHeapSizeInBytes > g_Renderer.GetTileStreamingBudgetBytes())
+            return UINT32_MAX;
+
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
         nvrhi::HeapDesc heapDesc{};
@@ -217,7 +225,12 @@ namespace nvfeedback
         // 64 tiles ≈ 4 MB of VRAM headroom for hysteresis.
         // In packed-mips-only mode the pool is zero: a standby tile is still mapped, so anything
         // above the packed levels has to be freed for the VRAM to actually drop.
-        ttmConfig.numExtraStandbyTiles = m_bPackedMipsOnly ? 0 : 64;
+        // Over the streaming budget the pool goes to zero as well, so TrimStandbyTiles() hands the VRAM back within
+        // a frame instead of after the hysteresis timeout.
+        const uint64_t budgetBytes = g_Renderer.GetStreamingBudgetBytes();
+        m_StatsLastFrame.m_bOverBudget =
+            budgetBytes != 0 && m_HeapAllocator->GetTotalAllocatedBytes() > g_Renderer.GetTileStreamingBudgetBytes();
+        ttmConfig.numExtraStandbyTiles = (m_bPackedMipsOnly || m_StatsLastFrame.m_bOverBudget) ? 0 : 64;
         m_TiledTextureManager->SetConfig(ttmConfig);
 
         // ── Step 1: Feed TTM the feedback whose decode has completed ──
@@ -331,7 +344,9 @@ namespace nvfeedback
 
             while (m_NumTTMHeaps < numRequiredHeaps)
             {
-                uint32_t heapId = m_HeapAllocator->AllocateHeap();
+                const uint32_t heapId = m_HeapAllocator->AllocateHeap();
+                if (heapId == UINT32_MAX)
+                    break;   // the streaming budget is spent (see HeapAllocator::AllocateHeap)
                 m_TiledTextureManager->AddHeap(heapId);
                 m_NumTTMHeaps++;
 
@@ -342,7 +357,7 @@ namespace nvfeedback
                 }
             }
         }
-        else if (allowHeapRelease)
+        else if (allowHeapRelease || m_StatsLastFrame.m_bOverBudget)
         {
             // Only release empty heaps when there are no pending tile uploads.
             // While m_PendingTileRequests is non-empty, TTM has already allocated
@@ -756,6 +771,11 @@ namespace nvfeedback
         return m_StatsLastFrame;
     }
 
+    uint64_t FeedbackManager::GetAllocatedHeapBytes() const
+    {
+        return m_HeapAllocator ? m_HeapAllocator->GetTotalAllocatedBytes() : 0;
+    }
+
     void FeedbackManager::MapPackedMips(uint32_t textureIdx)
     {
         // Synchronously allocate packed tiles through TTM and set up the GPU tile mapping.
@@ -787,7 +807,9 @@ namespace nvfeedback
                 const uint32_t heapsNeeded = (deficit + kHeapSizeInTiles - 1) / kHeapSizeInTiles;
                 for (uint32_t i = 0; i < heapsNeeded; ++i)
                 {
-                    uint32_t heapId = m_HeapAllocator->AllocateHeap();
+                    const uint32_t heapId = m_HeapAllocator->AllocateHeap();
+                    if (heapId == UINT32_MAX)
+                        break;   // the streaming budget is spent (see HeapAllocator::AllocateHeap)
                     m_TiledTextureManager->AddHeap(heapId);
                     m_NumTTMHeaps++;
                 }
