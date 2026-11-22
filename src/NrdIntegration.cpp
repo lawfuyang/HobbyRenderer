@@ -92,7 +92,7 @@ static void NrdFree(void* /*userArg*/, void* memory)
 // FillNRDCommonSettings
 // ============================================================================
 
-void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32_t height, uint32_t gbufferScale)
+void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32_t height)
 {
     
     const srrhi::PlanarViewConstants& view     = g_Renderer.m_Scene.m_View;
@@ -120,12 +120,8 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32
 
     // Motion vectors are in render-resolution pixels (Δx, Δy). NRD expects:
     //   pixelUvPrev = pixelUv + mv.xy → scale pixels → UV.
-    // The UV space is independent of the denoised resolution, so the scale divides by the
-    // render-resolution width, which is the denoised width times the block size.
-    const uint32_t fullWidth  = width  * gbufferScale;
-    const uint32_t fullHeight = height * gbufferScale;
-    settings.motionVectorScale[0] = 1.0f / static_cast<float>(fullWidth);
-    settings.motionVectorScale[1] = 1.0f / static_cast<float>(fullHeight);
+    settings.motionVectorScale[0] = 1.0f / static_cast<float>(width);
+    settings.motionVectorScale[1] = 1.0f / static_cast<float>(height);
     settings.motionVectorScale[2] = 1.0f; // mv.z is already in view-space units
 
     settings.isMotionVectorInWorldSpace = false;
@@ -139,14 +135,12 @@ void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32
     settings.isHistoryConfidenceAvailable        = false;
     settings.isDisocclusionThresholdMixAvailable = false;
 
-    // Camera jitter offsets (in render-resolution pixels, current and previous frame),
-    // converted to the denoised resolution.
+    // Camera jitter offsets (in render-resolution pixels, current and previous frame).
     // m_PixelOffset is the Halton sub-pixel jitter applied to the projection matrix.
-    const float jitterScale = 1.0f / static_cast<float>(gbufferScale);
-    settings.cameraJitter[0]     = view.m_PixelOffset.x * jitterScale;
-    settings.cameraJitter[1]     = view.m_PixelOffset.y * jitterScale;
-    settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x * jitterScale;
-    settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y * jitterScale;
+    settings.cameraJitter[0]     = view.m_PixelOffset.x;
+    settings.cameraJitter[1]     = view.m_PixelOffset.y;
+    settings.cameraJitterPrev[0] = prevView.m_PixelOffset.x;
+    settings.cameraJitterPrev[1] = prevView.m_PixelOffset.y;
 
     // Sky pixels are written as 1e6 in GenerateViewZ — safely outside this range.
     settings.denoisingRange = 1000.0f;

@@ -25,11 +25,8 @@
 // Fill nrd::CommonSettings from the current frame's scene view matrices,
 // motion vector scale, resolution, and frame index.
 //
-// width/height  — resolution the denoiser runs at (may be below the render resolution).
-// gbufferScale  — how many render-resolution pixels one denoised pixel stands for; the
-//                 motion vectors are expressed in render-resolution pixels, so it turns
-//                 them into the denoised resolution.
-void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32_t height, uint32_t gbufferScale);
+// width/height — the render resolution the denoiser runs at.
+void FillNRDCommonSettings(nrd::CommonSettings& settings, uint32_t width, uint32_t height);
 
 // ============================================================================
 // NrdIntegration

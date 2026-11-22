@@ -116,11 +116,6 @@ enum class ReSTIR_QualityMode { Balanced, HighPerformance, HighQuality };
 static ReSTIR_QualityMode g_ReSTIR_QualityMode = ReSTIR_QualityMode::Balanced;
 static rtxdi::CheckerboardMode g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
 
-// Half-resolution DI: the screen-space passes, their G-buffer reads, the reservoir grid,
-// the NRD chain and its lighting outputs all run at half the render resolution, and
-// CompositingPass upsamples the result back to full resolution.
-static bool g_ReSTIRDI_HalfRes = true;
-
 // Balanced — based on reference QualityPreset::Medium.
 // ReSTIR DI: ReGIR RIS, 8 samples, raytraced temporal BC, basic spatial BC.
 // ReSTIR GI: moderate history, boiling filter on, no MIS.
@@ -323,14 +318,6 @@ void RTXDIIMGUISettings()
     ImGui::Checkbox("Enable REBLUR Denoising (NRD)", &g_Renderer.m_EnableReSTIRDenoising);
     if (g_Renderer.m_EnableReSTIRDenoising)
         ImGui::TextDisabled("  Diffuse + specular denoised separately via REBLUR D+S.");
-
-    // ---- Resolution scale ---------------------------------------------------
-    ImGui::Checkbox("Half-Resolution DI", &g_ReSTIRDI_HalfRes);
-    ImGui::SetItemTooltip("Runs the RTXDI screen-space passes, the reservoir grid and the\n"
-                          "NRD chain at half the render resolution, then upsamples.\n"
-                          "The G-buffer itself stays full resolution.");
-    if (g_ReSTIRDI_HalfRes)
-        ImGui::TextDisabled("  This frame: ray budget, denoising and lighting outputs at 1/2 resolution.");
 
     ImGui::Separator();
 
@@ -755,11 +742,6 @@ public:
     RGTextureHandle m_RG_RawDiffuseOutput;
     RGTextureHandle m_RG_RawSpecularOutput;
 
-    // Reduced-resolution copies of the screen-space inputs NRD reads, declared only when
-    // the DI chain runs below the render resolution.
-    RGTextureHandle m_RG_HalfLinearDepth;
-    RGTextureHandle m_RG_HalfMotionVectors;
-    RGTextureHandle m_RG_HalfDenoiserNormalRoughness;
     // DEBUG: per-pixel secondary emission output from GI FinalShading.
     RGTextureHandle m_RG_GIDebugEmission;
     RGBufferHandle  m_RG_LightDataBuffer;
@@ -842,9 +824,6 @@ public:
     // When g_ReSTIRDI_CheckerboardMode differs from this, the contexts must be recreated.
     rtxdi::CheckerboardMode                 m_CachedCheckerboardMode = rtxdi::CheckerboardMode::Black;
 
-    // Resolution factor the contexts were created with; a change requires recreation.
-    uint32_t                                m_CachedGbufferScale = 1;
-
     // Set when the resolution changed: NRD's permanent pool textures were reallocated,
     // so its history has to be dropped instead of being reprojected into garbage.
     bool                                    m_bFlushNrdHistory = true;
@@ -852,27 +831,12 @@ public:
     std::unique_ptr<NrdIntegration> m_NrdIntegration;
     nrd::ReblurSettings m_NRDReblurSettings;
 
-    // How many render-resolution pixels one screen-space pass pixel stands for.
-    static uint32_t GbufferScale()
-    {
-        return g_ReSTIRDI_HalfRes ? 2u : 1u;
-    }
-
-    static uint32_t DIExtent(uint32_t extent)
-    {
-        return (extent + GbufferScale() - 1u) / GbufferScale();
-    }
-
     void CreateRTXDIContext()
     {
-        const uint32_t width  = DIExtent(g_Renderer.m_RHI->m_SwapchainExtent.x);
-        const uint32_t height = DIExtent(g_Renderer.m_RHI->m_SwapchainExtent.y);
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
-        // Checkerboard already halves the reservoir grid along X; combining it with the
-        // resolution scale would give two different notions of "pass pixel".
-        SDL_assert(!(g_ReSTIRDI_HalfRes && g_ReSTIRDI_CheckerboardMode != rtxdi::CheckerboardMode::Off));
-        m_CachedGbufferScale = GbufferScale();
-        m_bFlushNrdHistory   = true;
+        m_bFlushNrdHistory = true;
 
         // Reset the allocator so it can be reused if context is recreated
         m_RISBufferSegmentAllocator = rtxdi::RISBufferSegmentAllocator{};
@@ -928,8 +892,6 @@ public:
         g_ReSTIRGI_BoilingParams     = rtxdi::GetDefaultReSTIRGIBoilingFilterParams();
         g_ReSTIRGI_SpatialParams     = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
         g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
-
-        g_ReSTIRDI_HalfRes = Config::Get().m_HalfResDI;
 
         CreateRTXDIContext();
         switch (Config::Get().m_ReSTIRPreset)
@@ -1161,8 +1123,7 @@ public:
 
         // The resources declared below are sized from the context's static parameters, so a
         // resolution change has to recreate it here rather than later in Render.
-        if (m_CachedCheckerboardMode != g_ReSTIRDI_CheckerboardMode ||
-            m_CachedGbufferScale != GbufferScale())
+        if (m_CachedCheckerboardMode != g_ReSTIRDI_CheckerboardMode)
         {
             CreateRTXDIContext();
         }
@@ -1170,12 +1131,6 @@ public:
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
-
-        // Extent of the screen-space chain (the render extent divided by the resolution
-        // scale). The G-buffer and its history stay at the render extent.
-        const uint32_t gbufferScale = GbufferScale();
-        const uint32_t diWidth  = DIExtent(width);
-        const uint32_t diHeight = DIExtent(height);
 
         // RIS buffer capacity covers local-light tiles, env-light tiles, and ReGIR cell slots.
         // The env segment always reserves k_EnvRISTileSize × k_EnvRISTileCount
@@ -1190,13 +1145,13 @@ public:
         // ------------------------------------------------------------------
         if (g_Renderer.m_EnableReSTIRDenoising)
         {
-            m_NrdIntegration->Setup(renderGraph, diWidth, diHeight);
+            m_NrdIntegration->Setup(renderGraph, width, height);
 
             auto makeHDR = [&](const char* name, RGTextureHandle& h)
             {
                 RGTextureDesc desc;
-                desc.m_NvrhiDesc.width = diWidth;
-                desc.m_NvrhiDesc.height = diHeight;
+                desc.m_NvrhiDesc.width = width;
+                desc.m_NvrhiDesc.height = height;
                 desc.m_NvrhiDesc.format = nvrhi::Format::RGBA16_FLOAT;
                 desc.m_NvrhiDesc.isUAV = true;
                 desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -1219,8 +1174,8 @@ public:
             // Non-denoised path: DI output textures read by DeferredRenderer
             auto makeHDR = [&](const char* name, RGTextureHandle& h) {
                 RGTextureDesc desc;
-                desc.m_NvrhiDesc.width = diWidth;
-                desc.m_NvrhiDesc.height = diHeight;
+                desc.m_NvrhiDesc.width = width;
+                desc.m_NvrhiDesc.height = height;
                 desc.m_NvrhiDesc.format = Renderer::HDR_COLOR_FORMAT;
                 desc.m_NvrhiDesc.isUAV = true;
                 desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -1439,8 +1394,7 @@ public:
             renderGraph.DeclareTexture(desc, m_RG_DenoiserNormalRoughness);
         }
 
-        // Linear depth (R32F) — written by GenerateViewZ, read by PostprocessGBuffer and
-        // (full resolution) by the DI passes; NRD reads the reduced copy below.
+        // Linear depth (R32F) — written by GenerateViewZ, read by PostprocessGBuffer and the DI passes.
         {
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width  = width;
@@ -1450,39 +1404,6 @@ public:
             desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             desc.m_NvrhiDesc.debugName    = "RTXDILinearDepth";
             renderGraph.DeclareTexture(desc, m_RG_LinearDepth);
-        }
-
-        // Reduced-resolution inputs of the denoiser: view depth, motion vectors and packed
-        // normal+roughness. Only used when the DI chain runs below the render resolution;
-        // NRD requires every input to have the resolution it denoises at.
-        if (gbufferScale > 1)
-        {
-            RGTextureDesc depthDesc;
-            depthDesc.m_NvrhiDesc.width  = diWidth;
-            depthDesc.m_NvrhiDesc.height = diHeight;
-            depthDesc.m_NvrhiDesc.format = nvrhi::Format::R32_FLOAT;
-            depthDesc.m_NvrhiDesc.isUAV  = true;
-            depthDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            depthDesc.m_NvrhiDesc.debugName    = "RTXDIHalfLinearDepth";
-            renderGraph.DeclareTexture(depthDesc, m_RG_HalfLinearDepth);
-
-            RGTextureDesc mvDesc;
-            mvDesc.m_NvrhiDesc.width  = diWidth;
-            mvDesc.m_NvrhiDesc.height = diHeight;
-            mvDesc.m_NvrhiDesc.format = Renderer::GBUFFER_MOTION_FORMAT;
-            mvDesc.m_NvrhiDesc.isUAV  = true;
-            mvDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            mvDesc.m_NvrhiDesc.debugName    = "RTXDIHalfMotionVectors";
-            renderGraph.DeclareTexture(mvDesc, m_RG_HalfMotionVectors);
-
-            RGTextureDesc nrDesc;
-            nrDesc.m_NvrhiDesc.width  = diWidth;
-            nrDesc.m_NvrhiDesc.height = diHeight;
-            nrDesc.m_NvrhiDesc.format = nvrhi::Format::R10G10B10A2_UNORM;
-            nrDesc.m_NvrhiDesc.isUAV  = true;
-            nrDesc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            nrDesc.m_NvrhiDesc.debugName    = "RTXDIHalfDenoiserNormalRoughness";
-            renderGraph.DeclareTexture(nrDesc, m_RG_HalfDenoiserNormalRoughness);
         }
 
         // CompositingPass output (RGBA16F) — final DI + emissive composite, read by DeferredRenderer
@@ -1582,7 +1503,7 @@ public:
         if (bDoReSTIRGI && !bCombinedMode)
         {
             RGBufferDesc bd;
-            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(diWidth) * diHeight * sizeof(srrhi::SecondaryGBufferData);
+            bd.m_NvrhiDesc.byteSize     = static_cast<uint64_t>(width) * height * sizeof(srrhi::SecondaryGBufferData);
             bd.m_NvrhiDesc.structStride = sizeof(srrhi::SecondaryGBufferData);
             bd.m_NvrhiDesc.canHaveUAVs  = true;
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -1619,15 +1540,8 @@ public:
         
         nvrhi::IDevice* device = g_Renderer.m_RHI->m_NvrhiDevice;
 
-        // Render extent versus the extent of the screen-space chain. Everything below that
-        // dispatches over the screen (resampling, shading, the SHARC query) uses `width` and
-        // `height`; only the passes that must touch every pixel of the render target use the
-        // full extent.
-        const uint32_t fullWidth    = g_Renderer.m_RHI->m_SwapchainExtent.x;
-        const uint32_t fullHeight   = g_Renderer.m_RHI->m_SwapchainExtent.y;
-        const uint32_t gbufferScale = GbufferScale();
-        const uint32_t width        = DIExtent(fullWidth);
-        const uint32_t height       = DIExtent(fullHeight);
+        const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
+        const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
         const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled &&
             (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI ||
@@ -1635,11 +1549,9 @@ public:
         const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
 
-        // Recreate RTXDI contexts if checkerboard mode or the resolution scale changed
-        // (both are static parameters).
+        // Recreate the RTXDI contexts if the checkerboard mode changed (it is a static parameter).
         {
-            if (m_CachedCheckerboardMode != g_ReSTIRDI_CheckerboardMode ||
-                m_CachedGbufferScale != gbufferScale)
+            if (m_CachedCheckerboardMode != g_ReSTIRDI_CheckerboardMode)
             {
                 CreateRTXDIContext();
             }
@@ -1818,7 +1730,6 @@ public:
 
         // ---- Misc flags ----
         g_Const.SetEnablePreviousTLAS(1u);
-        g_Const.SetGbufferScale(gbufferScale);
         g_Const.SetDiscountNaiveSamples(m_Context->GetSpatialResamplingParameters().discountNaiveSamples);
         g_Const.SetEnableBrdfIndirect(bDoReSTIRGI ? 1u : 0u);
         g_Const.SetEnableBrdfAdditiveBlend(bDoReSTIRGI ? 1u : 0u);
@@ -2127,8 +2038,8 @@ public:
                 .bindingSetDesc = Renderer::CreateBindingSetDesc(vzInputs),
                 .bIncludeBindlessResources = false,
                 .dispatchParams = {
-                    .x = DivideAndRoundUp(fullWidth,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
-                    .y = DivideAndRoundUp(fullHeight, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .x = DivideAndRoundUp(width,  srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
+                    .y = DivideAndRoundUp(height, srrhi::RTXDIConstants::RTXDI_SCREEN_SPACE_GROUP_SIZE),
                     .z = 1u
                 }
             });
@@ -2168,39 +2079,6 @@ public:
                 .bIncludeBindlessResources = false,
                 .framebuffer    = ppFb,
                 .depthStencilState = &ds,
-            });
-        }
-
-        // ------------------------------------------------------------------
-        // DownsampleDIInputs
-        // NRD reads view depth, motion vectors and normal+roughness at the
-        // resolution it denoises at, so when the DI chain is reduced they are
-        // point sampled down to the DI extent. The full-resolution copies remain
-        // the inputs of the DI passes themselves.
-        // ------------------------------------------------------------------
-        if (gbufferScale > 1)
-        {
-            PROFILE_SCOPED("Downsample DI Inputs");
-
-            srrhi::DownsampleDIInputs dsInputs;
-            dsInputs.SetConst(rtxdiCB);
-            dsInputs.SetViewDepth(linearDepthTex);
-            dsInputs.SetMotionVectors(motionTex);
-            dsInputs.SetNormalRoughness(denoiserNRTex);
-            dsInputs.SetHalfViewDepth(renderGraph.GetTexture(m_RG_HalfLinearDepth, RGResourceAccessMode::Write), 0);
-            dsInputs.SetHalfMotionVectors(renderGraph.GetTexture(m_RG_HalfMotionVectors, RGResourceAccessMode::Write), 0);
-            dsInputs.SetHalfNormalRoughness(renderGraph.GetTexture(m_RG_HalfDenoiserNormalRoughness, RGResourceAccessMode::Write), 0);
-
-            g_Renderer.AddComputePass({
-                .commandList    = commandList,
-                .shaderID       = ShaderID::RTXDI_DOWNSAMPLEDIINPUTS_MAIN,
-                .bindingSetDesc = Renderer::CreateBindingSetDesc(dsInputs),
-                .bIncludeBindlessResources = false,
-                .dispatchParams = {
-                    .x = DivideAndRoundUp(width,  8u),
-                    .y = DivideAndRoundUp(height, 8u),
-                    .z = 1u
-                }
             });
         }
 
@@ -2674,7 +2552,7 @@ public:
         {
             // linearDepthTex was already written by GenerateViewZ above (unconditional)
             nrd::CommonSettings commonSettings{};
-            FillNRDCommonSettings(commonSettings, width, height, gbufferScale);
+            FillNRDCommonSettings(commonSettings, width, height);
 
             if (m_bFlushNrdHistory)
             {
@@ -2682,28 +2560,15 @@ public:
                 m_bFlushNrdHistory = false;
             }
 
-            // At a reduced resolution NRD consumes the point-sampled copies produced by
-            // DownsampleDIInputs; the lighting signals already have the DI extent.
-            const bool bReduced = (gbufferScale > 1);
-            nvrhi::TextureHandle nrdNormalRoughness = bReduced
-                ? renderGraph.GetTexture(m_RG_HalfDenoiserNormalRoughness, RGResourceAccessMode::Read)
-                : denoiserNRTex;
-            nvrhi::TextureHandle nrdViewZ = bReduced
-                ? renderGraph.GetTexture(m_RG_HalfLinearDepth, RGResourceAccessMode::Read)
-                : linearDepthTex;
-            nvrhi::TextureHandle nrdMotionVectors = bReduced
-                ? renderGraph.GetTexture(m_RG_HalfMotionVectors, RGResourceAccessMode::Read)
-                : motionTex;
-
             m_NrdIntegration->RunDenoiserPasses(
                 commandList,
                 renderGraph,
-                nrdNormalRoughness,     // IN_NORMAL_ROUGHNESS (packed by PostprocessGBuffer)
+                denoiserNRTex,          // IN_NORMAL_ROUGHNESS (packed by PostprocessGBuffer)
                 ormTex,                 // roughness source fallback
                 rawDiffuseTex,          // IN_DIFF_RADIANCE_HITDIST
                 rawSpecularTex,         // IN_SPEC_RADIANCE_HITDIST
-                nrdViewZ,               // IN_VIEWZ (written by GenerateViewZ above)
-                nrdMotionVectors,       // IN_MV (g_RG_GBufferMotionVectors, or its reduced copy)
+                linearDepthTex,         // IN_VIEWZ (written by GenerateViewZ above)
+                motionTex,              // IN_MV (g_RG_GBufferMotionVectors)
                 denoisedDiffuseTex,     // OUT_DIFF_RADIANCE_HITDIST
                 denoisedSpecularTex,    // OUT_SPEC_RADIANCE_HITDIST
                 commonSettings,
@@ -2725,13 +2590,6 @@ public:
             compInputs.SetGBufferEmissive(emissiveTex);
             compInputs.SetDiffuseIllumination(bDenoise ? denoisedDiffuseTex  : diOutputTex);
             compInputs.SetSpecularIllumination(bDenoise ? denoisedSpecularTex : specularOutTex);
-            // Depth pair for the upsample: this pixel's view depth and the reduced chain's, so
-            // lighting is not blended across a silhouette. Unused when the chain is full size,
-            // but it still has to be a single-channel float SRV there.
-            compInputs.SetViewDepth(linearDepthTex);
-            compInputs.SetHalfViewDepth(gbufferScale > 1
-                ? renderGraph.GetTexture(m_RG_HalfLinearDepth, RGResourceAccessMode::Read)
-                : linearDepthTex);
 
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(compositedTex);

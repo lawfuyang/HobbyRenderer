@@ -125,21 +125,19 @@ int RAB_TranslateLightIndex(uint lightIndex, bool currentToPrevious)
 // ---------------------------------------------------------------------------
 // DI resolution
 // ---------------------------------------------------------------------------
-// The screen-space passes may run below the render resolution (g_Const.gbufferScale
-// == 2 halves them on both axes). The G-buffer, its history copies and the
-// normal+roughness texture always hold the full render resolution, so a pass pixel
-// addresses the top-left texel of the block it stands for.
+// The screen-space passes run at the render resolution, and the G-buffer, its history
+// copies and the normal+roughness texture have the same extent.
 
 // Size of the screen-space passes, in pixels.
 int2 RAB_GetRenderSize()
 {
-    return int2(g_Const.view.m_ViewportSize) / int(g_Const.gbufferScale);
+    return int2(g_Const.view.m_ViewportSize);
 }
 
-// Full-resolution texel that the given pass pixel reads from.
+// Texel that the given pass pixel reads from.
 int2 RAB_GbufferTexelPos(int2 pixelPosition)
 {
-    return pixelPosition * int(g_Const.gbufferScale);
+    return pixelPosition;
 }
 
 #endif // RAB_BUFFER_HLSLI

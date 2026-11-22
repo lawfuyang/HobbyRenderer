@@ -124,12 +124,6 @@ struct Config
     // camera moves need a scripted camera to be reproducible.
     float m_CameraSpinDegreesPerSecond = 0.0f;
 
-    // Run the RTXDI screen-space chain (reservoirs, shading, the SHARC query) and the NRD
-    // denoiser at half the render resolution; CompositingPass upsamples the result with a
-    // depth-aware filter. On by default because it takes ~10 ms off a Bistro frame at 1080p.
-    // The panel exposes the same toggle, and `--full-res-di` turns it off for an A/B run.
-    bool m_HalfResDI = true;
-
     // ReSTIR quality preset: 0 = Balanced (the FullSample's "Medium"), 1 = HighPerformance
     // (its "Fast"), 2 = HighQuality (its "Ultra"). Selected with --restir-preset.
     int m_ReSTIRPreset = 0;

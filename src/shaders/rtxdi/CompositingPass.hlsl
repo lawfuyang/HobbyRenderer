@@ -31,18 +31,11 @@
 #define t_GBufferEmissive        srrhi::CompositingPassInputs::GetGBufferEmissive()
 #define t_DiffuseIllumination    srrhi::CompositingPassInputs::GetDiffuseIllumination()
 #define t_SpecularIllumination   srrhi::CompositingPassInputs::GetSpecularIllumination()
-#define t_ViewDepth              srrhi::CompositingPassInputs::GetViewDepth()
-#define t_HalfViewDepth          srrhi::CompositingPassInputs::GetHalfViewDepth()
 #define DENOISER_MODE_RELAX      srrhi::RTXDIConstants::DENOISER_MODE_RELAX
 #define DENOISER_MODE_REBLUR     srrhi::RTXDIConstants::DENOISER_MODE_REBLUR
 
 // Undo the NRD packing of the lighting signal. Packed radiance is not linear, so it
-// has to be unpacked before any interpolation between texels.
-
-// How far a reduced-resolution tap may stray in relative view depth before it stops counting
-// as the same surface as the full-resolution pixel being shaded. Silhouettes are where the
-// difference between a 1× and a 2× reconstruction shows, so the weight has to fall off fast.
-#define DEPTH_WEIGHT_STRENGTH 50.0f
+// has to be unpacked before it is remodulated with the surface albedo.
 
 float4 UnpackIllumination(float4 packed)
 {
@@ -55,64 +48,10 @@ float4 UnpackIllumination(float4 packed)
     return packed;
 }
 
-// 1 for a tap on the same surface as this pixel, falling to ~0 across a depth discontinuity.
-float DepthWeight(float tapDepth, float centreDepth)
-{
-    const float relative = abs(tapDepth - centreDepth) / max(centreDepth, 1e-3f);
-    return 1.0f / (1.0f + relative * DEPTH_WEIGHT_STRENGTH);
-}
-
-// Reads the lighting signal at this full-resolution pixel. The screen-space passes may have run
-// at a fraction of the render resolution, in which case the four surrounding texels are unpacked
-// and blended - by their bilinear weight times their depth weight, so a tap on the far side of a
-// silhouette contributes nothing and the edge keeps its shape instead of smearing across the 2×2
-// block.
+// Reads the lighting signal at this pixel.
 float4 LoadIllumination(Texture2D<float4> tex, int2 pixelPos)
 {
-    if (g_Const.gbufferScale <= 1)
-        return UnpackIllumination(tex[pixelPos]);
-
-    const int2 srcSize = int2(g_Const.view.m_ViewportSize) / int(g_Const.gbufferScale);
-
-    float2 srcPos = (float2(pixelPos) + 0.5f) / float(g_Const.gbufferScale) - 0.5f;
-    int2 i0 = int2(floor(srcPos));
-    float2 f = srcPos - float2(i0);
-
-    i0 = clamp(i0, int2(0, 0), srcSize - 1);
-    const int2 i1 = min(i0 + 1, srcSize - 1);
-
-    float4 v00 = UnpackIllumination(tex[int2(i0.x, i0.y)]);
-    float4 v10 = UnpackIllumination(tex[int2(i1.x, i0.y)]);
-    float4 v01 = UnpackIllumination(tex[int2(i0.x, i1.y)]);
-    float4 v11 = UnpackIllumination(tex[i1]);
-
-    // Bilinear weights, kept as the fallback when no tap shares this pixel's surface.
-    float w00 = (1.0f - f.x) * (1.0f - f.y);
-    float w10 = f.x * (1.0f - f.y);
-    float w01 = (1.0f - f.x) * f.y;
-    float w11 = f.x * f.y;
-
-    const float centreDepth = t_ViewDepth[pixelPos];
-    if (centreDepth > 0.0f && centreDepth < 1e5f)
-    {
-        const float d00 = DepthWeight(t_HalfViewDepth[int2(i0.x, i0.y)], centreDepth);
-        const float d10 = DepthWeight(t_HalfViewDepth[int2(i1.x, i0.y)], centreDepth);
-        const float d01 = DepthWeight(t_HalfViewDepth[int2(i0.x, i1.y)], centreDepth);
-        const float d11 = DepthWeight(t_HalfViewDepth[i1], centreDepth);
-
-        const float weightedSum = w00 * d00 + w10 * d10 + w01 * d01 + w11 * d11;
-        if (weightedSum > 1e-3f)
-        {
-            w00 *= d00;
-            w10 *= d10;
-            w01 *= d01;
-            w11 *= d11;
-            const float invSum = 1.0f / weightedSum;
-            w00 *= invSum; w10 *= invSum; w01 *= invSum; w11 *= invSum;
-        }
-    }
-
-    return v00 * w00 + v10 * w10 + v01 * w01 + v11 * w11;
+    return UnpackIllumination(tex[pixelPos]);
 }
 
 float4 CompositingPass_PSMain(FullScreenVertexOut input) : SV_Target

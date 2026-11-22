@@ -28,9 +28,6 @@ see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
 - **Quality presets**: `--restir-preset balanced|highperf|highquality` map to the FullSample's
   Medium / Fast / Ultra sample budgets (8/8/8, 4/4/4 and 16/16/16 ReGIR-RIS samples, with matching
   BRDF sample counts, spatial sample counts and bias-correction modes)
-- **Half-resolution lighting**: the RTXDI chain and NRD can run at half the render resolution
-  (`m_HalfResDI`, on by default) with a depth-aware joint-bilateral upsample in the compositing pass;
-  `--full-res-di` overrides
 - **NRD REBLUR denoising**: diffuse + specular REBLUR with anti-firefly filtering, 3×3 hit-distance
   reconstruction, and NRD-pack normal/roughness input
 - **Ray-traced shadows**: inline ray queries for the sun, with an option to disable shadow tracing
@@ -186,7 +183,6 @@ Every switch is parsed in `src/Config.cpp`; the useful ones:
 |---|---|
 | `--scene <path>` | scene to load (`.gltf`/`.glb`, or a `.scene.json` descriptor with models and lights) |
 | `--restir-preset balanced\|highperf\|highquality` | ReSTIR sample budget (default `balanced`) |
-| `--half-res-di` / `--full-res-di` | lighting and denoising resolution |
 | `--fov <degrees>` | vertical FOV override |
 | `--exposure <stops>` | auto-exposure bias |
 | `--taa-sharpness <0..1>` | sharpening in the TAA resolve |

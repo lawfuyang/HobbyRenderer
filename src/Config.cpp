@@ -56,16 +56,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_EnableOmm = true;
             SDL_Log("[Config] Opacity micromaps enabled via command line");
         }
-        else if (std::strcmp(arg, "--half-res-di") == 0)
-        {
-            s_Instance.m_HalfResDI = true;
-            SDL_Log("[Config] RTXDI + denoising at half resolution");
-        }
-        else if (std::strcmp(arg, "--full-res-di") == 0)
-        {
-            s_Instance.m_HalfResDI = false;
-            SDL_Log("[Config] RTXDI + denoising at full resolution");
-        }
         else if (std::strcmp(arg, "--cluster") == 0)
         {
             if (i + 1 < argc)
@@ -574,8 +564,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --no-denoise                     Ablation: no NRD denoising");
             SDL_Log("  --no-sky                         Ablation: no sky and no sky ambient");
             SDL_Log("  --taa-sharpness <0..1>           Sharpening applied by the TAA resolve");
-            SDL_Log("  --half-res-di                    Run RTXDI and NRD at half the render resolution");
-            SDL_Log("  --full-res-di                    Override: run RTXDI and NRD at full render resolution (default)");
             SDL_Log("  --cluster <0|1>                  Cook the per-primitive cluster LOD into the cooked mesh (default 1)");
             SDL_Log("  --cluster-stats                  Dump the cluster LOD of every primitive and run the phase 0 checks");
             SDL_Log("  --cluster-stats-frame <n>        Print the GPU cluster counters on frame n");
