@@ -90,6 +90,15 @@ public:
     nvrhi::BufferHandle GetGroupStateBuffer() const { return m_GroupStates; }
     nvrhi::BufferHandle GetLoadRequestBuffer() const { return m_LoadRequests; }
     nvrhi::BufferHandle GetStreamCounterBuffer() const { return m_StreamCounters; }
+    // One uint per geometry: the first LOD level of the suffix that is fully resident. The discrete-LOD path may
+    // seed a traversal at that level or coarser and nowhere finer, because a level that is missing groups would
+    // draw holes where the continuous cut draws whatever is available.
+    nvrhi::BufferHandle GetDiscreteLevelBuffer() const { return m_DiscreteLevels; }
+    // The host mirror of that table, so the CPU reference classifies exactly what the device does.
+    uint32_t GetDiscreteLevel(uint32_t geometryIndex) const
+    {
+        return geometryIndex < m_DiscreteLevelsHost.size() ? m_DiscreteLevelsHost[geometryIndex] : 0u;
+    }
 
 private:
     struct Residency
@@ -114,6 +123,17 @@ private:
 
     // Elements the streaming budget allows the arena to hold, capped at what the scene actually needs.
     uint32_t CapacityElementsForBudget() const;
+
+    // One geometry's slice of the global group array, and how many levels it has.
+    struct GeometryRange
+    {
+        uint32_t m_GroupOffset = 0;
+        uint32_t m_GroupCount = 0;
+        uint32_t m_LODLevelCount = 0;
+    };
+
+    // Publishing the discrete level is a cheap derivation of the residency table, done after every change.
+    void UpdateDiscreteLevels(nvrhi::ICommandList* cmd);
 
     void BuildInitialResidency(nvrhi::ICommandList* cmd);
     // Drops resident groups (coarsest level first) until they fit the arena.
@@ -170,6 +190,9 @@ private:
     ReadbackSlot m_Slots[kReadbackSlots];
     uint32_t m_NextSlot = 0;
 
+    std::vector<GeometryRange> m_Geometries;
+    std::vector<uint32_t> m_DiscreteLevelsHost;   // mirror of what the device holds, so an upload is only needed on change
+
     nvrhi::BufferHandle m_StreamData;       // the arena, one uint per element
     nvrhi::BufferHandle m_GroupStates;      // ClusterGroupState per global group
     nvrhi::BufferHandle m_LoadRequests;     // group indices the traversal could not draw
@@ -177,6 +200,7 @@ private:
     nvrhi::BufferHandle m_StreamCounters;   // ClusterStreamCounters
     nvrhi::BufferHandle m_ActiveGroupList;  // group indices the age filter iterates
     nvrhi::BufferHandle m_PatchList;        // ClusterStreamPatch list for ClusterStreamUpdate
+    nvrhi::BufferHandle m_DiscreteLevels;   // one uint per geometry: first fully resident LOD level
 
     Stats m_Stats{};   // refreshed by PreRender for the stats line
 };

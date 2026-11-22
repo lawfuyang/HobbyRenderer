@@ -58,6 +58,14 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
     m_GroupCount = uint32_t(m_GroupBlobs.size());
     m_FrameIndex = 0;
 
+    // The geometry slices are the per-MeshData group ranges the discrete-LOD levels are derived per geometry.
+    m_Geometries.clear();
+    m_Geometries.reserve(data.m_Geometry.size());
+    for (const srrhi::ClusterGeometry& geometry : data.m_Geometry)
+    {
+        m_Geometries.push_back(GeometryRange{ geometry.m_GroupOffset, geometry.m_GroupCount, geometry.m_LODLevelCount });
+    }
+
     m_TotalElements = 0;
     m_CoarsestElements = 0;
     uint32_t maxBlobElements = 0;
@@ -99,6 +107,8 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
         sizeof(uint32_t), false, "Scene_ClusterStreamActiveGroups");
     m_PatchList = createStreamBuffer(kMaxPatches * uint32_t(sizeof(srrhi::ClusterStreamPatch)),
         sizeof(srrhi::ClusterStreamPatch), false, "Scene_ClusterStreamPatches");
+    m_DiscreteLevels = createStreamBuffer(std::max<uint32_t>(uint32_t(m_Geometries.size()), 1) * uint32_t(sizeof(uint32_t)),
+        sizeof(uint32_t), false, "Scene_ClusterDiscreteLevels");
 
     for (ReadbackSlot& slot : m_Slots)
     {
@@ -124,6 +134,7 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
     }
 
     BuildInitialResidency(cmd);
+    UpdateDiscreteLevels(cmd);
 
     SDL_Log("[ClusterLod] geometry streaming: %u groups, %.2f MB of blobs (largest %.1f KB), arena %.2f MB of a "
             "%llu MB budget, age threshold %u",
@@ -311,10 +322,13 @@ void GeometryStreaming::Shutdown()
     m_StreamCounters = nullptr;
     m_ActiveGroupList = nullptr;
     m_PatchList = nullptr;
+    m_DiscreteLevels = nullptr;
 
     m_SourceTriangles.clear();
     m_SourceVertices.clear();
     m_GroupBlobs.clear();
+    m_Geometries.clear();
+    m_DiscreteLevelsHost.clear();
     m_Residency.clear();
     m_FreeBlocks.clear();
     m_ActiveGroups.clear();
@@ -670,6 +684,53 @@ void GeometryStreaming::PreRender(nvrhi::ICommandList* cmd)
     m_Stats.m_ResidentBytes = residentBytes;
     m_Stats.m_ActiveGroups = uint32_t(m_ActiveGroups.size());
     m_Stats.m_WastedBytes = m_Stats.m_ArenaBytes - residentBytes;
+}
+
+void GeometryStreaming::UpdateDiscreteLevels(nvrhi::ICommandList* cmd)
+{
+    SDL_assert(cmd != nullptr);
+    if (m_Geometries.empty())
+        return;
+
+    // Per geometry: the first level of the suffix that is entirely resident. That suffix is what the discrete-LOD
+    // path may seed a raster traversal at, so it can never ask for geometry the arena does not hold.
+    std::vector<uint32_t> levels(m_Geometries.size(), 0u);
+    uint32_t groupsPerLevel[ClusterLod::kMaxLODLevels];
+    uint32_t residentPerLevel[ClusterLod::kMaxLODLevels];
+
+    for (size_t geometryIndex = 0; geometryIndex < m_Geometries.size(); ++geometryIndex)
+    {
+        const GeometryRange& geometry = m_Geometries[geometryIndex];
+        SDL_assert(geometry.m_GroupOffset + geometry.m_GroupCount <= m_GroupCount);
+
+        memset(groupsPerLevel, 0, sizeof(groupsPerLevel));
+        memset(residentPerLevel, 0, sizeof(residentPerLevel));
+
+        for (uint32_t g = geometry.m_GroupOffset; g < geometry.m_GroupOffset + geometry.m_GroupCount; ++g)
+        {
+            const uint32_t level = std::min(m_GroupBlobs[g].m_LODLevel, ClusterLod::kMaxLODLevels - 1);
+            groupsPerLevel[level]++;
+            residentPerLevel[level] += m_Residency[g].m_bResident ? 1u : 0u;
+        }
+
+        // Every primitive's coarsest level is resident (it is the cheapest cover the arena always keeps), so the
+        // scan starts there and walks towards higher detail while the levels it passes are complete.
+        const uint32_t levelCount = std::min(geometry.m_LODLevelCount, ClusterLod::kMaxLODLevels);
+        uint32_t discrete = levelCount > 0 ? levelCount - 1 : 0;
+        while (discrete > 0 && residentPerLevel[discrete - 1] == groupsPerLevel[discrete - 1])
+            --discrete;
+
+        levels[geometryIndex] = discrete;
+    }
+
+    const bool bSizeChanged = m_DiscreteLevelsHost.size() != levels.size();
+    const bool bValueChanged = !bSizeChanged &&
+        memcmp(levels.data(), m_DiscreteLevelsHost.data(), levels.size() * sizeof(uint32_t)) != 0;
+    if (!bSizeChanged && !bValueChanged)
+        return;
+
+    m_DiscreteLevelsHost = levels;
+    cmd->writeBuffer(m_DiscreteLevels, levels.data(), levels.size() * sizeof(uint32_t), 0);
 }
 
 void GeometryStreaming::PostRender(nvrhi::ICommandList* cmd)
