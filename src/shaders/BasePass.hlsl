@@ -233,6 +233,10 @@ float4 Forward_PSMain(VSOut input) : SV_TARGET
 #elif defined(ALPHA_TEST)
 GBufferOut GBuffer_PSMain_AlphaTest(VSOut input)
 #else
+// The opaque variant has no discard, so the depth/stencil test can run before it: SampleBindlessStreamedTexture
+// requires that (it writes sampler feedback), and without it every rasterised fragment pays the streaming texture
+// chain, occluded or not.
+[earlydepthstencil]
 GBufferOut GBuffer_PSMain(VSOut input)
 #endif
 {

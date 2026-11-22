@@ -88,28 +88,12 @@ float4 SampleBindlessStreamedTexture(uint textureIndex, uint samplerIndex, uint 
         return tex.Sample(sam, uv);
     }
 
-    // Streaming path: read minMip FIRST and use it as MinLODClamp on the initial
-    // sample.  This prevents the hardware from ever fetching an unmapped tile.
+    // Streaming path: read minMip FIRST and use it as MinLODClamp on the sample.  This prevents the hardware from
+    // ever fetching an unmapped tile, which is what makes the clamp sufficient on its own — same argument as the
+    // ray-traced variant below, which documents why a status sample is not used: resolving the whole footprint and
+    // checking the mapping is a slow path, and in this shader it would be paid once per texture per fragment.
     uint minResidentMip = LoadMinResidentMip(minMipIndex, uv, minMipDims);
-
-    // Sample with minResidentMip as the MinLODClamp — the hardware will never
-    // pick a finer mip than what is resident, so the result is always mapped.
-    uint status;
-    float4 color = tex.Sample(sam, uv, 0, minResidentMip, status);
-
-    // Last-resort fallback: if the sample is STILL unmapped (minMip texture is
-    // transiently stale — e.g. the very first frame before any minMip upload),
-    // walk coarser mips until we find a mapped one.  Packed mips are always
-    // resident so this loop always terminates.
-    if (!CheckAccessFullyMapped(status))
-    {
-        for (uint mip = minResidentMip + 1; mip < srrhi::CommonConsts::MAX_MIP_COUNT; ++mip)
-        {
-            color = tex.Sample(sam, uv, 0, mip, status);
-            if (CheckAccessFullyMapped(status))
-                break;
-        }
-    }
+    float4 color = tex.Sample(sam, uv, 0, minResidentMip);
 
     WriteStreamingFeedback(tex, sam, uv, feedbackIndex, forcedMip);
     return color;
