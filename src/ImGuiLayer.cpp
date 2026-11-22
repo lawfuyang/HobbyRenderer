@@ -73,7 +73,7 @@ void ImGuiLayer::UpdateFrame()
         // pitch, which keeps the numbers from shifting and the separators from sliding as digits come and go.
         ImGui::Text("FPS: %7.1f", g_Renderer.m_FPS);
         ImGui::Separator();
-        ImGui::Text("CPU Time: %8.3f ms", g_Renderer.m_FrameTime);
+        ImGui::Text("CPU Time: %8.3f ms", g_Renderer.m_CpuTime);
         ImGui::Separator();
         // Summed from the frame's top-level GPU scopes, so it is the timed GPU work of a whole frame rather than
         // one pass, and it arrives one frame late like every other timer-query value.

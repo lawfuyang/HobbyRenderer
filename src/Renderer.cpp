@@ -918,6 +918,10 @@ void Renderer::Run()
         if (m_FrameTime > 0.0)
             m_FPS = 1000.0 / m_FrameTime;
 
+        // The menu bar reports CPU cost, so the submission stall is taken back out: when the GPU is the
+        // bottleneck, ExecutePendingCommandLists blocks on waitForIdle and m_FrameTime follows the GPU.
+        m_CpuTime = m_FrameTime - m_ExecuteWaitTime;
+
         // The first frames carry the scene load's uploads and the first PSO compilations, so they are slow by
         // definition and would drown out a real hitch.
         constexpr uint64_t kHitchWarmupFrames = 60;
@@ -2620,7 +2624,9 @@ void Renderer::ExecutePendingCommandLists()
     // Wait for GPU to finish all work before presenting
     {
         PROFILE_SCOPED("WaitForIdle");
+        const uint64_t waitStartNs = SDL_GetTicksNS();
         m_RHI->m_NvrhiDevice->waitForIdle();
+        m_ExecuteWaitTime = SDL_NS_TO_MS(static_cast<double>(SDL_GetTicksNS() - waitStartNs));
      }
 
     // Everything submitted by the frames before this one has now completed, so their GPU timestamps can be

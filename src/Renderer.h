@@ -389,7 +389,11 @@ public:
     std::vector<std::shared_ptr<IRenderer>> m_Renderers;
 
     // ─── Frame statistics & profiling ───
+    // Whole loop iteration, including the frame-rate sleep; follows the GPU when it is the bottleneck.
     double m_FrameTime = 0.0;
+    // m_FrameTime without the WaitForIdle stall that ExecutePendingCommandLists takes when the GPU is
+    // behind. Recording and command list submission stay included, so this is the CPU cost of the frame.
+    double m_CpuTime   = 0.0;
     double m_FPS       = 0.0;
     uint32_t m_TargetFPS = 200;
     nvrhi::PipelineStatistics m_SelectedBasePassPipelineStatistics;
@@ -571,6 +575,9 @@ public:
 
 private:
     // ─── Bindless heap internals ───
+
+    // WaitForIdle time of the last ExecutePendingCommandLists call, subtracted to form m_CpuTime.
+    double m_ExecuteWaitTime = 0.0;
 
     // Allocate an index, write a BindingSetItem to the global descriptor table, return index (UINT32_MAX on failure).
     uint32_t WriteBindlessItem(const nvrhi::BindingSetItem& item, const char* label);
