@@ -2568,6 +2568,7 @@ void Renderer::LogClusterCounters()
         params.m_ForcedLODLevel = Config::Get().m_ClusterForcedLOD;
 
         const uint32_t reference = CountReferenceCutClusters(m_Scene, bucket, params);
+        const DiscreteLodReference discreteReference = CountReferenceDiscreteLod(m_Scene, bucket, params);
 
         // The second pass adds to what is drawn, not to what the first pass requested, so the cut comparison has
         // to see both lists.
@@ -2580,6 +2581,17 @@ void Renderer::LogClusterCounters()
             counters.m_SecondPassClusterCount,
             counters.m_RejectNodeCount, counters.m_RejectGroupCount, counters.m_RejectClusterCount, reference,
             drawnClusters == reference ? "match" : "differs");
+
+        // The discrete classification is per instance and camera dependent, so the only meaningful check is a
+        // second, independent evaluation of it. Culling has to be off for the cluster counts to be comparable: the
+        // GPU's number is what survived culling, the reference's is the whole level.
+        SDL_Log("[ClusterLod] %s discrete LOD: %u instances, %u clusters | CPU reference: %u instances, %u clusters (%s%s)",
+            readback.m_BucketName, counters.m_DiscreteInstanceCount, counters.m_DiscreteClusterCount,
+            discreteReference.m_Instances, discreteReference.m_Clusters,
+            counters.m_DiscreteInstanceCount == discreteReference.m_Instances ? "instances match" : "instances differ",
+            Config::Get().m_ClusterDisableCulling ?
+                (counters.m_DiscreteClusterCount == discreteReference.m_Clusters ? ", clusters match" : ", clusters differ") :
+                ", cluster counts need --cluster-no-culling");
 
         readback.m_BucketName = nullptr;
     }

@@ -1,5 +1,9 @@
 #include "ClusterLodScene.h"
 
+#include "Config.h"
+#include "GeometryStreaming.h"
+#include "Renderer.h"
+
 // Aggregated view of the cluster DAGs a scene was cooked with. The cut checks (V0.2, V0.3) need the vertex
 // positions, which are not kept on the CPU after upload: they run during the cook instead, where
 // SceneLoader has them (see SceneLoader::ProcessMeshes, --cluster-stats).
@@ -158,4 +162,150 @@ uint32_t CountReferenceCutClusters(const Scene& scene, const Scene::BucketInfo& 
     }
 
     return total;
+}
+
+namespace
+{
+    // The primitive behind each MeshData index, which is how the traversal finds it too.
+    std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> MapClustersByMeshData(const Scene& scene)
+    {
+        std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData;
+        for (const Scene::Mesh& mesh : scene.m_Meshes)
+        {
+            for (size_t pi = 0; pi < mesh.m_Primitives.size() && pi < mesh.m_Clusters.size(); ++pi)
+            {
+                clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
+            }
+        }
+        return clustersByMeshData;
+    }
+
+    float InstanceWorldScale(const Matrix& world)
+    {
+        return std::max({ std::sqrt(world._11 * world._11 + world._12 * world._12 + world._13 * world._13),
+            std::sqrt(world._21 * world._21 + world._22 * world._22 + world._23 * world._23),
+            std::sqrt(world._31 * world._31 + world._32 * world._32 + world._33 * world._33) });
+    }
+
+    // The pixel error of a sphere given in the primitive's own space: ClusterTraversal.hlsl's SpherePixelError.
+    float SpherePixelError(const Vector3& centerLocal, float radiusLocal, float error, const Matrix& world,
+                           float worldScale, const ClusterLod::CutParams& params)
+    {
+        const DirectX::XMVECTOR local = DirectX::XMVectorSet(centerLocal.x, centerLocal.y, centerLocal.z, 0.0f);
+        const DirectX::XMVECTOR center = DirectX::XMVector3Transform(local, DirectX::XMLoadFloat4x4(&world));
+
+        const float dx = DirectX::XMVectorGetX(center) - params.m_ViewPosition.x;
+        const float dy = DirectX::XMVectorGetY(center) - params.m_ViewPosition.y;
+        const float dz = DirectX::XMVectorGetZ(center) - params.m_ViewPosition.z;
+        const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) - radiusLocal * worldScale;
+
+        return error * worldScale * params.m_FocalPixels / std::max(distance, 1e-4f);
+    }
+
+    // The level a discrete instance is drawn from, and whether it is discrete at all. Mirrors ClassifyInstanceLod.
+    struct ReferenceClassification
+    {
+        uint32_t m_DrawLevel = 0;
+        bool m_bDiscrete = false;
+    };
+
+    ReferenceClassification ClassifyReference(const ClusterLod::PrimitiveClusters& clusters, uint32_t meshDataIndex,
+                                              const Matrix& world, float worldScale, const ClusterLod::CutParams& params)
+    {
+        ReferenceClassification result;
+        const uint32_t levelCount = clusters.m_LODLevelCount;
+        if (levelCount == 0)
+            return result;
+
+        if (params.m_ForcedLODLevel >= 0)
+        {
+            result.m_DrawLevel = std::min(uint32_t(params.m_ForcedLODLevel), levelCount - 1);
+            return result;
+        }
+
+        // Per level: any group over the error budget, any group under it. ClusterTraversal.hlsl's
+        // ClassifyInstanceLod walks the same groups and asks the same question.
+        uint32_t coarseLevels = 0;
+        uint32_t fineLevels = 0;
+        for (const ClusterLod::Group& group : clusters.m_Groups)
+        {
+            const uint32_t level = std::min(group.m_LODLevel, 31u);
+            const Vector3 center{ group.m_Metric.m_Sphere.x, group.m_Metric.m_Sphere.y, group.m_Metric.m_Sphere.z };
+            const float pixelError = SpherePixelError(center, group.m_Metric.m_Sphere.w, group.m_Metric.m_MaxQuadricError,
+                world, worldScale, params);
+            if (pixelError >= params.m_PixelErrorThreshold)
+                coarseLevels |= 1u << level;
+            else
+                fineLevels |= 1u << level;
+        }
+
+        bool bDiscrete = coarseLevels == 0;
+        uint32_t lodLevelMin = levelCount;
+        if (!bDiscrete)
+        {
+            unsigned long firstBit = 0;
+            _BitScanForward(&firstBit, coarseLevels);
+            lodLevelMin = std::min(uint32_t(firstBit), levelCount);
+            bDiscrete = (fineLevels & (1u << lodLevelMin)) == 0;
+        }
+
+        result.m_DrawLevel = lodLevelMin == 0 ? 0u : lodLevelMin - 1;
+
+        // A cluster no coarser group replaced is drawn at any distance, so nothing below the seeded level may
+        // hold one. Same test as ClusterTraversal.hlsl.
+        uint32_t unreplacedLevels = 0;
+        for (size_t c = 0; c < clusters.m_Clusters.size(); ++c)
+        {
+            if (clusters.m_GeneratingGroups[c] != ClusterLod::kNoGroup)
+                continue;
+            unreplacedLevels |= 1u << std::min(clusters.m_Clusters[c].m_LODLevel, 31u);
+        }
+        bDiscrete = bDiscrete && (unreplacedLevels & ((1u << result.m_DrawLevel) - 1u)) == 0;
+
+        if (Config::Get().m_ClusterDiscreteLod && bDiscrete)
+        {
+            const GeometryStreaming* streaming = g_Renderer.m_GeometryStreaming.get();
+            if (streaming)
+                result.m_DrawLevel = std::max(result.m_DrawLevel, std::min(streaming->GetDiscreteLevel(meshDataIndex), levelCount - 1));
+            result.m_bDiscrete = true;
+        }
+
+        return result;
+    }
+
+}
+
+DiscreteLodReference CountReferenceDiscreteLod(const Scene& scene, const Scene::BucketInfo& bucket, const ClusterLod::CutParams& params)
+{
+    DiscreteLodReference result;
+
+    const std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData = MapClustersByMeshData(scene);
+
+    for (uint32_t i = 0; i < bucket.m_Count; ++i)
+    {
+        const srrhi::PerInstanceData& instance = scene.m_InstanceData[bucket.m_BaseIndex + i];
+
+        const auto it = clustersByMeshData.find(instance.m_MeshDataIndex);
+        if (it == clustersByMeshData.end() || it->second->IsEmpty())
+            continue;
+
+        const ClusterLod::PrimitiveClusters& clusters = *it->second;
+        if (clusters.m_LODLevelCount == 0)
+            continue;
+
+        const ReferenceClassification classification = ClassifyReference(clusters, instance.m_MeshDataIndex,
+            instance.m_World, InstanceWorldScale(instance.m_World), params);
+
+        if (!classification.m_bDiscrete)
+            continue;
+
+        result.m_Instances++;
+        for (const ClusterLod::Group& group : clusters.m_Groups)
+        {
+            if (group.m_LODLevel == classification.m_DrawLevel)
+                result.m_Clusters += group.m_ClusterCount;
+        }
+    }
+
+    return result;
 }

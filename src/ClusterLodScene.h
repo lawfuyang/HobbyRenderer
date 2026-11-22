@@ -12,3 +12,13 @@ void LogSceneClusterStats(const Scene& scene);
 // The CPU reference for V1.1: how many clusters ClusterLod::EvaluateCut draws for `bucket` at this camera. The
 // GPU traversal applies the cut rule per group, so with culling off the two counts have to match exactly.
 uint32_t CountReferenceCutClusters(const Scene& scene, const Scene::BucketInfo& bucket, const ClusterLod::CutParams& baseParams);
+
+// The scene-wide totals the discrete-LOD classification turns into a one-line check: how many instances were
+// classified as a single LOD level and how many clusters that level contributes. Mirrors the traversal's own
+// classification, so the two have to agree on both numbers (V6.2).
+struct DiscreteLodReference
+{
+    uint32_t m_Instances = 0;
+    uint32_t m_Clusters = 0;
+};
+DiscreteLodReference CountReferenceDiscreteLod(const Scene& scene, const Scene::BucketInfo& bucket, const ClusterLod::CutParams& baseParams);

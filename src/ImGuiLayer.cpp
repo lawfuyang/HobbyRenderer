@@ -246,6 +246,14 @@ void ImGuiLayer::UpdateFrame()
                     "first pass had nothing left to reject.");
             }
 
+            ImGui::Checkbox("Discrete LOD", &Config::Get().m_ClusterDiscreteLod);
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("An instance whose cut fits a single LOD level is drawn from that level's node alone,\n"
+                    "and the ray-traced BLAS is patched with the per-mesh LOD that matches it, so rasterisation and\n"
+                    "ray tracing shade the same geometry. Off draws the continuous cut.");
+            }
+
             // The three cluster views are Debug Modes, so this combo is only the traversal's counter readback.
             // The copy runs while the counters are on screen, so a closed panel costs nothing.
             static const char* const kClusterDebugViewNames[] = { "Off", "Traversal Counters" };
