@@ -137,7 +137,10 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         // Always write the selected LOD index for this instance so TLASRenderer
         // can patch the correct BLAS address regardless of rendering path.
-        g_InstanceLOD[actualInstanceIndex] = lodIndex;
+        // The cluster path replaces this: its traversal classifies the instance
+        // from the cluster DAG, which is the geometry the raster actually draws.
+        if (g_Culling.m_UseClusterRendering == 0)
+            g_InstanceLOD[actualInstanceIndex] = lodIndex;
     }
 
     if (g_Culling.m_Phase == 0)

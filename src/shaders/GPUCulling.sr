@@ -18,6 +18,9 @@ cbuffer CullingConstants
     float m_P11;
     int m_ForcedLOD;
     uint m_InstanceBaseIndex;
+    // 1 when the cluster path draws this bucket: the cluster traversal owns InstanceLOD then, because its discrete
+    // LOD classification is what ray tracing has to agree with.
+    uint m_UseClusterRendering;
 };
 
 srinput GPUCullingInputs

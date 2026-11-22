@@ -183,6 +183,13 @@ protected:
         uint32_t m_ClusterIndirectOffset = 0;
     };
 
+    // True when this bucket's base pass draws through the cluster mesh shader, which is also the condition for the
+    // traversal being the owner of the per-instance LOD ray tracing is patched with.
+    bool DrawsClusters(uint32_t alphaMode)
+    {
+        return g_Renderer.m_EnableClusterRendering && alphaMode != srrhi::CommonConsts::ALPHA_MODE_BLEND;
+    }
+
     void ComputeFrustumPlanes(const Matrix& proj, Vector4 frustumPlanes[6])
     {
         const float xScale = fabs(proj._11);
@@ -250,6 +257,7 @@ protected:
         cullData.SetP11(projectionMatrix.m[1][1]);
         cullData.SetForcedLOD(Config::Get().m_ForcedLOD);
         cullData.SetInstanceBaseIndex(args.m_InstanceBaseIndex);
+        cullData.SetUseClusterRendering(DrawsClusters(args.m_AlphaMode) ? 1u : 0u);
         commandList->writeBuffer(cullCB, &cullData, sizeof(cullData), 0);
 
         srrhi::GPUCullingInputs inputs;
