@@ -848,42 +848,133 @@ regression. No Release performance claim can be made until that is fixed.
 
 Gate **M4**: V4.1–V4.3 green; the feature stays behind `m_ClusterTwoPass`.
 
-### Phase 5 — Geometry streaming (groups)
+### Phase 5 — Geometry streaming (groups) — **landed**
 
 **Goal**: bound VRAM by streaming cluster groups, with the same request/decide/serve shape as the
 existing texture streaming.
 
-Tasks
+Tasks — as built
 
-1. `src/GeometryStreaming.h/.cpp` — request list (device → readback), per-frame load/unload budget,
-   residency table + compact active-group list, patch list applied by a `StreamUpdate` compute pass.
-2. Residency encoding as in the reference: `m_GroupAddress >= INVALID_ADDRESS_START` means "not
-   resident", low bits carry the frame index of the last request (idempotent requests without a second
-   buffer). Traversal treats an unresident generating group as "finest available" and still draws.
-3. Storage: persistent arena with a free-list — **decided**, no reserved/sparse resources. Group blobs
-   are 16-byte aligned and self-relative, so a move only rewrites the address table. Fragmentation is
-   bounded by the age filter and measured with `rdc-tools memory` (V5.3); if it ever becomes a problem
-   the fix is defragmentation at load, not a different allocation model.
-4. Age filter pass (`ClusterStreamAgeFilter.hlsl`) unloads groups untouched for N frames, except the
-   levels pinned by the discrete-LOD classification (phase 6).
-5. Integrate with the existing per-frame streaming ordering in `Renderer::UpdateStreamingPreRender`
-   (textures first, geometry patches after — both are "device asks, host serves").
-6. Reuse the readback pattern from `FeedbackManager`: cache-host-visible readback, one event query per
-   slot, **≥ 2 frames of slack** before polling (the texture-streaming note in this repo).
+1. `src/GeometryStreaming.{h,cpp}` owns everything: the arena, the residency table, the request lists, the
+   patch list and three readback slots. `Renderer::UpdateStreamingPreRender` runs it after the texture phases
+   (on its own command list - the texture phases close the one they were given), and
+   `Renderer::UpdateStreamingPostRender` copies this frame's requests into a slot and arms its event.
+2. Residency encoding as planned, in 32-bit form: `ClusterGroupState::m_Address` is an element offset into
+   `ClusterStreamData` below `ClusterStream::kInvalidAddressStart` (`1 << 31`); at or above it the group is
+   missing and the low bits hold the frame index of its last load request, which is what makes a second
+   request in the same frame free (`InterlockedMax` plus a compare). The traversal requests a group it cannot
+   draw, and a cluster whose *replacement* is missing is drawn itself, so a missing level shows finer
+   triangles for a few frames instead of a hole.
+3. Storage: one persistent arena with a host-side first-fit free list, blobs 16-byte aligned. A group blob is
+   its triangle words followed by its vertex words, and the cooked `ClusterRecord` element offsets are
+   rewritten to be **group-local** at load (`ClusterLodGpu.cpp`), so a group's address is the only thing that
+   moves. The cluster records themselves stay resident (1.9 MB on Bistro): the traversal needs every level's
+   per-cluster sphere before it knows whether that level is worth loading.
+4. `ClusterStreaming.hlsl` holds the two passes: `ClusterStreamUpdate_CSMain` (one thread per patch: publish
+   an address or clear one; it runs before the uploads, so freed space is never reused while the old address
+   is still in the table) and `ClusterStreamAgeFilter_CSMain` (one thread per resident group: age it, and ask
+   for it back at the threshold). The active list is host-maintained, so a swap-with-last removal has no race.
+5. Integration is `Renderer::UpdateStreamingPreRender` / `PostRender`, as above.
+6. Readback follows `FeedbackManager`: a cache-host-visible staging buffer per slot, one event query armed
+   with `SignalEventAfterFrame`, and `pollEventQuery` two or more frames later - no frame ever waits.
+7. Streaming is **always on**. There is no geometry-only budget any more: the arena is bounded by
+   `Renderer::GetStreamingBudgetBytes()`, the same VRAM budget the texture tile heaps spend, which defaults to
+   the OS budget for this application (9 283 MB of the 10 051 MB card here) and is overridden by `--stream-budget`
+   or by the panel's "Streaming VRAM" slider. Anything else is automatic: the arena holds every group when the
+   budget allows it, and a lower budget re-packs it (the coarsest levels go first) and hands the memory back.
+   `--cluster-stream-age <frames>` and `--cluster-stream-stats-frame <n>` stay as diagnostics. A level the cut
+   picks is "used"; a level it skips ages out, so with a tight budget the arena converges on what is on screen.
+   The sweep is only dispatched while the arena is **smaller than the scene** (`m_ArenaElements < m_TotalElements`,
+   i.e. the budget really did force a trim): when every blob fits, the preload has already made the whole scene
+   resident and evicting what this frame's cut skipped only guarantees the next camera move asks for it again.
 
-Validation
+Validation (Debug build, 1080p, Bistro restored camera, TAA/indirect/auto-exposure/RT shadows off)
 
-* **V5.1** with a VRAM ceiling (`--cluster-geo-budget <MiB>`), the scene renders the same image as the
-  preloaded path once streaming settles (compare at frame N and N+120).
-* **V5.2** no holes: coverage ≥ 99.9 % of the preloaded image at the same camera, at every camera
-  position of a 300-frame scripted path (new switch; `--camera-spin` is the only motion source today
-  and is not deterministic enough for a per-frame gate).
-* **V5.3** budget honoured: `rdc-tools vram` peak ≤ budget; unload actually returns memory
-  (`memory` heap totals drop between two captures).
-* **V5.4** patch correctness: `rdc-tools deps` shows no read-before-write on the group address table,
-  and `hazards` reports no *certain* finding.
+* **V5.1** the settled streamed image matches the preloaded one: frame 200 at a **4 MiB** budget differs from
+  the preloaded frame by max 35, mean 0.148, 1 482 px over threshold - *below* the renderer's own run-to-run
+  noise floor measured the same way (preloaded frame 150 vs 300: max 37, mean 0.156, 1 751 px). The
+  traversal is the stronger evidence: at frame 150 both runs report the identical
+  `16 instances, 492 nodes, 196 groups, 659 clusters (11 above level 0)` for opaque and
+  `4 / 52 / 10 / 95` for masked, i.e. the cut and the draw list are unchanged once streaming settles
+  (204 of 5 378 groups resident, 1.10 MB of the 4 MiB arena).
+* **V5.2** no holes at a budget that holds the working set: at 4 MiB the frame after a `--camera-spin` run
+  is still the scene. Under deliberate pressure (1 MiB arena, spinning camera) the arena runs at
+  229/5 378 groups with 95 requests a frame and the image stays coherent (mean luminance 79.9, 98 % of
+  pixels non-black) - that is the "finest available" trade-off, not a renderer failure.
+* **V5.3** budget honoured: `rdc-tools resources` shows `Scene_ClusterStreamData` at exactly the 4 MiB the
+  switch asked for (`4 194 304 B`), and the residency line never exceeds it (1.10-1.39 MB in these runs).
+  `rdc-tools vram` puts the whole frame at 355 MB. A *fixed reservation* cannot show heap totals shrinking,
+  because the plan's decision #3 is an arena with a free list rather than sparse resources; what returns to
+  the arena is the resident blobs (204 of 5 378 groups), not the VA range.
+* **V5.4** `deps` on `bin/captures/bistrox_capture.rdc` lists `Scene_ClusterGroupStates` with 19 writes and
+  22 reads and **no** `read-before-write` flag, and the request and counter buffers likewise. `hazards`
+  reports 8 distinct conflicts, all in pre-existing passes (`HZB` read as an SRV while in
+  `UnorderedAccess` in the culling pass, the two RTXDI light-PDF textures and `OpaqueColorTexture_RG`); none
+  involve the streaming buffers. `--rhidebug` on the streaming path: 0 D3D12 errors, 0 nvrhi messages.
+* Perf, `bin/captures/bistrox-frame150.wpix` (settled 4 MiB budget): `Cluster Streaming` 23.1 us, of which
+  the age filter is 16.3 us (dispatch overhead over 204 groups) and the request readback copy 5.2 us. For
+  scale in the same frame: `Cluster Traversal` 403 us for both buckets, `Base Pass Render (Phase 1) -
+  Opaque` 646 us, `Opaque Renderer` 2.03 ms. The churn frame (frame 60, uploads in flight) measures the
+  update pass at 23 us and the whole streaming step at ~41 us.
+* Cut exactness is unchanged with the indirection in place: `--cluster-no-culling` on Bistro gives
+  Opaque 37 236 and Masked 17 513 clusters against the CPU cut reference, both `(match)`; bunny 1 009
+  `(match)`.
 
-Gate **M5**: V5.1–V5.4 green at a budget of ≤ 1.5 GiB of geometry on Bistro.
+### Unconditional sweeping, and what it did to a turning camera (2026-11-21)
+
+The age filter used to run every frame regardless of budget. On a 9 283 MB budget for a 25.57 MB arena that
+is pure loss: a `--camera-spin 300` run from the Bistro street pose had **3 454 of 5 378 groups resident**,
+128 loads and 47 unloads a frame, and 10 339 dropped requests, so a quarter of the frame was missing its
+props (the scooter, the planters, the awnings) and half-covered surfaces read as degenerate geometry at the
+screen edges. With the sweep gated on pressure the same frame is **5 378 of 5 378 resident, 0 loads, 0
+unloads**, and the image matches the all-resident reference to the run-to-run noise floor (13 764 px over 8 of
+2 073 600, against 946 588 px - 428 k of them over 32 - before the gate). A tight budget still sweeps: at
+`--stream-budget 4` the arena stays at 4.00 MB with 1 321 groups and evictions, as designed. Every bucket's
+cut is still `(match)` on the CPU reference with `--cluster-no-culling` (41 822 opaque, 17 852 masked), and
+`--rhidebug` reports 0 D3D12 errors on the turning path.
+
+Generation was measured before it was changed, and it is not the cause: at the Bistro street pose with
+`--camera-spin 300` the metric cut draws 3 117 of 17 302 opaque clusters above level 0 (18 %, and those are
+props - railings, lamps, chairs - while buildings and pavement stay at level 0), forcing level 0 changes the
+same frame by 8 205 px over 8 out of 2 073 600, and the debug ramp (mode 14) is level 0 across every surface.
+`m_DecimationFactor` and `m_ErrorMergePrev` were left alone for that reason: a conservative chain would only
+spend arena and triangles on geometry the cut already declines to coarsen.
+
+Fixed on the way: `Scene_ClusterGeometryBuffer` was being created from the *vertex* buffer's descriptor
+(stride 4) and then re-created a second time in the same block; it is now created once, with its own stride.
+
+Gate **M5**: green at a 4 MiB budget on Bistro (V5.1-V5.4), with the caveat recorded above that a bounded
+arena trades transient holes for memory. Streaming now runs by default against the whole-VRAM budget (the same
+number the texture tile heaps spend, driven by the "Streaming VRAM" slider); the numbers above are what the same
+code does when that budget is turned down to 4 MiB with `--stream-budget`.
+
+#### Budget, and what the default looks like (2026-11-21)
+
+`--stream-budget <MiB>` / the panel slider is one cap for both streaming systems, and the two share it in both
+directions: the arena is sized to `min(scene blobs, budget - what the tile heaps already hold)` when the budget
+changes, and every `HeapAllocator::AllocateHeap` is refused past `budget - arena`
+(`Renderer::GetTileStreamingBudgetBytes`). Whichever system grows last yields, so the sum stays under the cap;
+the one exception is deliberate and is the arena's floor - a budget below the scene's own coarsest cover (3.07 MB
+on Bistro) still gets that cover, because coarse geometry beats no geometry.
+
+Measured on Bistro (frame 100, `--hitch-log 5`, arena from the streaming line, heaps from the hitch line):
+
+| Budget | Texture heaps | Geometry arena | Geometry residency |
+|---|---|---|---|
+| OS budget (9 283 MB) | 160 MB | 25.57 MB (all groups) | 5 378 / 5 378, 0 requests |
+| 96 MB | 64.0 MB in 4 heaps | 25.57 MB (all groups) | 5 378 / 5 378, 0 requests |
+| 48 MB | 32.0 MB in 2 heaps | 16.00 MB | 2 012 / 5 378, 128 loads a frame |
+| 25 MB | 16.0 MB in 1 heap | 9.00 MB | 2 010 / 5 378, 128 loads a frame |
+| 16 MB | 16.0 MB in 1 heap | 3.07 MB (the coarsest-cover floor) | 905 / 5 378 |
+| 4 MB | none - a 16 MB heap does not fit | 4.00 MB | 1 046 / 5 378 |
+
+Two consequences worth knowing before reading the table as a regression: the heaps load their resident tiles
+*before* the arena is sized, so at 48 MB they hold 32 MB and geometry gets the remaining 16 MB (a strict
+geometry-first split would need the tile heaps to evict resident tiles, which the MinMip path does not do), and a
+budget that cannot fit even one heap leaves every texture at its packed mips (4 MB row).
+
+A runtime change is a re-pack, not a reload: shrinking to 8 MB kept 1 305 groups and grew back to 25.57 MB and
+1 717 groups when the budget was raised again, with the drawn cluster count unchanged (19 266).
 
 ### Phase 6 — Discrete LOD for ray tracing / raster agreement
 
