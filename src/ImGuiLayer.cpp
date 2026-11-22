@@ -982,6 +982,150 @@ void ImGuiLayer::UpdateFrame()
 
             ImGui::TreePop();
         }
+
+        // ─── Streaming VRAM budget ────────────────────────────────────────────
+        // One cap for both streaming systems - the texture tile heaps and the cluster group arena - because they
+        // spend the same VRAM. The arena takes its group data out of it first, so the tile heaps budget against
+        // what is left. Lowering it is the stress test: both start evicting within a frame or two, and raising it
+        // back lets them grow again.
+        ImGui::SeparatorText("Streaming VRAM");
+        {
+            const uint64_t totalMB = g_Renderer.m_RHI->GetVRAMTotalBytes() / (1024ull * 1024ull);
+            const int maxBudgetMB = int(totalMB != 0 ? totalMB : 16384);
+            int budgetMB = int(std::min<uint64_t>(g_Renderer.m_StreamingBudgetMB, uint64_t(maxBudgetMB)));
+
+            const double texMB = BYTES_TO_MB(g_Renderer.m_FeedbackManager->GetStats().m_HeapAllocationInBytes);
+            const double geoMB = g_Renderer.m_GeometryStreaming
+                ? BYTES_TO_MB(g_Renderer.m_GeometryStreaming->GetStats().m_ArenaBytes) : 0.0;
+
+            ImGui::SetNextItemWidth(220.0f);
+            if (ImGui::SliderInt("VRAM budget (MB)", &budgetMB, 1, maxBudgetMB, "%d MB"))
+                g_Renderer.m_StreamingBudgetMB = uint64_t(std::max(budgetMB, 1));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cap on the texture tile heaps and the cluster group arena together; geometry\n"
+                                  "reserves its group data first and the tiles get the rest.\n"
+                                  "Lower it to stress both streaming systems; the GPU has %llu MB.\n"
+                                  "The arena only streams below the scene's own group data (%.1f MB here):\n"
+                                  "above that every group simply stays resident.",
+                                  static_cast<unsigned long long>(totalMB), geoMB);
+
+            const double tileCapMB = BYTES_TO_MB(g_Renderer.GetTileStreamingBudgetBytes());
+            const bool bTextureOverBudget = g_Renderer.m_FeedbackManager->GetStats().m_bOverBudget;
+            ImGui::Text("Tiles: %.1f / %.1f MB, geometry: %.1f MB, of %llu MB%s", texMB, tileCapMB, geoMB,
+                static_cast<unsigned long long>(g_Renderer.m_StreamingBudgetMB),
+                bTextureOverBudget ? "  (tiles over budget)" : "");
+        }
+
+        // ─── Cluster Geometry Streaming ───────────────────────────────────────
+        // The cluster counterpart of the texture panel above: the same "device asks, host serves" exchange, so the
+        // same questions apply - how much is resident, how hard is it working, and what is it spending it on.
+        if (g_Renderer.m_GeometryStreaming && ImGui::TreeNode("Cluster Streaming"))
+        {
+            const GeometryStreaming& streaming = *g_Renderer.m_GeometryStreaming;
+            const GeometryStreaming::Stats& stats = streaming.GetStats();
+
+            int ageThreshold = int(Config::Get().m_ClusterStreamAgeThreshold);
+            if (ImGui::SliderInt("Unload age", &ageThreshold, 2, 240, "%d frames"))
+                Config::Get().m_ClusterStreamAgeThreshold = uint32_t(ageThreshold);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Frames a resident group may go untouched before the age filter asks for it back");
+
+            ImGui::SeparatorText("Memory");
+            ImGui::Text("Groups: %u / %u resident", stats.m_ResidentGroups, stats.m_GroupCount);
+            ImGui::Text("Arena:  %.2f / %.2f MB", BYTES_TO_MB(stats.m_ResidentBytes), BYTES_TO_MB(stats.m_ArenaBytes));
+            ImGui::Text("Not in a blob: %.2f MB", BYTES_TO_MB(stats.m_WastedBytes));
+
+            ImGui::SeparatorText("Activity");
+            ImGui::Text("Loaded %u / unloaded %u this frame", stats.m_LoadedThisFrame, stats.m_UnloadedThisFrame);
+            ImGui::Text("Requests %u, %u active groups", stats.m_RequestsLastFrame, stats.m_ActiveGroups);
+            ImGui::Text("Dropped loads: %u, evicted by budget: %u", stats.m_DroppedLoads, stats.m_EvictedByBudget);
+
+            // ── Resident geometry over time ──
+            ImGui::SeparatorText("Resident geometry (MB)");
+            {
+                static std::vector<float> s_ResidentHistory;
+                static uint32_t s_HistoryIndex = 0;
+                static float s_TimeAccum = 0.0f;
+                if (s_ResidentHistory.empty())
+                {
+                    s_ResidentHistory.resize(128, 0.0f);
+                    s_HistoryIndex = 0;
+                }
+
+                // Sampled at 30 Hz like the texture bandwidth graph, so a burst of loads reads as one step rather
+                // than as a frame of noise.
+                s_TimeAccum += ImGui::GetIO().DeltaTime;
+                constexpr float kSampleInterval = 1.0f / 30.0f;
+                if (s_TimeAccum >= kSampleInterval)
+                {
+                    s_ResidentHistory[s_HistoryIndex] = float(BYTES_TO_MB(stats.m_ResidentBytes));
+                    s_HistoryIndex = (s_HistoryIndex + 1) % uint32_t(s_ResidentHistory.size());
+                    s_TimeAccum = 0.0f;
+                }
+
+                std::vector<float> drawBuffer;
+                drawBuffer.reserve(s_ResidentHistory.size());
+                drawBuffer.insert(drawBuffer.end(), s_ResidentHistory.begin() + s_HistoryIndex, s_ResidentHistory.end());
+                drawBuffer.insert(drawBuffer.end(), s_ResidentHistory.begin(), s_ResidentHistory.begin() + s_HistoryIndex);
+
+                float peak = 0.0f;
+                for (float v : drawBuffer)
+                    peak = std::max(peak, v);
+                const float graphMax = std::max(1.0f, peak * 1.1f);
+
+                char overlay[96];
+                snprintf(overlay, sizeof(overlay), "Resident MB (arena %.1f MB)", BYTES_TO_MB(stats.m_ArenaBytes));
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+                ImGui::PlotLines("##clusterresidentgraph", drawBuffer.data(), (int)drawBuffer.size(), 0, overlay,
+                    0.0f, graphMax, ImVec2(0, 60.0f));
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Peak in the window: %.2f MB, scale: %.2f MB", peak, graphMax);
+            }
+
+            // ── Per-level residency histogram ──
+            ImGui::SeparatorText("Resident groups per LOD level");
+            if (stats.m_LevelCount > 0)
+            {
+                // A share rather than a count, because levels differ by orders of magnitude in group count: a full
+                // bar means every group of that level is in the arena. The scale follows the tallest bar so the
+                // shape stays readable when nothing is fully resident, and the peak is printed in the overlay.
+                float share[ClusterLod::kMaxLODLevels] = {};
+                float peakShare = 0.0f;
+                for (uint32_t level = 0; level < stats.m_LevelCount; ++level)
+                {
+                    const uint32_t total = stats.m_GroupsPerLevel[level];
+                    share[level] = total > 0 ? float(stats.m_ResidentPerLevel[level]) / float(total) : 0.0f;
+                    peakShare = std::max(peakShare, share[level]);
+                }
+
+                char overlay[64];
+                snprintf(overlay, sizeof(overlay), "Share per level, peak %.0f%%", peakShare * 100.0f);
+
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+                ImGui::PlotHistogram("##clusterlevelhist", share, (int)stats.m_LevelCount, 0, overlay,
+                    0.0f, std::max(0.1f, peakShare * 1.15f), ImVec2(0, 70.0f));
+                ImGui::PopStyleColor();
+
+                if (ImGui::IsItemHovered())
+                {
+                    std::string tip = "Level: resident / groups\n";
+                    for (uint32_t level = 0; level < stats.m_LevelCount; ++level)
+                    {
+                        tip += "L" + std::to_string(level) + ": " +
+                            std::to_string(stats.m_ResidentPerLevel[level]) + " / " +
+                            std::to_string(stats.m_GroupsPerLevel[level]) + "\n";
+                    }
+                    ImGui::SetTooltip("%s", tip.c_str());
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("No cluster groups");
+            }
+
+            ImGui::TreePop();
+        }
     }
     ImGui::End();
 
