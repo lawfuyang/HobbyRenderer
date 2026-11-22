@@ -2,7 +2,7 @@
 
 A real-time renderer built in C++20 on Direct3D 12, with an NVIDIA RTX feature set: ReSTIR
 direct and indirect illumination, a spatial-hash radiance cache, NRD denoising, ray-traced shadows,
-opacity micromaps, GPU-driven meshlet geometry and sampler-feedback virtual texturing.
+opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedback virtual texturing.
 
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/d8f3c499-4f13-4549-8c5e-dd43b4b3b963" />
@@ -36,14 +36,17 @@ see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
 
 ### Geometry and acceleration structures
 - **GPU-driven meshlet rendering**: mesh and amplification shaders over generated meshlets (64 vertices,
-  96 triangles), with indirect dispatch built on the GPU
+  96 triangles), with indirect dispatch built on the GPU. Kept as the reference path the cluster LOD draw
+  is measured against (`--cluster-draw 0`)
 - **Two-phase occlusion culling**: frustum culling in phase 1, HZB occlusion culling with a phase-2 pass
   over the survivors, cone/silhouette culling, and per-instance LOD selection
 - **Hierarchical Z-buffer**: built with AMD FidelityFX Single Pass Downsampler (min reduction)
 - **Hierarchical LOD**: up to 8 levels generated with meshoptimizer progressive simplification, plus
-  vertex quantization
+  vertex quantization. The opaque and masked buckets draw through the cluster LOD DAG below instead, so
+  this per-mesh chain now serves the transparent bucket and the legacy path
 - **Multi-LOD acceleration structures**: per-LOD BLAS with a `TLASPatch` compute pass keeping the TLAS
-  instance addresses current as LODs change
+  instance addresses current as LODs change. When the cluster path draws, the LOD it patches is the one
+  the cluster traversal classified, so rays and rasterisation consume the same geometry
 - **Opacity micromaps (OMM)**: alpha-masked geometry is baked into 4-state micromaps (adaptive
   subdivision, `m_MaxLevel` 6, `m_TargetEdge` 3, selectable alpha mip), uploaded, and linked into the
   BLAS so masked rays resolve opacity in hardware instead of being treated as opaque. Baked from the
@@ -51,6 +54,39 @@ see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
   CLI: `--enable-omm`, `--omm-max-level`, `--omm-target-edge`, `--omm-debug`, `--omm-debug-mip`,
   `--omm-dump-mips`. The panel has a debug view over texel classification, the micromap grid and the
   candidate heatmap.
+
+### Cluster LOD (continuous LOD)
+- **Offline DAG**: every primitive is clusterised (96 triangles, 64 vertices), partitioned into groups of
+  ~16 clusters with `meshopt_partitionClusters`, and each group is decimated to roughly half its triangles
+  with `meshopt_simplifyWithAttributes`, its border locked (welded positions plus
+  `meshopt_SimplifyLockBorder`). A group that keeps more than 85 % of its triangles stays terminal and its
+  clusters keep no replacement, so they are drawn at any distance. The result is a DAG — a coarser group
+  can take clusters from several finer groups — not a per-mesh chain, and it is cooked once into the
+  versioned mesh cache with the clusterisation config hashed into the cache key, so a parameter change
+  re-cooks instead of mixing two layouts
+- **GPU cut**: a per-bucket traversal (init, one node pass per tree depth, group pass, indirect-args pass)
+  rejects whole subtrees on the frustum and the HZB, then draws a cluster when its group is detailed enough
+  for the camera and every group that replaced it is not. The threshold is in pixels (`--cluster-error`,
+  1.0 by default), so the cut follows the projection instead of a per-mesh heuristic. `ClusterLodTests`
+  checks the DAG, the watertightness of a cut in welded position space and the cooked payload without a
+  device
+- **One mesh-shader workgroup per cluster**: `DispatchMeshIndirect` over the visible-cluster list, the mesh
+  shader decoding a cluster's packed micro-indices into the same vertex output the meshlet path writes, so
+  the G-buffer and alpha-test pixel shaders are shared. Opaque and masked draw through it; the transparent
+  bucket keeps the vertex-shader path until OIT lands
+- **Per-cluster culling**: each cluster's own bounding sphere is tested against the HZB (a group spans
+  several clusters, so its sphere is rarely occluded), sub-pixel clusters are dropped outright, and
+  `--cluster-two-pass <0|1>` records what occlusion alone rejected so a second pass can revive it against
+  the depth the first pass just wrote
+- **Discrete LOD**: an instance whose cut resolves to a single level is seeded at that level's node and
+  drawn whole, which costs the traversal nothing where it applies and gives ray tracing the level to match
+- **Debug views**: cluster ids, a 32-level LOD ramp, group bounds as wireframe boxes and a per-triangle
+  overlay (Debug Modes 12–15, `--cluster-debug`), plus live traversal counters in the panel and
+  `--cluster-stats-frame <n>`, which compares the GPU's cut against the CPU reference of the same rule
+- **A/B switches**: `--cluster <0|1>` cooks the DAG, `--cluster-draw <0|1>` keeps the cooked data but draws
+  through the legacy meshlet path, and `--cluster-force-lod <n>`, `--cluster-max <n>`,
+  `--cluster-no-culling`, `--cluster-discrete-lod <0|1>` and `--cluster-freeze-culling` isolate the cut
+  from the draw
 
 ### Materials, transparency and post-processing
 - **PBR**: metallic/roughness workflow with normal, ORM and emissive maps;
@@ -72,7 +108,17 @@ see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
   RTX Tiled Texture Manager backend, hysteresis eviction, asynchronous tile I/O on a worker pool,
   per-frame tile budgets, minmip tracking and packed-mip prefetch; `--disable-sampler-feedback` forces
   everything resident for A/B runs
-- **Tooling**: tile residency debug view and per-texture residency statistics in the panel
+- **Cluster geometry streaming**: a cluster group is the streaming unit — its triangle and vertex words
+  are packed into one arena with a host free list, the traversal requests the groups it cannot draw and a
+  readback two frames later serves them, and an age filter sweeps only when the budget forced a trim. A
+  missing group is requested while the finest resident level is drawn, so a level streams in without a
+  hole
+- **One VRAM budget for both**: `--stream-budget <MiB>` caps the texture tile heaps and the geometry arena
+  together — the arena is sized from what the heaps leave and heaps are refused past what the arena leaves,
+  with a floor at the coarsest-level cover so a tight budget draws coarse geometry instead of none
+- **Tooling**: tile residency debug view and per-texture residency statistics in the panel, plus a cluster
+  streaming panel with resident MB, activity and a per-LOD-level residency histogram
+  (`--cluster-stream-stats-frame <n>`, `--cluster-stream-age <frames>`)
 
 ### Engine and tooling
 - **Render graph**: transient resource allocation with aliasing, automatic dependency ordering, pass
@@ -92,9 +138,9 @@ see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
 - **Capture support**: PIX3 markers, in-app PIX captures (`--pix`, `--pix-capture-frame`,
   `--pix-capture-load`, `--pix-capture-dir`) and in-app RenderDoc captures (`--renderdoc`,
   `--renderdoc-capture-frame`) — never both on one frame
-- **Scene loading**: glTF 2.0 via cgltf, a versioned binary scene cache, mesh optimization, LOD
-  generation, and an animation system (linear, step, cubic spline, SLERP, Catmull-Rom; transform and
-  material-emissive channels, topologically sorted)
+- **Scene loading**: glTF 2.0 via cgltf, a versioned binary scene cache, mesh optimization, meshlet and
+  LOD generation, the cluster LOD cook, and an animation system (linear, step, cubic spline, SLERP,
+  Catmull-Rom; transform and material-emissive channels, topologically sorted)
 - **Camera state**: per-scene position, yaw and pitch persisted and restored on load
 - **Screenshots**: `--screenshot-frame <n>` writes a lossless `bin/screenshot.png` and exits; `Ctrl+P`
   at runtime
@@ -146,6 +192,12 @@ Every switch is parsed in `src/Config.cpp`; the useful ones:
 | `--hide-ui` | draw no ImGui windows |
 | `--screenshot-frame <n>` | write `bin/screenshot.png` on frame n and exit |
 | `--enable-omm`, `--omm-max-level`, `--omm-target-edge`, `--omm-debug` | opacity micromaps |
+| `--cluster <0\|1>`, `--cluster-draw <0\|1>` | cook the cluster DAG / draw through it (`0` = legacy meshlet path) |
+| `--cluster-error <px>`, `--cluster-force-lod <n>`, `--cluster-max <n>` | cluster cut: pixel error, forced level, cluster cap |
+| `--cluster-no-culling`, `--cluster-two-pass <0\|1>`, `--cluster-discrete-lod <0\|1>` | cluster cut: isolation, second pass, discrete LOD |
+| `--cluster-stats`, `--cluster-stats-frame <n>` | dump the cooked DAG / print the traversal's counters |
+| `--stream-budget <MiB>` | VRAM cap shared by the tile heaps and the geometry arena |
+| `--cluster-stream-age <frames>`, `--cluster-stream-stats-frame <n>` | cluster streaming diagnostics |
 | `--disable-sampler-feedback`, `--disable-rendergraph-aliasing` | force full residency / no aliasing |
 | `--execute-per-pass`, `--execute-per-pass-and-wait` | submit one render-graph pass at a time |
 | `--pix[=<dll>]`, `--pix-capture-frame <n>`, `--pix-capture-load`, `--pix-capture-dir <dir>` | PIX |
@@ -172,8 +224,8 @@ own GPU timer group. Passes can be toggled individually from the panel.
   roulette and BRDF importance sampling, accumulated progressively
 
 ### Scene
-glTF 2.0 through cgltf, cached to a versioned binary, with meshlet and LOD generation, animation, a light
-buffer for ray tracing (directional with angular size, point/spot, environment), and OMM baking.
+glTF 2.0 through cgltf, cached to a versioned binary, with meshlet, LOD and cluster-DAG cooking, animation,
+a light buffer for ray tracing (directional with angular size, point/spot, environment), and OMM baking.
 
 ## Dependencies
 
