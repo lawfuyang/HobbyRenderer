@@ -1005,6 +1005,64 @@ Validation
 
 Gate **M6**: V6.1–V6.3 green; the discrete path is toggleable (`m_ClusterDiscreteLod`).
 
+**Phase 6 — as built (2026-11-22).** The classification is exact rather than bracketed, because the
+reference's per-level spheres are not sound here.
+
+* **The trap the first attempt fell into.** The reference classifies with one enclosing sphere plus the
+  level's smallest sphere and smallest/largest error, and treats "no group of this level is over the error
+  budget" as "this whole level is fine". On Bistro that lost **46 clusters** from five instances, and the
+  reason was not the sphere approximation: the cut also draws clusters *below* the drawn level whose
+  replacement is over the budget, and — the actual cause — **clusters no coarser group replaced at all**
+  (terminal/stuck groups keep `kNoGroup`, so they are drawn at any distance). Nothing in a level-wide
+  metric expresses that.
+* **What the shader does instead** (`ClassifyInstanceLod` in `ClusterTraversal.hlsl`): one pass over the
+  instance's own groups builds a bit mask of "this level has a group over the budget" and "… under it".
+  The first level in the coarse mask is where coarsening starts (`lodLevelMin`), the level below it is
+  the one drawn. The cut is that single level exactly when **every** group at `lodLevelMin` is over the
+  budget **and** `ClusterGeometry::m_UnreplacedLevels` has no bit below the drawn level. The cost is the
+  same set of group records the traversal is about to read anyway (~12 k per frame on Bistro, both
+  buckets), and it is a *per-instance* classification, so two instances of one primitive can disagree.
+* So a discrete instance seeds the traversal at its level's node with `ClusterRefFlags::kDiscrete` carried
+  on the node and group refs; the groups pass skips the metric and the replacement test for it and draws
+  the whole level (culling unchanged). The flag also rides the reject lists, so the second pass keeps the
+  same decision. The resulting image is **bit-identical** to the continuous cut (V6.2's first half) —
+  that is the property the exact test buys. The check is two runs of
+  `--cluster-no-culling --cluster-stats-frame <n>` (counters) and two of `--screenshot-frame <n>` with
+  `--cluster-discrete-lod 0` and `1` (image), on Bistro, Sponza and DragonAttenuation.
+* **RT agreement**: the traversal now owns `Scene_InstanceLODBuffer`, writing it for **every** instance of
+  the bucket before any culling, because a shadow ray reaches instances the camera does not see; the
+  culling pass leaves it alone when the cluster path draws that bucket (`CullingConstants::
+  m_UseClusterRendering`). The buffer is zeroed at load: `TLASPatch` runs before the first base pass, so
+  its first read is of whatever the load wrote. The level written is `m_LevelMeshLODs[drawLevel]`, the
+  per-mesh LOD whose quadric error is closest (log space) to that cluster level's worst group — the two
+  chains reduce by different factors (0.5× vs 0.6×), so the indices are not interchangeable and the
+  stored map is what keeps the BLAS at the same detail the raster cluster has.
+* **Residency** is a per-geometry table (`Scene_ClusterDiscreteLevels`, one uint: the first level of the
+  fully resident suffix), derived from the host residency in `GeometryStreaming::PreRender` — the mirror
+  of the reference's `Geometry::discreteLodLevel`, which is what makes "all levels from here on are
+  resident" one comparison. A discrete instance is clamped to `max(drawLevel, residentLevel)`: a pop to a
+  coarser level, never a hole and never a raster/RT mismatch. The levels such an instance draws are then
+  aged as used by the groups pass, which is the "pinning" task — no separate exception was needed.
+* **Gates** (Debug build): cut totals and discrete instance/cluster counts both `(match)` the CPU
+  reference (`CountReferenceDiscreteLod`) with `--cluster-no-culling` — Bistro 45 553 / 2 285 / 6 934
+  (opaque) and 18 106 / 135 / 9 215 (masked), Sponza 2 928 / 85 / 2 668 and 498 / 14 / 498, dragon
+  2 421 / 2 / 2 421. Discrete on vs off is **0 differing pixels** on all three once `--no-auto-exposure
+  --disable-sampler-feedback` pin the exposure and mip history (without them the ±1 noise reads as
+  0.2–20 % of pixels). At `--stream-budget 4` the clamp still matches the reference exactly
+  (2 285 / 6 934), which is the V6.2 non-resident half.
+* **Cost and captures** (Bistro, frame 30, same camera, PIX hardware counters): `Cluster Traversal`
+  526 µs with discrete on against 529 µs with it off, and the opaque base pass is 303.3 M instructions /
+  2.014 ms in both — the classification is free and the draw is untouched. RenderDoc
+  (`bin/captures/bistrox_capture.rdc`) lists the new buffers (`Scene_ClusterLevelMeshLODBuffer` 6 808 B,
+  `Scene_ClusterDiscreteLevels` 2 204 B, `Scene_ClusterGeometryBuffer` 22 040 B = 551 × 40 B, node queues
+  19 809 × 12 B), `hazards` still reports the same 8 pre-existing findings (HZB, RTXDI light PDFs,
+  OpaqueColor) and none on a cluster resource, and `--rhidebug` reports 0 D3D12 errors.
+* **V6.1 caveat.** Only "the raster is unchanged" is measured exactly. A per-pixel comparison against a
+  pre-phase-6 capture is not reproducible on this machine any more: `bin/camera_state.json` is not tracked
+  and was overwritten, and the RT shadow path is stochastic without NRD, so the honest evidence is the
+  dragon composite (coherent cast shadow, no acne streaks) plus the fact that the BLAS level and the
+  raster level now come from the same classification.
+
 ---
 
 ## 5. Validation infrastructure
