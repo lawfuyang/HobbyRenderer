@@ -3,8 +3,6 @@
 
 void Config::ParseCommandLine(int argc, char* argv[])
 {
-    
-
     for (int i = 1; i < argc; ++i)
     {
         const char* arg = argv[i];
@@ -298,6 +296,19 @@ void Config::ParseCommandLine(int argc, char* argv[])
                 SDL_LOG_ASSERT_FAIL("Missing value for --restir-preset", "[Config] Missing value for --restir-preset");
             }
         }
+        else if (std::strcmp(arg, "--restir-checkerboard") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_ReSTIRCheckerboard = std::atoi(argv[++i]);
+                SDL_Log("[Config] ReSTIR checkerboard rendering %s via command line",
+                    s_Instance.m_ReSTIRCheckerboard != 0 ? "forced on" : "forced off");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --restir-checkerboard", "[Config] Missing value for --restir-checkerboard");
+            }
+        }
         else if (std::strcmp(arg, "--fov") == 0)
         {
             if (i + 1 < argc)
@@ -574,18 +585,19 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 1 clusters, 2 lod level, 3 bounds (these are Debug Modes 12-14), 4 counters");
             SDL_Log("  --force-lod <n>                  Force the meshlet path's LOD index; -1 = automatic (A/B against the cluster cut)");
             SDL_Log("  --cluster-draw <0|1>             Draw through the cluster mesh shader; 0 keeps the legacy meshlet draw");
-        SDL_Log("  --cluster-two-pass <0|1>         Re-test what the first cluster pass rejected against this frame's depth");
-        SDL_Log("  --cluster-discrete-lod <0|1>     Draw instances whose cut fits one LOD level from that level alone (default 1)");
+            SDL_Log("  --cluster-two-pass <0|1>         Re-test what the first cluster pass rejected against this frame's depth");
+            SDL_Log("  --cluster-discrete-lod <0|1>     Draw instances whose cut fits one LOD level from that level alone (default 1)");
             SDL_Log("  --debug <n>                      Base pass debug view (0 none, 4 albedo, 3 world normals, 12-15 cluster views)");
             SDL_Log("  --no-rt-shadows                  Disable ray-traced sun shadows (isolates the draw path in an A/B)");
             SDL_Log("  --no-restir-di                   Disable ReSTIR DI, so the sun shadow is one hard ray per pixel");
-            SDL_Log("  --no-auto-exposure              Fixed exposure (no adaptation history in an exactness A/B)");
+            SDL_Log("  --no-auto-exposure               Fixed exposure (no adaptation history in an exactness A/B)");
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
             SDL_Log("  --stream-budget <MiB>            VRAM budget for texture + cluster streaming (0 = the OS budget)");
             SDL_Log("  --cluster-stream-age <frames>    Untouched frames before a resident group is unloaded (default 16)");
             SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
+            SDL_Log("  --restir-checkerboard <0|1>      Override the preset's checkerboard rendering (Balanced/highperf on, highquality off)");
             SDL_Log("  --fov <degrees>                  Override the vertical field of view; default is the scene camera's");
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");
             SDL_Log("  --hitch-log <ms>                 Log every frame slower than this with streaming/VRAM state");

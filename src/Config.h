@@ -128,6 +128,10 @@ struct Config
     // (its "Fast"), 2 = HighQuality (its "Ultra"). Selected with --restir-preset.
     int m_ReSTIRPreset = 0;
 
+    // ReSTIR checkerboard override: -1 = the quality preset decides (Balanced and HighPerformance
+    // enable it, HighQuality does not), 0 = force off, 1 = force on. Selected with --restir-checkerboard.
+    int m_ReSTIRCheckerboard = -1;
+
     // Vertical field of view in degrees, overriding the scene camera's own value; 0 = use the scene's.
     // A comparison against another renderer needs the same projection on both sides, and nothing else in the
     // pipeline can move this: the value otherwise comes from the glTF camera.

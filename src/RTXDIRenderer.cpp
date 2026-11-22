@@ -147,7 +147,7 @@ static void ApplyBalancedPreset()
     g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 8;
     g_ReSTIRDI_SpatialResamplingParams.neighborOffsetSamplingMode = ReSTIRDI_SpatialSamplingMode::LowDiscrepancy;
     g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
 
     // ---- ReSTIR GI ----
     g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
@@ -198,7 +198,7 @@ static void ApplyHighPerfPreset()
     g_ReSTIRDI_SpatialResamplingParams.numDisocclusionBoostSamples = 2;
     g_ReSTIRDI_SpatialResamplingParams.neighborOffsetSamplingMode = ReSTIRDI_SpatialSamplingMode::LowDiscrepancy;
     g_ReSTIRDI_ShadingParams.reuseFinalVisibility = 1u;
-    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Off;
+    g_ReSTIRDI_CheckerboardMode = rtxdi::CheckerboardMode::Black;
 
     // ---- ReSTIR GI ----
     g_ReSTIRGI_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
@@ -312,6 +312,17 @@ void RTXDIIMGUISettings()
         g_ReSTIRDI_ResamplingMode = static_cast<rtxdi::ReSTIRDI_ResamplingMode>(resamplingMode);
     }
     ImGui::PopItemWidth();
+
+    // ---- Checkerboard rendering ---------------------------------------------
+    bool enableCheckerboard = g_ReSTIRDI_CheckerboardMode != rtxdi::CheckerboardMode::Off;
+    if (ImGui::Checkbox("Checkerboard Rendering", &enableCheckerboard))
+    {
+        g_ReSTIRDI_CheckerboardMode = enableCheckerboard
+            ? rtxdi::CheckerboardMode::Black : rtxdi::CheckerboardMode::Off;
+    }
+    ImGui::SetItemTooltip("Trace ReSTIR DI and GI for half the pixels per frame (the two fields\n"
+                          "alternate), and let NRD reconstruct the missing field. The quality\n"
+                          "presets set this: Balanced and High Performance enable it, High Quality does not.");
 
     // ---- REBLUR Denoising toggle -------------------------------------------
     ImGui::Separator();
@@ -849,6 +860,8 @@ public:
         // Create the ReSTIRDI context
         const rtxdi::CheckerboardMode checkerMode = g_ReSTIRDI_CheckerboardMode;
         m_CachedCheckerboardMode = checkerMode;
+        SDL_Log("[RTXDI] Checkerboard sampling: %s", checkerMode != rtxdi::CheckerboardMode::Off
+            ? "Black (half the DI/GI pixels per frame)" : "off (full resolution)");
 
         rtxdi::ReSTIRDIStaticParameters staticParams;
         staticParams.RenderWidth = width;
@@ -893,13 +906,22 @@ public:
         g_ReSTIRGI_SpatialParams     = rtxdi::GetDefaultReSTIRGISpatialResamplingParams();
         g_ReSTIRGI_FinalShadingParams = rtxdi::GetDefaultReSTIRGIFinalShadingParams();
 
-        CreateRTXDIContext();
+        // Presets set static parameters (the checkerboard mode among them), so they are applied
+        // before the contexts that embed them are created.
         switch (Config::Get().m_ReSTIRPreset)
         {
         case 1:  ApplyHighPerfPreset();    break;
         case 2:  ApplyHighQualityPreset(); break;
         default: ApplyBalancedPreset();    break;
         }
+
+        if (Config::Get().m_ReSTIRCheckerboard >= 0)
+        {
+            g_ReSTIRDI_CheckerboardMode = Config::Get().m_ReSTIRCheckerboard != 0
+                ? rtxdi::CheckerboardMode::Black : rtxdi::CheckerboardMode::Off;
+        }
+
+        CreateRTXDIContext();
 
         m_NrdIntegration = std::make_unique<NrdIntegration>(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
         m_NrdIntegration->Initialize();
@@ -2559,6 +2581,11 @@ public:
                 commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
                 m_bFlushNrdHistory = false;
             }
+
+            // NRD must be told that its noisy inputs hold one checkerboard field packed into the
+            // left half, so it reconstructs the other field instead of denoising a half image.
+            m_NRDReblurSettings.checkerboardMode = (g_ReSTIRDI_CheckerboardMode != rtxdi::CheckerboardMode::Off)
+                ? nrd::CheckerboardMode::BLACK : nrd::CheckerboardMode::OFF;
 
             m_NrdIntegration->RunDenoiserPasses(
                 commandList,

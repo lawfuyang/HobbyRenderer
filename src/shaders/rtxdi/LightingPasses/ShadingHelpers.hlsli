@@ -134,8 +134,11 @@ void StoreShadingOutput(
     bool isFirstPass,
     bool isLastPass)
 {
-    // Lighting textures live in the resolution of the screen-space passes.
-    uint2 lightingTexturePos = pixelPosition;
+    // NRD takes its noisy inputs packed into the left half of the texture (one 2x1 screen pixel
+    // per texel), so with denoising on the lighting textures are addressed by reservoir position.
+    uint2 lightingTexturePos = (g_Const.denoiserMode != DENOISER_MODE_OFF)
+        ? reservoirPosition
+        : pixelPosition;
 
     float diffuseHitT = lightDistance;
     float specularHitT = lightDistance;
@@ -218,8 +221,11 @@ void StoreShadingOutput(
     bool isFirstPassSpecular,
     bool isLastPass)
 {
-    // Lighting textures live in the resolution of the screen-space passes.
-    uint2 lightingTexturePos = pixelPosition;
+    // NRD takes its noisy inputs packed into the left half of the texture (one 2x1 screen pixel
+    // per texel), so with denoising on the lighting textures are addressed by reservoir position.
+    uint2 lightingTexturePos = (g_Const.denoiserMode != DENOISER_MODE_OFF)
+        ? reservoirPosition
+        : pixelPosition;
 
     if (!isFirstPassDiffuse)
     {

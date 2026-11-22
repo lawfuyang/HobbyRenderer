@@ -28,6 +28,9 @@ see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
 - **Quality presets**: `--restir-preset balanced|highperf|highquality` map to the FullSample's
   Medium / Fast / Ultra sample budgets (8/8/8, 4/4/4 and 16/16/16 ReGIR-RIS samples, with matching
   BRDF sample counts, spatial sample counts and bias-correction modes)
+- **Checkerboard rendering**: ReSTIR DI/GI and the SHARC query trace half the pixels per frame
+  (`rtxdi::CheckerboardMode::Black`, on for the Balanced and High Performance presets) and NRD
+  reconstructs the other field; `--restir-checkerboard 0|1` overrides what the preset chose
 - **NRD REBLUR denoising**: diffuse + specular REBLUR with anti-firefly filtering, 3×3 hit-distance
   reconstruction, and NRD-pack normal/roughness input
 - **Ray-traced shadows**: inline ray queries for the sun, with an option to disable shadow tracing
@@ -183,6 +186,7 @@ Every switch is parsed in `src/Config.cpp`; the useful ones:
 |---|---|
 | `--scene <path>` | scene to load (`.gltf`/`.glb`, or a `.scene.json` descriptor with models and lights) |
 | `--restir-preset balanced\|highperf\|highquality` | ReSTIR sample budget (default `balanced`) |
+| `--restir-checkerboard <0\|1>` | force checkerboard rendering on/off over the preset |
 | `--fov <degrees>` | vertical FOV override |
 | `--exposure <stops>` | auto-exposure bias |
 | `--taa-sharpness <0..1>` | sharpening in the TAA resolve |
