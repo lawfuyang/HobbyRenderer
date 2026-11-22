@@ -519,6 +519,30 @@ public:
         return 0.0f;
     }
 
+    uint64_t GetVRAMBudgetBytes() const override
+    {
+        if (!m_Adapter) return 0;
+
+        ComPtr<IDXGIAdapter3> adapter3;
+        if (SUCCEEDED(m_Adapter.As(&adapter3)))
+        {
+            DXGI_QUERY_VIDEO_MEMORY_INFO info;
+            if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+                return info.Budget;
+        }
+        return 0;
+    }
+
+    uint64_t GetVRAMTotalBytes() const override
+    {
+        if (!m_Adapter) return 0;
+
+        DXGI_ADAPTER_DESC desc{};
+        if (SUCCEEDED(m_Adapter->GetDesc(&desc)))
+            return desc.DedicatedVideoMemory;
+        return 0;
+    }
+
     nvrhi::GraphicsAPI GetGraphicsAPI() const override { return nvrhi::GraphicsAPI::D3D12; }
 
     void SetCommandListDebugName(const nvrhi::CommandListHandle& commandList, std::string_view name) override

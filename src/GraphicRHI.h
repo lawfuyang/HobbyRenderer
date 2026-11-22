@@ -38,6 +38,12 @@ public:
 
     virtual float GetVRAMUsageMB() const = 0;
 
+    // What the OS currently lets this application use (DXGI's local-segment budget), and the card's own dedicated
+    // memory. The streaming budget defaults to the budget: it is the number the OS will actually enforce, and the
+    // total is what a slider should offer as its upper end.
+    virtual uint64_t GetVRAMBudgetBytes() const = 0;
+    virtual uint64_t GetVRAMTotalBytes() const = 0;
+
     virtual nvrhi::GraphicsAPI GetGraphicsAPI() const = 0;
 
     // Optional: set a debug name on an internal command list's native object
