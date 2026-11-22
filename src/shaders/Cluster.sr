@@ -75,21 +75,31 @@ struct ClusterRecord
     uint m_CenterRadius[2];
 };
 
-// 8 B. An entry of the node traversal queue.
+// 12 B. An entry of the node traversal queue.
 struct ClusterNodeRef
 {
     uint m_InstanceIndex;
     uint m_NodeIndex;       // global node index
+    uint m_Flags;           // ClusterRefFlags::kDiscrete when the instance was seeded at a discrete LOD level
 };
 
-// 8 B. An entry of the group queue: a leaf the traversal kept and the culling pass still has to test.
+// 12 B. An entry of the group queue: a leaf the traversal kept and the culling pass still has to test.
 struct ClusterGroupRef
 {
     uint m_InstanceIndex;
     uint m_GroupIndex;      // global group index
+    uint m_Flags;           // carried over from the node ref (ClusterRefFlags::kDiscrete)
 };
 
-// 32 B. One per MeshData: where this primitive's ranges start in the global arrays.
+// Discrete LOD (docs/cluster-lod-implementation-plan.md phase 6). A ref's m_Flags bit set means the instance's
+// cut fits one LOD level and the traversal was seeded at that level, so its groups pass must not re-test the
+// metric: every group the seeding node reaches is drawn.
+srinput ClusterRefFlags
+{
+    static const uint kDiscrete = 1u;
+};
+
+// 40 B. One per MeshData: where this primitive's ranges start in the global arrays.
 struct ClusterGeometry
 {
     uint m_NodeOffset;
@@ -100,6 +110,10 @@ struct ClusterGeometry
     uint m_ClusterCount;
     uint m_LODLevelCount;
     uint m_MaxTreeDepth;
+    uint m_LODLevelOffset;   // into LevelMeshLODs, m_LODLevelCount entries
+    // Bit L set: some cluster of level L has no replacement, so the cut draws it at any distance. A discrete
+    // instance may only seed above such a level, or drawing that level alone would drop those clusters.
+    uint m_UnreplacedLevels;
 };
 
 // 32 B, read back by the CPU for the counters panel and --cluster-stats-frame.
@@ -115,6 +129,8 @@ struct ClusterCounters
     uint m_RejectClusterCount;     // clusters the per-cluster occlusion test deferred
     uint m_SecondPassClusterCount;  // clusters the second pass revived
     uint m_CoarseClusterCount;      // drawn clusters that came from a level other than 0
+    uint m_DiscreteInstanceCount;   // instances whose cut fits one LOD level, seeded at it
+    uint m_DiscreteClusterCount;    // drawn clusters that came from such a discrete level
 };
 
 // ── Geometry streaming ───────────────────────────────────────────────────────────────────────────────
@@ -190,8 +206,9 @@ cbuffer ClusterTraversalConstants
     // how many groups one frame can ask for.
     uint  m_FrameIndex;
     uint  m_MaxLoads;
+    // 0 keeps the metric cut for every instance, which is the image the continuous traversal produces.
+    uint  m_EnableDiscreteLOD;
     uint  m_Pad0;
-    uint  m_Pad1;
 };
 
 srinput ClusterTraversalInputs
@@ -206,6 +223,8 @@ srinput ClusterTraversalInputs
     StructuredBuffer<uint>             GeneratingGroups;   // t5, per cluster: coarser group that replaced it
     StructuredBuffer<ClusterRecord>    ClusterRecords;    // t6, for the per-cluster bounding sphere
     Texture2D<float>                   HZB;                // t7
+    StructuredBuffer<uint>             LevelMeshLODs;     // t8, per cluster LOD level: the matching per-mesh LOD
+    StructuredBuffer<uint>             DiscreteLODLevels;  // t9, per geometry: first level of the fully resident suffix
 
     RWStructuredBuffer<ClusterNodeRef> NodeQueueIn;        // u0
     RWStructuredBuffer<ClusterNodeRef> NodeQueueOut;       // u1
@@ -241,6 +260,10 @@ srinput ClusterTraversalInputs
     RWStructuredBuffer<ClusterGroupState>     GroupStates;      // u19
     RWStructuredBuffer<uint>                  LoadRequests;     // u20
     RWStructuredBuffer<ClusterStreamCounters> StreamCounters;   // u21
+
+    // The per-instance LOD the ray-tracing structures are patched with (TLASPatch.hlsl): the per-mesh LOD whose
+    // error matches the level the cluster cut draws, so rasterisation and ray tracing agree on the geometry.
+    RWStructuredBuffer<uint>           InstanceLOD;   // u22
 };
 
 // The patch pass (ClusterStreaming.hlsl). One thread per entry of the patch list; the host only writes the

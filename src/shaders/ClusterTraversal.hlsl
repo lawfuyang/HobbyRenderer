@@ -30,6 +30,8 @@ static const StructuredBuffer<srrhi::ClusterGroup>    g_Groups       = srrhi::Cl
 static const StructuredBuffer<uint>                   g_GeneratingGroups = srrhi::ClusterTraversalInputs::GetGeneratingGroups();
 static const StructuredBuffer<srrhi::ClusterRecord>   g_ClusterRecords = srrhi::ClusterTraversalInputs::GetClusterRecords();
 static const Texture2D<float>                         g_HZB          = srrhi::ClusterTraversalInputs::GetHZB();
+static const StructuredBuffer<uint>                   g_LevelMeshLODs = srrhi::ClusterTraversalInputs::GetLevelMeshLODs();
+static const StructuredBuffer<uint>                   g_DiscreteLODLevels = srrhi::ClusterTraversalInputs::GetDiscreteLODLevels();
 
 static RWStructuredBuffer<srrhi::ClusterNodeRef>            g_NodeQueueIn       = srrhi::ClusterTraversalInputs::GetNodeQueueIn();
 static RWStructuredBuffer<srrhi::ClusterNodeRef>            g_NodeQueueOut      = srrhi::ClusterTraversalInputs::GetNodeQueueOut();
@@ -56,6 +58,10 @@ static RWStructuredBuffer<uint>                             g_Pass0GroupCount   
 static RWStructuredBuffer<srrhi::ClusterGroupState>         g_GroupStates      = srrhi::ClusterTraversalInputs::GetGroupStates();
 static RWStructuredBuffer<uint>                             g_LoadRequests     = srrhi::ClusterTraversalInputs::GetLoadRequests();
 static RWStructuredBuffer<srrhi::ClusterStreamCounters>     g_StreamCounters   = srrhi::ClusterTraversalInputs::GetStreamCounters();
+
+// The per-instance LOD the ray-tracing structures are patched with, written by both passes' init from the same
+// classification the raster seeds with.
+static RWStructuredBuffer<uint>                             g_InstanceLOD      = srrhi::ClusterTraversalInputs::GetInstanceLOD();
 
 // The grid slots the traversal owns in ClusterIndirectArgs: the first pass' mesh dispatch, the second pass'
 // INIT grid, its mesh dispatch, and the grid of the pass that re-tests the per-cluster rejections.
@@ -238,6 +244,96 @@ bool GroupTooCoarse(uint groupIndex, float4x4 world)
 	return pixelError >= g_Traversal.m_PixelErrorThreshold;
 }
 
+// What the discrete-LOD classification decided for one instance (docs/cluster-lod-implementation-plan.md phase 6).
+struct InstanceLodClassification
+{
+	uint m_MeshLOD;        // per-mesh LOD whose error matches the level drawn, for the ray-traced BLAS
+	uint m_DrawLevel;      // cluster LOD level the traversal should draw
+	bool m_bDiscrete;      // seed at m_DrawLevel's node and draw the whole level, instead of the metric cut
+};
+
+// The LOD level one instance's cut resolves to, and whether it is that single level.
+//
+// The cut draws the finest level whose groups are still fine enough, so the first level that has a group over the
+// error budget is where coarsening starts and the level below it is the one drawn. The cut is that whole level -
+// and can be drawn by seeding the traversal there - exactly when every group of the level above it is over the
+// budget: no group of the level below is dropped (its replacement is always over budget) and nothing coarser is
+// fine enough to be drawn.
+//
+// This walks the instance's own groups once, which is the same set the traversal below is about to walk anyway,
+// so it is exact rather than an estimate of the level's worst and best case.
+//
+// The result is also what ray tracing is patched with, so the two paths consume the same detail. A level that is
+// not fully resident cannot be drawn as a whole, so a discrete instance falls back to the first level that is - a
+// pop in detail, but never a raster/ray-tracing disagreement.
+InstanceLodClassification ClassifyInstanceLod(srrhi::ClusterGeometry geometry, srrhi::PerInstanceData instance)
+{
+	InstanceLodClassification result;
+	result.m_MeshLOD = 0;
+	result.m_DrawLevel = 0;
+	result.m_bDiscrete = false;
+
+	const uint levelCount = min(geometry.m_LODLevelCount, 32u);
+	if (levelCount == 0)
+		return result;
+
+	// Forced levels bypass the whole thing: the sweep has to draw what it asks for, on the continuous rule.
+	if (g_Traversal.m_ForcedLOD != kNoForcedLOD)
+	{
+		result.m_DrawLevel = min(g_Traversal.m_ForcedLOD, levelCount - 1);
+		result.m_MeshLOD = g_LevelMeshLODs[geometry.m_LODLevelOffset + result.m_DrawLevel];
+		return result;
+	}
+
+	// Per level: does it have a group that is over the error budget, and one that is not. Both are bit sets
+	// because a level count of 32 is the builder's limit.
+	uint coarseLevels = 0;
+	uint fineLevels = 0;
+	for (uint i = 0; i < geometry.m_GroupCount; ++i)
+	{
+		const uint groupIndex = geometry.m_GroupOffset + i;
+		const uint level = min(g_Groups[groupIndex].m_LODLevel, 31u);
+		if (GroupTooCoarse(groupIndex, instance.m_World))
+			coarseLevels |= 1u << level;
+		else
+			fineLevels |= 1u << level;
+	}
+
+	// Nothing is over budget: the camera is far enough for the coarsest level, which has no replacements and is
+	// therefore drawn whole.
+	bool bDiscrete = coarseLevels == 0;
+	uint lodLevelMin = bDiscrete ? levelCount : min(firstbitlow(coarseLevels), levelCount);
+	result.m_DrawLevel = lodLevelMin == 0 ? 0u : lodLevelMin - 1;
+
+	if (!bDiscrete)
+	{
+		// Every group of the first level over the budget has to be over it, or the cut also keeps some of the
+		// finer level's clusters and one level is not the whole picture.
+		bDiscrete = (fineLevels & (1u << lodLevelMin)) == 0;
+
+		// A cluster no coarser group replaced is drawn at any distance, so nothing below the seeded level may
+		// hold one.
+		bDiscrete = bDiscrete && (geometry.m_UnreplacedLevels & ((1u << result.m_DrawLevel) - 1u)) == 0;
+	}
+	else
+	{
+		bDiscrete = (geometry.m_UnreplacedLevels & ((1u << result.m_DrawLevel) - 1u)) == 0;
+	}
+
+	if (g_Traversal.m_EnableDiscreteLOD != 0 && bDiscrete)
+	{
+		if (g_Traversal.m_StreamingEnabled != 0)
+		{
+			const uint residentLevel = min(g_DiscreteLODLevels[instance.m_MeshDataIndex], levelCount - 1);
+			result.m_DrawLevel = max(result.m_DrawLevel, residentLevel);
+		}
+		result.m_bDiscrete = true;
+	}
+
+	result.m_MeshLOD = g_LevelMeshLODs[geometry.m_LODLevelOffset + result.m_DrawLevel];
+	return result;
+}
+
 [numthreads(srrhi::CommonConsts::kThreadsPerGroup, 1, 1)]
 void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
@@ -264,7 +360,23 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	const srrhi::PerInstanceData instance = g_InstanceData[instanceIndex];
 	const srrhi::ClusterGeometry geometry = g_Geometries[instance.m_MeshDataIndex];
 	if (geometry.m_LODLevelCount == 0)
+	{
+		// No cluster data: the cluster path draws nothing for this primitive, so the ray-traced structures keep it
+		// at its finest level.
+		g_InstanceLOD[instanceIndex] = 0u;
 		return;
+	}
+
+	// The classification decides both what the raster seeds with and which per-mesh LOD the ray-traced structures
+	// are patched with, so it happens before any culling: a shadow ray reaches what the camera does not see.
+	const InstanceLodClassification classification = ClassifyInstanceLod(geometry, instance);
+	g_InstanceLOD[instanceIndex] = classification.m_MeshLOD;
+
+	// A discrete instance seeds at its level's node, everything else at the primitive's root (node 0).
+	const uint seedNodeIndex = classification.m_bDiscrete
+		? NodeGetChildOffset(g_Nodes[geometry.m_NodeOffset].m_Packed) + classification.m_DrawLevel
+		: geometry.m_NodeOffset;
+	const uint seedFlags = classification.m_bDiscrete ? srrhi::ClusterRefFlags::kDiscrete : 0u;
 
 	bool bFrustumVisible;
 	bool bOcclusionVisible;
@@ -275,14 +387,15 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	if (!bOcclusionVisible)
 	{
-		// The instance sits behind last frame's depth. Its root is recorded instead of dropped, and the second
-		// pass re-tests the root's children against the depth this frame wrote.
+		// The instance sits behind last frame's depth. Its seed is recorded instead of dropped, and the second
+		// pass re-tests it against the depth this frame wrote.
 		uint rejectSlot;
 		InterlockedAdd(g_RejectNodeCount[0], 1, rejectSlot);
 
 		srrhi::ClusterNodeRef rejectedRoot;
 		rejectedRoot.m_InstanceIndex = instanceIndex;
-		rejectedRoot.m_NodeIndex = geometry.m_NodeOffset;
+		rejectedRoot.m_NodeIndex = seedNodeIndex;
+		rejectedRoot.m_Flags = seedFlags;
 		g_RejectNodes[rejectSlot] = rejectedRoot;
 
 		InterlockedAdd(g_Counters[0].m_RejectNodeCount, 1);
@@ -290,13 +403,34 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	}
 
 	InterlockedAdd(g_Counters[0].m_InstanceCount, 1);
+	if (classification.m_bDiscrete)
+		InterlockedAdd(g_Counters[0].m_DiscreteInstanceCount, 1);
+
+	const srrhi::ClusterNode seedNode = g_Nodes[seedNodeIndex];
+
+	// A level whose tree is a single leaf goes straight into the group queue; the root never is one.
+	if (classification.m_bDiscrete && NodeIsLeaf(seedNode.m_Packed))
+	{
+		uint groupSlot;
+		InterlockedAdd(g_GroupQueueCount[0], 1, groupSlot);
+
+		srrhi::ClusterGroupRef discreteGroup;
+		discreteGroup.m_InstanceIndex = instanceIndex;
+		discreteGroup.m_GroupIndex = NodeGetGroupIndex(seedNode.m_Packed);
+		discreteGroup.m_Flags = seedFlags;
+		g_GroupQueue[groupSlot] = discreteGroup;
+
+		InterlockedAdd(g_Counters[0].m_GroupCount, 1);
+		return;
+	}
 
 	uint slot;
 	InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
 
 	srrhi::ClusterNodeRef nodeRef;
 	nodeRef.m_InstanceIndex = instanceIndex;
-	nodeRef.m_NodeIndex = geometry.m_NodeOffset;   // node 0 of the primitive is its root
+	nodeRef.m_NodeIndex = seedNodeIndex;
+	nodeRef.m_Flags = seedFlags;
 	g_NodeQueueOut[slot] = nodeRef;
 }
 
@@ -345,6 +479,7 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 					srrhi::ClusterNodeRef rejectedChild;
 					rejectedChild.m_InstanceIndex = nodeRef.m_InstanceIndex;
 					rejectedChild.m_NodeIndex = childIndex;
+					rejectedChild.m_Flags = nodeRef.m_Flags;
 					g_RejectNodes[rejectSlot] = rejectedChild;
 
 					InterlockedAdd(g_Counters[0].m_RejectNodeCount, 1);
@@ -358,6 +493,7 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 			srrhi::ClusterNodeRef childRef;
 			childRef.m_InstanceIndex = nodeRef.m_InstanceIndex;
 			childRef.m_NodeIndex = childIndex;
+			childRef.m_Flags = nodeRef.m_Flags;
 			g_NodeQueueOut[slot] = childRef;
 		}
 
@@ -381,6 +517,7 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	srrhi::ClusterGroupRef groupRef;
 	groupRef.m_InstanceIndex = nodeRef.m_InstanceIndex;
 	groupRef.m_GroupIndex = groupIndex;
+	groupRef.m_Flags = nodeRef.m_Flags;
 	g_GroupQueue[slot] = groupRef;
 
 	InterlockedAdd(g_Counters[0].m_GroupCount, 1);
@@ -397,13 +534,21 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	const srrhi::ClusterGroup group = g_Groups[groupRef.m_GroupIndex];
 	const srrhi::PerInstanceData instance = g_InstanceData[groupRef.m_InstanceIndex];
 
+	// A discrete instance was seeded at the level the cut resolves to, so every group the seeding node reaches is
+	// drawn: the classification already proved that level is the whole cut. Culling below is unchanged.
+	const bool bDiscrete = (groupRef.m_Flags & srrhi::ClusterRefFlags::kDiscrete) != 0;
+
 	// Forced levels clamp to the primitive's own coarsest level, which is what ClusterLod::EvaluateCut does: a
 	// validation sweep must not silently draw nothing for a primitive that has fewer levels than the forced one.
 	const srrhi::ClusterGeometry geometry = g_Geometries[instance.m_MeshDataIndex];
 	const bool bForcedLevel = g_Traversal.m_ForcedLOD != kNoForcedLOD;
 	const uint forcedLevel = min(g_Traversal.m_ForcedLOD, geometry.m_LODLevelCount - 1);
 
-	if (bForcedLevel)
+	if (bDiscrete)
+	{
+		// intentionally empty: the metric cut is what the classification replaced
+	}
+	else if (bForcedLevel)
 	{
 		// Above the forced level nothing is drawn; at or below it, a cluster is drawn unless a coarser group that
 		// is still at or above the forced level replaced it. That is the same rule as the metric cut with "the
@@ -443,6 +588,7 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 			srrhi::ClusterGroupRef rejectedGroup;
 			rejectedGroup.m_InstanceIndex = groupRef.m_InstanceIndex;
 			rejectedGroup.m_GroupIndex = groupRef.m_GroupIndex;
+			rejectedGroup.m_Flags = groupRef.m_Flags;
 			g_RejectGroups[rejectSlot] = rejectedGroup;
 
 			InterlockedAdd(g_Counters[0].m_RejectGroupCount, 1);
@@ -458,8 +604,10 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		// enough for this camera. This is per cluster, not per group: one group holds clusters that were
 		// replaced by different coarser groups. A replacement that is not resident covers nothing, so the
 		// finer cluster stays: that is the "finest available" rule while a level streams in.
+		// A discrete group is drawn whole, so its replacements are not consulted: the classification already
+		// established that every one of them is over the budget for this camera.
 		const uint generating = g_GeneratingGroups[clusterIndex];
-		if (generating != kNoGroup && GroupIsResident(generating))
+		if (!bDiscrete && generating != kNoGroup && GroupIsResident(generating))
 		{
 			const bool bReplacedByCoarser = bForcedLevel ?
 				(g_Groups[generating].m_LODLevel <= forcedLevel) :
@@ -514,6 +662,8 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 			InterlockedAdd(g_Counters[0].m_ClusterCount, 1);
 			if (group.m_LODLevel != 0)
 				InterlockedAdd(g_Counters[0].m_CoarseClusterCount, 1);
+			if (bDiscrete)
+				InterlockedAdd(g_Counters[0].m_DiscreteClusterCount, 1);
 		}
 		else
 		{

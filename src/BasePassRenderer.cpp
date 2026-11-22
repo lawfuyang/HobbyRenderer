@@ -373,6 +373,9 @@ protected:
         inputs.SetGeneratingGroups(scene.m_ClusterGeneratingGroupsBuffer);
         inputs.SetClusterRecords(scene.m_ClusterRecordBuffer);
         inputs.SetHZB(hzb ? hzb : CommonResources::GetInstance().DefaultTextureBlack);
+        inputs.SetLevelMeshLODs(scene.m_ClusterLevelMeshLODBuffer);
+        inputs.SetDiscreteLODLevels(g_Renderer.m_GeometryStreaming ?
+            g_Renderer.m_GeometryStreaming->GetDiscreteLevelBuffer() : CommonResources::GetInstance().DummySRVStructuredBuffer);
         inputs.SetNodeQueueIn(handles.clusterNodeQueue[queueIn]);
         inputs.SetNodeQueueOut(handles.clusterNodeQueue[queueOut]);
         inputs.SetNodeQueueCountIn(handles.clusterNodeQueueCount[queueIn]);
@@ -401,6 +404,8 @@ protected:
         inputs.SetGroupStates(streaming ? streaming->GetGroupStateBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
         inputs.SetLoadRequests(streaming ? streaming->GetLoadRequestBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
         inputs.SetStreamCounters(streaming ? streaming->GetStreamCounterBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        // The traversal writes the LOD ray tracing is patched with, so the two paths share one classification.
+        inputs.SetInstanceLOD(scene.m_InstanceLODBuffer);
 
         Renderer::RenderPassParams params;
         params.commandList = commandList;
@@ -458,6 +463,7 @@ protected:
         data.SetStreamingEnabled(streaming != nullptr ? 1u : 0u);
         data.SetFrameIndex(streaming != nullptr ? streaming->GetFrameIndex() : 0u);
         data.SetMaxLoads(streaming != nullptr ? streaming->GetMaxLoads() : 0u);
+        data.SetEnableDiscreteLOD(Config::Get().m_ClusterDiscreteLod ? 1u : 0u);
         commandList->writeBuffer(cb, &data, sizeof(data), 0);
 
         return cb;

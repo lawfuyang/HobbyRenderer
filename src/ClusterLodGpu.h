@@ -36,6 +36,11 @@ namespace ClusterLod
         std::vector<uint32_t> m_GeneratingGroups;          // per cluster, global cluster order
         std::vector<srrhi::ClusterGeometry> m_Geometry;   // one per Scene::m_MeshData entry
 
+        // One entry per LOD level, each geometry's levels contiguous from ClusterGeometry::m_LODLevelOffset: the
+        // per-mesh LOD the ray-tracing BLAS pick uses for a discrete instance at that level
+        // (docs/cluster-lod-implementation-plan.md phase 6).
+        std::vector<uint32_t> m_LevelMeshLODs;
+
         // The draw side: one record per cluster, the micro indices of every cluster's triangles and the
         // scene-wide vertex index of every cluster vertex. The mesh shader reads these through ClusterRecord,
         // with the record's offsets relative to the group's StreamGroup blob.
@@ -52,8 +57,10 @@ namespace ClusterLod
     };
 
     // Fills outData from `meshes`. A primitive without cluster data leaves its ClusterGeometry at
-    // m_LODLevelCount == 0, which the traversal treats as "nothing to draw".
-    void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, GpuData& outData);
+    // m_LODLevelCount == 0, which the traversal treats as "nothing to draw". `meshData` is the cooked mesh array
+    // (Scene::m_MeshData): its per-mesh LOD errors decide which BLAS a discrete cluster level maps to.
+    void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrhi::MeshData>& meshData,
+                      GpuData& outData);
 
     // Counts of one primitive, used to size the traversal queues and the visible-cluster list.
     struct Counts

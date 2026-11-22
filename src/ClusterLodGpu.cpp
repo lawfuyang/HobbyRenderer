@@ -1,6 +1,7 @@
 #include "ClusterLodGpu.h"
 
 #include "ClusterLod.h"
+#include "meshoptimizer.h"
 #include "shaders/srrhi/cpp/Cluster.h"
 
 namespace ClusterLod
@@ -36,6 +37,50 @@ namespace
         return maxDepth;
     }
 
+    // Error floor for the log-space ratio below: level 0 has an error of exactly 0 on both sides.
+    constexpr float kErrorFloor = 1e-6f;
+
+    // The per-mesh LOD whose quadric error is closest to `clusterError`, in log space. That is the BLAS a discrete
+    // instance at this cluster level is patched with, so ray tracing shows the same surface detail the raster
+    // cluster of that level does. The per-mesh chain reduces by a different factor per level than the cluster
+    // chain does, so the indices are not interchangeable.
+    uint32_t FindMatchingMeshLOD(const srrhi::MeshData& meshData, float clusterError)
+    {
+        const uint32_t lodCount = std::clamp<uint32_t>(meshData.m_LODCount, 1u, srrhi::CommonConsts::MAX_LOD_COUNT);
+        uint32_t bestLod = 0;
+        float bestCost = FLT_MAX;
+        for (uint32_t lod = 0; lod < lodCount; ++lod)
+        {
+            const float error = std::max(meshData.m_LODErrors[lod], 0.0f);
+            const float cost = std::fabs(std::log((error + kErrorFloor) / (clusterError + kErrorFloor)));
+            if (cost < bestCost)
+            {
+                bestCost = cost;
+                bestLod = lod;
+            }
+        }
+        return bestLod;
+    }
+
+    // One level's per-mesh LOD: the index whose quadric error is closest to this level's worst group. A discrete
+    // instance is drawn from that level's clusters and patched with that BLAS, so the two paths show the same
+    // surface detail.
+    uint32_t BuildLevelMeshLOD(const PrimitiveClusters& clusters, uint32_t level, const srrhi::MeshData& meshData)
+    {
+        float levelError = 0.0f;
+        bool bHasGroups = false;
+        for (const Group& group : clusters.m_Groups)
+        {
+            if (group.m_LODLevel != level)
+                continue;
+            levelError = bHasGroups ? std::max(levelError, group.m_Metric.m_MaxQuadricError)
+                                    : group.m_Metric.m_MaxQuadricError;
+            bHasGroups = true;
+        }
+
+        return FindMatchingMeshLOD(meshData, levelError);
+    }
+
 }
 
 uint64_t GpuData::GetMemoryBytes() const
@@ -48,6 +93,7 @@ uint64_t GpuData::GetMemoryBytes() const
         uint64_t(m_Records.size()) * sizeof(srrhi::ClusterRecord) +
         uint64_t(m_Triangles.size()) * sizeof(uint32_t) +
         uint64_t(m_Vertices.size()) * sizeof(uint32_t) +
+        uint64_t(m_LevelMeshLODs.size()) * sizeof(uint32_t) +
         uint64_t(m_StreamGroups.size()) * sizeof(StreamGroup);
 }
 
@@ -61,7 +107,8 @@ Counts GetCounts(const PrimitiveClusters& clusters)
     return counts;
 }
 
-void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, GpuData& outData)
+void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrhi::MeshData>& meshData,
+                  GpuData& outData)
 {
     outData.m_Nodes.clear();
     outData.m_NodeBounds.clear();
@@ -71,8 +118,9 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
     outData.m_Triangles.clear();
     outData.m_Vertices.clear();
     outData.m_StreamGroups.clear();
+    outData.m_LevelMeshLODs.clear();
     outData.m_PrimitivesWithoutData = 0;
-    outData.m_Geometry.assign(meshDataCount, srrhi::ClusterGeometry{});
+    outData.m_Geometry.assign(meshData.size(), srrhi::ClusterGeometry{});
 
     uint32_t clusterBase = 0;
 
@@ -107,6 +155,24 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, size_t meshDataCount, 
             geometry.m_ClusterCount = counts.m_ClusterCount;
             geometry.m_LODLevelCount = clusters.m_LODLevelCount;
             geometry.m_MaxTreeDepth = counts.m_MaxTreeDepth;
+
+            // The per-mesh LOD each cluster level maps to, for the ray-traced BLAS the discrete path patches.
+            geometry.m_LODLevelOffset = uint32_t(outData.m_LevelMeshLODs.size());
+            SDL_assert(meshDataIndex < meshData.size());
+            for (uint32_t level = 0; level < clusters.m_LODLevelCount; ++level)
+            {
+                outData.m_LevelMeshLODs.push_back(BuildLevelMeshLOD(clusters, level, meshData[meshDataIndex]));
+            }
+
+            // A cluster no coarser group replaced is drawn at any distance, so a discrete instance can only seed at
+            // a level above every level that holds one.
+            for (uint32_t c = 0; c < counts.m_ClusterCount; ++c)
+            {
+                if (clusters.m_GeneratingGroups[c] != kNoGroup)
+                    continue;
+                const uint32_t level = std::min(clusters.m_Clusters[c].m_LODLevel, 31u);
+                geometry.m_UnreplacedLevels |= 1u << level;
+            }
 
             // The builder numbers children, groups and clusters per primitive; the traversal walks the whole
             // scene through one shared buffer, so every index it follows has to be rebased here.

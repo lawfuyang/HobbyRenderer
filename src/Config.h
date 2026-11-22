@@ -55,6 +55,10 @@ struct Config
     uint32_t m_ClusterDebugMode = 0;
     bool m_ClusterFreezeCulling = false;
     bool m_ClusterTwoPass = false;
+    // Discrete LOD (phase 6): an instance whose cut fits a single LOD level is seeded at that level's node and
+    // drawn whole, and ray tracing is patched with the per-mesh LOD that matches it. Off = the continuous cut, i.e.
+    // the pre-phase-6 image, for an A/B.
+    bool m_ClusterDiscreteLod = true;
 
     // The VRAM budget both streaming systems spend: the texture tile heaps and the cluster group arena. 0 means
     // "whatever the OS says this application may use", which is the panel slider's default too.
