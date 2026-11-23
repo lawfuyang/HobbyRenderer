@@ -173,6 +173,13 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
         outError = "generating-group array is not parallel to the cluster array";
         return false;
     }
+    // The blob words are absent on a scene loaded from the cooked file (they stream from it); when present, both
+    // arrays have to be.
+    if (clusters.m_Triangles.empty() != clusters.m_VertexIndices.empty())
+    {
+        outError = "blob arrays are not parallel (one is empty)";
+        return false;
+    }
     if (clusters.m_Nodes.size() != clusters.m_NodeBounds.size() || clusters.m_Nodes.empty())
     {
         outError = "node/bounds arrays are not parallel or empty";
@@ -249,22 +256,28 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
             outError = "cluster " + std::to_string(c) + " has a different level than its group";
             return false;
         }
-        if (uint64_t(cluster.m_VertexOffset) + cluster.GetVertexCount() > clusters.m_VertexIndices.size())
+
+        // Blob-relative checks only when the words are present: a loaded scene streams them from the file and
+        // its DAG is validated structurally here, with the offsets checked by the cache reader/streamer.
+        if (!clusters.m_Triangles.empty())
         {
-            outError = "cluster " + std::to_string(c) + " reads past the vertex index array";
-            return false;
-        }
-        if (uint64_t(cluster.m_TriangleOffset) + uint64_t(cluster.GetTriangleCount()) * 3 > clusters.m_Triangles.size())
-        {
-            outError = "cluster " + std::to_string(c) + " reads past the micro index array";
-            return false;
-        }
-        for (uint32_t t = 0; t < cluster.GetTriangleCount() * 3; ++t)
-        {
-            if (clusters.m_Triangles[cluster.m_TriangleOffset + t] >= cluster.GetVertexCount())
+            if (uint64_t(cluster.m_VertexOffset) + cluster.GetVertexCount() > clusters.m_VertexIndices.size())
             {
-                outError = "cluster " + std::to_string(c) + " has a micro index outside its vertex range";
+                outError = "cluster " + std::to_string(c) + " reads past the vertex index array";
                 return false;
+            }
+            if (uint64_t(cluster.m_TriangleOffset) + uint64_t(cluster.GetTriangleCount()) * 3 > clusters.m_Triangles.size())
+            {
+                outError = "cluster " + std::to_string(c) + " reads past the micro index array";
+                return false;
+            }
+            for (uint32_t t = 0; t < cluster.GetTriangleCount() * 3; ++t)
+            {
+                if (clusters.m_Triangles[cluster.m_TriangleOffset + t] >= cluster.GetVertexCount())
+                {
+                    outError = "cluster " + std::to_string(c) + " has a micro index outside its vertex range";
+                    return false;
+                }
             }
         }
 
@@ -312,14 +325,10 @@ bool ValidateDag(const PrimitiveClusters& clusters, std::string& outError)
         }
     }
 
-    for (uint32_t level = 1; level < clusters.m_LODLevelCount; ++level)
-    {
-        if (clusters.m_LODMinMaxError[level] < clusters.m_LODMinMaxError[level - 1])
-        {
-            outError = "level " + std::to_string(level) + " does not have a larger worst error than the level below";
-            return false;
-        }
-    }
+    // Monotonicity along the DAG edges is what the cut needs, and it is checked above per cluster. A level's
+    // *worst* group error is not monotone in the level: that worst group need not be an ancestor of the previous
+    // level's worst group, so comparing whole levels rejects valid DAGs (it dropped two primitives of
+    // threedscans_animals at 7.9 M triangles).
     if (clusters.m_LODMinMaxError[0] != 0.0f)
     {
         outError = "level 0 has a non-zero error";
@@ -588,8 +597,8 @@ void WriteToStream(std::ostream& os, const PrimitiveClusters& clusters)
     writeVector(clusters.m_Groups);
     writeVector(clusters.m_Clusters);
     writeVector(clusters.m_GeneratingGroups);
-    writeVector(clusters.m_Triangles);
-    writeVector(clusters.m_VertexIndices);
+    // The triangle and vertex-index words are not part of the index record: SaveCookedMesh writes them as the
+    // per-group blob section, in the order the arena consumes them (see GroupBlobRef).
     os.write(reinterpret_cast<const char*>(&clusters.m_LODLevelCount), sizeof(clusters.m_LODLevelCount));
     os.write(reinterpret_cast<const char*>(clusters.m_LODMinSphere), sizeof(clusters.m_LODMinSphere));
     os.write(reinterpret_cast<const char*>(clusters.m_LODMinMaxError), sizeof(clusters.m_LODMinMaxError));
@@ -612,8 +621,7 @@ void ReadFromStream(std::istream& is, PrimitiveClusters& clusters)
     readVector(clusters.m_Groups);
     readVector(clusters.m_Clusters);
     readVector(clusters.m_GeneratingGroups);
-    readVector(clusters.m_Triangles);
-    readVector(clusters.m_VertexIndices);
+    // The blob words are not in the index record; the loaded scene leaves these empty and streams them.
     is.read(reinterpret_cast<char*>(&clusters.m_LODLevelCount), sizeof(clusters.m_LODLevelCount));
     is.read(reinterpret_cast<char*>(clusters.m_LODMinSphere), sizeof(clusters.m_LODMinSphere));
     is.read(reinterpret_cast<char*>(clusters.m_LODMinMaxError), sizeof(clusters.m_LODMinMaxError));

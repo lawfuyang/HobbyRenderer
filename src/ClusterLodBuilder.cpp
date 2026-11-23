@@ -86,6 +86,19 @@ namespace
         float m_Error = 0.0f;      // error of using this level's clusters instead of the original mesh
     };
 
+    // Runs `count` independent bodies: the caller's scheduler when it gave us one, otherwise serially. The builder
+    // never nests these - Build itself must be called outside any parallel loop.
+    void RunParallel(const ParallelForFn& parallelFor, uint32_t count, const std::function<void(uint32_t)>& body)
+    {
+        if (parallelFor && count > 1)
+        {
+            parallelFor(count, body);
+            return;
+        }
+        for (uint32_t i = 0; i < count; ++i)
+            body(i);
+    }
+
     bool ClusterizeIndices(const BuildInput& input, const Config& config, const std::vector<uint32_t>& indices,
                            std::vector<WorkCluster>& outClusters)
     {
@@ -710,7 +723,8 @@ namespace
 }
 
 
-bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& outClusters, BuildStats& outStats)
+bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& outClusters, BuildStats& outStats,
+           const ParallelForFn& parallelFor)
 {
     const auto startTime = std::chrono::steady_clock::now();
 
@@ -748,7 +762,6 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
     std::vector<uint32_t> levelGroupOffset(kMaxLODLevels, 0);
     std::vector<uint32_t> levelGroupCount(kMaxLODLevels, 0);
     std::vector<uint8_t> locks;
-    std::vector<uint32_t> groupIndices;
     std::vector<float> rawErrorPerGroup;   // parallel to outClusters.m_Groups
 
     uint64_t triangleCount = dedup.m_Indices.size() / 3;
@@ -780,6 +793,22 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
         levelGroupOffset[level] = uint32_t(outClusters.m_Groups.size());
         levelGroupCount[level] = groupCount;
 
+        // Per-cluster bounding spheres: independent of the order-dependent appends below, and the meshopt call is
+        // the expensive half of emitting a cluster, so it runs in parallel and the loop only copies the words.
+        std::vector<uint64_t> clusterSpheres(clusterCount, 0);
+        RunParallel(parallelFor, clusterCount, [&](uint32_t i)
+        {
+            const WorkCluster& cluster = levelClusters[i];
+            const meshopt_Bounds bounds = meshopt_computeClusterBounds(cluster.m_Indices.data(),
+                cluster.m_Indices.size(), work.m_Positions, work.m_VertexCount, work.m_PositionStride);
+
+            const uint64_t lo = uint64_t(uint32_t(meshopt_quantizeHalf(bounds.center[0])) |
+                (uint32_t(meshopt_quantizeHalf(bounds.center[1])) << 16));
+            const uint64_t hi = uint64_t(uint32_t(meshopt_quantizeHalf(bounds.center[2])) |
+                (uint32_t(meshopt_quantizeHalf(bounds.radius)) << 16));
+            clusterSpheres[i] = lo | (hi << 32);
+        });
+
         for (uint32_t gi = 0; gi < groupCount; ++gi)
         {
             LevelGroup& group = groups[gi];
@@ -803,16 +832,9 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
                 emittedCluster.m_VertexOffset = uint32_t(outClusters.m_VertexIndices.size());
                 emittedCluster.m_TriangleOffset = uint32_t(outClusters.m_Triangles.size());
 
-                // The cluster's own bounding sphere, for the per-cluster occlusion test. `work` holds the
-                // deduplicated positions and the cluster's indices are in that space, so meshopt sees exactly
-                // the triangles it partitioned.
-                const meshopt_Bounds bounds = meshopt_computeClusterBounds(cluster.m_Indices.data(),
-                    cluster.m_Indices.size(), work.m_Positions, work.m_VertexCount, work.m_PositionStride);
-
-                emittedCluster.m_CenterRadius[0] = uint32_t(meshopt_quantizeHalf(bounds.center[0])) |
-                    (uint32_t(meshopt_quantizeHalf(bounds.center[1])) << 16);
-                emittedCluster.m_CenterRadius[1] = uint32_t(meshopt_quantizeHalf(bounds.center[2])) |
-                    (uint32_t(meshopt_quantizeHalf(bounds.radius)) << 16);
+                // The cluster's own bounding sphere, for the per-cluster occlusion test, computed above.
+                emittedCluster.m_CenterRadius[0] = uint32_t(clusterSpheres[group.m_ClusterOffset + i]);
+                emittedCluster.m_CenterRadius[1] = uint32_t(clusterSpheres[group.m_ClusterOffset + i] >> 32);
 
                 for (uint32_t v : cluster.m_Vertices)
                     outClusters.m_VertexIndices.push_back(dedup.m_Sources[v]);
@@ -826,13 +848,18 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
             outClusters.m_Groups.push_back(emitted);
         }
 
-        // Decimate every group to build the next level, and record how much error that costs.
+        // Decimate every group to build the next level, and record how much error that costs. The groups are
+        // independent (each simplifies its own index subset against the shared read-only locks), so a primitive
+        // with few groups - or a scene with few primitives - gets its parallelism here.
+        SDL_assert(rawErrorPerGroup.size() == size_t(levelGroupOffset[level]));
+        rawErrorPerGroup.resize(size_t(levelGroupOffset[level]) + groupCount, 0.0f);
+        std::vector<uint8_t> groupStuck(groupCount, 0);
         uint32_t stuckGroups = 0;
-        for (uint32_t gi = 0; gi < groupCount; ++gi)
+        RunParallel(parallelFor, groupCount, [&](uint32_t gi)
         {
             LevelGroup& group = groups[gi];
 
-            groupIndices.clear();
+            std::vector<uint32_t> groupIndices;
             for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
             {
                 const WorkCluster& cluster = levelClusters[group.m_ClusterOffset + i];
@@ -851,12 +878,15 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
             if (group.m_Simplified.size() > size_t(double(groupIndices.size()) * double(config.m_SimplifyThreshold)))
             {
                 group.m_Simplified.clear();
-                stuckGroups++;
+                groupStuck[gi] = 1;
             }
 
             group.m_RawError = rawError;
-            rawErrorPerGroup.push_back(rawError);
-        }
+            rawErrorPerGroup[size_t(levelGroupOffset[level]) + gi] = rawError;
+        });
+
+        for (uint32_t gi = 0; gi < groupCount; ++gi)
+            stuckGroups += groupStuck[gi];
 
         SDL_Log("[ClusterLod] level %u: %u of %u groups are stuck (kept above the simplify threshold)", level, stuckGroups,
             groupCount);
@@ -934,26 +964,30 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
         }
 
         // Build the next level from the decimated groups, one clusterisation per group so every new cluster knows
-        // the group that produced it.
+        // the group that produced it. Also independent per group, and another large share of the build time on a
+        // coarse level, so it runs through the same hook and is merged in group order afterwards.
+        std::vector<std::vector<WorkCluster>> producedPerGroup(groupCount);
+        RunParallel(parallelFor, groupCount, [&](uint32_t gi)
+        {
+            if (groups[gi].m_Simplified.size() < 3)
+                return;
+
+            std::vector<WorkCluster> produced;
+            if (ClusterizeIndices(work, config, groups[gi].m_Simplified, produced))
+                producedPerGroup[gi] = std::move(produced);
+        });
+
         std::vector<WorkCluster> nextClusters;
         uint64_t nextTriangleCount = 0;
         for (uint32_t gi = 0; gi < groupCount; ++gi)
         {
-            if (groups[gi].m_Simplified.size() < 3)
-                continue;
-
-            std::vector<WorkCluster> produced;
-            if (!ClusterizeIndices(work, config, groups[gi].m_Simplified, produced))
-                continue;
-
             const uint32_t sourceGlobal = levelGroupOffset[level] + gi;
-            for (WorkCluster& cluster : produced)
+            for (WorkCluster& cluster : producedPerGroup[gi])
             {
                 cluster.m_SourceGroup = sourceGlobal;
                 nextTriangleCount += cluster.m_Triangles.size() / 3;
-            }
-            for (WorkCluster& cluster : produced)
                 nextClusters.push_back(std::move(cluster));
+            }
         }
 
         uint64_t levelTriangleCount = 0;

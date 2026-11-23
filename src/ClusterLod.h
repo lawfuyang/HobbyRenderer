@@ -69,6 +69,8 @@ namespace ClusterLod
         std::vector<Group> m_Groups;               // group.m_ClusterOffset indexes m_Clusters
         std::vector<Cluster> m_Clusters;
         std::vector<uint32_t> m_GeneratingGroups;  // per cluster: the group that replaced it at the next level
+        // Cook-time only. The cooked cache stores the group blobs in GPU order instead, and a loaded scene
+        // leaves these two empty: the bytes stream from the file (see GroupBlobRef below).
         std::vector<uint8_t> m_Triangles;          // micro indices, 3 per triangle
         std::vector<uint32_t> m_VertexIndices;     // cluster-local -> primitive-local vertex index
         TraversalMetric m_LODMinSphere[kMaxLODLevels] = {};
@@ -82,6 +84,31 @@ namespace ClusterLod
         uint32_t GetLevelGroupCount(uint32_t level) const;
         uint64_t GetMemoryBytes() const;
         void Clear();
+    };
+
+    // Where one group's words live in the cooked mesh file. The bytes are the group's arena blob verbatim:
+    // `GetBlobElements()` words, 16-byte aligned, the group's clusters' triangles followed by every cluster
+    // vertex's attributes (a VertexQuantized, six words each). A load is therefore one copy out of the mapping -
+    // no group data has to be materialised in system RAM.
+    struct GroupBlobRef
+    {
+        uint64_t m_FileOffset = 0;   // byte offset into the cooked mesh file
+        uint32_t m_ByteSize = 0;
+        uint32_t m_Unused = 0;       // keeps the record 16 B so the table reads as one vector
+    };
+
+    // The cooked file a scene's group blobs are streamed from, and the table that locates them. Filled by
+    // SceneCache::LoadOrCookMeshData and consumed by GeometryStreaming at scene load.
+    struct BlobFile
+    {
+        std::filesystem::path m_Path;
+        std::vector<GroupBlobRef> m_Groups;   // global group order, parallel to GpuData::m_StreamGroups
+
+        void Clear()
+        {
+            m_Path.clear();
+            m_Groups.clear();
+        }
     };
 
     // Clusterisation parameters. Every field is hashed into the cooked-mesh config hash, so changing one
@@ -135,7 +162,13 @@ namespace ClusterLod
     // invalidates existing caches instead of mixing two layouts.
     const Config& GetActiveConfig();
 
-    bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& outClusters, BuildStats& outStats);
+    // Optional parallelism hook for Build: runs `body(0..count-1)` concurrently; every index writes only its own
+    // output, and the shared inputs are read-only. An empty hook runs the build serially. The caller must not
+    // invoke Build from inside another parallel loop: the builder calls the hook on its own thread.
+    using ParallelForFn = std::function<void(uint32_t count, const std::function<void(uint32_t)>& body)>;
+
+    bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& outClusters, BuildStats& outStats,
+               const ParallelForFn& parallelFor = {});
 
     // ── Runtime side (CPU reference; the GPU path must match it cluster for cluster) ──────────────────
 

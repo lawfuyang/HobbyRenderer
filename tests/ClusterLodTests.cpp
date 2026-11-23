@@ -175,8 +175,10 @@ namespace
         if (!SameVector(a.m_Groups, b.m_Groups)) { SDL_Log("[ClusterLodTests] %sgroups differ", prefix.c_str()); return false; }
         if (!SameVector(a.m_Clusters, b.m_Clusters)) { SDL_Log("[ClusterLodTests] %sclusters differ", prefix.c_str()); return false; }
         if (!SameVector(a.m_GeneratingGroups, b.m_GeneratingGroups)) { SDL_Log("[ClusterLodTests] %sgenerating groups differ", prefix.c_str()); return false; }
-        if (!SameVector(a.m_Triangles, b.m_Triangles)) { SDL_Log("[ClusterLodTests] %striangles differ", prefix.c_str()); return false; }
-        if (!SameVector(a.m_VertexIndices, b.m_VertexIndices)) { SDL_Log("[ClusterLodTests] %svertex indices differ", prefix.c_str()); return false; }
+        // The index record no longer carries the blob words - they live in the cooked file's group section - so a
+        // loaded copy has them empty while a rebuilt one still has them.
+        if (!a.m_Triangles.empty() && !b.m_Triangles.empty() && !SameVector(a.m_Triangles, b.m_Triangles)) { SDL_Log("[ClusterLodTests] %striangles differ", prefix.c_str()); return false; }
+        if (!a.m_VertexIndices.empty() && !b.m_VertexIndices.empty() && !SameVector(a.m_VertexIndices, b.m_VertexIndices)) { SDL_Log("[ClusterLodTests] %svertex indices differ", prefix.c_str()); return false; }
         if (a.m_LODLevelCount != b.m_LODLevelCount) { SDL_Log("[ClusterLodTests] %slevel count differs", prefix.c_str()); return false; }
         return true;
     }
@@ -251,6 +253,8 @@ namespace
         std::filesystem::remove(path, ec);
 
         Check(SameClusters(clusters, loaded), prefix + "V0.5 round-trip");
+        Check(loaded.m_Triangles.empty() && loaded.m_VertexIndices.empty(),
+            prefix + "V0.5 blob words are not part of the index record");
         const bool bLoadedDagValid = ClusterLod::ValidateDag(loaded, error);
         Check(bLoadedDagValid, prefix + "V0.5 loaded DAG is valid: " + error);
 
