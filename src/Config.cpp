@@ -275,6 +275,31 @@ void Config::ParseCommandLine(int argc, char* argv[])
                     "[Config] Missing value for --cluster-io-mb-per-frame");
             }
         }
+        else if (std::strcmp(arg, "--stream-import") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_bStreamImport = std::atoi(argv[++i]) != 0;
+                SDL_Log("[Config] Streamed glTF import %s", s_Instance.m_bStreamImport ? "enabled" : "disabled");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --stream-import", "[Config] Missing value for --stream-import");
+            }
+        }
+        else if (std::strcmp(arg, "--import-limit-primitives") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                const int value = std::atoi(argv[++i]);
+                s_Instance.m_ImportPrimitiveLimit = uint32_t(std::max(0, value));
+                SDL_Log("[Config] Streamed import limited to %u primitives", s_Instance.m_ImportPrimitiveLimit);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --import-limit-primitives", "[Config] Missing value for --import-limit-primitives");
+            }
+        }
         else if (std::strcmp(arg, "--rt-max-scene-mb") == 0)
         {
             if (i + 1 < argc)
@@ -624,6 +649,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-stream-age <frames>    Untouched frames before a resident group is unloaded (default 16)");
             SDL_Log("  --cluster-io-mb-per-frame <MiB>  Group blob bytes streamed per frame from the cooked file (default 16, 0 = uncapped)");
             SDL_Log("  --rt-max-scene-mb <MiB>          VRAM a scene's vertices+indices+BLAS may need before RT is turned off (0 = GPU budget)");
+            SDL_Log("  --stream-import <0|1>            Cook one primitive at a time into resumable part files (huge scenes)");
+            SDL_Log("  --import-limit-primitives <n>    Stop the streamed import after n primitives (0 = all)");
             SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");

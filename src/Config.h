@@ -71,6 +71,11 @@ struct Config
     // VRAM a scene's ray-tracing footprint (vertices + indices + BLAS) may use before every RT feature is turned
     // off for it. 0 = the GPU's streaming budget. `--rt-max-scene-mb` exists to force the oversized path.
     uint32_t m_RayTracingBudgetMiB = 0;
+    // Streamed import: cook one primitive at a time and flush each to a part file, so a scene whose decoded glTF
+    // does not fit in RAM can still be imported (docs/cluster-lod-upstream-review-2026-11-23.md §22).
+    bool m_bStreamImport = false;
+    // Streamed import stops after this many primitives (0 = all), for a first look at a huge scene.
+    uint32_t m_ImportPrimitiveLimit = 0;
     // Prints the streaming residency stats on this frame. -1 = never.
     int m_ClusterStreamStatsFrame = -1;
 
