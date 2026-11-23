@@ -45,6 +45,68 @@ namespace SceneCache
     //    cluster path no longer reads the scene-global vertex buffer.
     constexpr uint32_t kCookedMeshVersion = 9;
 
+    // ── Streamed import: one part file per primitive ──────────────────────────
+    //
+    // A scene whose decoded glTF does not fit in RAM (zorah: 9.53 GB on disk, 41.69 GB decoded) cannot be cooked
+    // by holding every primitive: the cook writes one part per primitive as soon as that primitive's clusters and
+    // group blobs exist, and only the cluster metadata stays resident. A part is self-contained and final, so an
+    // interrupted cook resumes by skipping the parts that are already there; AssembleCookedMesh then streams the
+    // parts into the usual cooked-mesh layout, deleting each part as it is copied.
+    //
+    // Part file layout:
+    //   0   4   Magic: 0x54524150 ("PART")
+    //   4   4   Version: uint32_t
+    //   8   ..  CookedPartHeader fields
+    //   var     Cluster metadata: ClusterLod::WriteToStream(PrimitiveClusters)
+    //   var     Group blob table: [count:uint32_t][ClusterLod::GroupBlobRef * count], offsets relative to the
+    //           blob region below
+    //   var     Blob region: the group blobs exactly as the arena holds them
+    struct CookedPartHeader
+    {
+        uint32_t m_Magic = 0;
+        uint32_t m_Version = 0;
+        uint32_t m_MeshIndex = 0;
+        uint32_t m_PrimitiveIndex = 0;
+        uint32_t m_VertexCount = 0;
+        uint32_t m_IndexCount = 0;
+        uint32_t m_LODCount = 0;
+        uint32_t m_IndexCounts[srrhi::CommonConsts::MAX_LOD_COUNT] = {};
+        float    m_Center[3] = {};
+        float    m_Radius = 0.0f;
+        uint64_t m_ClusterBytes = 0;   // metadata section, from the header to the blob table
+        uint64_t m_BlobBytes = 0;      // blob region size
+        uint32_t m_GroupCount = 0;
+    };
+
+    constexpr uint32_t kCookedPartMagic = 0x54524150;   // "PART"
+    constexpr uint32_t kCookedPartVersion = 1;
+
+    // `<cachePath>.parts/<mesh>_<primitive>.part`
+    std::filesystem::path GetPartPath(const std::filesystem::path& cachePath, uint32_t meshIndex, uint32_t primitiveIndex);
+
+    // Writes one primitive's part: the cluster metadata plus every group's blob, packed from `vertices` (the
+    // primitive's own packed vertex block, which is why the blob can carry attributes without the scene-wide
+    // array). Returns false and leaves no file behind on failure.
+    bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, uint32_t primitiveIndex,
+                         const ClusterLod::PrimitiveClusters& clusters,
+                         const std::vector<srrhi::VertexQuantized>& vertices,
+                         const srrhi::MeshData& meshData, const float center[3], float radius);
+
+    // Header only: enough to rebuild the scene records of an already-imported primitive without reading its
+    // geometry back.
+    bool ReadCookedPartHeader(const std::filesystem::path& partPath, CookedPartHeader& header);
+
+    // Header plus cluster metadata, for the assemble pass and for resuming.
+    bool ReadCookedPart(const std::filesystem::path& partPath, CookedPartHeader& header,
+                        ClusterLod::PrimitiveClusters& clusters);
+
+    // Assembles the parts into a cooked mesh with no legacy vertex/index/meshlet arrays (the cluster path and the
+    // group blobs are all a streamed scene has), streaming each part's blob region into the file. Parts are
+    // deleted as they are copied, so peak disk is the cache plus one part.
+    bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vector<Scene::Mesh>& meshes,
+                            const std::vector<srrhi::MeshData>& meshData, const std::filesystem::path& partsDir,
+                            ClusterLod::BlobFile& outBlobs);
+
     // ── Binary I/O helpers ────────────────────────────────────────────────────
 
     template<typename T>

@@ -250,6 +250,313 @@ bool SaveCookedMesh(
     return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Streamed import: part files
+// ─────────────────────────────────────────────────────────────────────────────
+
+std::filesystem::path GetPartPath(const std::filesystem::path& cachePath, uint32_t meshIndex, uint32_t primitiveIndex)
+{
+    std::filesystem::path dir = cachePath;
+    dir += ".parts";
+    char name[64];
+    std::snprintf(name, sizeof(name), "%06u_%04u.part", meshIndex, primitiveIndex);
+    return dir / name;
+}
+
+bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, uint32_t primitiveIndex,
+                     const ClusterLod::PrimitiveClusters& clusters,
+                     const std::vector<srrhi::VertexQuantized>& vertices,
+                     const srrhi::MeshData& meshData, const float center[3], float radius)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(partPath.parent_path(), ec);
+
+    // Written under a temporary name and renamed, so a part file's existence means "complete". That is the whole
+    // resume protocol: a torn part is simply absent and gets redone.
+    std::filesystem::path tempPath = partPath;
+    tempPath += ".tmp";
+
+    {
+        std::ofstream os(tempPath, std::ios::binary | std::ios::trunc);
+        if (!os.is_open())
+        {
+            SDL_Log("[SceneCache] Failed to open part file for writing: %s", tempPath.string().c_str());
+            return false;
+        }
+
+        CookedPartHeader header;
+        header.m_Magic = kCookedPartMagic;
+        header.m_Version = kCookedPartVersion;
+        header.m_MeshIndex = meshIndex;
+        header.m_PrimitiveIndex = primitiveIndex;
+        header.m_VertexCount = uint32_t(vertices.size());
+        header.m_IndexCount = meshData.m_IndexCounts[0];
+        header.m_LODCount = meshData.m_LODCount;
+        for (uint32_t lod = 0; lod < srrhi::CommonConsts::MAX_LOD_COUNT; ++lod)
+            header.m_IndexCounts[lod] = meshData.m_IndexCounts[lod];
+        header.m_Center[0] = center[0];
+        header.m_Center[1] = center[1];
+        header.m_Center[2] = center[2];
+        header.m_Radius = radius;
+        header.m_GroupCount = uint32_t(clusters.m_Groups.size());
+        WritePOD(os, header);
+
+        const std::streampos metadataStart = os.tellp();
+        ClusterLod::WriteToStream(os, clusters);
+        header.m_ClusterBytes = uint64_t(os.tellp() - metadataStart);
+
+        // The blob table, with offsets relative to the blob region that follows it. Every group's blob is the
+        // same layout the arena holds: its triangles, then six words of VertexQuantized per cluster vertex.
+        std::vector<ClusterLod::GroupBlobRef> refs(clusters.m_Groups.size());
+        uint64_t blobBytes = 0;
+        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+        {
+            const ClusterLod::Group& group = clusters.m_Groups[g];
+            uint32_t words = 0;
+            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+            {
+                const ClusterLod::Cluster& cluster = clusters.m_Clusters[group.m_ClusterOffset + i];
+                words += cluster.GetTriangleCount() + 6u * cluster.GetVertexCount();
+            }
+            refs[g].m_FileOffset = blobBytes;
+            refs[g].m_ByteSize = (words * uint32_t(sizeof(uint32_t)) + 15u) & ~15u;
+            blobBytes += refs[g].m_ByteSize;
+        }
+        header.m_BlobBytes = blobBytes;
+
+        WritePOD(os, uint32_t(refs.size()));
+        for (const ClusterLod::GroupBlobRef& ref : refs)
+            WritePOD(os, ref);
+
+        std::vector<uint32_t> words;
+        for (const ClusterLod::Group& group : clusters.m_Groups)
+        {
+            words.clear();
+            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+            {
+                const ClusterLod::Cluster& cluster = clusters.m_Clusters[group.m_ClusterOffset + i];
+                for (uint32_t t = 0; t < cluster.GetTriangleCount(); ++t)
+                {
+                    const size_t at = cluster.m_TriangleOffset + size_t(t) * 3;
+                    words.push_back(uint32_t(clusters.m_Triangles[at]) | (uint32_t(clusters.m_Triangles[at + 1]) << 8) |
+                        (uint32_t(clusters.m_Triangles[at + 2]) << 16));
+                }
+            }
+            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+            {
+                const ClusterLod::Cluster& cluster = clusters.m_Clusters[group.m_ClusterOffset + i];
+                for (uint32_t v = 0; v < cluster.GetVertexCount(); ++v)
+                {
+                    const uint32_t vertex = clusters.m_VertexIndices[cluster.m_VertexOffset + v];
+                    SDL_assert(vertex < vertices.size());
+                    const srrhi::VertexQuantized& vq = vertices[vertex];
+                    const uint32_t* attributeWords = reinterpret_cast<const uint32_t*>(&vq);
+                    for (uint32_t w = 0; w < 6u; ++w)
+                        words.push_back(attributeWords[w]);
+                }
+            }
+            os.write(reinterpret_cast<const char*>(words.data()), std::streamsize(words.size() * sizeof(uint32_t)));
+        }
+
+        if (!os.good())
+        {
+            SDL_Log("[SceneCache] Write error while saving part: %s", tempPath.string().c_str());
+            os.close();
+            std::filesystem::remove(tempPath, ec);
+            return false;
+        }
+
+        // The header is only final once the sizes are known.
+        os.seekp(0);
+        WritePOD(os, header);
+        os.close();
+    }
+
+    std::filesystem::rename(tempPath, partPath, ec);
+    if (ec)
+    {
+        SDL_Log("[SceneCache] Failed to publish part %s: %s", partPath.string().c_str(), ec.message().c_str());
+        std::filesystem::remove(tempPath, ec);
+        return false;
+    }
+    return true;
+}
+
+bool ReadCookedPartHeader(const std::filesystem::path& partPath, CookedPartHeader& header)
+{
+    std::ifstream is(partPath, std::ios::binary);
+    if (!is.is_open())
+        return false;
+    ReadPOD(is, header);
+    if (!is.good() || header.m_Magic != kCookedPartMagic || header.m_Version != kCookedPartVersion)
+        return false;
+    return true;
+}
+
+bool ReadCookedPart(const std::filesystem::path& partPath, CookedPartHeader& header,
+                    ClusterLod::PrimitiveClusters& clusters)
+{
+    std::ifstream is(partPath, std::ios::binary);
+    if (!is.is_open())
+        return false;
+    ReadPOD(is, header);
+    if (!is.good() || header.m_Magic != kCookedPartMagic || header.m_Version != kCookedPartVersion)
+        return false;
+    ClusterLod::ReadFromStream(is, clusters);
+    return is.good();
+}
+
+bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vector<Scene::Mesh>& meshes,
+                        const std::vector<srrhi::MeshData>& meshData, const std::filesystem::path& partsDir,
+                        ClusterLod::BlobFile& outBlobs)
+{
+    // Blob order must match BuildGpuData's group order: mesh, primitive, group.
+    std::vector<std::filesystem::path> parts;
+    std::vector<CookedPartHeader> headers;
+    uint64_t blobBytes = 0;
+    for (const Scene::Mesh& mesh : meshes)
+    {
+        for (size_t pi = 0; pi < mesh.m_Primitives.size(); ++pi)
+        {
+            if (mesh.m_Clusters.empty() || mesh.m_Clusters[pi].IsEmpty())
+                continue;
+            const uint32_t meshIndex = uint32_t(&mesh - meshes.data());
+            const std::filesystem::path partPath = GetPartPath(cachePath, meshIndex, uint32_t(pi));
+            CookedPartHeader header;
+            if (!ReadCookedPartHeader(partPath, header))
+            {
+                SDL_Log("[SceneCache] Missing part for mesh %u primitive %zu: %s", meshIndex, pi, partPath.string().c_str());
+                return false;
+            }
+            parts.push_back(partPath);
+            headers.push_back(header);
+            blobBytes += header.m_BlobBytes;
+        }
+    }
+
+    std::ofstream os(cachePath, std::ios::binary | std::ios::trunc);
+    if (!os.is_open())
+    {
+        SDL_Log("[SceneCache] Failed to open cache file for writing: %s", cachePath.string().c_str());
+        return false;
+    }
+
+    WritePOD(os, kCookedMeshMagic);
+    WritePOD(os, kCookedMeshVersion);
+    WritePOD(os, ClusterLod::GetCacheConfigHash(ClusterLod::GetActiveConfig()));
+    WritePOD(os, uint32_t(1));   // clusters cooked
+
+    const uint32_t meshCount = uint32_t(meshes.size());
+    WritePOD(os, meshCount);
+    for (const Scene::Mesh& mesh : meshes)
+    {
+        const uint32_t primCount = uint32_t(mesh.m_Primitives.size());
+        WritePOD(os, primCount);
+        for (const Scene::Primitive& prim : mesh.m_Primitives)
+        {
+            WritePOD(os, prim.m_VertexOffset);
+            WritePOD(os, prim.m_VertexCount);
+            WritePOD(os, prim.m_MaterialIndex);
+            WritePOD(os, prim.m_MeshDataIndex);
+        }
+        WritePOD(os, mesh.m_Center);
+        WritePOD(os, mesh.m_Radius);
+
+        const uint32_t clusterCount = uint32_t(mesh.m_Clusters.size());
+        WritePOD(os, clusterCount);
+        for (const ClusterLod::PrimitiveClusters& clusters : mesh.m_Clusters)
+            ClusterLod::WriteToStream(os, clusters);
+    }
+
+    // No legacy vertex/index/meshlet arrays: a streamed scene is drawn from the group blobs only.
+    WriteVector(os, std::vector<srrhi::MeshData>{});
+    WriteVector(os, std::vector<srrhi::Meshlet>{});
+    WriteVector(os, std::vector<uint32_t>{});
+    WriteVector(os, std::vector<uint32_t>{});
+    WriteVector(os, std::vector<srrhi::VertexQuantized>{});
+    WriteVector(os, std::vector<uint32_t>{});
+    (void)meshData;
+
+    outBlobs.m_Groups.clear();
+    uint64_t offset = 0;
+    for (const CookedPartHeader& header : headers)
+        for (uint32_t g = 0; g < header.m_GroupCount; ++g)
+            outBlobs.m_Groups.push_back(ClusterLod::GroupBlobRef{});
+
+    // Per-part blob tables carry their own sizes; re-read them to fill the global table.
+    size_t globalGroup = 0;
+    for (size_t p = 0; p < parts.size(); ++p)
+    {
+        std::ifstream part(parts[p], std::ios::binary);
+        CookedPartHeader header{};
+        ReadPOD(part, header);
+        part.seekg(std::streamoff(sizeof(CookedPartHeader) + int64_t(header.m_ClusterBytes)));
+        uint32_t groupCount = 0;
+        ReadPOD(part, groupCount);
+        SDL_assert(groupCount == header.m_GroupCount);
+        for (uint32_t g = 0; g < groupCount; ++g)
+        {
+            ClusterLod::GroupBlobRef ref{};
+            ReadPOD(part, ref);
+            ref.m_FileOffset += offset;
+            outBlobs.m_Groups[globalGroup++] = ref;
+        }
+        offset += header.m_BlobBytes;
+    }
+
+    const uint64_t tableBytes = sizeof(uint64_t) + uint64_t(outBlobs.m_Groups.size()) * sizeof(ClusterLod::GroupBlobRef);
+    const uint64_t sectionStart = (uint64_t(os.tellp()) + tableBytes + 4095u) & ~uint64_t(4095);
+    for (ClusterLod::GroupBlobRef& ref : outBlobs.m_Groups)
+        ref.m_FileOffset += sectionStart;
+
+    WritePOD(os, uint64_t(outBlobs.m_Groups.size()));
+    for (const ClusterLod::GroupBlobRef& ref : outBlobs.m_Groups)
+        WritePOD(os, ref);
+    WriteZeroBytes(os, sectionStart - uint64_t(os.tellp()));
+
+    // Stream each part's blob region in and delete the part as it goes.
+    std::vector<char> buffer;
+    for (size_t p = 0; p < parts.size(); ++p)
+    {
+        const CookedPartHeader& header = headers[p];
+        std::ifstream part(parts[p], std::ios::binary);
+        part.seekg(std::streamoff(sizeof(CookedPartHeader) + int64_t(header.m_ClusterBytes) + sizeof(uint32_t) +
+            int64_t(header.m_GroupCount) * int64_t(sizeof(ClusterLod::GroupBlobRef))));
+        buffer.resize(size_t(std::min<uint64_t>(header.m_BlobBytes, 32ull << 20)));
+        uint64_t remaining = header.m_BlobBytes;
+        while (remaining != 0)
+        {
+            const size_t chunk = size_t(std::min<uint64_t>(remaining, buffer.size()));
+            part.read(buffer.data(), std::streamsize(chunk));
+            if (!part.good())
+            {
+                SDL_Log("[SceneCache] Failed to read part blob data: %s", parts[p].string().c_str());
+                return false;
+            }
+            os.write(buffer.data(), std::streamsize(chunk));
+            remaining -= chunk;
+        }
+        part.close();
+
+        std::error_code ec;
+        std::filesystem::remove(parts[p], ec);
+    }
+
+    outBlobs.m_Path = cachePath;
+    if (!os.good())
+    {
+        SDL_Log("[SceneCache] Write error while assembling the cooked mesh: %s", cachePath.string().c_str());
+        return false;
+    }
+    os.close();
+
+    std::error_code ec;
+    std::filesystem::remove(partsDir, ec);
+    SDL_Log("[SceneCache] Assembled cooked mesh from %zu parts: %.2f MB of blobs", parts.size(),
+        double(blobBytes) / (1024.0 * 1024.0));
+    return true;
+}
+
 bool LoadCookedMesh(
     const std::filesystem::path& cachePath,
     std::vector<Scene::Mesh>&            outMeshes,

@@ -1062,6 +1062,40 @@ the cache.
   the identical cut and image; then `--import-limit-primitives 200` on Zorah for a first real-data
   test that costs minutes rather than hours; then the full cook.
 
+### 22.1 What is already in place (stage 1, part-file layer)
+
+`src/SceneCache.{h,cpp}` now owns the resumable half of the import:
+
+* `CookedPartHeader` + `GetPartPath()` — one `<cache>.parts/<mesh>_<primitive>.part` per primitive:
+  header, the primitive's `PrimitiveClusters` metadata (`ClusterLod::WriteToStream`), its group blob
+  table, then the blob bytes, all packed from that primitive's own vertex block (which is what lets the
+  blob carry attributes without the scene-wide array).
+* `WriteCookedPart()` writes to `<part>.tmp` and **renames** on success, so a part file's existence
+  *is* the "done" marker — a torn part is simply absent and gets redone. That is the whole resume
+  protocol; no journal is needed.
+* `ReadCookedPartHeader()` rebuilds a primitive's scene records (vertex/index counts, per-LOD index
+  counts, bounds, group count) without touching the geometry, and `ReadCookedPart()` also restores its
+  cluster metadata, so a resumed cook skips the work instead of redoing it.
+* `AssembleCookedMesh()` writes the cooked mesh with **empty** legacy vertex/index/meshlet arrays and
+  streams the parts' blob regions in, deleting each part as it is copied (peak disk = cache + one part).
+
+Still to wire, in this order:
+
+1. `SceneLoader::ProcessMeshes`: a `--stream-import 1` mode that runs the primitive body **serially**
+   (the existing `ParallelFor(jobs.size())` becomes a named lambda and is dispatched either across jobs
+   or one job at a time), builds each primitive's clusters with the scheduler inside that loop, calls
+   `WriteCookedPart`, and then clears that primitive's vertex/index/meshlet vectors. Peak becomes one
+   primitive plus the cluster metadata (Zorah ≈ 2 GB) instead of 44 GB.
+2. The merge phase: skip the global index rebasing/appending and take mesh bounds from the cluster
+   group bounds instead of `Sphere::CreateFromPoints` over the (now absent) vertex array.
+3. `LoadOrCookMeshData`: call `AssembleCookedMesh` instead of `SaveCookedMesh` when the parts
+   directory holds the scene.
+4. `decompressMeshopt` still expands every compressed bufferView up front; the per-primitive
+   decode-and-release (`mode`/`filter` per view, as the existing loop already dispatches) is the piece
+   that removes the remaining 41.69 GB spike. Until then a streamed cook needs the raw `.bin` buffers
+   to fit, so it is `--import-limit-primitives` that makes the first real-data test affordable.
+
+
 
 
 
