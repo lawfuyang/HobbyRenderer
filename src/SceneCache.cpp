@@ -329,8 +329,9 @@ bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, 
             WritePOD(os, ref);
 
         std::vector<uint32_t> words;
-        for (const ClusterLod::Group& group : clusters.m_Groups)
+        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
         {
+            const ClusterLod::Group& group = clusters.m_Groups[g];
             words.clear();
             for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
             {
@@ -356,6 +357,9 @@ bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, 
                 }
             }
             os.write(reinterpret_cast<const char*>(words.data()), std::streamsize(words.size() * sizeof(uint32_t)));
+            // The table promises a 16-byte aligned blob, so the tail is zero-filled exactly as the arena sees it.
+            SDL_assert(words.size() * sizeof(uint32_t) <= refs[g].m_ByteSize);
+            WriteZeroBytes(os, refs[g].m_ByteSize - words.size() * sizeof(uint32_t));
         }
 
         if (!os.good())
@@ -390,18 +394,35 @@ bool ReadCookedPartHeader(const std::filesystem::path& partPath, CookedPartHeade
     ReadPOD(is, header);
     if (!is.good() || header.m_Magic != kCookedPartMagic || header.m_Version != kCookedPartVersion)
         return false;
+
+    // The resume marker is the file's existence, so a part that is the wrong size (a write that was cut short,
+    // or a part from an older layout) must be rejected and redone rather than trusted.
+    const uint64_t expected = sizeof(CookedPartHeader) + header.m_ClusterBytes + sizeof(uint32_t) +
+        uint64_t(header.m_GroupCount) * sizeof(ClusterLod::GroupBlobRef) + header.m_BlobBytes;
+    std::error_code ec;
+    const auto actual = std::filesystem::file_size(partPath, ec);
+    if (ec || uint64_t(actual) != expected)
+    {
+        SDL_Log("[SceneCache] Part %s is %llu bytes, its header promises %llu: re-importing it",
+            partPath.filename().string().c_str(), static_cast<unsigned long long>(ec ? 0 : actual),
+            static_cast<unsigned long long>(expected));
+        return false;
+    }
     return true;
 }
 
 bool ReadCookedPart(const std::filesystem::path& partPath, CookedPartHeader& header,
                     ClusterLod::PrimitiveClusters& clusters)
 {
+    // Validated through the header reader, so a part whose size does not match its header is rejected here too -
+    // that is what makes the resume check and the assemble pass agree on which parts are usable.
+    if (!ReadCookedPartHeader(partPath, header))
+        return false;
+
     std::ifstream is(partPath, std::ios::binary);
     if (!is.is_open())
         return false;
     ReadPOD(is, header);
-    if (!is.good() || header.m_Magic != kCookedPartMagic || header.m_Version != kCookedPartVersion)
-        return false;
     ClusterLod::ReadFromStream(is, clusters);
     return is.good();
 }
@@ -434,10 +455,13 @@ bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vecto
         }
     }
 
-    std::ofstream os(cachePath, std::ios::binary | std::ios::trunc);
+    // Assembled under a temporary name: a failure must not leave a file that a later run would happily "load".
+    std::filesystem::path tempCache = cachePath;
+    tempCache += ".tmp";
+    std::ofstream os(tempCache, std::ios::binary | std::ios::trunc);
     if (!os.is_open())
     {
-        SDL_Log("[SceneCache] Failed to open cache file for writing: %s", cachePath.string().c_str());
+        SDL_Log("[SceneCache] Failed to open cache file for writing: %s", tempCache.string().c_str());
         return false;
     }
 
@@ -468,14 +492,14 @@ bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vecto
             ClusterLod::WriteToStream(os, clusters);
     }
 
-    // No legacy vertex/index/meshlet arrays: a streamed scene is drawn from the group blobs only.
-    WriteVector(os, std::vector<srrhi::MeshData>{});
+    // The legacy vertex/index/meshlet arrays are absent from a streamed scene; m_MeshData is not legacy - the
+    // cluster path and the node bounds read it - so it is written as usual.
+    WriteVector(os, meshData);
     WriteVector(os, std::vector<srrhi::Meshlet>{});
     WriteVector(os, std::vector<uint32_t>{});
     WriteVector(os, std::vector<uint32_t>{});
     WriteVector(os, std::vector<srrhi::VertexQuantized>{});
     WriteVector(os, std::vector<uint32_t>{});
-    (void)meshData;
 
     outBlobs.m_Groups.clear();
     uint64_t offset = 0;
@@ -545,12 +569,22 @@ bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vecto
     outBlobs.m_Path = cachePath;
     if (!os.good())
     {
-        SDL_Log("[SceneCache] Write error while assembling the cooked mesh: %s", cachePath.string().c_str());
+        SDL_Log("[SceneCache] Write error while assembling the cooked mesh: %s", tempCache.string().c_str());
+        os.close();
+        std::error_code removeError;
+        std::filesystem::remove(tempCache, removeError);
         return false;
     }
     os.close();
 
     std::error_code ec;
+    std::filesystem::rename(tempCache, cachePath, ec);
+    if (ec)
+    {
+        SDL_Log("[SceneCache] Failed to publish the assembled cache %s: %s", cachePath.string().c_str(),
+            ec.message().c_str());
+        return false;
+    }
     std::filesystem::remove(partsDir, ec);
     SDL_Log("[SceneCache] Assembled cooked mesh from %zu parts: %.2f MB of blobs", parts.size(),
         double(blobBytes) / (1024.0 * 1024.0));
@@ -714,7 +748,9 @@ bool LoadOrCookMeshData(
         SDL_Log("[SceneCache] Cache file exists but failed to load, falling back to glTF...");
     }
 
-    // 2. Cache miss — process meshes from glTF
+    // 2. Cache miss — process meshes from glTF. A streamed import needs somewhere for its part files: the cooked
+    // cache's own path plus ".parts".
+    SceneLoader::SetStreamImportPartsBase(cachePath);
     bool success = SceneLoader::ProcessMeshesFromGLTF(
         scenePath.string(), scene, outVerticesQuantized, outIndices, bCookClusters);
     if (!success)
@@ -729,17 +765,29 @@ bool LoadOrCookMeshData(
         scene.UpdateNodeBoundingSphere(ni);
     }
 
-    // 3. Save the cooked mesh for next time
-    if (SaveCookedMesh(cachePath,
-        scene.m_Meshes,
-        scene.m_MeshData,
-        scene.m_Meshlets,
-        scene.m_MeshletVertices,
-        scene.m_MeshletTriangles,
-        outVerticesQuantized,
-        outIndices,
-        bCookClusters,
-        outBlobs))
+    // 3. Save the cooked mesh for next time. A streamed import leaves per-primitive parts behind instead of the
+    // scene's geometry, so the assembler streams those in and writes no legacy arrays.
+    std::filesystem::path partsDir = cachePath;
+    partsDir += ".parts";
+    bool saved = false;
+    if (Config::Get().m_bStreamImport && std::filesystem::exists(partsDir))
+    {
+        saved = AssembleCookedMesh(cachePath, scene.m_Meshes, scene.m_MeshData, partsDir, outBlobs);
+    }
+    else
+    {
+        saved = SaveCookedMesh(cachePath,
+            scene.m_Meshes,
+            scene.m_MeshData,
+            scene.m_Meshlets,
+            scene.m_MeshletVertices,
+            scene.m_MeshletTriangles,
+            outVerticesQuantized,
+            outIndices,
+            bCookClusters,
+            outBlobs);
+    }
+    if (saved)
     {
         SDL_Log("[SceneCache] Saved cooked mesh to cache: %s", cachePath.string().c_str());
     }
