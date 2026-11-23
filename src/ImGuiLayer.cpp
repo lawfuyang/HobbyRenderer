@@ -1038,13 +1038,21 @@ void ImGuiLayer::UpdateFrame()
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Frames a resident group may go untouched before the age filter asks for it back");
 
+            int loadMB = int(Config::Get().m_ClusterLoadBytesPerFrame / (1024u * 1024u));
+            if (ImGui::SliderInt("Load budget", &loadMB, 0, 128, "%d MB/frame"))
+                Config::Get().m_ClusterLoadBytesPerFrame = uint32_t(std::max(0, loadMB)) * 1024u * 1024u;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Group blob bytes copied out of the cooked file per frame (0 = only the group cap)");
+
             ImGui::SeparatorText("Memory");
             ImGui::Text("Groups: %u / %u resident", stats.m_ResidentGroups, stats.m_GroupCount);
             ImGui::Text("Arena:  %.2f / %.2f MB", BYTES_TO_MB(stats.m_ResidentBytes), BYTES_TO_MB(stats.m_ArenaBytes));
             ImGui::Text("Not in a blob: %.2f MB", BYTES_TO_MB(stats.m_WastedBytes));
+            ImGui::Text("Blob file: %.2f MB (mapped)", BYTES_TO_MB(stats.m_BlobFileBytes));
 
             ImGui::SeparatorText("Activity");
             ImGui::Text("Loaded %u / unloaded %u this frame", stats.m_LoadedThisFrame, stats.m_UnloadedThisFrame);
+            ImGui::Text("From file: %.2f MB", BYTES_TO_MB(stats.m_LoadBytesThisFrame));
             ImGui::Text("Requests %u, %u active groups", stats.m_RequestsLastFrame, stats.m_ActiveGroups);
             ImGui::Text("Dropped loads: %u, evicted by budget: %u", stats.m_DroppedLoads, stats.m_EvictedByBudget);
 

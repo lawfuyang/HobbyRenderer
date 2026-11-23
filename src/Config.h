@@ -65,6 +65,12 @@ struct Config
     uint64_t m_StreamingBudgetMiB = 0;
     // Frames a resident group may go untouched before the age filter asks for it back.
     uint32_t m_ClusterStreamAgeThreshold = 16;
+    // Bytes of group blobs copied out of the cooked file per frame. Bounds disk/PCIe bandwidth and the load
+    // ring's stall; 0 = only the per-frame group cap applies.
+    uint32_t m_ClusterLoadBytesPerFrame = 16u * 1024u * 1024u;
+    // VRAM a scene's ray-tracing footprint (vertices + indices + BLAS) may use before every RT feature is turned
+    // off for it. 0 = the GPU's streaming budget. `--rt-max-scene-mb` exists to force the oversized path.
+    uint32_t m_RayTracingBudgetMiB = 0;
     // Prints the streaming residency stats on this frame. -1 = never.
     int m_ClusterStreamStatsFrame = -1;
 

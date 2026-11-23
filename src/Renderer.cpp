@@ -2508,10 +2508,12 @@ void Renderer::LogClusterCounters()
         const GeometryStreaming::Stats& stats = m_GeometryStreaming->GetStats();
         const double mb = 1.0 / (1024.0 * 1024.0);
         SDL_Log("[ClusterLod] streaming: %u/%u groups resident (%.2f / %.2f MB, %.2f MB not in a blob), %u active, "
-            "loaded %u, unloaded %u, dropped %u, %u requests last frame",
+            "loaded %u (%.2f MB), unloaded %u, dropped %u, %u requests last frame, blob file %.2f MB, budget %llu MB/frame",
             stats.m_ResidentGroups, stats.m_GroupCount, double(stats.m_ResidentBytes) * mb,
             double(stats.m_ArenaBytes) * mb, double(stats.m_WastedBytes) * mb, stats.m_ActiveGroups,
-            stats.m_LoadedThisFrame, stats.m_UnloadedThisFrame, stats.m_DroppedLoads, stats.m_RequestsLastFrame);
+            stats.m_LoadedThisFrame, double(stats.m_LoadBytesThisFrame) * mb, stats.m_UnloadedThisFrame,
+            stats.m_DroppedLoads, stats.m_RequestsLastFrame, double(stats.m_BlobFileBytes) * mb,
+            static_cast<unsigned long long>(stats.m_LoadBudgetBytes / (1024ull * 1024ull)));
     }
 
     // A legacy-path stats run has no cluster counters to log, but its base pass statistics are the point of it.

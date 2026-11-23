@@ -44,7 +44,7 @@ void Scene::LoadScene()
 		{
 			// Load or cook mesh data (cache-aware)
 			success = SceneCache::LoadOrCookMeshData(sceneFilePath, *this, allVerticesQuantized, allIndices,
-				Config::Get().m_EnableClusterLod);
+				Config::Get().m_EnableClusterLod, g_Renderer.m_ClusterBlobFile);
 		}
 	}
 
@@ -92,6 +92,46 @@ void Scene::LoadScene()
 	}
 }
 
+Scene::GeometryFootprint Scene::MeasureGeometryFootprint() const
+{
+	GeometryFootprint footprint;
+
+	// A triangle BLAS references the scene's own vertex block and index range, so both have to be resident for as
+	// long as the AS exists - that is the part of RT that disk-backed streaming cannot help with.
+	for (const Mesh& mesh : m_Meshes)
+	{
+		for (const Primitive& primitive : mesh.m_Primitives)
+			footprint.m_VertexBytes += uint64_t(primitive.m_VertexCount) * sizeof(srrhi::VertexQuantized);
+	}
+
+	uint64_t indexCount = 0;
+	for (const srrhi::MeshData& meshData : m_MeshData)
+	{
+		const uint32_t lodCount = std::min<uint32_t>(meshData.m_LODCount, srrhi::CommonConsts::MAX_LOD_COUNT);
+		for (uint32_t lod = 0; lod < lodCount; ++lod)
+		{
+			indexCount += meshData.m_IndexCounts[lod];
+			footprint.m_Triangles += meshData.m_IndexCounts[lod] / 3u;
+		}
+	}
+	footprint.m_IndexBytes = indexCount * sizeof(uint32_t);
+
+	// Measured, not guessed: threedscans_animals' 18.66 M triangles build 1 291.69 MB of BLAS at
+	// PreferFastTrace (Scene.cpp's own log line), i.e. 69 B per triangle.
+	constexpr uint64_t kBlasBytesPerTriangle = 69;
+	footprint.m_BlasBytes = footprint.m_Triangles * kBlasBytesPerTriangle;
+	footprint.m_ResidentBytes = footprint.m_VertexBytes + footprint.m_IndexBytes + footprint.m_BlasBytes;
+	return footprint;
+}
+
+uint64_t Scene::GetRayTracingBudgetBytes() const
+{
+	const uint32_t budgetMiB = Config::Get().m_RayTracingBudgetMiB;
+	if (budgetMiB != 0)
+		return uint64_t(budgetMiB) * 1024ull * 1024ull;
+	return g_Renderer.GetStreamingBudgetBytes();
+}
+
 void Scene::BuildAccelerationStructures()
 {
 	//SCOPED_TIMER("[Scene] Build Accel Structs");
@@ -107,6 +147,53 @@ void Scene::BuildAccelerationStructures()
 			primitive.m_BLAS.clear();
 	}
 	m_RTInstanceDescs.clear();
+
+	// A scene whose geometry does not fit in VRAM cannot have acceleration structures either: a triangle BLAS
+	// is O(geometry) and, unlike the raster cut, it cannot be partially resident. Measured on
+	// threedscans_animals: 69.2 B per triangle at PreferFastTrace (18.66 M triangles -> 1 291.69 MB), so at
+	// 10^9 vertices the AS alone is tens of GB. Rather than let the driver fail the allocation, report the
+	// footprint and run the scene with every ray-traced feature off (docs/cluster-lod-upstream-review-2026-11-23.md §20).
+	const GeometryFootprint footprint = MeasureGeometryFootprint();
+	const uint64_t budget = GetRayTracingBudgetBytes();
+	if (footprint.m_ResidentBytes > budget)
+	{
+		SDL_Log("[RT ] Scene geometry does not fit the ray-tracing budget: %.2f GB needed "
+		        "(%.2f GB vertices + %.2f GB indices + %.2f GB BLAS for %llu triangles), %.2f GB available",
+		        double(footprint.m_ResidentBytes) / 1e9, double(footprint.m_VertexBytes) / 1e9,
+		        double(footprint.m_IndexBytes) / 1e9, double(footprint.m_BlasBytes) / 1e9,
+		        (unsigned long long)footprint.m_Triangles, double(budget) / 1e9);
+		SDL_Log("[RT ] Ray tracing disabled for this scene: no BLAS/TLAS is built, RT shadows and ReSTIR DI/GI "
+		        "are off. Rasterisation is unaffected (clusters stream from the cooked file).");
+
+		m_bRayTracingDisabled = true;
+		g_Renderer.m_EnableRTShadows = false;
+		g_Renderer.m_EnableReSTIRDI = false;
+		g_Renderer.m_IndirectLightingTechnique = srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_NONE;
+
+		// An empty TLAS keeps every shader binding valid for the passes that are still recorded (the deferred
+		// shader and the TLAS patch read the instance buffers even with the techniques off), at a cost of a few KB.
+		// The build still needs a real instance buffer, so a one-element placeholder is uploaded and zero instances
+		// are built from it.
+		const uint32_t instanceDescBytes = uint32_t(sizeof(nvrhi::rt::InstanceDesc));
+		nvrhi::BufferDesc instanceDescBuffer;
+		instanceDescBuffer.byteSize = instanceDescBytes;
+		instanceDescBuffer.structStride = instanceDescBytes;
+		instanceDescBuffer.debugName = "RTInstanceDescBuffer (ray tracing disabled)";
+		instanceDescBuffer.isAccelStructBuildInput = true;
+		instanceDescBuffer.canHaveUAVs = true;
+		instanceDescBuffer.initialState = nvrhi::ResourceStates::AccelStructBuildInput;
+		instanceDescBuffer.keepInitialState = true;
+		m_RTInstanceDescBuffer = device->createBuffer(instanceDescBuffer);
+
+		nvrhi::rt::AccelStructDesc emptyTlasDesc{};
+		emptyTlasDesc.topLevelMaxInstances = 1;
+		emptyTlasDesc.debugName = "Scene TLAS (ray tracing disabled)";
+		emptyTlasDesc.isTopLevel = true;
+		m_TLAS = device->createAccelStruct(emptyTlasDesc);
+		scopedCmd->buildTopLevelAccelStructFromBuffer(m_TLAS, m_RTInstanceDescBuffer, 0, 0);
+		return;
+	}
+	m_bRayTracingDisabled = false;
 
     // Mapping from MeshDataIndex to Primitive pointer for TLAS build
     std::vector<Primitive*> meshDataToPrimitive(m_MeshData.size(), nullptr);
@@ -171,13 +258,13 @@ void Scene::BuildAccelerationStructures()
 				primitive.m_BLAS[lod] = device->createAccelStruct(blasDesc);
 				nvrhi::utils::BuildBottomLevelAccelStruct(scopedCmd, primitive.m_BLAS[lod], blasDesc);
 
-				// Accumulate memory for logging (Req 7)
+				// Accumulate memory for logging: the RT residency question is decided entirely by this number.
 				totalBLASMemoryBytes += device->getAccelStructMemoryRequirements(primitive.m_BLAS[lod]).size;
 			}
 		}
 	}
 
-	//SDL_Log("[Scene] Total BLAS memory across all LODs: %.2f MB", totalBLASMemoryBytes / (1024.0 * 1024.0));
+	SDL_Log("[Scene] Total BLAS memory across all LODs: %.2f MB", totalBLASMemoryBytes / (1024.0 * 1024.0));
 
 	// 2. Build TLAS for the scene
 	nvrhi::rt::AccelStructDesc tlasDesc;

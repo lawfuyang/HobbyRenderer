@@ -532,6 +532,10 @@ public:
     // the arena and the residency table are sized by the cooked cluster data.
     std::unique_ptr<GeometryStreaming> m_GeometryStreaming;
 
+    // The cooked file the cluster group blobs stream from, and the per-group ranges that locate them. Filled by
+    // SceneCache during the scene load; GeometryStreaming maps the file and takes the table.
+    ClusterLod::BlobFile m_ClusterBlobFile;
+
     // The cap both streaming systems budget against: the texture tile heaps and the cluster group arena. It is the
     // OS's VRAM budget for this application unless --stream-budget or the "Streaming VRAM" slider overrides it.
     uint64_t m_StreamingBudgetMB = 0;

@@ -260,6 +260,34 @@ void Config::ParseCommandLine(int argc, char* argv[])
                 SDL_LOG_ASSERT_FAIL("Missing value for --cluster-stream-age", "[Config] Missing value for --cluster-stream-age");
             }
         }
+        else if (std::strcmp(arg, "--cluster-io-mb-per-frame") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                const int value = std::atoi(argv[++i]);
+                s_Instance.m_ClusterLoadBytesPerFrame = uint32_t(std::max(0, value)) * 1024u * 1024u;
+                SDL_Log("[Config] Cluster load budget %u MB/frame%s", s_Instance.m_ClusterLoadBytesPerFrame / (1024u * 1024u),
+                    value == 0 ? " (uncapped)" : "");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --cluster-io-mb-per-frame",
+                    "[Config] Missing value for --cluster-io-mb-per-frame");
+            }
+        }
+        else if (std::strcmp(arg, "--rt-max-scene-mb") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                const int value = std::atoi(argv[++i]);
+                s_Instance.m_RayTracingBudgetMiB = uint32_t(std::max(0, value));
+                SDL_Log("[Config] Ray tracing budget %u MB (0 = the GPU's streaming budget)", s_Instance.m_RayTracingBudgetMiB);
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --rt-max-scene-mb", "[Config] Missing value for --rt-max-scene-mb");
+            }
+        }
         else if (std::strcmp(arg, "--cluster-stream-stats-frame") == 0)
         {
             if (i + 1 < argc)
@@ -594,6 +622,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-freeze-culling         Freeze the camera used for cluster culling (A/B determinism)");
             SDL_Log("  --stream-budget <MiB>            VRAM budget for texture + cluster streaming (0 = the OS budget)");
             SDL_Log("  --cluster-stream-age <frames>    Untouched frames before a resident group is unloaded (default 16)");
+            SDL_Log("  --cluster-io-mb-per-frame <MiB>  Group blob bytes streamed per frame from the cooked file (default 16, 0 = uncapped)");
+            SDL_Log("  --rt-max-scene-mb <MiB>          VRAM a scene's vertices+indices+BLAS may need before RT is turned off (0 = GPU budget)");
             SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
             SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
             SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
