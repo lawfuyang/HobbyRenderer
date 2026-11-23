@@ -1138,9 +1138,10 @@ public:
     // ------------------------------------------------------------------
     bool Setup(RenderGraph& renderGraph) override
     {
-        // If the user turned RTXDI off, we want the DeferredRenderer to take
-        // the classic path — don't participate in the render graph at all.
-        if (!g_Renderer.m_EnableReSTIRDI)
+        // IsReSTIRDIUsed() keeps RTXDI out when the user turned ReSTIR DI off, and out of every debug view
+        // except the ReGIR cell view, which it produces itself. DeferredRenderer reads its output under the
+        // same predicate, so the two always agree.
+        if (!g_Renderer.IsReSTIRDIUsed())
             return false;
 
         // The resources declared below are sized from the context's static parameters, so a
@@ -1513,11 +1514,14 @@ public:
             renderGraph.DeclareBuffer(bd, m_RG_PrimitiveLightBuffer);
         }
 
-        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled &&
+        // A debug view runs only the direct-lighting chain -- SHARC is not scheduled, so the combined mode's
+        // cache buffers do not exist. What the ReGIR cell view needs is the DI ShadeSamples pass, which draws it.
+        const bool bDebugView     = g_Renderer.IsDebugViewActive();
+        const bool bDoReSTIRGI    = !bDebugView && g_ReSTIRGI_Enabled &&
             (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI ||
-             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC));
-        const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
-            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
+             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
+        const bool bCombinedMode  = !bDebugView && g_ReSTIRGI_Enabled &&
+            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC;
 
         // Secondary GBuffer (SecondaryGBufferData per pixel) — used by BrdfRayTracing.
         // In combined mode (RESTIR_GI_SHARC), BrdfRayTracing is skipped entirely, so
@@ -1565,11 +1569,13 @@ public:
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
 
-        const bool bDoReSTIRGI = (g_ReSTIRGI_Enabled &&
+        // Same view decision as Setup(): a debug view is direct lighting only, with no SHARC-fed GI chain.
+        const bool bDebugView     = g_Renderer.IsDebugViewActive();
+        const bool bDoReSTIRGI    = !bDebugView && g_ReSTIRGI_Enabled &&
             (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI ||
-             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC));
-        const bool bCombinedMode = (g_ReSTIRGI_Enabled &&
-            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
+             g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC);
+        const bool bCombinedMode  = !bDebugView && g_ReSTIRGI_Enabled &&
+            g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC;
 
         // Recreate the RTXDI contexts if the checkerboard mode changed (it is a static parameter).
         {
@@ -1760,7 +1766,7 @@ public:
         g_Const.SetUseSharcCache(bCombinedMode ? 1u : 0u);
         g_Const.SetDirectLightingMode(srrhi::RTXDIConstants::DIRECT_LIGHTING_MODE_RESTIR);
         g_Const.SetDebugVisualizeGIEmission(static_cast<uint32_t>(g_DebugVisualizeGIEmission));
-        g_ReGIR_VisualizeRegirCells = (g_Renderer.m_ActiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
+        g_ReGIR_VisualizeRegirCells = (g_Renderer.GetDebugView() == static_cast<uint32_t>(srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS));
         g_Const.SetVisualizeRegirCells(g_ReGIR_VisualizeRegirCells ? 1u : 0u);
 
         // ---- ReSTIR GI parameters ----

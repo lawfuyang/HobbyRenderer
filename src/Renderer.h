@@ -204,6 +204,12 @@ public:
     void Shutdown();
     void ScheduleAndRunAllRenderers();
 
+    // Scheduling for a debug view: the geometry chain plus whatever renderer produces the inspected
+    // property. Passes that only shape the lit image (sky, transparency, the temporal and bloom chains,
+    // the indirect techniques) stay out of the frame -- except RTXDI, which draws the ReGIR cell view
+    // itself and gates itself back out of every other one.
+    void ScheduleDebugView();
+
     // ─── Per-frame uploads (called by the main loop) ───
 
     // Upload any dirty instance transforms to the GPU and reset the dirty range.
@@ -220,7 +226,33 @@ public:
 
     // ─── Mode & debug settings ───
 
-    void HandleDebugModeSettings();
+    // The selected scene-inspection view (Config::m_DebugMode) and whether one is on at all.
+    uint32_t GetDebugView() const { return static_cast<uint32_t>(Config::Get().m_DebugMode); }
+    bool IsDebugViewActive() const { return GetDebugView() != static_cast<uint32_t>(srrhi::CommonConsts::DEBUG_MODE_NONE); }
+
+    // True when this frame samples ReSTIR DI's composited output. A debug view replaces the lit image, so
+    // only the ReGIR cell view -- which RTXDI produces itself -- keeps the technique alive.
+    bool IsReSTIRDIUsed() const
+    {
+        if (!m_EnableReSTIRDI)
+            return false;
+        return !IsDebugViewActive() || GetDebugView() == static_cast<uint32_t>(srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS);
+    }
+
+    // True when SHARC takes part this frame. In the combined mode it only feeds ReSTIR GI's secondary rays,
+    // so it has nothing to do unless ReSTIR DI/GI actually runs; a debug view bypasses the cache entirely.
+    bool IsSHARCUsed() const
+    {
+        if (IsDebugViewActive())
+            return false;
+        if (m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+            return true;
+        return m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC &&
+               IsReSTIRDIUsed();
+    }
+
+    // RT shadows belong to the lit image, which a debug view replaces; the rays are pure cost there.
+    bool IsRTShadowEnabled() const { return m_EnableRTShadows && !IsDebugViewActive(); }
 
     // Apply per-mode defaults for features that vary by rendering mode
     // (RT shadows, ReSTIR DI, indirect lighting technique).
@@ -462,15 +494,6 @@ public:
     // the room around them, so with no threshold one lamp smears over the whole frame.
     float m_BloomThreshold = 1.0f;
     float m_UpsampleRadius = 0.85f;
-
-    int      m_ActiveDebugMode = 0;
-    bool     m_bAnyDebugWasActive = false;
-    struct {
-        bool m_EnableBloom;
-        bool m_EnableAutoExposure;
-        float m_ExposureValue;
-        float m_ExposureCompensation;
-    } m_DebugBackup{};
 
     bool m_bTAAEnabled = true;
     bool m_bTAADebugView = false;

@@ -40,12 +40,14 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
-        // Participate when SHARC is the selected indirect technique, or when
-        // the combined ReSTIR GI + SHARC mode is active (SHARC provides the
-        // secondary-surface radiance cache; the Query pass is skipped in that mode).
-        if (g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC &&
-            g_Renderer.m_IndirectLightingTechnique != srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_RESTIR_GI_SHARC)
+        // IsSHARCUsed() is the single source of truth: the SHARC-only technique, or the combined mode while
+        // ReSTIR DI/GI actually runs to consume the cache. Nothing runs it for a debug view.
+        if (!g_Renderer.IsSHARCUsed())
             return false;
+
+        // A persistent buffer the graph evicted while SHARC was off (a debug view, or ReSTIR DI turned off)
+        // comes back uninitialised; mark the cache for clearing, the same way a technique switch does.
+        bool bReallocated = false;
 
         const uint32_t width  = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
@@ -63,7 +65,7 @@ public:
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.keepInitialState = true;
             bd.m_NvrhiDesc.debugName    = "SHARC_HashEntries";
-            renderGraph.DeclarePersistentBuffer(bd, g_RG_SHARCHashEntries);
+            bReallocated |= renderGraph.DeclarePersistentBuffer(bd, g_RG_SHARCHashEntries);
         }
 
         // ------------------------------------------------------------------
@@ -79,7 +81,7 @@ public:
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.keepInitialState = true;
             bd.m_NvrhiDesc.debugName    = "SHARC_Accumulation";
-            renderGraph.DeclarePersistentBuffer(bd, g_RG_SHARCAccumulation);
+            bReallocated |= renderGraph.DeclarePersistentBuffer(bd, g_RG_SHARCAccumulation);
         }
 
         // ------------------------------------------------------------------
@@ -95,7 +97,7 @@ public:
             bd.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             bd.m_NvrhiDesc.keepInitialState = true;
             bd.m_NvrhiDesc.debugName    = "SHARC_Resolved";
-            renderGraph.DeclarePersistentBuffer(bd, g_RG_SHARCResolved);
+            bReallocated |= renderGraph.DeclarePersistentBuffer(bd, g_RG_SHARCResolved);
         }
 
         // ------------------------------------------------------------------
@@ -117,6 +119,9 @@ public:
         renderGraph.ReadTexture(g_RG_GBufferNormals);
         renderGraph.ReadTexture(g_RG_GBufferAlbedo);
         renderGraph.ReadTexture(g_RG_GBufferORM);
+
+        if (bReallocated)
+            m_bClearOnNextRender = true;
 
         return true;
     }

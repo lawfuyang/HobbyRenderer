@@ -30,8 +30,11 @@ public:
 
     bool Setup(RenderGraph& renderGraph) override
     {
+        // A debug view shows raw surface values, so the adaptive exposure history would only shift them.
+        const bool bAutoExposure = g_Renderer.m_EnableAutoExposure && !g_Renderer.IsDebugViewActive();
+
         // Luminance Histogram
-        if (g_Renderer.m_EnableAutoExposure)
+        if (bAutoExposure)
         {
             RGBufferDesc desc;
             desc.m_NvrhiDesc.structStride = sizeof(uint32_t);
@@ -69,8 +72,9 @@ public:
             m_ReadbackInitialized = true;
         }
         
-        if (g_Renderer.m_Mode == RenderingMode::ReferencePathTracer)
+        if (g_Renderer.m_Mode == RenderingMode::ReferencePathTracer || g_Renderer.IsDebugViewActive())
         {
+            // A debug view has no TAA pass, so it has no g_RG_TAAOutput to read.
             renderGraph.ReadTexture(g_RG_HDRColor);
         }
         else
@@ -88,11 +92,14 @@ public:
     {
         PROFILE_GPU_SCOPED("HDR Post-Processing", commandList);
 
-        nvrhi::BufferHandle luminanceHistogram = g_Renderer.m_EnableAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
+        const bool bDebugView = g_Renderer.IsDebugViewActive();
+        const bool bAutoExposure = g_Renderer.m_EnableAutoExposure && !bDebugView;
+
+        nvrhi::BufferHandle luminanceHistogram = bAutoExposure ? renderGraph.GetBuffer(m_RG_LuminanceHistogram, RGResourceAccessMode::Write) : nullptr;
         nvrhi::BufferHandle exposureBuffer = renderGraph.GetBuffer(m_RG_ExposureBuffer, RGResourceAccessMode::Write);
 
         nvrhi::TextureHandle HDRInput;
-        if (g_Renderer.m_Mode == RenderingMode::ReferencePathTracer)
+        if (g_Renderer.m_Mode == RenderingMode::ReferencePathTracer || bDebugView)
         {
             HDRInput = renderGraph.GetTexture(g_RG_HDRColor, RGResourceAccessMode::Read);
         }
@@ -102,7 +109,7 @@ public:
         }
 
         // 1. Histogram Pass
-        if (g_Renderer.m_EnableAutoExposure)
+        if (bAutoExposure)
         {
             PROFILE_GPU_SCOPED("Luminance Histogram", commandList);
 
@@ -139,7 +146,7 @@ public:
         {
             PROFILE_GPU_SCOPED("Exposure Adaptation", commandList);
             
-            if (g_Renderer.m_EnableAutoExposure)
+            if (bAutoExposure)
             {
                 srrhi::ExposureAdaptationInputs inputs;
                 inputs.m_AdaptationConstants.SetDeltaTime((float)g_Renderer.m_FrameTime / 1000.0f);
@@ -172,12 +179,14 @@ public:
             }
             else
             {
-                // Manual mode: write the exposure value directly to both buffer and texture
-                commandList->writeBuffer(exposureBuffer, &g_Renderer.m_Scene.m_Camera.m_Exposure, sizeof(float));
+                // Manual mode: write the exposure value directly to both buffer and texture. A debug view uses
+                // a fixed 1.0 so the inspected values are not scaled by the scene exposure.
+                const float exposure = bDebugView ? 1.0f : g_Renderer.m_Scene.m_Camera.m_Exposure;
+                commandList->writeBuffer(exposureBuffer, &exposure, sizeof(float));
 
                 // Also write to the 1x1 exposure texture for FSR3
                 nvrhi::TextureHandle exposureTexture = renderGraph.GetTexture(g_RG_ExposureTexture, RGResourceAccessMode::Write);
-                commandList->writeTexture(exposureTexture, 0, 0, &g_Renderer.m_Scene.m_Camera.m_Exposure, sizeof(float));
+                commandList->writeTexture(exposureTexture, 0, 0, &exposure, sizeof(float));
             }
         }
 

@@ -29,12 +29,13 @@ public:
 
         renderGraph.WriteTexture(g_RG_HDRColor);
 
-        // Conditionally read the RTXDI composited output when ReSTIR DI is enabled
-        if (g_Renderer.m_EnableReSTIRDI)
+        // Read each indirect output only when its renderer runs this frame. A debug view schedules neither
+        // pass, and reading an undeclared render-graph resource is a hard error.
+        if (g_Renderer.IsReSTIRDIUsed())
             renderGraph.ReadTexture(g_RG_RTXDIDIComposited);
 
-        // Conditionally read the SHARC indirect output when SHARC is the selected technique
-        if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+        if (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC &&
+            g_Renderer.IsSHARCUsed())
             renderGraph.ReadTexture(g_RG_SHARCIndirect);
 
         return true;
@@ -69,21 +70,22 @@ public:
         dcb.SetEnableSky(g_Renderer.m_EnableSky ? 1 : 0);
         dcb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
         // RT shadows are ray-traced against the scene TLAS
-        dcb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
+        dcb.SetEnableRTShadows(g_Renderer.IsRTShadowEnabled() ? 1 : 0);
         dcb.SetDebugMode(Config::Get().m_DebugMode);
-        dcb.SetUseReSTIRDI(g_Renderer.m_EnableReSTIRDI ? 1u : 0u);
+        dcb.SetUseReSTIRDI(g_Renderer.IsReSTIRDIUsed() ? 1u : 0u);
         dcb.SetUseReSTIRDIDenoised(0u); // compositing is done by CompositingPass
         dcb.SetIndirectLightingMode(g_Renderer.m_IndirectLightingTechnique);
         commandList->writeBuffer(deferredCB, &dcb, sizeof(dcb), 0);
 
         // t8: RTXDI composited output (DI + emissive, already remodulated by CompositingPass)
-        nvrhi::TextureHandle rtxdiComposited = g_Renderer.m_EnableReSTIRDI
+        nvrhi::TextureHandle rtxdiComposited = g_Renderer.IsReSTIRDIUsed()
             ? renderGraph.GetTexture(g_RG_RTXDIDIComposited, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureBlack;
 
         // t14: SHARC indirect radiance (written by SHARCQuery pass; black fallback when SHARC is inactive)
         nvrhi::TextureHandle sharcIndirect =
-            (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC)
+            (g_Renderer.m_IndirectLightingTechnique == srrhi::IndirectLightingMode::INDIRECT_LIGHTING_MODE_SHARC &&
+             g_Renderer.IsSHARCUsed())
             ? renderGraph.GetTexture(g_RG_SHARCIndirect, RGResourceAccessMode::Read)
             : CommonResources::GetInstance().DefaultTextureBlack;
 

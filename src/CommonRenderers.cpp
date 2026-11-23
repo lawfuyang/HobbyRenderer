@@ -194,6 +194,11 @@ public:
         if (!scene.m_TLAS || !scene.m_RTInstanceDescBuffer || scene.m_RTInstanceDescs.empty())
             return false;
 
+        // The TLAS is only consumed by ray tracing. With RTXDI, SHARC and RT shadows all out of the frame, the
+        // per-frame LOD patch and rebuild have no reader and are pure cost.
+        if (!g_Renderer.IsRTShadowEnabled() && !g_Renderer.IsReSTIRDIUsed() && !g_Renderer.IsSHARCUsed())
+            return false;
+
         return true;
     }
 

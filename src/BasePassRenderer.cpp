@@ -721,7 +721,7 @@ protected:
         cb.SetCameraPos(DirectX::XMFLOAT4{ camPos.x, camPos.y, camPos.z, 0.0f });
         cb.SetCullingCameraPos(DirectX::XMFLOAT4{ cullingCamPos.x, cullingCamPos.y, cullingCamPos.z, 0.0f });
         cb.SetLightCount(g_Renderer.m_Scene.m_LightCount);
-        cb.SetEnableRTShadows(g_Renderer.m_EnableRTShadows ? 1 : 0);
+        cb.SetEnableRTShadows(g_Renderer.IsRTShadowEnabled() ? 1 : 0);
         cb.SetDebugMode(effectiveDebugMode);
         cb.SetEnableFrustumCulling(g_Renderer.m_EnableFrustumCulling ? 1 : 0);
         cb.SetEnableConeCulling((g_Renderer.m_EnableConeCulling && args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) ? 1 : 0);

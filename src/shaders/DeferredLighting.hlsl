@@ -54,6 +54,39 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
 
     float3 emissive = g_GBufferEmissive.Load(uint3(uvInt, 0)).rgb;
 
+    // A debug view shows one property of the surface itself, so resolve it before any lighting work: the
+    // frame does not pay for sun shadows, ReSTIR or SHARC that the view never displays. The ReGIR cell view
+    // is the exception -- RTXDI draws it into its composited output, so it goes through the path below.
+    if (g_Deferred.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE &&
+        g_Deferred.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_REGIR_CELLS)
+    {
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_WORLD_NORMALS)
+            return float4(N * 0.5f + 0.5f, alpha);
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_ALBEDO)
+            return float4(baseColor, alpha);
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_ROUGHNESS)
+            return float4(roughness.xxx, alpha);
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_METALLIC)
+            return float4(metallic.xxx, alpha);
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_EMISSIVE)
+            return float4(emissive, alpha);
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MOTION_VECTORS)
+            return float4(abs(g_GBufferMotion.Load(uint3(uvInt, 0)).xy), 0.0f, alpha);
+
+        // The bounds overlay draws its lines into the emissive target instead of the albedo one, so the
+        // lines only survive if the view adds that target back.
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
+            return float4(baseColor + emissive, alpha);
+
+        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_STREAMING_MIP)
+            return float4(emissive, alpha); // the base pass writes this view into the emissive target
+
+        // Every remaining view (instances, meshlets, clusters, cluster LOD/triangles, LOD) writes its colour
+        // into the albedo target; passing it through unlit is what makes it readable, and lighting it would
+        // mix in the noise the view exists to see past.
+        return float4(baseColor, alpha);
+    }
+
     LightingInputs lightingInputs;
     lightingInputs.N = N;
     lightingInputs.V = V;
@@ -104,41 +137,6 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
     {
         // SHARC cache stores outgoing indirect radiance (BRDF already baked in during the Update pass). Add directly � no further BRDF modulation needed.
         color += g_SHARCIndirect.Load(uint3(uvInt, 0)).rgb;
-    }
-
-    // Debug visualizations
-    if (g_Deferred.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE)
-    {
-        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_WORLD_NORMALS)
-            color = N * 0.5f + 0.5f;
-        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_ALBEDO)
-            color = baseColor;
-        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_ROUGHNESS)
-            color = roughness.xxx;
-        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_METALLIC)
-            color = metallic.xxx;
-        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_EMISSIVE)
-            color = emissive;
-        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MOTION_VECTORS)
-            color = float3(abs(g_GBufferMotion.Load(uint3(uvInt, 0)).xy), 0.0f);
-
-        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES ||
-            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS ||
-            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS ||
-            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD ||
-            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES ||
-            g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
-            {
-                // These views write their colour into the albedo target, so passing it through unlit is what makes
-                // them readable; lighting them would mix in the noise the views exist to see past.
-                color = baseColor;
-            }
-        else if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
-            {
-                // The bounds overlay draws its lines into the emissive target instead of the albedo one, so the
-                // lines only survive this pass if the debug view adds that target back.
-                color = baseColor + emissive;
-            }
     }
 
     return float4(color, alpha);

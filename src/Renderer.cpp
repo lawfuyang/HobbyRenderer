@@ -802,9 +802,6 @@ void Renderer::Run()
         m_Scene.m_ViewPrev = m_Scene.m_View;
         m_Scene.m_Camera.Update();
 
-        // Handle debug mode settings
-        HandleDebugModeSettings();
-
         int windowW, windowH;
         SDL_GetWindowSize(m_Window, &windowW, &windowH);
         m_Scene.m_ViewPrev = m_Scene.m_View;
@@ -1429,46 +1426,6 @@ void Renderer::ApplyRenderingModeDefaults(RenderingMode mode)
     }
 }
 
-void Renderer::HandleDebugModeSettings()
-{
-    const bool bAnyDebugActive = (Config::Get().m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE);
-
-    auto SaveState = [this]()
-    {
-        m_DebugBackup.m_EnableBloom          = m_EnableBloom;
-        m_DebugBackup.m_EnableAutoExposure   = m_EnableAutoExposure;
-        m_DebugBackup.m_ExposureValue        = m_Scene.m_Camera.m_ExposureValue;
-        m_DebugBackup.m_ExposureCompensation = m_Scene.m_Camera.m_ExposureCompensation;
-    };
-
-    auto RestoreState = [this]()
-    {
-        m_EnableBloom                           = m_DebugBackup.m_EnableBloom;
-        m_EnableAutoExposure                    = m_DebugBackup.m_EnableAutoExposure;
-        m_Scene.m_Camera.m_ExposureValue        = m_DebugBackup.m_ExposureValue;
-        m_Scene.m_Camera.m_ExposureCompensation = m_DebugBackup.m_ExposureCompensation;
-    };
-
-    // Unified transition: save on first entry into any debug mode, restore on full exit.
-    if (bAnyDebugActive != m_bAnyDebugWasActive)
-    {
-        if (bAnyDebugActive) SaveState();
-        else                 RestoreState();
-        m_bAnyDebugWasActive = bAnyDebugActive;
-    }
-
-    // m_ActiveDebugMode is read externally (e.g. RTXDIRenderer), keep it in sync.
-    m_ActiveDebugMode = Config::Get().m_DebugMode;
-
-    // Lock settings every frame while any debug overlay is active.
-    if (bAnyDebugActive)
-    {
-        m_EnableBloom        = false;
-        m_EnableAutoExposure = false;
-        m_Scene.m_Camera.m_Exposure = 1.0f;
-    }
-}
-
 void Renderer::UpdateOmmDebugTexture()
 {
     if (m_OmmDebugMode != 1 || !m_bOmmDebugDirty)
@@ -1590,14 +1547,19 @@ void Renderer::ScheduleAndRunAllRenderers()
 
     m_RenderGraph.BeginSetup();
 
-    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
-
     if (m_Mode == RenderingMode::ReferencePathTracer)
     {
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("PathTracerRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HDRRenderer"));
+    }
+    else if (IsDebugViewActive())
+    {
+        ScheduleDebugView();
     }
     else
     {
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OpaqueRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("MaskedPassRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HZBGeneratorPhase2"));
@@ -1609,9 +1571,9 @@ void Renderer::ScheduleAndRunAllRenderers()
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TransparentPassRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TAARenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("BloomRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HDRRenderer"));
     }
 
-    m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HDRRenderer"));
     m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TileResidencyDebugRenderer"));
     m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OmmDebugRenderer"));
     m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ImGuiRenderer"));
@@ -1620,6 +1582,25 @@ void Renderer::ScheduleAndRunAllRenderers()
 
     // Compile render graph: compute lifetimes and allocate resources
     m_RenderGraph.Compile();
+}
+
+void Renderer::ScheduleDebugView()
+{
+    auto schedule = [this](const char* name) { m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer(name)); };
+
+    // Geometry first: every debug view is read off the surfaces the base pass draws. TLAS and RTXDI stay in
+    // the list but gate themselves -- IsReSTIRDIUsed() makes them participate for the ReGIR cell view, the
+    // only view a ray-traced technique produces, and keeps them out of every other one.
+    schedule("ClearRenderer");
+    schedule("OpaqueRenderer");
+    schedule("MaskedPassRenderer");
+    schedule("HZBGeneratorPhase2");
+    schedule("TLASRenderer");
+    schedule("RTXDIRenderer");
+
+    // Resolve the inspected property from the G-buffer and tonemap it, with TAA and bloom out of the way.
+    schedule("DeferredRenderer");
+    schedule("HDRRenderer");
 }
 
 float Renderer::GetTotalGpuTimeMs() const
