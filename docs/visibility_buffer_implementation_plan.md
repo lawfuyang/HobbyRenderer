@@ -1,0 +1,740 @@
+# Visibility Buffer — Implementation Plan
+
+Companion to [visibility_buffer_analysis.md](visibility_buffer_analysis.md). The analysis explains
+*why* variant A (visibility buffer → existing G-buffer resolve) was chosen; this document is the
+work breakdown: phases, tasks, milestones, and the capture-based checks that decide whether each
+phase is actually done.
+
+Status: planning only. No renderer code has been changed.
+
+---
+
+## Table of Contents
+
+1. [Conventions](#1-conventions)
+2. [Baseline and preconditions](#2-baseline-and-preconditions)
+3. [Milestones at a glance](#3-milestones-at-a-glance)
+4. [Phase 0 — Baseline and instrumentation](#4-phase-0--baseline-and-instrumentation)
+5. [Phase 1 — Render-graph plumbing and the flag](#5-phase-1--render-graph-plumbing-and-the-flag)
+6. [Phase 2 — Opaque cluster visibility raster](#6-phase-2--opaque-cluster-visibility-raster)
+7. [Phase 3 — The resolve](#7-phase-3--the-resolve)
+8. [Phase 4 — Masked bucket](#8-phase-4--masked-bucket)
+9. [Phase 5 — Correctness hardening](#9-phase-5--correctness-hardening)
+10. [Phase 6 — Performance verdict](#10-phase-6--performance-verdict)
+11. [Phase 7 — Optional backlog](#11-phase-7--optional-backlog)
+12. [Correctness and performance with captures](#12-correctness-and-performance-with-captures)
+13. [File-touch matrix and build order](#13-file-touch-matrix-and-build-order)
+14. [Risk register](#14-risk-register)
+15. [Appendix A — command cheat sheet](#15-appendix-a--command-cheat-sheet)
+16. [Appendix B — reference cross-map](#16-appendix-b--reference-cross-map)
+17. [Appendix C — per-phase gate checklist](#17-appendix-c--per-phase-gate-checklist)
+
+---
+
+## 1. Conventions
+
+### 1.1 Task ids are plan bookkeeping only
+
+Tasks are numbered (`P2.3`) so the checklist in Appendix C can reference them. **Do not copy a
+task id, phase number or milestone id into a code comment or a test name** — this repository's
+comment policy bans provenance stamps. Put `docs/visibility_buffer_implementation_plan.md` in the
+commit message instead.
+
+### 1.2 Exactness classes
+
+Every validation step below names the class it must satisfy. This matters because a visibility
+buffer *cannot* be bit-identical to the raster path everywhere: texture LOD comes from an analytic
+gradient estimate rather than the hardware's footprint.
+
+| Class | Meaning | Applies to |
+|---|---|---|
+| **A — bit-identical** | 0 differing bytes/pixels | depth buffer, cluster cut counts, `--vis-buffer 0` against the current build, every pass that should not move (Deferred, RTXDI, NRD, TAA, sky, transparent) |
+| **B — bounded** | differing pixels under a stated budget, and the differences are explainable (triangle edges, texture LOD) | the six G-buffer debug views, the composite at a fixed pose |
+| **C — expected to differ** | documented, not a gate | sampler-feedback tile sets, mip level choice on oblique surfaces, per-pixel A/B heat maps |
+
+### 1.3 Feature-flag discipline
+
+- One switch: `Config::m_EnableVisibilityBuffer`, `--vis-buffer <0|1>`, **default 0** until the
+  milestone that flips it explicitly says so.
+- With the flag off, the build must be behaviourally identical to the commit before the work
+  started (Class A, checked at every milestone).
+- Nothing in the vis path may become load-bearing for non-vis paths. If a shared function has to
+  change (e.g. a streaming sampler helper), it is added, not modified in place.
+
+### 1.4 Definition of "done" for a task
+
+A task is done when (a) it compiles in Debug with `--rhidebug` reporting 0 D3D12 errors, (b) its
+row in the phase table's *Done when* column is satisfied, and (c) the phase's milestone was run
+with flags identical to the recorded baseline commands.
+
+---
+
+## 2. Baseline and preconditions
+
+Do this **before the first code edit**. Without it, no later comparison has a reference.
+
+### 2.1 Build and environment preconditions
+
+```powershell
+# from the repo root; a new .cpp under src/ is globbed, but only after a reconfigure
+cmake -S . -B build
+cmake --build build --config Debug --target build_srrhi
+cmake --build build --config Debug --target build_shaderids
+cmake --build build --config Debug --target build_shaders
+cmake --build build --config Debug --target HobbyRenderer
+```
+
+- Build order is enforced by CMake: `build_srrhi → build_shaderids → build_shaders → exe`. Never
+  hand-edit `src/shaders/srrhi/**` or `src/shaders/ShaderIDs.h`.
+- Debug builds are the ones that run on this machine; Release still dies in the driver after a few
+  frames (recorded in the repo's cluster notes).
+- Scenes live in `D:\Workspace\GLTF Scenes`; run from `D:\Workspace` so relative scene paths work.
+- Before each capture run, restore the camera pose: every run **overwrites**
+  `bin/camera_state.json` on exit, so copy a saved pose back or use a fixed pose per capture pair.
+
+### 2.2 Baseline artefacts to record (Task P0.1)
+
+| Artefact | How |
+|---|---|
+| Screenshots, per scene | `--hide-ui --screenshot-frame 60` on `--vis-buffer 0` (baseline) |
+| Debug views 3/4/5/6/7 | `--hide-ui --debug <n> --screenshot-frame 60` |
+| Cluster cut reference | `--cluster-no-culling --cluster-stats-frame 5` log line per scene |
+| GPU pass timings | the ImGui pass panel or the CSV dump (`bin/ev90_cb.csv` style), plus `--hitch-log` off |
+| PIX frame capture | `--pix-capture-frame 90`, event list with `gpu__*`, `smsp__inst_executed.sum`, `l1tex__t_sectors.sum`, `dram__bytes.sum` |
+| RenderDoc frame capture | `--renderdoc-capture-frame 90`, `verify` + `summary` + `hazards` + `samplers` + `rootsig-check` transcripts |
+
+Reference set (cheap → expensive): `Cornell` (deterministic, tiny), `bunny` (per-corner normals,
+simplification stress), `Sponza` (masked geometry, large distant triangles), `Bistro/bistrox`
+(props = small triangles, the performance case), `DragonAttenuation` (no alpha test).
+
+**Disk note:** a Bistro frame capture is ~1.3 GB and a frame-0 (load) capture ~177 MB. Do the A/B
+image work on Cornell/Sponza and keep Bistro for the performance run; delete captures after each
+milestone.
+
+### 2.3 Known capture constraints (read before Phase 0)
+
+- PIX and RenderDoc hook the same queue; their brackets are mutually exclusive and the renderer
+  asserts this. Never enable both in one run.
+- A capture stalls the captured frame, so **never** use a capture run for time measurements. Time
+  comes from the engine's own GPU timers; captures explain *why*.
+- Loading `renderdoc.dll` clamps the device to DXR 1.1 and disables sampler feedback, so a `.rdc`
+  cannot show OMM or the streaming material path. Streaming validation must be done in PIX or in
+  the running app with logs.
+- `pixtool save-screenshot` is broken on this machine; use `save-resource --rtv=0` or the app's
+  `--screenshot-frame`.
+
+---
+
+## 3. Milestones at a glance
+
+```mermaid
+flowchart LR
+  P0[P0 baseline] --> M0{M0 baseline recorded}
+  M0 --> P1[P1 plumbing]
+  P1 --> M1{M1 flag is neutral}
+  M1 --> P2[P2 opaque vis raster]
+  P2 --> P3[P3 resolve]
+  P3 --> M2{M2 opaque image agreed}
+  M2 --> P4[P4 masked]
+  P4 --> M3{M3 masked agreed}
+  M3 --> P5[P5 hardening]
+  P5 --> M4{M4 validation clean}
+  M4 --> P6[P6 performance]
+  P6 --> M5{M5 verdict}
+  M5 --> P7[P7 backlog]
+```
+
+| Milestone | After | Pass criteria | Tools |
+|---|---|---|---|
+| **M0** | P0 | Baseline artefacts exist for all five scenes and re-run to the same numbers (within run-to-run noise) | app, PIX, RenderDoc |
+| **M1** | P1 | `--vis-buffer 1` is Class A identical to `--vis-buffer 0` (the pass is declared but not ordered) | app, `passdiff` |
+| **M2** | P3 | Depth **Class A** identical; debug views 3/4/5/6/7 **Class B** within budget; composite **Class B**; `hazards`/`rootsig-check`/`crosscheck` clean | PIX, RenderDoc, `rdc-tools` |
+| **M3** | P4 | Masked silhouettes and mode-4 view **Class B**; depth still **Class A** | same |
+| **M4** | P5 | Zero validation errors, no new hazard findings, streaming converges, motion/TAA stable, `--cluster-no-culling` still `(match)` | all |
+| **M5** | P6 | Per-pass work and frame time measured and the keep/revert/default decision recorded | PIX counters + engine timers |
+
+---
+
+## 4. Phase 0 — Baseline and instrumentation
+
+No renderer behaviour changes. Everything here is additive.
+
+| Task | Work | Files | Done when |
+|---|---|---|---|
+| P0.1 | Record the baseline artefact set of §2.2 | — | files exist under `bin\baseline\` (create it), with a small `README.txt` naming the flags used |
+| P0.2 | Add the `--vis-buffer-stats-frame <n>` config field and help line (the readback itself lands with the resolve) | `src/Config.h`, `src/Config.cpp` | flag parses; help text lists it |
+| P0.3 | Confirm the PIX and `rdc-tools` workflows end-to-end on the *current* build | — | `perform-single-playback` exit 0; `verify` prints `problems: 0` |
+
+**Reference checkpoints**
+
+- Filmic Worlds part 1: the pass taxonomy (`PrePass`, `Material`, `Lighting`, `VisUtil`, `Other`)
+  is the vocabulary the timings in this plan use; adopt it so numbers are comparable to the
+  article's.
+- `D3D12_Research/Resources/Shaders/VisibilityGBuffer.hlsl`: the *shape* of the resolve pass this
+  plan builds (vis texture → triangle fetch → G-buffer), useful as a second opinion on structure.
+- The-Forge `VisibilityBufferShaderDefs.h.fsl`: the bit-field macro style; do not copy the 23-bit
+  batch id, this renderer uses a job index (§2 of the analysis).
+
+**Validation:** re-run P0.3 twice; the event counts and marker counts must match, and the PIX
+control passes (Deferred, REBLUR, TAA) must be ×1.000 between the two runs.
+
+---
+
+## 5. Phase 1 — Render-graph plumbing and the flag
+
+Goal: the visibility texture exists, is cleared, and nothing reads it. Flag on must be Class A
+identical.
+
+| Task | Work | Files | Done when |
+|---|---|---|---|
+| P1.1 | Add `Config::m_EnableVisibilityBuffer` (default `false`), `--vis-buffer <0\|1>`, help line | `src/Config.h`, `src/Config.cpp` | `--help` lists it; default run unchanged |
+| P1.2 | Declare `g_RG_VisibilityBuffer` (`R32_UINT`, `isRenderTarget`, `keepInitialState`), clear to 0 | `src/CommonRenderers.cpp` | the texture appears in the render-graph UI; `--vis-buffer 0` unaffected |
+| P1.3 | Add a `VisibilityResolveRenderer` that registers, orders after `MaskedPassRenderer`, and `Setup()` returns `false` when the flag is off | new `src/VisibilityResolveRenderer.cpp`, `src/Renderer.cpp` | the pass appears in the panel as disabled; image identical |
+| P1.4 | Add the ImGui checkbox next to "Use Meshlet Rendering" / "Enable Cluster LOD" | `src/ImGuiLayer.cpp` | toggling does not change the image |
+| P1.5 | Add the PIX marker names `VisibilityRaster` (around the cluster dispatch) and `VisibilityResolve` (around the resolve) in the code now, so the capture vocabulary is stable from the first capture on | `src/BasePassRenderer.cpp`, new renderer | both names appear in a PIX event list when the flag is on |
+
+**Reference checkpoints**
+
+- Analysis §3.4: the renderer order and why the resolve must sit after `MaskedPass` and before
+  `RTXDI`/`SHARC`.
+- `src/CommonRenderers.cpp` `ClearRenderer::Setup` for the declaration style; `nvrhi::Format::R32_UINT`
+  and `clearTextureUInt` are already used for buffers, the texture form is the same call.
+
+**Validation (M1)**
+
+1. `--vis-buffer 0` vs `--vis-buffer 1` at the same pose: `--hide-ui --screenshot-frame 60`,
+   compare with the existing image compare used for the FSR/cluster work; expect 0.
+2. RenderDoc `passdiff` between the two captures: identical pass trees, only the disabled marker.
+3. `--rhidebug` on both: 0 D3D12 errors.
+
+**Rollback:** the flag defaults off, so a failed M1 costs nothing but the two new files.
+
+---
+
+## 6. Phase 2 — Opaque cluster visibility raster
+
+Goal: the opaque cluster bucket writes ids instead of G-buffer values. Nothing changes visually yet
+because the resolve is not enabled — so gate this phase on the *buffer contents*, not on the image.
+
+| Task | Work | Files | Done when |
+|---|---|---|---|
+| P2.1 | New `src/shaders/ClusterVis.hlsl`: `ASMain` unchanged in behaviour; `MSMain` writes a reduced `VSOutVis` (position + uv) and a per-primitive `{ triangleIndex }`; `PSMain` returns the packed id | `src/shaders/ClusterVis.hlsl`, `src/shaders/shaders.cfg` | shaders compile; new `ShaderID::CLUSTERVIS_*` entries exist |
+| P2.2 | Carry the job index: add `m_JobIndex` to the mesh payload in the AS (the AS already reads `g_ClusterJobs[groupId.x]`) | `ClusterVis.hlsl` | the value equals `groupId.x` for every cluster (asserted in a debug path) |
+| P2.3 | Pack `list:2 \| (job+1):23 \| triangle:7`, list 0 = opaque pass 1 | `ClusterVis.hlsl` | the id is non-zero for every covered pixel; empty = 0 |
+| P2.4 | Draw branch: when the flag is on, build the mesh pipeline against a framebuffer of `{ vis, depth }`, `DepthReadWrite` + stencil replace 1, and **skip** the G-buffer attachments | `src/BasePassRenderer.cpp` | one MRT bound in the capture; stencil still 1 |
+| P2.5 | `Setup()`: when the flag is on, the opaque bucket declares vis writes instead of G-buffer writes | `src/BasePassRenderer.cpp` | render graph shows no opaque→G-buffer edge |
+| P2.6 | Second ("revived") pass writes list 1 | `src/BasePassRenderer.cpp` | both lists appear in the capture |
+| P2.7 | Resolve stub: a temporary "visualise id" pass that writes `hash(id)` into albedo, so the ids can be looked at before the real resolve exists (view it with `--debug 4`; the other five targets stay empty until phase 3) | new renderer/shader | a hash-coloured image with clean cluster boundaries |
+
+**Reference checkpoints**
+
+- Xbox sample `Source/VisibilityMS.hlsl`: the exact `out primitives PrimitiveAttributes
+  sharedPrimitives[MAX_PRIMITIVES]` pattern and the `SetMeshOutputCounts` ordering. This is the
+  mechanism, not a suggestion.
+- Xbox sample `Source/VisibilityPS.hlsl`: the "biased id so 0 means empty" convention
+  (`(objectIndex + 1) & 0xfff`).
+- `D3D12_Research/Resources/Shaders/VisibilityBuffer.hlsli`: the 7-bit primitive + 25-bit candidate
+  packing (`primitiveID & 0x7F`, `candidateIndex = data >> 7`, `candidateIndex -= 1`).
+- `src/shaders/ClusterBasePass.hlsl`: the cluster record decode (`ClusterStreamBase`, micro-index
+  fetch) that the reduced MS keeps verbatim.
+- Mesh shader spec ("SV_PrimitiveID in the Pixel Shader"): there is no system primitive id; the
+  per-primitive output is the only route.
+
+**Validation (P2 gate, before the resolve)**
+
+1. **Vis buffer contents, numerically.** RenderDoc: `replay_dump textures <rdc> "VisibilityBuffer"
+   --save bin\visdump --raw` then read the `.bin` (R32_UINT, one word per pixel) with Python;
+   assert sampled pixels decode to a job index that maps back to the cluster covering a known
+   screen point. Cross-check one pixel with `replay_dump trace <rdc> <eid> --pixel x,y`.
+2. **Coverage.** The count of non-zero words must equal the number of pixels the baseline G-buffer
+   says have a surface (albedo alpha or stencil 1). Reasonable slack on triangle edges; a large
+   delta means the MS dropped primitives.
+3. **Depth.** Compare the depth target between vis mode and baseline: **Class A** identical. This
+   is the strongest single check that the reduced vertex output uses the same transform maths.
+4. **PIX per-pass image:** `save-resource bin\vis.dds --marker=VisibilityRaster --rtv=0`, then
+   convert/inspect; a `.dds` keeps the DXGI format.
+5. **Cluster cut unchanged:** `--cluster-no-culling --cluster-stats-frame 5` still says `(match)`.
+
+**Rollback:** flag off restores the old framebuffer and PS selection in one branch; delete the
+shader if the phase is abandoned.
+
+---
+
+## 7. Phase 3 — The resolve
+
+Goal: the six G-buffer targets are written from the vis buffer, and the composite matches the
+baseline within the Class B budget.
+
+| Task | Work | Files | Done when |
+|---|---|---|---|
+| P3.1 | Port the corrected `CalcFullBary` (McLaren/Hill) into a shared include | `src/shaders/VisibilityResolve.hlsl` (or `CommonLighting.hlsli`) | unit-checked against a known triangle (see below) |
+| P3.2 | `VisibilityResolve.sr`: per-frame constants + vis/job/record/group-state/stream/instance/material/vertex bindings | `src/shaders/VisibilityResolve.sr` | `build_srrhi` generates the C++/HLSL glue |
+| P3.3 | Resolve PS: decode → job → cluster record → 3 micro-indices → 3 vertices → clip positions → barycentrics/derivatives → interpolate | `VisibilityResolve.hlsl` | debug view 4/3 matches baseline Class B |
+| P3.4 | Material fetch: texture-flag logic of `GBuffer_PSMain`, using the gradient streamed sampler | `VisibilityResolve.hlsl`, `src/shaders/Bindless.hlsli` (new helper) | ORM/emissive views match; no sampler-feedback mip violations in `samplers` |
+| P3.5 | Write all six targets, including `GeoNormal` (interpolated vertex normal — *not* the face normal) and motion vectors via `ComputeMotionVectors` | `VisibilityResolve.hlsl` | mode 9 (motion) matches; RTXDI's geo-normal history has no edge noise |
+| P3.6 | Port the debug-colour block for modes 1, 2, 8, 12, 13 and streaming-mip 11 | `VisibilityResolve.hlsl` | each mode matches the baseline view |
+| P3.7 | Schedule the pass; declare vis read + six writes when enabled | `src/VisibilityResolveRenderer.cpp` | pass appears between `MaskedPass` and `RTXDI` in the capture |
+
+**Reference checkpoints**
+
+- Filmic Worlds part 1, "Interpolation and Analytic Partial Derivatives": the corrected
+  `CalcFullBary` and the chain-rule rule ("apply derivatives to the values on the path to the
+  texture sample, then `SampleGrad`").
+- The-Forge `VisibilityBufferShadingUtilities.h.fsl`: `CalcFullBary`, `InterpolateWithDeriv`,
+  `Interpolate2DWithDeriv`, `Cal3DDeriv`, `perturb_normal` — a working implementation of the same
+  maths; compare your port line by line.
+- Xbox sample `Source/SceneReconstructionCS.hlsl`: the `WaveActiveAllEqual(visibility)` fast path
+  and the ray/plane fallback, plus the warning that neighbour values are read **before** any
+  early-out.
+- `D3D12_Research/Resources/Shaders/VisibilityBuffer.hlsli` `ComputeBarycentrics`: a third
+  independent derivation; useful to confirm the NDC-to-pixel scale and the `ddy` sign.
+- Analysis §5.7 for why `SampleGrad` alone is not enough with streaming textures.
+
+**Barycentric unit check (do this before looking at a frame)**
+
+Pick a known triangle from the cluster records, compute `m_lambda` at a known pixel on the CPU with
+the same formula, and compare against the resolve's value via `replay_dump trace --pixel`. A
+transposed 2×2 determinant or a missing `2/viewport` scale fails this immediately and looks like
+"textures are blurry / wrong mip" in a frame check, which wastes time.
+
+**Validation (M2)**
+
+1. Depth **Class A** (still identical — the resolve does not touch it).
+2. Debug views: `--debug 4` (albedo), `3` (world normals), `5` (roughness), `6` (metallic),
+   `7` (emissive), `9` (motion) — Class B on Cornell/Sponza, and the difference map concentrated on
+   triangle edges, not on interiors.
+3. Composite: Class B at a fixed pose with `--no-auto-exposure --disable-sampler-feedback` on both
+   sides.
+4. `rdc-tools`: `verify` (`problems: 0`), `hazards` (no findings beyond the 8 pre-existing bindless
+   artefacts), `rootsig-check` (resolve bindings match its signature), `samplers` (no `certain`
+   verdict), `vram` (report the new texture's cost).
+5. `replay_dump crosscheck <rdc>` — render-target formats against the resolve PS output signature
+   (one `R32_UINT` plus the six G-buffer formats).
+6. PIX `perform-single-playback` exit 0.
+
+---
+
+## 8. Phase 4 — Masked bucket
+
+Goal: alpha-tested geometry enters the vis buffer with the test resolved in the raster pass.
+
+| Task | Work | Files | Done when |
+|---|---|---|---|
+| P4.1 | `PSMainAlphaTest`: sample the albedo alpha and `discard`, then write the id with list 2 | `ClusterVis.hlsl` | discarded texels leave the id at 0 behind the fragment that wins depth |
+| P4.2 | Masked bucket's `Setup()`/draw branch mirror P2.4–P2.6 | `src/BasePassRenderer.cpp` | masked pass binds `{ vis, depth }` only |
+| P4.3 | Bind the masked job list to the resolve; decode list id 2 | `src/VisibilityResolveRenderer.cpp` | masked pixels resolve; no id from the wrong list |
+| P4.4 | Streaming for the alpha texture: the vis PS uses the implicit-derivative streamed sampler (it is a pixel shader, so it can) | `ClusterVis.hlsl` | residency behaves as before; no missing tiles on foliage |
+
+**Reference checkpoints**
+
+- Analysis §5.3: why the test cannot be deferred (a discard in the resolve would expose nothing
+  behind it).
+- Nanite technical docs: materials restricted to Opaque/Masked, and masked geometry resolved
+  during rasterisation ("programmable raster") for exactly this reason.
+- `src/shaders/BasePass.hlsl` `GBuffer_PSMain_AlphaTest`: the existing alpha logic to mirror
+  (`alpha = albedo.w * baseColor.w`, compare against `m_AlphaCutoff`).
+
+**Validation (M3)**
+
+1. Depth still Class A.
+2. `--debug 4` on Sponza's foliage/railings: Class B, and specifically check the *silhouette*, not
+   just the interior — the failure mode is a fringe of missing or extra texels.
+3. A vis-buffer dump at a leaf edge: ids on one side of the edge, 0 on the other, with no
+   half-tested texels surviving.
+4. `samplers` on the new capture: same verdict as baseline.
+
+---
+
+## 9. Phase 5 — Correctness hardening
+
+Goal: everything that is *adjacent* to the change is proven untouched.
+
+| Task | Work | Done when |
+|---|---|---|
+| P5.1 | Two-pass occlusion: `--cluster-two-pass 1` shows revived clusters in the resolve | Class B vs baseline; list 1 ids present |
+| P5.2 | Streaming: `--stream-budget 16` on Bistro, let it settle, compare drawn clusters | residency converges; no holes; `--cluster-stream-stats-frame` sane |
+| P5.3 | Temporal: motion vectors and TAA | no ghosting change; FSR3 output Class B over 30 frames |
+| P5.4 | RT consumers: RTXDI, SHARC, NRD, Deferred, sky, transparent | control passes ×1.000 in the PIX counter A/B; no new `hazards` |
+| P5.5 | Cross-cutting: `--vis-buffer 1` with `--cluster 0`, `--cluster-draw 0`, `--no-indirect`, `--no-denoise`, `--no-sky`, `--no-taa` | the flag either falls back cleanly or is documented as unsupported with an assert-free message |
+| P5.6 | Shutdown / resource lifetime: toggle the flag at runtime via ImGui for 100 frames | no validation error, no stale job buffer read |
+| P5.7 | Documentation: update the analysis doc's open questions with the answers taken | doc updated |
+
+**Reference checkpoints**
+
+- Analysis §5.10 (hazards, job-buffer lifetime, arena stability within a frame).
+- `docs/pix-capture-debugging.md` §6 for the tool bugs that look like renderer bugs (device reset
+  under `run-debug-layer`, the sampler-feedback descriptor warnings on streamed scenes).
+- Repo memory on validation: Release cannot be validated here, Debug is the target; `--rhidebug`
+  is the equivalent of the PIX debug-layer replay without the device reset.
+
+**Validation (M4)**
+
+- `--rhidebug` 0/0 on all five scenes.
+- `rdc-tools`: `verify` 0 problems; `hazards` no new findings; `rootsig-check` clean;
+  `samplers` clean; `memory` shows the vis texture with the expected lifetime (one frame, not
+  persisting into the next).
+- `replay_dump counters --per-pass`: control passes ×1.000 between vis on/off.
+- Cluster reference: `--cluster-no-culling --cluster-stats-frame 5` still `(match)` for both buckets.
+- OMM note: a `.rdc` cannot show OMM at all (DXR 1.1 clamp); if OMM is in the run, validate it in
+  PIX or with `--enable-omm` logs, not RenderDoc.
+
+---
+
+## 10. Phase 6 — Performance verdict
+
+Goal: a number, not an impression.
+
+| Task | Work | Done when |
+|---|---|---|
+| P6.1 | Frame-time A/B: same pose, 120 frames, `--hitch-log <ms>`, engine GPU timers per pass | a table of per-pass times for vis off/on |
+| P6.2 | PIX counter A/B on frame 90 with matched residency | per-pass `inst`, `l1tex` sectors, `dram` bytes; controls ×1.000 |
+| P6.3 | `vram` before/after; report the 4 B/px cost and whether any G-buffer target can be dropped later | a line in the report |
+| P6.4 | Decide: default on / default off / delete | decision recorded in the analysis doc §10 and in `/memories/repo/HobbyRenderer-VisibilityBuffer.md` |
+| P6.5 | Land the `--vis-buffer-stats-frame` readback: pixels resolved, empty pixels, per-list fragment counts | proves the resolve runs once per pixel, not once per quad lane |
+
+**What to expect (and therefore what "success" looks like)**
+
+- `Opaque Renderer` instructions fall and `l1tex` sectors fall (no material sampling in raster).
+- A new `VisibilityResolve` pass carries one material evaluation per pixel plus ~3 vertex fetches.
+- `dram__bytes` for G-buffer *writes* should be roughly conserved (they moved), while raster-side
+  texture traffic drops.
+- Control passes (`Deferred`, `REBLUR_*`, `FSR3 TAA`) must be ×1.000; if they are not, the A/B is
+  invalid (pose or residency differed).
+
+**Reference checkpoints**
+
+- Filmic Worlds part 1 performance tables: the expected shape is a wash on large triangles, a win
+  at 10 px, a clear win at 1 px. Quote his numbers as the *prior*, then measure this renderer.
+- Filmic Worlds parts 2–4: if the measured win is real, DVM / software VRS is where the next
+  multiplier is — record it as the backlog item, do not start it here.
+- `docs/pix-capture-debugging.md` §10.1: the OMM A/B is the exact precedent for this analysis
+  (controls ×1.000, absolute counters, ratio tables).
+
+---
+
+## 11. Phase 7 — Optional backlog
+
+Only what a measurement justifies.
+
+| Item | Why it exists | Reference |
+|---|---|---|
+| Legacy meshlet path ids | keeps `--cluster-draw 0` comparable | needs a 64-bit id or a meshlet-index export |
+| Per-material indirect bins | Hable's divergence fix if the resolve is shown to be cache-bound | Filmic Worlds part 1 (material count → prefix sum → pixel list) |
+| Triangle filter / batch binning | The-Forge's alternative to per-cluster traversal on CPU/GPU | `TriangleFiltering.h.fsl`, `TriangleBinning.h.fsl`, `BatchCompaction.h.fsl` |
+| Compute software raster | removes raster fixed-function for sub-pixel triangles | `MeshletRasterize.hlsl`, `RasterCompute.hlsl`; requires SM 6.6 + `Int64ShaderOps` |
+| Software VRS / DVM / visibility TAA | the techniques that need this buffer to exist | Filmic Worlds parts 2–4 |
+
+---
+
+## 12. Correctness and performance with captures
+
+Two capture paths, one rule: **captures explain; the engine's own timers measure.**
+
+### 12.1 RenderDoc production for this feature
+
+```powershell
+# in-app capture (implies --renderdoc; loads renderdoc.dll before the D3D12 device exists)
+.\bin\HobbyRenderer.exe --scene "D:\Workspace\GLTF Scenes\Bistro\bistrox.gltf" `
+    --cluster 1 --vis-buffer 0 --renderdoc-capture-frame 90
+
+# rename before the next run: the template is fixed per scene stem
+Move-Item bin\captures\bistrox_capture.rdc bin\captures\bistrox_off.rdc
+```
+
+Then the same run with `--vis-buffer 1` → `bistrox_on.rdc`.
+
+Rules:
+
+- `--renderdoc-capture-frame 0` brackets the **scene load** (uploads, BLAS/TLAS) and is the only
+  way to see them; it is ~177 MB. Frame-N captures are ~1.3 GB for Bistro.
+- RenderDoc forces DXR 1.1 and sampler feedback off. For a *material* A/B in RenderDoc, run both
+  sides with `--disable-sampler-feedback` so the difference is the vis path, not the streaming path.
+- Do not expect OMM in a `.rdc`; it is never built with renderdoc.dll loaded.
+
+### 12.2 Offline analysis with `rdc-tools`
+
+```powershell
+$py  = 'C:\Program Files\Python314\python.exe'
+$RDC = 'D:\Workspace\rdc-tools\src\py\rdc_analysis.py'
+
+# every capture, first
+& $py $RDC verify   bin\captures\bistrox_on.rdc          # problems: 0 is the bar
+& $py $RDC summary  bin\captures\bistrox_on.rdc          # passes and chunk histogram
+& $py $RDC markers  bin\captures\bistrox_on.rdc          # marker tree; find VisibilityRaster/Resolve
+
+# the verdict-producing checks
+& $py $RDC hazards      bin\captures\bistrox_on.rdc --format markdown
+& $py $RDC samplers     bin\captures\bistrox_on.rdc --format markdown
+& $py $RDC rootsig-check bin\captures\bistrox_on.rdc --format markdown
+
+# memory and cost
+& $py $RDC vram  bin\captures\bistrox_on.rdc --format markdown
+& $py $RDC deps  bin\captures\bistrox_on.rdc 60 table     # who writes/reads the vis texture
+& $py $RDC memory bin\captures\bistrox_on.rdc 40          # lifetime of the new target
+```
+
+What each answers for this work:
+
+| Command | Question it answers |
+|---|---|
+| `verify` | is the parse trustworthy at all (framing, padding, payload) |
+| `markers` / `summary` | did both passes run, in the right order, with the expected draw/dispatch counts |
+| `hazards` | did the new pass introduce a read-while-write on the vis texture, the G-buffer or a job buffer |
+| `samplers` | does the gradient sampler path bind a mip range the sampler cannot reach |
+| `rootsig-check` | do the resolve's declared root parameters match what the stream binds and the heaps hold |
+| `deps` / `provenance` | who writes the vis texture before the resolve reads it (expect the raster events, not a clear) |
+| `vram` | the 4 B/px cost and the widest pass |
+| `passdiff on.rdc off.rdc` | the two pass trees side by side, by marker path |
+| `chunks <rdc> N List_DispatchMesh` | the cluster dispatch exists and how many there are |
+
+Known sharp edges to respect (from `rdc-tools`' own notes): `hazards` findings on this engine are
+dominated by **bindless descriptor-range artefacts** — the same shapes appear on unrelated scenes,
+so a *new* finding is the signal, not the total. Exit codes through a pipe are meaningless (a
+truncated stdout makes Python exit 1); capture the output in a variable and read it.
+
+### 12.3 Engine-side analysis with `replay_dump`
+
+```powershell
+$RDP = 'D:\Workspace\rdc-tools\bin\replay_dump.exe'
+
+& $RDP info       bin\captures\bistrox_on.rdc
+& $RDP draws      bin\captures\bistrox_on.rdc 200 "Visibility"
+& $RDP state      bin\captures\bistrox_on.rdc <eid>             # RTVs, DSV, shaders, roots
+& $RDP shaders    bin\captures\bistrox_on.rdc <eid> --disasm
+& $RDP crosscheck bin\captures\bistrox_on.rdc                    # RT format vs PS output sig
+& $RDP counters   bin\captures\bistrox_on.rdc --per-pass --top 20
+& $RDP textures   bin\captures\bistrox_on.rdc "VisibilityBuffer" --save bin\visdump --raw
+& $RDP trace      bin\captures\bistrox_on.rdc <eid> --pixel 640,360 --max-steps 200
+```
+
+The three that matter most here:
+
+1. **`crosscheck`** — the resolve writes one `R32_UINT` and six G-buffer targets; a mismatch between
+   the PS output signature and the bound RT formats is exactly the class of bug that produces a
+   black or garbage target with no validation error.
+2. **`state` + `shaders`** — confirm the resolve dispatch uses the visibility binding set (not a
+   dummy), and the shader hash is the one just built.
+3. **`trace --pixel`** — step one resolve invocation: the decoded job/triangle, the three vertices,
+   `m_lambda`, and the sampled texels. This is the fastest way to prove the id decode and the
+   barycentrics are right before blaming the maths.
+
+### 12.4 A/B with bundles and `replaydiff`
+
+This is the offline, device-free comparison — pass lists aligned by marker path, constants compared
+member by member, shader identity by SHA-256, and (with images) per-pass pixel diffs:
+
+```powershell
+& $RDP dump bin\captures\bistrox_off.rdc ab\off --with-images
+& $RDP dump bin\captures\bistrox_on.rdc  ab\on  --with-images
+& $py $RDC replaydiff ab\off ab\on --out ab\diff --with-images
+```
+
+Use it for: the pass list (a missing pass is a bug, not a difference), the constants (the resolve's
+per-frame block), and the per-pass image heat maps (which pass moved, and by how much). It cannot
+say *why* — that is `trace` or PIX.
+
+### 12.5 PIX production and recipes
+
+```powershell
+$PXT = 'C:\Program Files\Microsoft PIX\2610.28\pixtool.exe'
+
+# capture (the app captures itself; no PIX UI involved)
+.\bin\HobbyRenderer.exe --scene "D:\Workspace\GLTF Scenes\Bistro\bistrox.gltf" `
+    --cluster 1 --vis-buffer 1 --pix-capture-frame 90
+# -> bin\captures\bistrox-frame90.wpix ; rename before the --vis-buffer 0 run
+```
+
+Recipes for this feature (all from `docs/pix-capture-debugging.md` §3–§4):
+
+```powershell
+# 1. event list: do both passes exist, in order, and what is inside them?
+& $PXT --output=quiet open-capture bin\captures\vis_on.wpix save-event-list bin\ev_on.csv
+
+# 2. the vis buffer as an image (textures are .dds; PNG only with --depth)
+& $PXT --output=quiet open-capture bin\captures\vis_on.wpix `
+      save-resource bin\vis.dds --marker=VisibilityRaster --rtv=0
+
+# 3. each G-buffer target the resolve wrote
+& $PXT --output=quiet open-capture bin\captures\vis_on.wpix `
+      save-resource bin\resolve_albedo.dds --marker=VisibilityResolve --rtv=0
+
+# 4. the depth the raster pass wrote (for the Class A check against the baseline)
+& $PXT --output=quiet open-capture bin\captures\vis_off.wpix `
+      save-resource bin\depth_off.png --marker=MaskedPass --depth
+
+# 5. per-pass work: the comparison that decides the performance verdict
+& $PXT --output=quiet open-capture bin\captures\vis_on.wpix `
+      save-event-list bin\ev_on_c.csv --counters=gpu__* `
+      --counters=smsp__inst_executed.sum --counters=l1tex__t_sectors.sum --counters=dram__bytes.sum
+& $PXT --output=quiet open-capture bin\captures\vis_off.wpix `
+      save-event-list bin\ev_off_c.csv --counters=gpu__* `
+      --counters=smsp__inst_executed.sum --counters=l1tex__t_sectors.sum --counters=dram__bytes.sum
+
+# 6. playback sanity
+& $PXT --output=verbose open-capture bin\captures\vis_on.wpix perform-single-playback
+```
+
+Rules that make the counter A/B meaningful (adapted from the pix doc's OMM A/B):
+
+1. **Same view and same streaming state**, not the same event count. The vis path *deliberately*
+   changes the event count (one pass's work moves), so the pix doc's "equal event count" rule does
+   not apply verbatim; compare per *marker name* instead.
+2. Same frame index and pose for both runs; restore `bin/camera_state.json` before each run.
+3. For a counter A/B keep sampler feedback **on** (it is part of the material path under test) and
+   confirm residency matched (settled arena, 0 loads). For an *image* A/B pin it off on both sides.
+4. Compare `smsp__inst_executed.sum` and `l1tex__t_sectors.sum`; they reproduce to ~0.1 %. Treat
+   `gpu__time_duration.sum` as a ranking only (counter collection inflates it).
+5. Include a control set: `Deferred`, `REBLUR_*`, `FSR3 TAA`, `TransparentPass`. If any control is
+   not ×1.000, the runs are not comparable — fix the setup before reading the results.
+6. Expect the harmless `Invalid/Uninitialized descriptor` capturer messages on streamed scenes; they
+   are present in every capture on this machine.
+
+### 12.6 What each tool cannot tell you
+
+| Question | RenderDoc / `rdc-tools` | PIX |
+|---|---|---|
+| Depth / G-buffer pixel values | yes (`textures --raw/--cast`, `--depth` png) | yes (`save-resource`) |
+| Vis buffer id at a pixel | yes (`textures --raw`, `trace --pixel`) | image only (`.dds`), no numeric decode |
+| Shader source / DXIL / constants | yes (`shaders`, `cb`, `trace`) | GUI only |
+| Hardware counters per pass | partial (`counters --per-pass`) | **yes** (618 counters, the authority here) |
+| OMM / DXR 1.2 | **no** (clamped to 1.1) | yes |
+| Sampler feedback / streaming path | **no** (forced off) | yes |
+| Frame time under capture | no (replay) | no (capture stalls the frame) |
+
+Consequences for the plan: correctness of the streaming material path is validated in the running
+app (logs, debug view 11) and in PIX, never in RenderDoc; performance numbers come from the engine's
+own `GpuPassTimers` plus the PIX counter A/B, never from a capture's elapsed time.
+
+---
+
+## 13. File-touch matrix and build order
+
+| File | Phase | Change |
+|---|---|---|
+| `src/Config.h`, `src/Config.cpp` | 0–1 | two new flags + help text |
+| `src/CommonRenderers.cpp` | 1 | declare + clear `g_RG_VisibilityBuffer` |
+| `src/ImGuiLayer.cpp` | 1 | checkbox |
+| `src/Renderer.cpp` | 1 | schedule `VisibilityResolveRenderer` |
+| `src/BasePassRenderer.cpp` | 2, 4 | vis framebuffer, PS selection, declaration switch, markers |
+| `src/BasePassCommon.h/.cpp` | 1–2 | resolve resource handles, if not local to the new renderer |
+| `src/shaders/ClusterVis.hlsl` | 2, 4 | new (AS/MS/PS + alpha variant) |
+| `src/shaders/VisibilityResolve.hlsl` | 3, 4 | new |
+| `src/shaders/VisibilityResolve.sr` | 3 | new binding set |
+| `src/shaders/Bindless.hlsli` | 3 | new gradient streaming sampler (additive) |
+| `src/shaders/shaders.cfg` | 2–3 | new entry points |
+| `src/VisibilityResolveRenderer.cpp` | 1, 3 | new renderer |
+| `docs/visibility_buffer_analysis.md` | 5–6 | record answers and the verdict |
+
+Do **not** touch `src/shaders/Cluster.sr` in phases 1–4: it is the cooked-mesh layout, and editing
+it means bumping `kCookedMeshVersion` and re-cooking every scene. New constants go in the new
+`VisibilityResolve.sr` (or `Common.sr` if shared).
+
+Build note: a new `.cpp` under `src/` is globbed, so re-run `cmake -S . -B build` before building.
+Shader edits need `build_srrhi` (for `.sr`) and `build_shaderids` (for `shaders.cfg`) before
+`build_shaders`.
+
+---
+
+## 14. Risk register
+
+| Risk | Where it bites | Mitigation | Phase |
+|---|---|---|---|
+| Job index off by one | warped triangles, no validation error | payload carries `groupId.x`; assert in Debug; `trace --pixel` on a known pixel | 2 |
+| `SV_PrimitiveID` used by habit | PSO creation fails with a generic nvrhi message | per-primitive output only; see the mesh shader spec | 2 |
+| Depth differs | HZB/occlusion drift over time; hard to attribute | Class A gate at M2; reuse `PrepareVSOut`'s transform verbatim | 2 |
+| Texture LOD differs | visible mip seams, look like a filtering bug | analytic LOD + MinMip clamp; compare debug mode 11; document Class C | 3 |
+| Streaming feedback divergence | tiles load earlier/later; residency never settles | PIX/app validation; `--disable-sampler-feedback` control; `--cluster-stream-stats-frame` | 3, 5 |
+| Alpha test deferred by accident | holes at masked silhouettes | P4.1's discard lives in the raster PS; silhouette check, not interior | 4 |
+| Resolve reads a stale job list | geometry from another cluster; only on movement | same-frame resolve only; document the double-buffer requirement before any async work | 5 |
+| RenderDoc hides half the material path | false confidence | OMM/streaming validated outside RenderDoc; run both sides with feedback off for image A/Bs | all |
+| Capture disk pressure | 1.3 GB per Bistro frame | A/B on Cornell/Sponza; delete after each milestone | all |
+| Performance is a wash | effort without payoff | M5 decision is explicit; flag defaults off; the win is reserved for dense scenes | 6 |
+
+---
+
+## 15. Appendix A — command cheat sheet
+
+```powershell
+# ── baseline / app-side gates ───────────────────────────────────────────────
+$S = "D:\Workspace\GLTF Scenes"
+.\bin\HobbyRenderer.exe --scene "$S\Sponza\Sponza.gltf" --hide-ui --screenshot-frame 60
+.\bin\HobbyRenderer.exe --scene "$S\Sponza\Sponza.gltf" --hide-ui --debug 4 --screenshot-frame 60
+.\bin\HobbyRenderer.exe --scene "$S\Bistro\bistrox.gltf" --cluster-no-culling --cluster-stats-frame 5
+.\bin\HobbyRenderer.exe --scene "$S\Bistro\bistrox.gltf" --vis-buffer 1 --rhidebug
+.\bin\HobbyRenderer.exe --scene "$S\Bistro\bistrox.gltf" --cluster-two-pass 1 --vis-buffer 1
+.\bin\HobbyRenderer.exe --scene "$S\Bistro\bistrox.gltf" --stream-budget 16 --vis-buffer 1 `
+    --cluster-stream-stats-frame 120
+
+# ── RenderDoc ───────────────────────────────────────────────────────────────
+.\bin\HobbyRenderer.exe --scene "$S\Bistro\bistrox.gltf" --vis-buffer 1 --renderdoc-capture-frame 90
+$py  = 'C:\Program Files\Python314\python.exe'
+$RDC = 'D:\Workspace\rdc-tools\src\py\rdc_analysis.py'
+$RDP = 'D:\Workspace\rdc-tools\bin\replay_dump.exe'
+& $py $RDC verify   bin\captures\bistrox_capture.rdc
+& $py $RDC markers  bin\captures\bistrox_capture.rdc
+& $py $RDC hazards  bin\captures\bistrox_capture.rdc --format markdown
+& $py $RDC samplers bin\captures\bistrox_capture.rdc --format markdown
+& $py $RDC rootsig-check bin\captures\bistrox_capture.rdc --format markdown
+& $py $RDC vram     bin\captures\bistrox_capture.rdc --format markdown
+& $RDP crosscheck   bin\captures\bistrox_capture.rdc
+& $RDP counters     bin\captures\bistrox_capture.rdc --per-pass --top 20
+& $RDP textures     bin\captures\bistrox_capture.rdc "VisibilityBuffer" --save bin\visdump --raw
+& $RDP trace        bin\captures\bistrox_capture.rdc <eid> --pixel 640,360 --max-steps 200
+& $RDP dump bin\captures\bistrox_off.rdc ab\off --with-images
+& $RDP dump bin\captures\bistrox_on.rdc  ab\on  --with-images
+& $py $RDC replaydiff ab\off ab\on --out ab\diff --with-images
+
+# ── PIX ─────────────────────────────────────────────────────────────────────
+$PXT = 'C:\Program Files\Microsoft PIX\2610.28\pixtool.exe'
+.\bin\HobbyRenderer.exe --scene "$S\Bistro\bistrox.gltf" --vis-buffer 1 --pix-capture-frame 90
+& $PXT --output=quiet open-capture bin\captures\bistrox-frame90.wpix save-event-list bin\ev.csv
+& $PXT --output=quiet open-capture bin\captures\bistrox-frame90.wpix `
+       save-resource bin\vis.dds --marker=VisibilityRaster --rtv=0
+& $PXT --output=quiet open-capture bin\captures\bistrox-frame90.wpix `
+       save-event-list bin\evc.csv --counters=gpu__* `
+       --counters=smsp__inst_executed.sum --counters=l1tex__t_sectors.sum --counters=dram__bytes.sum
+& $PXT --output=verbose open-capture bin\captures\bistrox-frame90.wpix perform-single-playback
+```
+
+---
+
+## 16. Appendix B — reference cross-map
+
+| Question during implementation | Reference answer |
+|---|---|
+| How do I get a triangle id out of a mesh shader? | Xbox `VisibilityMS.hlsl` (`out primitives`), D3D12 mesh shader spec |
+| What bit layout for the id? | `D3D12_Research/VisibilityBuffer.hlsli`; The-Forge `VisibilityBufferShaderDefs.h.fsl`; analysis §5.2 |
+| How do I get perspective-correct barycentrics inside a deferred pass? | Filmic Worlds part 1 (corrected `CalcFullBary`); The-Forge `VisibilityBufferShadingUtilities.h.fsl`; `D3D12_Research` `ComputeBarycentrics` |
+| How do I derive texture gradients on an arbitrary triangle? | Filmic Worlds part 1 (chain rule); Xbox `SceneReconstructionCS.hlsl` (quad-uniform fast path + ray/plane fallback) |
+| Where does the alpha test go? | Analysis §5.3; Nanite docs (masked materials); Xbox `VisibilityBufferPassAlpha` shaders |
+| What should the resolve write? | `D3D12_Research/VisibilityGBuffer.hlsl`; this plan §7 (six existing targets) |
+| Why is the resolve a pixel shader here and not a compute shader? | Analysis §5.4; SM 6.6 derivative-in-compute spec |
+| What is the next multiplier once this works? | Filmic Worlds parts 2 (DVM), 3 (software VRS), 4 (visibility TAA) |
+| What does batched filtering/binning look like if the resolve is cache-bound? | The-Forge `TriangleFiltering.h.fsl`, `TriangleBinning.h.fsl`, `BatchCompaction.h.fsl` |
+| What does a software rasteriser need? | `D3D12_Research/MeshletRasterize.hlsl`, `RasterCompute.hlsl`; analysis §5.1 variant C |
+
+---
+
+## 17. Appendix C — per-phase gate checklist
+
+Copy into the PR/commit description for each phase and tick what ran.
+
+```text
+Phase __ gate
+[ ] builds Debug, 0 warnings introduced
+[ ] --vis-buffer 0 is Class A identical to baseline (screenshots + passdiff)
+[ ] --rhidebug: 0 D3D12 errors, 0 nvrhi messages
+[ ] depth Class A identical (vis on vs off)
+[ ] debug views 3/4/5/6/7/9 within the stated Class B budget
+[ ] composite within run-to-run noise floor (fixed pose, flags pinned)
+[ ] --cluster-no-culling --cluster-stats-frame 5 still "(match)"
+[ ] rdc-tools verify: problems: 0
+[ ] rdc-tools hazards: no new findings (8 pre-existing bindless artefacts allowed)
+[ ] rdc-tools samplers: no "certain" verdict
+[ ] rdc-tools rootsig-check: clean
+[ ] replay_dump crosscheck: RT formats match the PS output signature
+[ ] PIX perform-single-playback: exit 0
+[ ] PIX counters: control passes (Deferred, REBLUR_*, FSR3 TAA, Transparent) x1.000
+[ ] captures deleted / archived, disk restored
+[ ] analysis doc updated with what was learned
+```
