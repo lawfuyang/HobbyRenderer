@@ -1095,6 +1095,90 @@ Still to wire, in this order:
    that removes the remaining 41.69 GB spike. Until then a streamed cook needs the raw `.bin` buffers
    to fit, so it is `--import-limit-primitives` that makes the first real-data test affordable.
 
+### 22.2 Stage 1 is implemented and verified on `threedscans_animals` (2026-11-23)
+
+All four items above except the meshopt laziness are in, behind `--stream-import 1` (plus
+`--import-limit-primitives <n>` for a first look at a huge scene):
+
+| Where | What |
+|---|---|
+| `SceneLoader::ProcessMeshes` | the per-primitive body is a named lambda; streamed mode drives it one job at a time, builds that primitive's clusters (still per-group parallel through the scheduler), writes its part, then frees its vertex/index/meshlet/`m_Triangles`/`m_VertexIndices` vectors. A part that already exists and validates is read back instead of rebuilt, so a resumed run is one part per missing primitive. |
+| merge phase | `m_IndexOffsets` stay primitive-local and the mesh sphere comes from the per-part bounds recorded in `PrimitiveResult`. |
+| `LoadOrCookMeshData` | routes the save to `AssembleCookedMesh` when `<cache>.parts` exists. |
+| `CreateAndUploadGpuBuffers` | a placeholder vertex buffer (one vertex) and a placeholder RT index buffer keep every binding valid; the RT index rebase is skipped when there is no index array. |
+| `Scene::BuildAccelerationStructures` | `m_bLegacyGeometryAbsent` (set from the load) is now an explicit RT-off reason, so a streamed scene never asks the driver for a BLAS. |
+
+Measured on `threedscans_animals` (5 primitives, 18.7 M triangles, 28 threads):
+
+* streamed cook **213 s** wall (vs 91 s with every primitive in flight — the price of one primitive at
+  a time and the serial meshopt/optimise work), 5 parts of 318 MB, assembly **311.56 MB of blobs** in a
+  **317.67 MB** cache (the same scene's full cache is 757.74 MB);
+* the assembled cache reloads and draws: 13 549 groups, 311.56 MB of blobs mapped, RT auto-disabled
+  (`[RT ] Scene has no scene-wide geometry buffers (streamed import)`), and
+  `--cluster-no-culling` still reports **16 401 clusters `(match)`** — the exact cut of the
+  non-streamed path;
+* `--import-limit-primitives 2` produces a working partial cache (8 503 groups) whose screenshot shows
+  the correctly shaded statues, which is the cheap first-look route for a huge scene;
+* resume was exercised by corrupting a part: the size check rejected it (119 069 376 vs 119 098 688
+  bytes, the pre-padding writer) and only that primitive was rebuilt.
+
+What is left for Zorah/junkworld is exactly item 4: `decompressMeshopt` still materialises every
+compressed bufferView (41.69 GB for Zorah) before the first primitive is imported. Until that is made
+per-primitive, the streamed path removes the *scene-wide* arrays (25 GB + 19.5 GB) but not the decode
+spike.
+
+### 22.3 The meshopt decode spike, and how upstream avoids it
+
+**Corrected numbers** (Zorah's own glTF): buffer 0 is `zorah_main_public.v2.bin`, **10.0 GB of
+*compressed* data**; buffer 1 has no URI and declares **31.69 GB** — the decoded container the views
+expand into. So the spike is **31.69 GB decoded**, not 41.69 (that figure summed both buffers). Every
+bufferView carries `EXT_meshopt_compression`, and the largest single view is **6 MB**, so decoding one
+view at a time is free.
+
+Our loader does the opposite of that: `SceneLoader::decompressMeshopt` walks *every* bufferView at
+load and `malloc`s `count × stride` for each, then `ProcessMeshes` runs — which is 31.69 GB of heap
+(plus `cgltf_load_buffers`' own 10 GB vector) before one primitive is touched.
+
+`vk_lod_clusters` solves it in three layers, with **no cgltf fork and no meshopt support inside
+cgltf** (their `src/cgltf.cpp` has no meshopt code at all):
+
+1. **The buffers are mapped, not read.** `cgltf_options.file.read/release` are pointed at a
+   `FileMappingList` (`src/scene_gltf.cpp:132-151`, wired at `:316-318`), so `cgltf_load_buffers`
+   hands back mapped pointers and `meshopt_compression.buffer->data` is a mapping. Our vendored cgltf
+   is 1.15 and has the same `cgltf_file_options` hooks, so this needs no library change.
+2. **Decode is per geometry and reference counted.** `loadCompressedViewsGLTF`
+   (`src/scene_gltf.cpp:1089-1178`) decodes only the views the current geometry's accessors use, with
+   a `SpinLock` per view and a `bufferViewUsers[]` count; `unloadCompressedViewsGLTF` (`:1181-1199`)
+   decrements and `free`s when the last user lets go. Peak memory is the views in flight, never the
+   scene. Their decode logic is explicitly derived from meshoptimizer's own
+   `gltf/parsegltf.cpp::decompressMeshopt` — the same code we copied, minus the "all views at once".
+3. **A throttled, resumable preprocess pass.** `Scene::init` detects a large scene and re-runs with
+   `processingOnly = true` (`src/scene.cpp:386-427`), which only writes their cache
+   (`src/scene_cache.cpp:375-500`: header + per-geometry offsets, a `.gltf_mesh_cache_partial` file,
+   `--processingpartial` to resume). Geometries are processed one task each, biggest first, gated by
+   `estimateGeometryProcessingBytes = 128 B per input triangle` and `--processingmemorygigabytes`
+   (default 0 = 60 % of installed RAM; negative = a percentage of it), with `--processingthreadpct`
+   (default 50 %). Attributes are read straight out of the decoded view into their quantised format
+   (`readAttributesGLTF`, `cgltf_buffer_view_data(view) + accessor->offset`, `:1202-1216`), so no
+   intermediate vertex array is built either.
+
+**The fix for us**, in the order it is worth doing (all three keep the part files and the streamed
+loop from §22.2 unchanged):
+
+1. **Release what is decoded.** Give `decompressMeshopt` an acquire/release pair keyed on the
+   primitive being imported (per-view user count + spin lock, exactly upstream's shape), and call them
+   from the streamed per-primitive loop. Peak becomes one primitive's views instead of 31.69 GB.
+2. **Map the buffers.** Set `cgltf_options.file.read/release` to a `MemoryMappedDataReader`-backed
+   mapping list (the reader already exists in this codebase), which removes the 10 GB vector as well.
+3. **Read accessors through the view.** `cgltf_accessor_read_float` per element is the slow path;
+   when `accessor->stride == sizeof(T)` the view can be read directly, as upstream does. Worth doing
+   in the same edit since the decode path is being touched anyway.
+
+With those, Zorah's decode peak is "one primitive's views" (tens of MB) on top of the ~2 GB of
+resident cluster metadata, which is what the 32 GB machine needs.
+
+
+
 
 
 
