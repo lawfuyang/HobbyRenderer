@@ -1,13 +1,18 @@
 #pragma once
 
 #include "ClusterLodGpu.h"
+#include "Utilities.h"
 
 // Geometry streaming (docs/cluster-lod-implementation-plan.md phase 5).
 //
-// Cluster groups are the streaming unit. Every group's triangle and vertex words live in one 16-byte aligned blob
+// Cluster groups are the streaming unit. Every group's triangles and vertex attributes live in one 16-byte aligned blob
 // in a device arena, and a residency table (one ClusterGroupState per global group) says where each blob is. The
 // traversal asks for the groups it could not draw; this class serves those requests the same way texture
 // streaming does:
+//
+// The blob bytes are never materialised in system RAM: they stay in the cooked mesh file, which is mapped
+// read-only, and a load copies the group's range straight into the arena from the mapping. The file's per-group
+// table (ClusterLod::BlobFile) is filled by the scene load and consumed here.
 //
 //   device asks   the traversal (and the age filter) append group indices to request lists, which are copied to a
 //                 cache-host-visible staging buffer at the end of the frame and signalled with an event query;
@@ -29,18 +34,19 @@ class GeometryStreaming
 public:
     // Requests read back per slot. The lists themselves are fixed-size device buffers; anything past the budget
     // is dropped and asked for again on a later frame, which costs nothing because the frame tag has changed.
-    static constexpr uint32_t kMaxLoadsPerFrame = 128;
+    // This is the device-side cap; the host applies the byte budget below on top of it.
+    static constexpr uint32_t kMaxLoadsPerFrame = 512;
     static constexpr uint32_t kMaxUnloadsPerFrame = 1024;
 
     // Capacities of the device-side request lists (also the readback ranges).
-    static constexpr uint32_t kLoadListCapacity = 1024;
+    static constexpr uint32_t kLoadListCapacity = 2048;
     static constexpr uint32_t kUnloadListCapacity = 2048;
 
     static constexpr uint32_t kMaxPatches = kMaxLoadsPerFrame + kMaxUnloadsPerFrame;
 
-    // A request is consumed on the first frame its event has completed. Three slots leave more than the two
-    // frames of slack the texture streaming readback needs.
-    static constexpr uint32_t kReadbackSlots = 3;
+    // A request is consumed on the first frame its event has completed. The slots pipeline several frames of
+    // requests, so a high per-frame byte budget is not throttled by a single readback.
+    static constexpr uint32_t kReadbackSlots = 8;
 
     struct Stats
     {
@@ -56,6 +62,9 @@ public:
         uint32_t m_DroppedLoads = 0;
         uint32_t m_RequestsLastFrame = 0;
         uint32_t m_EvictedByBudget = 0;         // groups the budget has forced out since the last resize
+        uint64_t m_LoadBytesThisFrame = 0;      // bytes copied out of the cooked file for this frame's loads
+        uint64_t m_LoadBudgetBytes = 0;         // Config::m_ClusterLoadBytesPerFrame, 0 = uncapped
+        uint64_t m_BlobFileBytes = 0;           // size of the mapped cooked file
 
         // Per LOD level, for the residency histogram: how many groups exist at each level and how many of them
         // are in the arena right now.
@@ -65,8 +74,8 @@ public:
     };
 
     // Creates the arena, the residency table, the request lists and the readback slots, and makes the groups that
-    // fit the streaming budget resident. The blob source arrays are moved out of `data`, which is the cooked copy
-    // the uploads are served from.
+    // fit the streaming budget resident. The blob bytes come from the cooked file the scene load mapped
+    // (Renderer::m_ClusterBlobFile); only the group metadata is taken from `data`.
     void Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData& data);
     void Shutdown();
 
@@ -160,6 +169,9 @@ private:
 
     nvrhi::BufferHandle CreateArenaBuffer(uint32_t elements) const;
 
+    // The mapped bytes of one group's arena blob, or nullptr when the mapping is unusable.
+    const uint8_t* GetGroupBlob(uint32_t groupIndex, uint32_t& outByteSize) const;
+
     uint32_t m_FrameIndex = 0;
     uint32_t m_GroupCount = 0;
     uint64_t m_TotalElements = 0;
@@ -167,9 +179,10 @@ private:
     uint32_t m_ArenaElements = 0;
     uint64_t m_ResizedBudgetBytes = 0;   // the budget the arena was last sized for
 
-    // The cooked data the blobs are uploaded from, moved in from the load-time GpuData.
-    std::vector<uint32_t> m_SourceTriangles;
-    std::vector<uint32_t> m_SourceVertices;
+    // The cooked data the blobs are uploaded from: the mapped mesh file and its per-group ranges.
+    std::unique_ptr<MemoryMappedDataReader> m_BlobFile;
+    std::vector<ClusterLod::GroupBlobRef> m_GroupFiles;   // parallel to m_GroupBlobs
+
     std::vector<ClusterLod::StreamGroup> m_GroupBlobs;
 
     std::vector<Residency> m_Residency;

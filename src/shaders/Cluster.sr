@@ -60,16 +60,18 @@ struct ClusterJob
 };
 
 // 32 B. The draw-side view of one cluster. ClusterLod::Cluster packs four 8-bit counts into one uint, which
-// HLSL cannot read, so the mesh shader gets plain fields and element offsets into the two shared arrays
-// below. Built at load from the cooked record (ClusterLodGpu.cpp), so this is not part of the cooked layout.
+// HLSL cannot read, so the mesh shader gets plain fields and element offsets into the group's blob below.
+// Built at load from the cooked record (ClusterLodGpu.cpp), so this is not part of the cooked layout.
 struct ClusterRecord
 {
     uint m_TriangleCount;
     uint m_VertexCount;
     uint m_LODLevel;         // 0 = original mesh
     uint m_GroupIndex;       // global, for the culling bounds the debug view draws
-    uint m_TriangleOffset;   // into ClusterTriangles, one packed micro-index triple per triangle
-    uint m_VertexOffset;     // into ClusterVertices, one scene-wide vertex index per cluster vertex
+    uint m_TriangleOffset;   // into the group blob, one packed micro-index triple per triangle
+    // Into the group blob, six words per vertex of this cluster: a VertexQuantized verbatim. The triangle micro
+    // indices are cluster-local, so a cluster's vertices are a dense run and no vertex-index indirection is left.
+    uint m_AttributeOffset;
     // The cluster's own bounding sphere, as halves: x, y in word 0 and z, radius in word 1. The traversal needs
     // it because a group's sphere bounds several clusters and is far too loose to reject the hidden ones.
     uint m_CenterRadius[2];

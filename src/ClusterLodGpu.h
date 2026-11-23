@@ -10,14 +10,16 @@
 // C++ cannot drift; this file only decides how the per-primitive data is laid out in them.
 namespace ClusterLod
 {
-    // One group's share of the streaming arena: its triangle words followed by its vertex words, 16-byte aligned.
-    // The record offsets in m_Records are relative to this blob, so moving a group only rewrites its address in
-    // the residency table (ClusterGroupState) and never the cluster data itself.
+    // One group's share of the streaming arena: its triangle words followed by its vertex attributes, 16-byte
+    // aligned. The record offsets in m_Records are relative to this blob, so moving a group only rewrites its
+    // address in the residency table (ClusterGroupState) and never the cluster data itself. The words live in the
+    // cooked file (ClusterLod::GroupBlobRef), not in RAM; the two element fields are primitive-local cursors used
+    // while BuildGpuData rebases the records, nothing reads them afterwards.
     struct StreamGroup
     {
-        uint32_t m_TriangleElement = 0;   // first element of GpuData::m_Triangles
+        uint32_t m_TriangleElement = 0;   // primitive-local first triangle triple
         uint32_t m_TriangleCount = 0;
-        uint32_t m_VertexElement = 0;     // first element of GpuData::m_Vertices
+        uint32_t m_VertexElement = 0;     // primitive-local first vertex index
         uint32_t m_VertexCount = 0;
         uint32_t m_LODLevel = 0;          // level the group belongs to, for the per-level residency histogram
         // The coarsest level of its primitive: the set a bounded arena preloads, because it covers the primitive
@@ -25,7 +27,9 @@ namespace ClusterLod
         bool m_bCoarsestLevel = false;
 
         // Elements the blob occupies in the arena, padded to the 16-byte alignment a group address promises.
-        uint32_t GetBlobElements() const { return ((m_TriangleCount + m_VertexCount) + 3u) & ~3u; }
+        // Every cluster vertex carries its own VertexQuantized (six words), which is what lets the arena be the
+        // only copy of the cut's vertices.
+        uint32_t GetBlobElements() const { return ((m_TriangleCount + 6u * m_VertexCount) + 3u) & ~3u; }
     };
 
     struct GpuData
@@ -43,10 +47,9 @@ namespace ClusterLod
 
         // The draw side: one record per cluster, the micro indices of every cluster's triangles and the
         // scene-wide vertex index of every cluster vertex. The mesh shader reads these through ClusterRecord,
-        // with the record's offsets relative to the group's StreamGroup blob.
+        // with the record's offsets relative to the group's StreamGroup blob. The words themselves live in the
+        // cooked file: `GpuData` only carries the geometry, not a system-RAM copy of every blob.
         std::vector<srrhi::ClusterRecord> m_Records;
-        std::vector<uint32_t> m_Triangles;   // one packed micro-index triple per triangle
-        std::vector<uint32_t> m_Vertices;    // scene-wide vertex indices, one per cluster vertex
         std::vector<StreamGroup> m_StreamGroups;
 
         // Primitives the cluster path cannot draw, because they have no cluster data (fewer than three indices,

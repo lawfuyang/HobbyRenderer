@@ -25,6 +25,22 @@ uint ClusterStreamBase(srrhi::ClusterRecord cluster)
     return g_ClusterGroupStates[cluster.m_GroupIndex].m_Address;
 }
 
+// A cluster vertex, straight out of the group's blob. Six words per vertex is a VertexQuantized verbatim, so the
+// mesh shader never touches the scene-global vertex buffer: the cut's vertices are the only ones the arena has to
+// hold (docs/cluster-lod-upstream-review-2026-11-23.md §17.3).
+srrhi::VertexQuantized ReadClusterVertex(uint streamBase, srrhi::ClusterRecord cluster, uint localIndex)
+{
+    const uint at = streamBase + cluster.m_AttributeOffset + localIndex * 6u;
+    srrhi::VertexQuantized vq;
+    vq.m_Pos.x   = asfloat(g_ClusterStreamData[at + 0u]);
+    vq.m_Pos.y   = asfloat(g_ClusterStreamData[at + 1u]);
+    vq.m_Pos.z   = asfloat(g_ClusterStreamData[at + 2u]);
+    vq.m_Normal  = g_ClusterStreamData[at + 3u];
+    vq.m_Uv      = g_ClusterStreamData[at + 4u];
+    vq.m_Tangent = g_ClusterStreamData[at + 5u];
+    return vq;
+}
+
 float3 HashColor(uint id)
 {
     uint h = id * 0x27D4EB2Du;

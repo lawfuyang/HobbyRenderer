@@ -22,6 +22,11 @@ namespace SceneCache
     // var     var    MletTris:  [count:uint64_t][uint32_t * count]
     // var     var    VerticesQ: [count:uint64_t][srrhi::VertexQuantized * count]
     // var     var    Indices:   [count:uint64_t][uint32_t * count]
+    // var     8      Group blobs: [count:uint64_t][ClusterLod::GroupBlobRef * count]
+    // var     var    Blob data:  padded to the next 4 KiB; one 16-byte aligned blob per group, in the order
+    //                            BuildGpuData flattens groups (mesh, primitive, group). Inserting the table here
+    //                            keeps the per-primitive records small: a loaded scene streams the words from
+    //                            this section instead of holding them in system RAM.
     // ─────────────────────────────────────────────────────────────────────────────
 
     // Magic: "RLFY" = 0x59464C52
@@ -34,7 +39,11 @@ namespace SceneCache
     // - LOD generation parameters change
     // 3: cluster LOD data written per primitive, plus the cluster config hash in the header.
     // 5: terminal (stuck) groups, regularised simplification and the meshoptimizer vertex dedup.
-    constexpr uint32_t kCookedMeshVersion = 7;
+    // 8: cluster group blob words moved to their own section (a table plus 4 KiB-aligned blobs), so the runtime
+    //    streams them from the file; the per-primitive index records no longer carry them.
+    // 9: a group blob carries every cluster vertex's attributes after its triangles (six words each), so the
+    //    cluster path no longer reads the scene-global vertex buffer.
+    constexpr uint32_t kCookedMeshVersion = 9;
 
     // ── Binary I/O helpers ────────────────────────────────────────────────────
 
@@ -82,7 +91,8 @@ namespace SceneCache
         const std::vector<uint32_t>&              meshletTriangles,
         const std::vector<srrhi::VertexQuantized>& allVerticesQuantized,
         const std::vector<uint32_t>&              allIndices,
-        bool                                      bCookClusters);
+        bool                                      bCookClusters,
+        ClusterLod::BlobFile&                     outBlobs);
 
     // Load mesh-processed data from a binary file.
     // Returns true on success; false if file is missing, corrupt, or wrong version.
@@ -95,7 +105,8 @@ namespace SceneCache
         std::vector<uint32_t>&               outMeshletTriangles,
         std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
         std::vector<uint32_t>&               outIndices,
-        bool                                 bCookClusters);
+        bool                                 bCookClusters,
+        ClusterLod::BlobFile&                outBlobs);
 
     // Check whether the cached file exists and is newer than the source file.
     bool IsCacheValid(const std::filesystem::path& cachePath,
@@ -109,6 +120,7 @@ namespace SceneCache
         Scene& scene,
         std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
         std::vector<uint32_t>& outIndices,
-        bool bCookClusters);
+        bool bCookClusters,
+        ClusterLod::BlobFile& outBlobs);
 
 } // namespace SceneCache

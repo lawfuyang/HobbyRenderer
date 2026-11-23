@@ -502,6 +502,13 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	const uint groupIndex = NodeGetGroupIndex(packed);
 
+	// The cut never draws a group that is already too coarse for this camera, and with streaming a request for it
+	// would only pull a level the cut cannot use into the arena - which is how a tight budget starves. Forced-level
+	// runs select by level and discrete seeds draw their whole level, so both bypass the metric test.
+	const bool bDiscreteSeed = (nodeRef.m_Flags & srrhi::ClusterRefFlags::kDiscrete) != 0;
+	if (!bDiscreteSeed && g_Traversal.m_ForcedLOD == kNoForcedLOD && GroupTooCoarse(groupIndex, instance.m_World))
+		return;
+
 	// A group whose blob is not in the arena cannot be drawn, so it is asked for instead of queued. The levels
 	// around it still cover its region: the groups pass draws a finer cluster while the coarser group that
 	// replaced it is missing.

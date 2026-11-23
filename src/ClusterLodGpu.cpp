@@ -91,8 +91,6 @@ uint64_t GpuData::GetMemoryBytes() const
         uint64_t(m_GeneratingGroups.size()) * sizeof(uint32_t) +
         uint64_t(m_Geometry.size()) * sizeof(srrhi::ClusterGeometry) +
         uint64_t(m_Records.size()) * sizeof(srrhi::ClusterRecord) +
-        uint64_t(m_Triangles.size()) * sizeof(uint32_t) +
-        uint64_t(m_Vertices.size()) * sizeof(uint32_t) +
         uint64_t(m_LevelMeshLODs.size()) * sizeof(uint32_t) +
         uint64_t(m_StreamGroups.size()) * sizeof(StreamGroup);
 }
@@ -115,8 +113,6 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrh
     outData.m_Groups.clear();
     outData.m_GeneratingGroups.clear();
     outData.m_Records.clear();
-    outData.m_Triangles.clear();
-    outData.m_Vertices.clear();
     outData.m_StreamGroups.clear();
     outData.m_LevelMeshLODs.clear();
     outData.m_PrimitivesWithoutData = 0;
@@ -203,10 +199,15 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrh
             }
 
             // The draw side: the cooked Cluster packs its counts into bitfields, so it is expanded into the
-            // shader's own record, and its element offsets become offsets into the two scene-wide arrays. The
-            // micro indices stay 8-bit in the asset but are packed one triple per uint here, which is the same
-            // layout UnpackTriangle already reads for meshlets.
-            const uint32_t vertexBase = mesh.m_Primitives[pi].m_VertexOffset;
+            // shader's own record. The blob words are not built here: the cooked cache stores them per group in
+            // exactly this order and GeometryStreaming uploads them from the file, so the offsets are arithmetic
+            // - a group's triangles first, then its clusters' vertex attributes. A freshly cooked scene still has
+            // the source arrays, and their micro/vertex indices are validated here; a loaded one has them empty.
+            const bool bHasBlobData = !clusters.m_Triangles.empty();
+            SDL_assert(clusters.m_Triangles.empty() == clusters.m_VertexIndices.empty());
+
+            uint32_t triCursor = 0;
+            uint32_t vertexCursor = 0;
             for (uint32_t c = 0; c < counts.m_ClusterCount; ++c)
             {
                 const Cluster& cluster = clusters.m_Clusters[c];
@@ -216,37 +217,31 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrh
                 record.m_VertexCount = cluster.GetVertexCount();
                 record.m_LODLevel = cluster.m_LODLevel;
                 record.m_GroupIndex = 0;   // filled in below, from the group that owns the cluster
-                record.m_TriangleOffset = uint32_t(outData.m_Triangles.size());
-                record.m_VertexOffset = uint32_t(outData.m_Vertices.size());
+                record.m_TriangleOffset = triCursor;
+                record.m_AttributeOffset = vertexCursor;
                 record.m_CenterRadius[0] = cluster.m_CenterRadius[0];
                 record.m_CenterRadius[1] = cluster.m_CenterRadius[1];
+
+                triCursor += record.m_TriangleCount;
+                vertexCursor += record.m_VertexCount;
 
                 SDL_assert(record.m_TriangleCount <= srrhi::CommonConsts::kMaxClusterTriangles);
                 SDL_assert(record.m_VertexCount <= srrhi::CommonConsts::kMaxClusterVertices);
 
-                for (uint32_t t = 0; t < record.m_TriangleCount; ++t)
+                if (bHasBlobData)
                 {
-                    const size_t source = cluster.m_TriangleOffset + size_t(t) * 3;
-                    outData.m_Triangles.push_back(uint32_t(clusters.m_Triangles[source]) |
-                        (uint32_t(clusters.m_Triangles[source + 1]) << 8) |
-                        (uint32_t(clusters.m_Triangles[source + 2]) << 16));
-                }
+                    for (uint32_t t = 0; t < record.m_TriangleCount * 3; ++t)
+                    {
+                        SDL_assert(clusters.m_Triangles[cluster.m_TriangleOffset + t] < record.m_VertexCount);
+                    }
 
-                for (uint32_t v = 0; v < record.m_VertexCount; ++v)
-                {
-                    const uint32_t index = clusters.m_VertexIndices[cluster.m_VertexOffset + v];
-
-                    // The cooked clusters index the primitive's own vertex block, and the CPU is the only place
-                    // that rebasing can be wrong without anyone noticing: a bad index turns the cluster's
-                    // triangles into something that covers nothing, and the mesh shader draws nothing at all.
-                    SDL_assert(index < mesh.m_Primitives[pi].m_VertexCount);
-
-                    outData.m_Vertices.push_back(vertexBase + index);
-                }
-
-                for (uint32_t t = 0; t < record.m_TriangleCount * 3; ++t)
-                {
-                    SDL_assert(clusters.m_Triangles[cluster.m_TriangleOffset + t] < record.m_VertexCount);
+                    for (uint32_t v = 0; v < record.m_VertexCount; ++v)
+                    {
+                        // A bad index turns the cluster's triangles into something that covers nothing, and the
+                        // mesh shader draws nothing at all, so the CPU is the only place this can be caught.
+                        SDL_assert(clusters.m_VertexIndices[cluster.m_VertexOffset + v] <
+                            mesh.m_Primitives[pi].m_VertexCount);
+                    }
                 }
 
                 outData.m_Records.push_back(record);
@@ -269,7 +264,7 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrh
                 {
                     const srrhi::ClusterRecord& first = outData.m_Records[geometry.m_ClusterOffset + firstCluster];
                     streamGroup.m_TriangleElement = first.m_TriangleOffset;
-                    streamGroup.m_VertexElement = first.m_VertexOffset;
+                    streamGroup.m_VertexElement = first.m_AttributeOffset;
                 }
 
                 for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
@@ -288,8 +283,10 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrh
                 {
                     srrhi::ClusterRecord& record = outData.m_Records[geometry.m_ClusterOffset + group.m_ClusterOffset + i];
                     record.m_TriangleOffset -= streamGroup.m_TriangleElement;
-                    // Triangles come first in the blob, so the vertex offsets move past the group's triangles.
-                    record.m_VertexOffset = streamGroup.m_TriangleCount + (record.m_VertexOffset - streamGroup.m_VertexElement);
+                    // Triangles come first in the blob, then each cluster's vertex attributes in cluster order:
+                    // six words (a VertexQuantized) per vertex, so the cluster's run is dense.
+                    record.m_AttributeOffset =
+                        streamGroup.m_TriangleCount + (record.m_AttributeOffset - streamGroup.m_VertexElement) * 6u;
                 }
 
                 groupedClusters += group.m_ClusterCount;

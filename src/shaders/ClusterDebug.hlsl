@@ -172,8 +172,7 @@ struct TriangleVertexOut
 TriangleVertexOut MakeTriangleVertex(uint microIndex, srrhi::ClusterRecord cluster, uint streamBase,
     srrhi::PerInstanceData instance, uint clusterID, uint triangleID)
 {
-    const uint vertexIndex = g_ClusterStreamData[streamBase + cluster.m_VertexOffset + microIndex];
-    const srrhi::Vertex vertex = UnpackVertex(g_Vertices[vertexIndex]);
+    const srrhi::Vertex vertex = UnpackVertex(ReadClusterVertex(streamBase, cluster, microIndex));
 
     TriangleVertexOut output;
     output.Position = MatrixMultiply(

@@ -68,8 +68,7 @@ void MSMain(
 
     if (outputIndex < cluster.m_VertexCount)
     {
-        const uint vertexIndex = g_ClusterStreamData[streamBase + cluster.m_VertexOffset + outputIndex];
-        const srrhi::Vertex vertex = UnpackVertex(g_Vertices[vertexIndex]);
+        const srrhi::Vertex vertex = UnpackVertex(ReadClusterVertex(streamBase, cluster, outputIndex));
 
         // A cluster has no meshlet and no per-cluster material yet, so meshletID stays invalid; the LOD level
         // rides in lodIndex, which is what the LOD debug view and the motion-vector path read.

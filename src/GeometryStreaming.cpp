@@ -48,15 +48,71 @@ nvrhi::BufferHandle GeometryStreaming::CreateArenaBuffer(uint32_t elements) cons
     return g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 }
 
+const uint8_t* GeometryStreaming::GetGroupBlob(uint32_t groupIndex, uint32_t& outByteSize) const
+{
+    outByteSize = 0;
+    if (!m_BlobFile || !m_BlobFile->IsValid() || groupIndex >= m_GroupFiles.size())
+        return nullptr;
+
+    const ClusterLod::GroupBlobRef& ref = m_GroupFiles[groupIndex];
+    SDL_assert(uint64_t(ref.m_FileOffset) + ref.m_ByteSize <= m_BlobFile->GetSize());
+    outByteSize = ref.m_ByteSize;
+    return static_cast<const uint8_t*>(m_BlobFile->GetDataAt(size_t(ref.m_FileOffset)));
+}
+
 void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData& data)
 {
     SDL_assert(cmd != nullptr);
 
-    m_SourceTriangles = std::move(data.m_Triangles);
-    m_SourceVertices = std::move(data.m_Vertices);
     m_GroupBlobs = std::move(data.m_StreamGroups);
     m_GroupCount = uint32_t(m_GroupBlobs.size());
     m_FrameIndex = 0;
+
+    // The blobs stay in the cooked mesh file. Map it read-only and take the per-group table; the table is in the
+    // same group order BuildGpuData flattened them, so entry i is m_GroupBlobs[i]'s bytes.
+    m_GroupFiles = std::move(g_Renderer.m_ClusterBlobFile.m_Groups);
+    const std::string blobPath = g_Renderer.m_ClusterBlobFile.m_Path.string();
+    g_Renderer.m_ClusterBlobFile.Clear();
+
+    m_BlobFile = std::make_unique<MemoryMappedDataReader>(blobPath);
+    SDL_assert(m_BlobFile->IsValid());
+    if (!m_BlobFile->IsValid())
+    {
+        SDL_Log("[ClusterLod] geometry streaming: cannot map the cooked mesh file %s; nothing will stream in",
+            blobPath.c_str());
+    }
+
+    // A table that does not line up with the flattened groups is a bug in the cook: refuse to draw another
+    // group's bytes rather than trusting the offsets.
+    SDL_assert(m_GroupFiles.size() == m_GroupBlobs.size());
+    if (m_GroupFiles.size() != m_GroupBlobs.size())
+    {
+        SDL_Log("[ClusterLod] geometry streaming: %zu group blobs for %u groups; streaming disabled",
+            m_GroupFiles.size(), m_GroupCount);
+        m_BlobFile.reset();
+        m_GroupFiles.clear();
+    }
+
+    if (m_BlobFile && m_BlobFile->IsValid())
+    {
+        const uint64_t fileBytes = m_BlobFile->GetSize();
+        for (uint32_t g = 0; g < m_GroupCount; ++g)
+        {
+            const uint64_t bytes = uint64_t(m_GroupBlobs[g].GetBlobElements()) * sizeof(uint32_t);
+            const uint64_t end   = uint64_t(m_GroupFiles[g].m_FileOffset) + bytes;
+            SDL_assert(m_GroupFiles[g].m_ByteSize == bytes);
+            SDL_assert(end <= fileBytes);
+            if (m_GroupFiles[g].m_ByteSize != bytes || end > fileBytes)
+            {
+                SDL_Log("[ClusterLod] geometry streaming: group %u blob %u B at %llu does not fit the cooked file "
+                        "(%llu B, expected %llu B); streaming disabled",
+                    g, m_GroupFiles[g].m_ByteSize, static_cast<unsigned long long>(m_GroupFiles[g].m_FileOffset),
+                    static_cast<unsigned long long>(fileBytes), static_cast<unsigned long long>(bytes));
+                m_BlobFile.reset();
+                break;
+            }
+        }
+    }
 
     // The geometry slices are the per-MeshData group ranges the discrete-LOD levels are derived per geometry.
     m_Geometries.clear();
@@ -124,6 +180,8 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
 
     m_Stats = Stats{};
     m_Stats.m_GroupCount = m_GroupCount;
+    m_Stats.m_LoadBudgetBytes = Config::Get().m_ClusterLoadBytesPerFrame;
+    m_Stats.m_BlobFileBytes = (m_BlobFile && m_BlobFile->IsValid()) ? m_BlobFile->GetSize() : 0;
 
     // Per-level totals for the residency histogram; the resident half is refreshed every frame in PreRender.
     for (const ClusterLod::StreamGroup& blob : m_GroupBlobs)
@@ -137,12 +195,15 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
     UpdateDiscreteLevels(cmd);
 
     SDL_Log("[ClusterLod] geometry streaming: %u groups, %.2f MB of blobs (largest %.1f KB), arena %.2f MB of a "
-            "%llu MB budget, age threshold %u",
+            "%llu MB budget, age threshold %u, blob file %s (%.2f MB), load budget %llu MB/frame",
         m_GroupCount, double(m_TotalElements * sizeof(uint32_t)) / (1024.0 * 1024.0),
         double(maxBlobElements * sizeof(uint32_t)) / 1024.0,
         double(m_ArenaElements * sizeof(uint32_t)) / (1024.0 * 1024.0),
         static_cast<unsigned long long>(m_Stats.m_BudgetBytes / (1024ull * 1024ull)),
-        Config::Get().m_ClusterStreamAgeThreshold);
+        Config::Get().m_ClusterStreamAgeThreshold,
+        (m_BlobFile && m_BlobFile->IsValid()) ? "mapped" : "MISSING",
+        double(m_Stats.m_BlobFileBytes) / (1024.0 * 1024.0),
+        static_cast<unsigned long long>(m_Stats.m_LoadBudgetBytes / (1024ull * 1024ull)));
 }
 
 void GeometryStreaming::BuildInitialResidency(nvrhi::ICommandList* cmd)
@@ -215,7 +276,6 @@ void GeometryStreaming::TrimToCapacity()
 
 void GeometryStreaming::Pack(nvrhi::ICommandList* cmd)
 {
-    std::vector<uint32_t> arena(m_ArenaElements, 0);
     std::vector<srrhi::ClusterGroupState> states(std::max<uint32_t>(m_GroupCount, 1));
 
     // An address of zero is a valid arena offset, so a default-initialised table would claim every group is
@@ -228,6 +288,7 @@ void GeometryStreaming::Pack(nvrhi::ICommandList* cmd)
 
     m_FreeBlocks.clear();
     m_ActiveGroups.clear();
+    m_StreamData = CreateArenaBuffer(m_ArenaElements);
 
     uint32_t cursor = 0;
     for (uint32_t g = 0; g < m_GroupCount; ++g)
@@ -245,16 +306,17 @@ void GeometryStreaming::Pack(nvrhi::ICommandList* cmd)
             continue;
         }
 
-        if (blob.m_TriangleCount != 0)
+        // The blob is one contiguous range in the cooked file: triangles first, then the vertex indices.
+        uint32_t byteSize = 0;
+        const uint8_t* bytes = GetGroupBlob(g, byteSize);
+        SDL_assert(bytes != nullptr && byteSize == uint64_t(elements) * sizeof(uint32_t));
+        if (bytes == nullptr || byteSize != uint64_t(elements) * sizeof(uint32_t))
         {
-            memcpy(arena.data() + cursor, m_SourceTriangles.data() + blob.m_TriangleElement,
-                size_t(blob.m_TriangleCount) * sizeof(uint32_t));
+            MarkUnresident(g);
+            continue;
         }
-        if (blob.m_VertexCount != 0)
-        {
-            memcpy(arena.data() + cursor + blob.m_TriangleCount, m_SourceVertices.data() + blob.m_VertexElement,
-                size_t(blob.m_VertexCount) * sizeof(uint32_t));
-        }
+
+        cmd->writeBuffer(m_StreamData, bytes, byteSize, uint64_t(cursor) * sizeof(uint32_t));
 
         m_Residency[g].m_Offset = cursor;
         m_Residency[g].m_Elements = elements;
@@ -267,9 +329,6 @@ void GeometryStreaming::Pack(nvrhi::ICommandList* cmd)
     if (cursor < m_ArenaElements)
         m_FreeBlocks.push_back(FreeBlock{ cursor, m_ArenaElements - cursor });
 
-    m_StreamData = CreateArenaBuffer(m_ArenaElements);
-    if (m_ArenaElements != 0)
-        cmd->writeBuffer(m_StreamData, arena.data(), size_t(m_ArenaElements) * sizeof(uint32_t), 0);
     if (m_GroupCount != 0)
         cmd->writeBuffer(m_GroupStates, states.data(), size_t(m_GroupCount) * sizeof(srrhi::ClusterGroupState), 0);
 
@@ -324,8 +383,8 @@ void GeometryStreaming::Shutdown()
     m_PatchList = nullptr;
     m_DiscreteLevels = nullptr;
 
-    m_SourceTriangles.clear();
-    m_SourceVertices.clear();
+    m_BlobFile.reset();
+    m_GroupFiles.clear();
     m_GroupBlobs.clear();
     m_Geometries.clear();
     m_DiscreteLevelsHost.clear();
@@ -490,6 +549,18 @@ void GeometryStreaming::ApplyUnloads(std::vector<srrhi::ClusterStreamPatch>& pat
 
 void GeometryStreaming::ApplyLoads(std::vector<srrhi::ClusterStreamPatch>& patches)
 {
+    // Coarse to fine: a fine group that lands before the levels between it renders the same surface twice for a
+    // frame or two, so the coarser levels of this frame's requests go first. The order is stable, so groups of
+    // the same level keep the traversal's order (which is roughly front to back).
+    std::stable_sort(m_PendingLoads.begin(), m_PendingLoads.end(), [this](uint32_t a, uint32_t b)
+    {
+        const uint32_t levelA = a < m_GroupCount ? m_GroupBlobs[a].m_LODLevel : 0u;
+        const uint32_t levelB = b < m_GroupCount ? m_GroupBlobs[b].m_LODLevel : 0u;
+        return levelA > levelB;
+    });
+
+    const uint64_t budget = Config::Get().m_ClusterLoadBytesPerFrame;
+    uint64_t bytesThisFrame = 0;
     uint32_t loadsThisFrame = 0;
     for (uint32_t groupIndex : m_PendingLoads)
     {
@@ -499,6 +570,13 @@ void GeometryStreaming::ApplyLoads(std::vector<srrhi::ClusterStreamPatch>& patch
             continue;
 
         const uint32_t elements = m_GroupBlobs[groupIndex].GetBlobElements();
+        const uint64_t blobBytes = uint64_t(elements) * sizeof(uint32_t);
+
+        // The byte budget bounds how much of the file is pulled per frame. Always let one blob through, so a
+        // budget smaller than a single blob cannot stall the stream entirely.
+        if (budget != 0 && loadsThisFrame != 0 && bytesThisFrame + blobBytes > budget)
+            break;
+
         const uint32_t offset = Allocate(elements);
         if (offset >= srrhi::ClusterStream::kInvalidAddressStart)
         {
@@ -511,11 +589,13 @@ void GeometryStreaming::ApplyLoads(std::vector<srrhi::ClusterStreamPatch>& patch
         MarkResident(groupIndex, offset, elements);
         m_LoadedThisFrame.push_back(groupIndex);
         loadsThisFrame++;
+        bytesThisFrame += blobBytes;
         m_Stats.m_LoadedThisFrame++;
 
         patches.push_back(srrhi::ClusterStreamPatch{ groupIndex, offset });
     }
     m_PendingLoads.clear();
+    m_Stats.m_LoadBytesThisFrame = bytesThisFrame;
 }
 
 void GeometryStreaming::DispatchPatches(nvrhi::ICommandList* cmd, uint32_t unloadCount)
@@ -553,22 +633,16 @@ void GeometryStreaming::UploadLoadedBlobs(nvrhi::ICommandList* cmd)
 {
     for (uint32_t groupIndex : m_LoadedThisFrame)
     {
-        const ClusterLod::StreamGroup& blob = m_GroupBlobs[groupIndex];
         const Residency& residency = m_Residency[groupIndex];
         SDL_assert(residency.m_bResident);
 
-        const uint32_t baseBytes = residency.m_Offset * uint32_t(sizeof(uint32_t));
-        if (blob.m_TriangleCount != 0)
-        {
-            cmd->writeBuffer(m_StreamData, m_SourceTriangles.data() + blob.m_TriangleElement,
-                size_t(blob.m_TriangleCount) * sizeof(uint32_t), baseBytes);
-        }
-        if (blob.m_VertexCount != 0)
-        {
-            cmd->writeBuffer(m_StreamData, m_SourceVertices.data() + blob.m_VertexElement,
-                size_t(blob.m_VertexCount) * sizeof(uint32_t),
-                baseBytes + blob.m_TriangleCount * uint32_t(sizeof(uint32_t)));
-        }
+        uint32_t byteSize = 0;
+        const uint8_t* bytes = GetGroupBlob(groupIndex, byteSize);
+        SDL_assert(bytes != nullptr && byteSize == uint64_t(residency.m_Elements) * sizeof(uint32_t));
+        if (bytes == nullptr)
+            continue;
+
+        cmd->writeBuffer(m_StreamData, bytes, byteSize, uint64_t(residency.m_Offset) * sizeof(uint32_t));
     }
     m_LoadedThisFrame.clear();
 }
@@ -636,6 +710,8 @@ void GeometryStreaming::PreRender(nvrhi::ICommandList* cmd)
 
     m_Stats.m_LoadedThisFrame = 0;
     m_Stats.m_UnloadedThisFrame = 0;
+    m_Stats.m_LoadBytesThisFrame = 0;
+    m_Stats.m_LoadBudgetBytes = Config::Get().m_ClusterLoadBytesPerFrame;   // the panel slider is live
 
     // A budget change (the panel slider or --stream-budget) re-packs the arena before anything else this frame,
     // so the address table the traversal is about to read already matches the new reservation.
