@@ -45,6 +45,9 @@ void Scene::LoadScene()
 			// Load or cook mesh data (cache-aware)
 			success = SceneCache::LoadOrCookMeshData(sceneFilePath, *this, allVerticesQuantized, allIndices,
 				Config::Get().m_EnableClusterLod, g_Renderer.m_ClusterBlobFile);
+				// A streamed (cluster-only) scene has no scene-wide geometry arrays; nothing that needs them can
+				// run for it, RT included.
+				m_bLegacyGeometryAbsent = success && allVerticesQuantized.empty() && allIndices.empty();
 		}
 	}
 
@@ -155,15 +158,27 @@ void Scene::BuildAccelerationStructures()
 	// footprint and run the scene with every ray-traced feature off (docs/cluster-lod-upstream-review-2026-11-23.md §20).
 	const GeometryFootprint footprint = MeasureGeometryFootprint();
 	const uint64_t budget = GetRayTracingBudgetBytes();
-	if (footprint.m_ResidentBytes > budget)
+	// A streamed, cluster-only scene has no scene-wide vertex or index buffer at all, so there is nothing a
+	// triangle BLAS could reference: RT is off for it whatever its size.
+	const bool bHasGeometryBuffers = !m_bLegacyGeometryAbsent && m_VertexBufferQuantized != nullptr &&
+		!m_MeshData.empty();
+	if (!bHasGeometryBuffers)
 	{
-		SDL_Log("[RT ] Scene geometry does not fit the ray-tracing budget: %.2f GB needed "
-		        "(%.2f GB vertices + %.2f GB indices + %.2f GB BLAS for %llu triangles), %.2f GB available",
-		        double(footprint.m_ResidentBytes) / 1e9, double(footprint.m_VertexBytes) / 1e9,
-		        double(footprint.m_IndexBytes) / 1e9, double(footprint.m_BlasBytes) / 1e9,
-		        (unsigned long long)footprint.m_Triangles, double(budget) / 1e9);
-		SDL_Log("[RT ] Ray tracing disabled for this scene: no BLAS/TLAS is built, RT shadows and ReSTIR DI/GI "
-		        "are off. Rasterisation is unaffected (clusters stream from the cooked file).");
+		SDL_Log("[RT ] Scene has no scene-wide geometry buffers (streamed import), so no BLAS/TLAS is built and "
+		        "RT shadows and ReSTIR DI/GI are off.");
+	}
+	if (!bHasGeometryBuffers || footprint.m_ResidentBytes > budget)
+	{
+		if (bHasGeometryBuffers)
+		{
+			SDL_Log("[RT ] Scene geometry does not fit the ray-tracing budget: %.2f GB needed "
+			        "(%.2f GB vertices + %.2f GB indices + %.2f GB BLAS for %llu triangles), %.2f GB available",
+			        double(footprint.m_ResidentBytes) / 1e9, double(footprint.m_VertexBytes) / 1e9,
+			        double(footprint.m_IndexBytes) / 1e9, double(footprint.m_BlasBytes) / 1e9,
+			        (unsigned long long)footprint.m_Triangles, double(budget) / 1e9);
+			SDL_Log("[RT ] Ray tracing disabled for this scene: no BLAS/TLAS is built, RT shadows and ReSTIR DI/GI "
+			        "are off. Rasterisation is unaffected (clusters stream from the cooked file).");
+		}
 
 		m_bRayTracingDisabled = true;
 		g_Renderer.m_EnableRTShadows = false;
