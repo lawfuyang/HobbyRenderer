@@ -6,11 +6,11 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
 
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/d8f3c499-4f13-4549-8c5e-dd43b4b3b963" />
-<img width="1920" height="1080" alt="screenshot" src="https://github.com/user-attachments/assets/3408b616-54dc-450f-a070-a50be92eaaa5" />
 
-For how the pieces fit together — `IRenderer`, the render graph, resource binding, srrhi, ShaderIDs and
-the build pipeline — see **[PIPELINE.md](PIPELINE.md)**. For capturing and reading PIX/RenderDoc frames,
-see **[docs/pix-capture-debugging.md](docs/pix-capture-debugging.md)**.
+### Cluster LOD
+| None | Meshlets | LODs | Triangles |
+|---|---|---|---|
+| <img width="1920" height="1080" alt="none" src="https://github.com/user-attachments/assets/216b175a-20f4-488c-9314-6d845bb02190" /> | <img width="1920" height="1080" alt="clusters" src="https://github.com/user-attachments/assets/2b778981-9168-4452-8c9a-71cd996e1474" /> | <img width="1920" height="1080" alt="LODs" src="https://github.com/user-attachments/assets/55919719-94d5-44c5-ab18-cf393bf25680" /> | <img width="1920" height="1080" alt="triangles" src="https://github.com/user-attachments/assets/10078f4c-12b2-4e0c-888c-b85d8fe2c25c" /> |
 
 ## Features
 
