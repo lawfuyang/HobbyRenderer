@@ -1177,6 +1177,76 @@ loop from §22.2 unchanged):
 With those, Zorah's decode peak is "one primitive's views" (tens of MB) on top of the ~2 GB of
 resident cluster metadata, which is what the 32 GB machine needs.
 
+### 22.4 Cook time: why the threads were idle, and primitive splitting
+
+Measured on the streamed import of **30 Zorah primitives (49.06 M triangles)**: 1235 s, i.e.
+**40 k triangles/s** aggregate. The same build on a 1.2 M-triangle primitive runs at
+**370–600 k triangles/s**, a ~10× penalty for size alone. `ClusterLod::Build` already parallelises
+every group of a level, so the gap is the part that is *serial within one part*:
+
+- `DeduplicateVertices` over every index,
+- the level-0 `ClusterizeIndices` (`meshopt_buildMeshlets` over the whole primitive),
+- `AssignGroups` (`meshopt_partitionClusters`, called once per level),
+- `ComputeLocks`.
+
+Plus two pieces of work the streamed path did not need at all:
+
+- the legacy per-primitive LOD chain (`meshopt_simplifyWithAttributes` once per level, then
+  `meshopt_buildMeshlets` and `meshopt_computeMeshletBounds` per level), and
+- tangent generation with its UV-seam vertex splits.
+
+A streamed part carries only its cluster metadata and group blobs, so both were computed and thrown
+away. A raw vertex-attribute read of the whole accessor per part was the third repeat: the parts of a
+split primitive share the glTF vertex array.
+
+**What changed**
+
+1. `--split-primitive-tris <n>` (default 2,000,000, `0` = never split). A primitive becomes one job
+   per triangle range, so each part owns its own cluster DAG, its own blobs and its own part file.
+   The cooked range is recorded in `CookedPartHeader` (part version 2) so a changed split invalidates
+   an earlier run's parts instead of mixing two subdivisions in one mesh.
+2. Each job reads only its own range and only the vertices that range references.
+3. The parts of one primitive are prepared in waves of 8 on the pool, then built one at a time on the
+   main thread, because `Build` drives the scheduler and cannot run on a worker.
+4. Tangents are generated only when the material samples a normal texture — the shader reads them
+   under `TEXFLAG_NORMAL` and nowhere else.
+5. Streamed cooks skip the legacy LOD chain and meshlet build; the base index count is kept, because
+   the cluster build partitions those indices.
+
+**Measured**
+
+| Run | Before | After |
+|---|---|---|
+| 30 Zorah primitives, 49.06 M tris | 1235 s (40 k tris/s) | **266.6 s (184 k tris/s)**, 38 parts, 807.50 MB of blobs |
+| animals, 18.66 M tris, 5 primitives | 213 s | **50.4 s** wall for the whole process, 8 parts, 273.71 MB of blobs |
+| Bistro, 551 primitives | — | cooked cache **byte-identical** to the pre-change cook, same 66 sweep warnings |
+
+The split costs nothing in quality beyond groups not spanning a part boundary (clusters are ≤ 128
+triangles, so the loss is at the boundary only), and it makes every part an independent streaming
+unit. animals and a non-streamed cook of the same scene produce identical totals (20 658 nodes,
+10 917 groups), so the streamed and in-memory paths agree.
+
+**Batching (implemented)**. Parts from *consecutive primitives* are prepared in one batch instead of one
+primitive at a time, so a scene of many small primitives no longer alternates "one core preparing" with
+"every core building". Two bounds keep the transient memory at the same 128 B per input triangle: a
+batch stops once it holds enough parts to fill the pool, and a wave prepares only what fits in a 2 GiB
+workspace. animals went from 50.4 s to 38.4 s with identical clusters, and on zorah's first 30
+primitives preparation is now 5.8 s of a 263 s cook.
+
+**Where the build time actually goes** (zorah's first 30 primitives, 49.06 M triangles, build 210.0 s,
+time here is wall time per phase summed over the 38 parts): per-group clusterisation of the decimated
+output 119.8 s, `ComputeLocks` 42.9 s, level-0 clusterisation 29.5 s, emit 6.1 s, per-group
+simplification 4.6 s, partition 3.5 s, dedup 2.6 s, node trees 0.3 s. The two serial phases are the
+ones to attack, and `ComputeLocks` is now parallel: hash every vertex, one serial hash-to-slot probe,
+a lock-free fold of each cluster vertex's group into its slot's packed (min, max), then a parallel
+marking pass. On animals it costs 2.2 s instead of 14.2 s with byte-identical cluster data (20 658
+nodes, 10 917 groups), and that build went from 42.0 s to 32.4 s.
+
+**Not done**: parts are still built one at a time (every worker on that part's groups). Building all
+pending parts at once was measured slower on a many-primitive scene — dozens of builds each push a
+handful of tiny group tasks and their serial phases collide — and the level-0 clusterisation of a huge
+part is still serial.
+
 
 
 

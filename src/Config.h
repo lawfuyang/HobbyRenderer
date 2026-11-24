@@ -76,6 +76,10 @@ struct Config
     bool m_bStreamImport = false;
     // Streamed import stops after this many primitives (0 = all), for a first look at a huge scene.
     uint32_t m_ImportPrimitiveLimit = 0;
+    // A primitive with more triangles than this is split into independent parts that are cooked and streamed on
+    // their own. The cluster build's dedup, level-0 clusterisation and partition are serial within a part, so
+    // splitting a huge primitive is what lets those phases use every core (report §22.4). 0 = never split.
+    uint32_t m_SplitPrimitiveTriangles = 2000000;
     // Prints the streaming residency stats on this frame. -1 = never.
     int m_ClusterStreamStatsFrame = -1;
 

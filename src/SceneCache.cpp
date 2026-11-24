@@ -264,6 +264,7 @@ std::filesystem::path GetPartPath(const std::filesystem::path& cachePath, uint32
 }
 
 bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, uint32_t primitiveIndex,
+                     uint32_t firstTriangle, uint32_t triangleCount,
                      const ClusterLod::PrimitiveClusters& clusters,
                      const std::vector<srrhi::VertexQuantized>& vertices,
                      const srrhi::MeshData& meshData, const float center[3], float radius)
@@ -289,6 +290,8 @@ bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, 
         header.m_Version = kCookedPartVersion;
         header.m_MeshIndex = meshIndex;
         header.m_PrimitiveIndex = primitiveIndex;
+        header.m_FirstTriangle = firstTriangle;
+        header.m_TriangleCount = triangleCount;
         header.m_VertexCount = uint32_t(vertices.size());
         header.m_IndexCount = meshData.m_IndexCounts[0];
         header.m_LODCount = meshData.m_LODCount;

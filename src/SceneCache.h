@@ -67,6 +67,11 @@ namespace SceneCache
         uint32_t m_Version = 0;
         uint32_t m_MeshIndex = 0;
         uint32_t m_PrimitiveIndex = 0;
+        // The triangle range this part was cooked from. A primitive above the split limit is several parts, and a
+        // different split makes the parts of an earlier run describe different geometry: the reader compares the
+        // range and re-imports the part when it does not match.
+        uint32_t m_FirstTriangle = 0;
+        uint32_t m_TriangleCount = 0;
         uint32_t m_VertexCount = 0;
         uint32_t m_IndexCount = 0;
         uint32_t m_LODCount = 0;
@@ -79,15 +84,17 @@ namespace SceneCache
     };
 
     constexpr uint32_t kCookedPartMagic = 0x54524150;   // "PART"
-    constexpr uint32_t kCookedPartVersion = 1;
+    // 2: the cooked triangle range is recorded, so a changed --split-primitive-tris invalidates earlier parts.
+    constexpr uint32_t kCookedPartVersion = 2;
 
     // `<cachePath>.parts/<mesh>_<primitive>.part`
     std::filesystem::path GetPartPath(const std::filesystem::path& cachePath, uint32_t meshIndex, uint32_t primitiveIndex);
 
-    // Writes one primitive's part: the cluster metadata plus every group's blob, packed from `vertices` (the
-    // primitive's own packed vertex block, which is why the blob can carry attributes without the scene-wide
-    // array). Returns false and leaves no file behind on failure.
+    // Writes one part: the cluster metadata plus every group's blob, packed from `vertices` (the part's own packed
+    // vertex block, which is why the blob can carry attributes without the scene-wide array). Returns false and
+    // leaves no file behind on failure.
     bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, uint32_t primitiveIndex,
+                         uint32_t firstTriangle, uint32_t triangleCount,
                          const ClusterLod::PrimitiveClusters& clusters,
                          const std::vector<srrhi::VertexQuantized>& vertices,
                          const srrhi::MeshData& meshData, const float center[3], float radius);
