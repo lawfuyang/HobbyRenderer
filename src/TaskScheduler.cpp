@@ -92,8 +92,38 @@ void TaskScheduler::ParallelFor(uint32_t count, const std::function<void(uint32_
     m_Condition.notify_all();
     m_CompletionCondition.notify_all();
 
+    // The calling thread waits for its own items, but it cannot simply block: a ParallelFor started from inside a
+    // task would then wait on work that only blocked workers could run, and the pool would deadlock. So while it
+    // waits the caller drains whatever the queue holds, which is also what makes any depth of nesting progress
+    // (the build of one part can then use the same pool as the build of every other part).
     std::unique_lock<std::mutex> lock(completionMutex);
-    completionCondition.wait(lock, [&remaining]() { return remaining == 0; });
+    while (remaining != 0)
+    {
+        std::function<void(uint32_t)> task;
+        {
+            std::lock_guard<std::mutex> queueLock(m_QueueMutex);
+            if (!m_Tasks.empty())
+            {
+                task = std::move(m_Tasks.back());
+                m_Tasks.pop_back();
+            }
+        }
+
+        if (!task)
+        {
+            completionCondition.wait_for(lock, std::chrono::milliseconds(1));
+            continue;
+        }
+
+        lock.unlock();
+        task(GetThreadCount());
+        if (m_RemainingTasks.fetch_sub(1) == 1)
+        {
+            std::lock_guard<std::mutex> remainingLock(m_CompletionMutex);
+            m_CompletionCondition.notify_all();
+        }
+        lock.lock();
+    }
 }
 
 void TaskScheduler::ScheduleTask(std::function<void()> func, bool bImmediateExecute)
