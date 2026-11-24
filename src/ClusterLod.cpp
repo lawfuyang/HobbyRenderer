@@ -597,6 +597,8 @@ void WriteToStream(std::ostream& os, const PrimitiveClusters& clusters)
     writeVector(clusters.m_Groups);
     writeVector(clusters.m_Clusters);
     writeVector(clusters.m_GeneratingGroups);
+    writeVector(clusters.m_Overlaps);
+    writeVector(clusters.m_OverlapGroups);
     // The triangle and vertex-index words are not part of the index record: SaveCookedMesh writes them as the
     // per-group blob section, in the order the arena consumes them (see GroupBlobRef).
     os.write(reinterpret_cast<const char*>(&clusters.m_LODLevelCount), sizeof(clusters.m_LODLevelCount));
@@ -621,6 +623,8 @@ void ReadFromStream(std::istream& is, PrimitiveClusters& clusters)
     readVector(clusters.m_Groups);
     readVector(clusters.m_Clusters);
     readVector(clusters.m_GeneratingGroups);
+    readVector(clusters.m_Overlaps);
+    readVector(clusters.m_OverlapGroups);
     // The blob words are not in the index record; the loaded scene leaves these empty and streams them.
     is.read(reinterpret_cast<char*>(&clusters.m_LODLevelCount), sizeof(clusters.m_LODLevelCount));
     is.read(reinterpret_cast<char*>(clusters.m_LODMinSphere), sizeof(clusters.m_LODMinSphere));

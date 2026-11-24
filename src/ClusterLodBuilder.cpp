@@ -704,6 +704,60 @@ namespace
         }
     }
 
+    // The +-1 LOD overlap table: for every group, the distinct groups one level coarser that replaced any of its
+    // clusters, and the distinct groups it replaced itself. A level root and a stuck group simply have no coarse
+    // links. The transpose is what a group's fine list is, so both directions come out of one pass over the DAG.
+    void BuildGroupOverlaps(PrimitiveClusters& clusters)
+    {
+        const size_t groupCount = clusters.m_Groups.size();
+        clusters.m_Overlaps.assign(groupCount, GroupOverlap{});
+        clusters.m_OverlapGroups.clear();
+        if (groupCount == 0)
+            return;
+
+        std::vector<std::vector<uint32_t>> coarse(groupCount);
+        std::vector<std::vector<uint32_t>> fine(groupCount);
+
+        for (size_t g = 0; g < groupCount; ++g)
+        {
+            const Group& group = clusters.m_Groups[g];
+            std::vector<uint32_t>& list = coarse[g];
+            list.reserve(group.m_ClusterCount);
+            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+            {
+                const uint32_t replacement = clusters.m_GeneratingGroups[group.m_ClusterOffset + i];
+                if (replacement != kNoGroup)
+                    list.push_back(replacement);
+            }
+
+            std::sort(list.begin(), list.end());
+            list.erase(std::unique(list.begin(), list.end()), list.end());
+
+            for (uint32_t replacement : list)
+            {
+                SDL_assert(replacement < groupCount);
+                fine[replacement].push_back(uint32_t(g));
+            }
+        }
+
+        // Flattened in group order, so a cook of the same input produces the same table.
+        size_t links = 0;
+        for (size_t g = 0; g < groupCount; ++g)
+            links += coarse[g].size() + fine[g].size();
+        clusters.m_OverlapGroups.reserve(links);
+
+        for (size_t g = 0; g < groupCount; ++g)
+        {
+            GroupOverlap& overlap = clusters.m_Overlaps[g];
+            SDL_assert(coarse[g].size() <= 0xFFFFu && fine[g].size() <= 0xFFFFu);
+            overlap.m_Offset = uint32_t(clusters.m_OverlapGroups.size());
+            overlap.m_CoarseCount = uint16_t(coarse[g].size());
+            overlap.m_FineCount = uint16_t(fine[g].size());
+            clusters.m_OverlapGroups.insert(clusters.m_OverlapGroups.end(), coarse[g].begin(), coarse[g].end());
+            clusters.m_OverlapGroups.insert(clusters.m_OverlapGroups.end(), fine[g].begin(), fine[g].end());
+        }
+    }
+
     void BuildNodeTrees(PrimitiveClusters& clusters)
     {
         std::vector<TempNode> tempNodes;
@@ -1089,6 +1143,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
     InflateGroupSpheres(outClusters);
     FillLevelMetrics(outClusters);
     BuildNodeTrees(outClusters);
+    BuildGroupOverlaps(outClusters);
     outStats.m_FinalizeMilliseconds = takePhase();
 
     outStats.m_LODLevelCount = levelCount;
@@ -1129,7 +1184,9 @@ uint64_t PrimitiveClusters::GetMemoryBytes() const
 {
     return uint64_t(m_Nodes.size()) * sizeof(Node) + uint64_t(m_NodeBounds.size()) * sizeof(Bounds) +
         uint64_t(m_Groups.size()) * sizeof(Group) + uint64_t(m_Clusters.size()) * sizeof(Cluster) +
-        uint64_t(m_GeneratingGroups.size()) * sizeof(uint32_t) + uint64_t(m_Triangles.size()) * sizeof(uint8_t) +
+        uint64_t(m_GeneratingGroups.size()) * sizeof(uint32_t) +
+        uint64_t(m_Overlaps.size()) * sizeof(GroupOverlap) +
+        uint64_t(m_OverlapGroups.size()) * sizeof(uint32_t) + uint64_t(m_Triangles.size()) * sizeof(uint8_t) +
         uint64_t(m_VertexIndices.size()) * sizeof(uint32_t);
 }
 
@@ -1140,6 +1197,8 @@ void PrimitiveClusters::Clear()
     m_Groups.clear();
     m_Clusters.clear();
     m_GeneratingGroups.clear();
+    m_Overlaps.clear();
+    m_OverlapGroups.clear();
     m_Triangles.clear();
     m_VertexIndices.clear();
     for (uint32_t level = 0; level < kMaxLODLevels; ++level)

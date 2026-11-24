@@ -65,6 +65,8 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
     SDL_assert(cmd != nullptr);
 
     m_GroupBlobs = std::move(data.m_StreamGroups);
+    m_Overlaps = std::move(data.m_Overlaps);
+    m_OverlapGroups = std::move(data.m_OverlapGroups);
     m_GroupCount = uint32_t(m_GroupBlobs.size());
     m_FrameIndex = 0;
 
@@ -531,6 +533,17 @@ void GeometryStreaming::ConsumeCompletedRequests()
 
 void GeometryStreaming::ApplyUnloads(std::vector<srrhi::ClusterStreamPatch>& patches)
 {
+    // Fine to coarse, so a region's cover disappears last: the coarse group that replaced a fine one is still in
+    // the arena for the frame the fine group leaves. (A residency gate on top of this - refusing the unload while
+    // a neighbour is missing - was measured to wedge a tight arena: at a 16 mb reservation almost no neighbour is
+    // resident, so nothing could ever be evicted and every request was dropped.)
+    std::stable_sort(m_PendingUnloads.begin(), m_PendingUnloads.end(), [this](uint32_t a, uint32_t b)
+    {
+        const uint32_t levelA = a < m_GroupCount ? m_GroupBlobs[a].m_LODLevel : 0u;
+        const uint32_t levelB = b < m_GroupCount ? m_GroupBlobs[b].m_LODLevel : 0u;
+        return levelA > levelB;
+    });
+
     // Every request that arrived is honoured: a dropped unload would leave a group resident with an age past the
     // threshold, and the age filter only asks once per idle period.
     for (uint32_t groupIndex : m_PendingUnloads)

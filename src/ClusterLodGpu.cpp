@@ -198,6 +198,28 @@ void BuildGpuData(const std::vector<Scene::Mesh>& meshes, const std::vector<srrh
                 outData.m_GeneratingGroups.push_back(generating == kNoGroup ? 0xFFFFFFFFu : geometry.m_GroupOffset + generating);
             }
 
+            // The overlap table moves into the scene-wide link array, so both its offset and its links are rebased.
+            SDL_assert(clusters.m_Overlaps.size() == size_t(counts.m_GroupCount));
+            for (uint32_t g = 0; g < counts.m_GroupCount; ++g)
+            {
+                const GroupOverlap& local = clusters.m_Overlaps[g];
+                const uint32_t linkCount = uint32_t(local.m_CoarseCount) + uint32_t(local.m_FineCount);
+                SDL_assert(size_t(local.m_Offset) + linkCount <= clusters.m_OverlapGroups.size());
+
+                GroupOverlap global;
+                global.m_Offset = uint32_t(outData.m_OverlapGroups.size());
+                global.m_CoarseCount = local.m_CoarseCount;
+                global.m_FineCount = local.m_FineCount;
+
+                for (uint32_t i = 0; i < linkCount; ++i)
+                {
+                    const uint32_t link = clusters.m_OverlapGroups[local.m_Offset + i];
+                    SDL_assert(link < counts.m_GroupCount);
+                    outData.m_OverlapGroups.push_back(geometry.m_GroupOffset + link);
+                }
+                outData.m_Overlaps.push_back(global);
+            }
+
             // The draw side: the cooked Cluster packs its counts into bitfields, so it is expanded into the
             // shader's own record. The blob words are not built here: the cooked cache stores them per group in
             // exactly this order and GeometryStreaming uploads them from the file, so the offsets are arithmetic

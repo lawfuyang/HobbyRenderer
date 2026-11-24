@@ -250,6 +250,7 @@ struct InstanceLodClassification
 	uint m_MeshLOD;        // per-mesh LOD whose error matches the level drawn, for the ray-traced BLAS
 	uint m_DrawLevel;      // cluster LOD level the traversal should draw
 	bool m_bDiscrete;      // seed at m_DrawLevel's node and draw the whole level, instead of the metric cut
+	uint m_SeedLevels;     // one bit per level whose root the traversal seeds: the levels the cut can still draw from
 };
 
 // The LOD level one instance's cut resolves to, and whether it is that single level.
@@ -272,16 +273,19 @@ InstanceLodClassification ClassifyInstanceLod(srrhi::ClusterGeometry geometry, s
 	result.m_MeshLOD = 0;
 	result.m_DrawLevel = 0;
 	result.m_bDiscrete = false;
+	result.m_SeedLevels = 1u;
 
 	const uint levelCount = min(geometry.m_LODLevelCount, 32u);
 	if (levelCount == 0)
 		return result;
 
-	// Forced levels bypass the whole thing: the sweep has to draw what it asks for, on the continuous rule.
+	// Forced levels bypass the whole thing: the sweep has to draw what it asks for, on the continuous rule. Only
+	// the levels up to the forced one can be drawn, so only their roots need seeding.
 	if (g_Traversal.m_ForcedLOD != kNoForcedLOD)
 	{
 		result.m_DrawLevel = min(g_Traversal.m_ForcedLOD, levelCount - 1);
 		result.m_MeshLOD = g_LevelMeshLODs[geometry.m_LODLevelOffset + result.m_DrawLevel];
+		result.m_SeedLevels = result.m_DrawLevel >= 31u ? 0xFFFFFFFFu : ((2u << result.m_DrawLevel) - 1u);
 		return result;
 	}
 
@@ -331,6 +335,13 @@ InstanceLodClassification ClassifyInstanceLod(srrhi::ClusterGeometry geometry, s
 	}
 
 	result.m_MeshLOD = g_LevelMeshLODs[geometry.m_LODLevelOffset + result.m_DrawLevel];
+
+	// Which level roots the traversal has to visit: the levels that still hold a group under the error budget, plus
+	// the seeded level of a discrete instance. Every group of a level that is entirely over the budget is rejected
+	// by the leaf test anyway, so walking its subtree is queue traffic the cut never uses - and with streaming each
+	// such leaf could ask for a blob the cut would never accept.
+	result.m_SeedLevels = result.m_bDiscrete ? (1u << min(result.m_DrawLevel, 31u))
+		: (fineLevels != 0 ? fineLevels : 1u);
 	return result;
 }
 
@@ -372,11 +383,15 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	const InstanceLodClassification classification = ClassifyInstanceLod(geometry, instance);
 	g_InstanceLOD[instanceIndex] = classification.m_MeshLOD;
 
-	// A discrete instance seeds at its level's node, everything else at the primitive's root (node 0).
-	const uint seedNodeIndex = classification.m_bDiscrete
-		? NodeGetChildOffset(g_Nodes[geometry.m_NodeOffset].m_Packed) + classification.m_DrawLevel
-		: geometry.m_NodeOffset;
+	// The seeds: one root per level the cut can still draw from. Node 0 is a synthetic root whose children are the
+	// per-level roots (in level order), which is the layout the discrete seeding already relies on; a primitive
+	// whose tree is a single leaf seeds node 0 itself.
+	const srrhi::ClusterNode rootNode = g_Nodes[geometry.m_NodeOffset];
+	const bool bRootIsLeaf = NodeIsLeaf(rootNode.m_Packed);
+	const uint levelRootBase = bRootIsLeaf ? 0u : NodeGetChildOffset(rootNode.m_Packed);
 	const uint seedFlags = classification.m_bDiscrete ? srrhi::ClusterRefFlags::kDiscrete : 0u;
+	const uint levelMask = geometry.m_LODLevelCount >= 32u ? 0xFFFFFFFFu : ((1u << geometry.m_LODLevelCount) - 1u);
+	const uint seedMask = bRootIsLeaf ? 1u : (classification.m_SeedLevels & levelMask);
 
 	bool bFrustumVisible;
 	bool bOcclusionVisible;
@@ -387,18 +402,39 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	if (!bOcclusionVisible)
 	{
-		// The instance sits behind last frame's depth. Its seed is recorded instead of dropped, and the second
-		// pass re-tests it against the depth this frame wrote.
+		// The instance sits behind last frame's depth. Its seeds are recorded instead of dropped, and the second
+		// pass re-tests them against the depth this frame wrote.
+		const uint rejectCount = bRootIsLeaf ? 1u : countbits(seedMask);
+
 		uint rejectSlot;
-		InterlockedAdd(g_RejectNodeCount[0], 1, rejectSlot);
+		InterlockedAdd(g_RejectNodeCount[0], rejectCount, rejectSlot);
 
-		srrhi::ClusterNodeRef rejectedRoot;
-		rejectedRoot.m_InstanceIndex = instanceIndex;
-		rejectedRoot.m_NodeIndex = seedNodeIndex;
-		rejectedRoot.m_Flags = seedFlags;
-		g_RejectNodes[rejectSlot] = rejectedRoot;
+		uint written = 0;
+		if (bRootIsLeaf)
+		{
+			srrhi::ClusterNodeRef rejectedRoot;
+			rejectedRoot.m_InstanceIndex = instanceIndex;
+			rejectedRoot.m_NodeIndex = geometry.m_NodeOffset;
+			rejectedRoot.m_Flags = seedFlags;
+			g_RejectNodes[rejectSlot] = rejectedRoot;
+		}
+		else
+		{
+			for (uint level = 0; level < geometry.m_LODLevelCount; ++level)
+			{
+				if ((seedMask & (1u << level)) == 0)
+					continue;
 
-		InterlockedAdd(g_Counters[0].m_RejectNodeCount, 1);
+				srrhi::ClusterNodeRef rejectedRoot;
+				rejectedRoot.m_InstanceIndex = instanceIndex;
+				rejectedRoot.m_NodeIndex = levelRootBase + level;
+				rejectedRoot.m_Flags = seedFlags;
+				g_RejectNodes[rejectSlot + written] = rejectedRoot;
+				written++;
+			}
+		}
+
+		InterlockedAdd(g_Counters[0].m_RejectNodeCount, rejectCount);
 		return;
 	}
 
@@ -406,32 +442,54 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	if (classification.m_bDiscrete)
 		InterlockedAdd(g_Counters[0].m_DiscreteInstanceCount, 1);
 
-	const srrhi::ClusterNode seedNode = g_Nodes[seedNodeIndex];
-
-	// A level whose tree is a single leaf goes straight into the group queue; the root never is one.
-	if (classification.m_bDiscrete && NodeIsLeaf(seedNode.m_Packed))
+	if (bRootIsLeaf)
 	{
-		uint groupSlot;
-		InterlockedAdd(g_GroupQueueCount[0], 1, groupSlot);
+		uint slot;
+		InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
 
-		srrhi::ClusterGroupRef discreteGroup;
-		discreteGroup.m_InstanceIndex = instanceIndex;
-		discreteGroup.m_GroupIndex = NodeGetGroupIndex(seedNode.m_Packed);
-		discreteGroup.m_Flags = seedFlags;
-		g_GroupQueue[groupSlot] = discreteGroup;
-
-		InterlockedAdd(g_Counters[0].m_GroupCount, 1);
+		srrhi::ClusterNodeRef nodeRef;
+		nodeRef.m_InstanceIndex = instanceIndex;
+		nodeRef.m_NodeIndex = geometry.m_NodeOffset;
+		nodeRef.m_Flags = seedFlags;
+		g_NodeQueueOut[slot] = nodeRef;
 		return;
 	}
 
-	uint slot;
-	InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
+	for (uint level = 0; level < geometry.m_LODLevelCount; ++level)
+	{
+		if ((seedMask & (1u << level)) == 0)
+			continue;
 
-	srrhi::ClusterNodeRef nodeRef;
-	nodeRef.m_InstanceIndex = instanceIndex;
-	nodeRef.m_NodeIndex = seedNodeIndex;
-	nodeRef.m_Flags = seedFlags;
-	g_NodeQueueOut[slot] = nodeRef;
+		const uint seedNodeIndex = levelRootBase + level;
+		const srrhi::ClusterNode seedNode = g_Nodes[seedNodeIndex];
+
+		// A discrete level whose tree is a single leaf goes straight into the group queue: the classification has
+		// already proved that level is the whole cut. Everything else goes through the node pass, so its leaves
+		// meet the same cut test they always did.
+		if (classification.m_bDiscrete && NodeIsLeaf(seedNode.m_Packed))
+		{
+			uint groupSlot;
+			InterlockedAdd(g_GroupQueueCount[0], 1, groupSlot);
+
+			srrhi::ClusterGroupRef discreteGroup;
+			discreteGroup.m_InstanceIndex = instanceIndex;
+			discreteGroup.m_GroupIndex = NodeGetGroupIndex(seedNode.m_Packed);
+			discreteGroup.m_Flags = seedFlags;
+			g_GroupQueue[groupSlot] = discreteGroup;
+
+			InterlockedAdd(g_Counters[0].m_GroupCount, 1);
+			continue;
+		}
+
+		uint slot;
+		InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
+
+		srrhi::ClusterNodeRef nodeRef;
+		nodeRef.m_InstanceIndex = instanceIndex;
+		nodeRef.m_NodeIndex = seedNodeIndex;
+		nodeRef.m_Flags = seedFlags;
+		g_NodeQueueOut[slot] = nodeRef;
+	}
 }
 
 [numthreads(srrhi::CommonConsts::kThreadsPerGroup, 1, 1)]

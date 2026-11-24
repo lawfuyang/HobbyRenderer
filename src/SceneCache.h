@@ -43,7 +43,8 @@ namespace SceneCache
     //    streams them from the file; the per-primitive index records no longer carry them.
     // 9: a group blob carries every cluster vertex's attributes after its triangles (six words each), so the
     //    cluster path no longer reads the scene-global vertex buffer.
-    constexpr uint32_t kCookedMeshVersion = 9;
+    // 10: the cluster record carries the +-1 lod overlap table (one 8 b record per group plus its links).
+    constexpr uint32_t kCookedMeshVersion = 10;
 
     // ── Streamed import: one part file per primitive ──────────────────────────
     //
@@ -85,7 +86,8 @@ namespace SceneCache
 
     constexpr uint32_t kCookedPartMagic = 0x54524150;   // "PART"
     // 2: the cooked triangle range is recorded, so a changed --split-primitive-tris invalidates earlier parts.
-    constexpr uint32_t kCookedPartVersion = 2;
+    // 3: the part's cluster record carries the +-1 lod overlap table.
+    constexpr uint32_t kCookedPartVersion = 3;
 
     // `<cachePath>.parts/<mesh>_<primitive>.part`
     std::filesystem::path GetPartPath(const std::filesystem::path& cachePath, uint32_t meshIndex, uint32_t primitiveIndex);

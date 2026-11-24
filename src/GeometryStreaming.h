@@ -185,6 +185,10 @@ private:
 
     std::vector<ClusterLod::StreamGroup> m_GroupBlobs;
 
+    // The +-1 LOD overlap table (global group order): the unload order and the speculative prefetch read it.
+    std::vector<ClusterLod::GroupOverlap> m_Overlaps;
+    std::vector<uint32_t> m_OverlapGroups;
+
     std::vector<Residency> m_Residency;
     std::vector<FreeBlock> m_FreeBlocks;           // sorted by offset, coalesced
 

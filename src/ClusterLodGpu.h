@@ -38,6 +38,9 @@ namespace ClusterLod
         std::vector<srrhi::ClusterBounds> m_NodeBounds;
         std::vector<srrhi::ClusterGroup> m_Groups;
         std::vector<uint32_t> m_GeneratingGroups;          // per cluster, global cluster order
+        // The +-1 LOD overlap table in global group order: stream-in ordering and the unload gate read it.
+        std::vector<GroupOverlap> m_Overlaps;             // parallel to m_Groups
+        std::vector<uint32_t> m_OverlapGroups;            // link lists, global group indices
         std::vector<srrhi::ClusterGeometry> m_Geometry;   // one per Scene::m_MeshData entry
 
         // One entry per LOD level, each geometry's levels contiguous from ClusterGeometry::m_LODLevelOffset: the

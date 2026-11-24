@@ -61,6 +61,18 @@ namespace ClusterLod
     };
     static_assert(sizeof(Cluster) == 20);
 
+    // The groups one LOD level coarser and one level finer than a group, derived from the generating-group links.
+    // Upstream keeps the same table (scene_cluster_lod.cpp, buildGeometryLodOverlap): the child-to-parent link
+    // alone cannot answer "who replaced this group" without scanning every cluster, which is what stream-in
+    // ordering, speculative prefetch and the unload gate all need.
+    struct GroupOverlap
+    {
+        uint32_t m_Offset = 0;        // into PrimitiveClusters::m_OverlapGroups
+        uint16_t m_CoarseCount = 0;   // links [m_Offset, m_Offset + m_CoarseCount): groups that replaced this one
+        uint16_t m_FineCount = 0;     // links [m_Offset + m_CoarseCount, + m_FineCount): groups this one replaced
+    };
+    static_assert(sizeof(GroupOverlap) == 8);
+
     // Everything the offline builder produced for one primitive, in primitive-local vertex indices.
     struct PrimitiveClusters
     {
@@ -69,6 +81,8 @@ namespace ClusterLod
         std::vector<Group> m_Groups;               // group.m_ClusterOffset indexes m_Clusters
         std::vector<Cluster> m_Clusters;
         std::vector<uint32_t> m_GeneratingGroups;  // per cluster: the group that replaced it at the next level
+        std::vector<GroupOverlap> m_Overlaps;      // parallel to m_Groups
+        std::vector<uint32_t> m_OverlapGroups;     // both link lists, group indices local to this primitive
         // Cook-time only. The cooked cache stores the group blobs in GPU order instead, and a loaded scene
         // leaves these two empty: the bytes stream from the file (see GroupBlobRef below).
         std::vector<uint8_t> m_Triangles;          // micro indices, 3 per triangle
