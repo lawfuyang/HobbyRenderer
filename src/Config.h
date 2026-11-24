@@ -73,7 +73,11 @@ struct Config
     uint32_t m_RayTracingBudgetMiB = 0;
     // Streamed import: cook one primitive at a time and flush each to a part file, so a scene whose decoded glTF
     // does not fit in RAM can still be imported (docs/cluster-lod-upstream-review-2026-11-23.md §22).
+    // The load sets this itself from the scene's own buffer sizes (SceneLoader::ApplyStreamImportPolicy), so a
+    // scene that cannot be cooked in memory never tries to be; --stream-import pins the choice either way.
     bool m_bStreamImport = false;
+    // -1 = decide from the scene's size, 0 = never stream, 1 = always stream. Set by --stream-import.
+    int m_StreamImportPolicy = -1;
     // Streamed import stops after this many primitives (0 = all), for a first look at a huge scene.
     uint32_t m_ImportPrimitiveLimit = 0;
     // A primitive with more triangles than this is split into independent parts that are cooked and streamed on

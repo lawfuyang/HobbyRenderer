@@ -199,6 +199,8 @@ Every switch is parsed in `src/Config.cpp`; the useful ones:
 | `--cluster-stats`, `--cluster-stats-frame <n>` | dump the cooked DAG / print the traversal's counters |
 | `--stream-budget <MiB>` | VRAM cap shared by the tile heaps and the geometry arena |
 | `--cluster-stream-age <frames>`, `--cluster-stream-stats-frame <n>` | cluster streaming diagnostics |
+| `--stream-import <0\|1>` | pin how the cook holds geometry: streamed parts, or one piece in memory (default: automatic, a scene over an eighth of RAM streams) |
+| `--import-limit-primitives <n>` | cook only the first `n` primitives, for measuring a huge scene |
 | `--disable-sampler-feedback`, `--disable-rendergraph-aliasing` | force full residency / no aliasing |
 | `--execute-per-pass`, `--execute-per-pass-and-wait` | submit one render-graph pass at a time |
 | `--pix[=<dll>]`, `--pix-capture-frame <n>`, `--pix-capture-load`, `--pix-capture-dir <dir>` | PIX |

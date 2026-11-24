@@ -280,7 +280,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             if (i + 1 < argc)
             {
                 s_Instance.m_bStreamImport = std::atoi(argv[++i]) != 0;
-                SDL_Log("[Config] Streamed glTF import %s", s_Instance.m_bStreamImport ? "enabled" : "disabled");
+                s_Instance.m_StreamImportPolicy = s_Instance.m_bStreamImport ? 1 : 0;
+                SDL_Log("[Config] Streamed glTF import pinned %s", s_Instance.m_bStreamImport ? "on" : "off");
             }
             else
             {
@@ -663,7 +664,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --cluster-stream-age <frames>    Untouched frames before a resident group is unloaded (default 16)");
             SDL_Log("  --cluster-io-mb-per-frame <MiB>  Group blob bytes streamed per frame from the cooked file (default 16, 0 = uncapped)");
             SDL_Log("  --rt-max-scene-mb <MiB>          VRAM a scene's vertices+indices+BLAS may need before RT is turned off (0 = GPU budget)");
-            SDL_Log("  --stream-import <0|1>            Cook one primitive at a time into resumable part files (huge scenes)");
+            SDL_Log("  --stream-import <0|1>            Override the cook's shape: 1 cooks one primitive at a time into resumable part files,");
+            SDL_Log("                                   0 cooks the whole scene in memory (default: automatic, from the scene's decoded size)");
             SDL_Log("  --import-limit-primitives <n>    Stop the streamed import after n primitives (0 = all)");
             SDL_Log("  --split-primitive-tris <n>       Split primitives into n-triangle parts (0 = never)");
             SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
