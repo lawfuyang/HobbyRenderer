@@ -33,6 +33,17 @@ size_t HashCombine(size_t hash, size_t value);
 
 void ChooseWindowSize(int* outWidth, int* outHeight);
 
+// A parallel-for hook: runs `body(0..count-1)`, possibly concurrently. TaskScheduler::ParallelFor and the cluster
+// builder's ClusterLod::ParallelForFn both have this shape, so either passes straight in; an empty hook runs the
+// body serially, which is what lets a caller opt out of parallelism without a second code path.
+void RunParallel(const std::function<void(uint32_t, const std::function<void(uint32_t)>&)>& parallelFor,
+                 uint32_t count, const std::function<void(uint32_t)>& body);
+
+// The same for a range: splits [0, count) into `chunkSize` items and hands one chunk per task to the hook, so a
+// per-vertex loop costs one task per chunk instead of one per item.
+void RunParallelRange(const std::function<void(uint32_t, const std::function<void(uint32_t)>&)>& parallelFor,
+                      uint32_t count, uint32_t chunkSize, const std::function<void(uint32_t, uint32_t)>& body);
+
 struct SimpleTimer
 {
     uint64_t freq = SDL_GetPerformanceFrequency();

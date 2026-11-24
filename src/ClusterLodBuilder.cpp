@@ -2,6 +2,8 @@
 
 #include "meshoptimizer.h"
 
+#include "Utilities.h"
+
 namespace ClusterLod
 {
 
@@ -85,19 +87,6 @@ namespace
         float m_RawError = 0.0f;   // error of simplifying this group into the next level
         float m_Error = 0.0f;      // error of using this level's clusters instead of the original mesh
     };
-
-    // Runs `count` independent bodies: the caller's scheduler when it gave us one, otherwise serially. The builder
-    // never nests these - Build itself must be called outside any parallel loop.
-    void RunParallel(const ParallelForFn& parallelFor, uint32_t count, const std::function<void(uint32_t)>& body)
-    {
-        if (parallelFor && count > 1)
-        {
-            parallelFor(count, body);
-            return;
-        }
-        for (uint32_t i = 0; i < count; ++i)
-            body(i);
-    }
 
     bool ClusterizeIndices(const BuildInput& input, const Config& config, const std::vector<uint32_t>& indices,
                            std::vector<WorkCluster>& outClusters)
@@ -419,33 +408,88 @@ namespace
     // whose position is used by another group of this level is locked. Locking more than strictly necessary is
     // harmless (it only costs simplification quality), locking less leaves a crack.
     void ComputeLocks(const BuildInput& input, const std::vector<WorkCluster>& clusters, size_t vertexCount,
-                      std::vector<uint8_t>& outLocks)
+                      std::vector<uint8_t>& outLocks, const ParallelForFn& parallelFor)
     {
         outLocks.assign(vertexCount, 0);
+        if (vertexCount == 0)
+            return;
 
-        std::unordered_map<size_t, uint32_t> firstGroup;
+        constexpr uint32_t kVertexChunk = 4096;
+        constexpr uint32_t kClusterChunk = 64;
+
         std::vector<size_t> vertexHashes(vertexCount, 0);
-        std::unordered_set<size_t> sharedPositions;
-
-        for (uint32_t v = 0; v < vertexCount; ++v)
-            vertexHashes[v] = HashPosition(input.m_Positions, input.m_PositionStride, v);
-
-        for (const WorkCluster& cluster : clusters)
+        RunParallelRange(parallelFor, uint32_t(vertexCount), kVertexChunk, [&](uint32_t begin, uint32_t end)
         {
-            for (uint32_t v : cluster.m_Vertices)
+            for (uint32_t v = begin; v < end; ++v)
+                vertexHashes[v] = HashPosition(input.m_Positions, input.m_PositionStride, v);
+        });
+
+        // One slot per position, half-empty so probing stays at a step or two. Mapping hash -> slot is the only
+        // serial pass left, and it is pure pointer chasing: every later pass indexes the table through
+        // `slotOfVertex`, so no pass has to re-derive or compare a hash.
+        size_t tableSize = 16;
+        while (tableSize < vertexCount * 2)
+            tableSize <<= 1;
+        const size_t mask = tableSize - 1;
+
+        std::vector<size_t> slotHash(tableSize, 0);
+        std::vector<uint8_t> slotUsed(tableSize, 0);
+        std::vector<uint32_t> slotOfVertex(vertexCount, 0);
+        for (size_t v = 0; v < vertexCount; ++v)
+        {
+            const size_t hash = vertexHashes[v];
+            size_t slot = hash & mask;
+            while (slotUsed[slot] && slotHash[slot] != hash)
+                slot = (slot + 1) & mask;
+            slotUsed[slot] = 1;
+            slotHash[slot] = hash;
+            slotOfVertex[v] = uint32_t(slot);
+        }
+        std::vector<size_t>().swap(slotHash);
+        std::vector<uint8_t>().swap(slotUsed);
+
+        // Each slot holds the smallest and largest group id that used its position, one plus the id so 0 means
+        // "unused". The two halves live in one word and every update folds with a compare-exchange, so any worker
+        // can touch any slot without a lock: the result does not depend on the order the words were folded in.
+        std::unique_ptr<std::atomic<uint64_t>[]> slotGroups(new std::atomic<uint64_t>[tableSize]());
+
+        RunParallelRange(parallelFor, uint32_t(clusters.size()), kClusterChunk, [&](uint32_t begin, uint32_t end)
+        {
+            for (uint32_t c = begin; c < end; ++c)
             {
-                const size_t hash = vertexHashes[v];
-                const auto inserted = firstGroup.emplace(hash, cluster.m_Group);
-                if (!inserted.second && inserted.first->second != cluster.m_Group)
-                    sharedPositions.insert(hash);
-            }
-        }
+                const WorkCluster& cluster = clusters[c];
+                SDL_assert(cluster.m_Group != kNoGroup);
+                const uint32_t group = cluster.m_Group + 1;
 
-        for (uint32_t v = 0; v < vertexCount; ++v)
+                for (uint32_t v : cluster.m_Vertices)
+                {
+                    std::atomic<uint64_t>& word = slotGroups[slotOfVertex[v]];
+                    uint64_t current = word.load(std::memory_order_relaxed);
+                    for (;;)
+                    {
+                        const uint32_t currentMin = uint32_t(current >> 32);
+                        const uint32_t currentMax = uint32_t(current & 0xFFFFFFFFu);
+                        const uint32_t nextMin = currentMin == 0 ? group : std::min(currentMin, group);
+                        const uint32_t nextMax = currentMax == 0 ? group : std::max(currentMax, group);
+                        const uint64_t next = (uint64_t(nextMin) << 32) | uint64_t(nextMax);
+                        if (next == current ||
+                            word.compare_exchange_weak(current, next, std::memory_order_relaxed))
+                            break;
+                    }
+                }
+            }
+        });
+
+        // A position two different groups use is a border: its vertices must not move, or the groups pull apart.
+        RunParallelRange(parallelFor, uint32_t(vertexCount), kVertexChunk, [&](uint32_t begin, uint32_t end)
         {
-            if (sharedPositions.count(vertexHashes[v]))
-                outLocks[v] = meshopt_SimplifyVertex_Lock;
-        }
+            for (uint32_t v = begin; v < end; ++v)
+            {
+                const uint64_t word = slotGroups[slotOfVertex[v]].load(std::memory_order_relaxed);
+                if (uint32_t(word >> 32) != uint32_t(word & 0xFFFFFFFFu))
+                    outLocks[v] = meshopt_SimplifyVertex_Lock;
+            }
+        });
     }
 
     // Simplifies one group's index list down to `target` indices. Permissive mode is what lets a group collapse at
@@ -731,6 +775,16 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
     outClusters.Clear();
     outStats = BuildStats{};
 
+    // Phase clock: every `takePhase` returns the milliseconds since the previous call and restarts it.
+    auto phaseClock = std::chrono::steady_clock::now();
+    auto takePhase = [&phaseClock]()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - phaseClock).count();
+        phaseClock = now;
+        return ms;
+    };
+
     if (input.m_Indices == nullptr || input.m_IndexCount < 3 || input.m_VertexCount == 0 || input.m_Positions == nullptr)
     {
         SDL_Log("[ClusterLod] Build: empty input");
@@ -739,6 +793,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
 
     Deduplicated dedup;
     DeduplicateVertices(input, dedup);
+    outStats.m_DedupMilliseconds = takePhase();
 
     // Everything below works on the deduplicated vertex buffer, in its ids; the emitted clusters refer to it.
     BuildInput work = input;
@@ -756,6 +811,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
         SDL_Log("[ClusterLod] Build: clusterisation produced no clusters");
         return false;
     }
+    outStats.m_ClusterizeMilliseconds = takePhase();
 
     std::vector<uint32_t> levelClusterOffset(kMaxLODLevels, 0);
     std::vector<uint32_t> levelClusterCount(kMaxLODLevels, 0);
@@ -770,6 +826,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
     for (uint32_t level = 0; level < config.m_MaxLODLevels; ++level)
     {
         const uint32_t groupCount = AssignGroups(work, config, levelClusters);
+        outStats.m_AssignGroupsMilliseconds += takePhase();
         const uint32_t clusterCount = uint32_t(levelClusters.size());
         if (groupCount == 0 || clusterCount == 0)
         {
@@ -786,7 +843,8 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
             group.m_ClusterCount++;
         }
 
-        ComputeLocks(work, levelClusters, uint32_t(work.m_VertexCount), locks);
+        ComputeLocks(work, levelClusters, uint32_t(work.m_VertexCount), locks, parallelFor);
+        outStats.m_LocksMilliseconds += takePhase();
 
         levelClusterOffset[level] = uint32_t(outClusters.m_Clusters.size());
         levelClusterCount[level] = clusterCount;
@@ -847,6 +905,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
 
             outClusters.m_Groups.push_back(emitted);
         }
+        outStats.m_EmitMilliseconds += takePhase();
 
         // Decimate every group to build the next level, and record how much error that costs. The groups are
         // independent (each simplifies its own index subset against the shared read-only locks), so a primitive
@@ -884,6 +943,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
             group.m_RawError = rawError;
             rawErrorPerGroup[size_t(levelGroupOffset[level]) + gi] = rawError;
         });
+        outStats.m_SimplifyMilliseconds += takePhase();
 
         for (uint32_t gi = 0; gi < groupCount; ++gi)
             stuckGroups += groupStuck[gi];
@@ -966,6 +1026,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
         // Build the next level from the decimated groups, one clusterisation per group so every new cluster knows
         // the group that produced it. Also independent per group, and another large share of the build time on a
         // coarse level, so it runs through the same hook and is merged in group order afterwards.
+        outStats.m_EmitMilliseconds += takePhase();
         std::vector<std::vector<WorkCluster>> producedPerGroup(groupCount);
         RunParallel(parallelFor, groupCount, [&](uint32_t gi)
         {
@@ -976,6 +1037,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
             if (ClusterizeIndices(work, config, groups[gi].m_Simplified, produced))
                 producedPerGroup[gi] = std::move(produced);
         });
+        outStats.m_NextLevelMilliseconds += takePhase();
 
         std::vector<WorkCluster> nextClusters;
         uint64_t nextTriangleCount = 0;
@@ -989,6 +1051,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
                 nextClusters.push_back(std::move(cluster));
             }
         }
+        outStats.m_EmitMilliseconds += takePhase();
 
         uint64_t levelTriangleCount = 0;
         for (uint32_t i = levelClusterOffset[level]; i < levelClusterOffset[level] + clusterCount; ++i)
@@ -1026,6 +1089,7 @@ bool Build(const BuildInput& input, const Config& config, PrimitiveClusters& out
     InflateGroupSpheres(outClusters);
     FillLevelMetrics(outClusters);
     BuildNodeTrees(outClusters);
+    outStats.m_FinalizeMilliseconds = takePhase();
 
     outStats.m_LODLevelCount = levelCount;
     const auto endTime = std::chrono::steady_clock::now();

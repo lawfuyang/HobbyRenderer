@@ -255,3 +255,38 @@ void ChooseWindowSize(int* outWidth, int* outHeight)
     *outWidth = windowW;
     *outHeight = windowH;
 }
+
+void RunParallel(const std::function<void(uint32_t, const std::function<void(uint32_t)>&)>& parallelFor,
+                 uint32_t count, const std::function<void(uint32_t)>& body)
+{
+    if (parallelFor && count > 1)
+    {
+        parallelFor(count, body);
+        return;
+    }
+    for (uint32_t i = 0; i < count; ++i)
+        body(i);
+}
+
+void RunParallelRange(const std::function<void(uint32_t, const std::function<void(uint32_t)>&)>& parallelFor,
+                      uint32_t count, uint32_t chunkSize, const std::function<void(uint32_t, uint32_t)>& body)
+{
+    SDL_assert(chunkSize > 0);
+    if (count == 0)
+        return;
+
+    const uint32_t chunkCount = (count + chunkSize - 1) / chunkSize;
+    auto runChunk = [&](uint32_t chunk)
+    {
+        const uint32_t begin = chunk * chunkSize;
+        body(begin, std::min(begin + chunkSize, count));
+    };
+
+    if (parallelFor && chunkCount > 1)
+    {
+        parallelFor(chunkCount, runChunk);
+        return;
+    }
+    for (uint32_t chunk = 0; chunk < chunkCount; ++chunk)
+        runChunk(chunk);
+}

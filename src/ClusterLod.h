@@ -156,6 +156,16 @@ namespace ClusterLod
         uint64_t m_TriangleCountPerLevel[kMaxLODLevels] = {};
         float m_WorstErrorPerLevel[kMaxLODLevels] = {};
         double m_BuildMilliseconds = 0.0;
+        // Where the build's time went, in milliseconds. The dedup, the level-0 clusterisation and the per-level
+        // partition run on one thread; everything else already runs through the caller's parallel-for hook.
+        double m_DedupMilliseconds = 0.0;
+        double m_ClusterizeMilliseconds = 0.0;      // level 0, the whole primitive at once
+        double m_AssignGroupsMilliseconds = 0.0;    // sum over levels, includes meshopt_partitionClusters
+        double m_LocksMilliseconds = 0.0;           // sum over levels
+        double m_SimplifyMilliseconds = 0.0;        // sum over levels, per-group decimation
+        double m_NextLevelMilliseconds = 0.0;       // sum over levels, per-group clusterisation
+        double m_EmitMilliseconds = 0.0;            // bounds, cluster and group records, level linking
+        double m_FinalizeMilliseconds = 0.0;        // node trees and the level metrics after the last level
     };
 
     // The parameters this build clusterises with. They are part of the cooked-mesh cache hash, so a change here
