@@ -354,8 +354,12 @@ void Renderer::SaveBackBufferScreenshot()
         cmdList->copyTexture(stagingTexture, nvrhi::TextureSlice{}, backbuffer, nvrhi::TextureSlice{});
     }
 
-    // Execute the command list immediately - this will synchronize
+    // Execute the copy now; the explicit wait below is what synchronizes the readback.
     ExecutePendingCommandLists();
+
+    // With frame pipelining the submission above does not wait for the GPU, and the staging texture must not be
+    // mapped before the copy has executed.
+    m_RHI->m_NvrhiDevice->waitForIdle();
 
     // Map the staging texture and read the data
     size_t rowPitch = 0;
@@ -668,6 +672,12 @@ void Renderer::Run()
     ScopedTimerLog runScope{"[Timing] Run phase:"};
 
     SDL_Log("[Run ] Entering main loop");
+    SDL_Log("[FramePipeline] %s: %u frame(s) in flight, %u render-graph heap set(s), %u swapchain buffer(s)",
+            Config::Get().m_EnableFramePipelining ? "enabled" : "disabled",
+            Config::Get().m_EnableFramePipelining ? kFramesInFlight : 1u,
+            Config::Get().m_EnableFramePipelining ? RenderGraph::kFrameSetCount : 1u,
+            GraphicRHI::SwapchainImageCount);
+    SDL_assert(GraphicRHI::SwapchainImageCount >= kFramesInFlight);
 
     while (m_Running)
     {
@@ -996,6 +1006,11 @@ void Renderer::Shutdown()
     m_InFlightCommandLists.clear();
     m_PendingCommandLists.clear();
     m_CommandListFreeList.clear();
+    for (FrameSubmission& submission : m_FrameSubmissions)
+    {
+        submission.m_Event = nullptr;
+        submission.m_bPending = false;
+    }
 
     SDL_Log("[Shutdown] ImGui layer");
     m_ImGuiLayer.Shutdown();
@@ -1533,10 +1548,62 @@ void Renderer::UpdateOmmDebugTexture()
             100.0 * m_OmmDebugStats.m_MixedCount / texels);
 }
 
+void Renderer::WaitForGraphMemoryFrame()
+{
+    // GPU stall accounting for this frame; both this wait and ExecutePendingCommandLists add to it.
+    m_ExecuteWaitTime = 0.0;
+
+    if (!Config::Get().m_EnableFramePipelining)
+        return;
+
+    // The graph's transient heap sets alternate, so the set this frame allocates into was last written by the
+    // frame kFramesInFlight ago. Compile() rebinds and may recreate resources in that memory, which is illegal
+    // while the older submission is still reading it.
+    FrameSubmission& submission = m_FrameSubmissions[m_FrameNumber % kFramesInFlight];
+    if (submission.m_bPending)
+    {
+        PROFILE_SCOPED("WaitForGraphMemoryFrame");
+        const uint64_t waitStartNs = SDL_GetTicksNS();
+        m_RHI->m_NvrhiDevice->waitEventQuery(submission.m_Event.Get());
+        m_ExecuteWaitTime = SDL_NS_TO_MS(static_cast<double>(SDL_GetTicksNS() - waitStartNs));
+        submission.m_bPending = false;
+        m_LastCompletedFrame = submission.m_Frame;
+        m_bHasCompletedFrame = true;
+    }
+
+    // Timer queries from that submission are readable now. Anything newer belongs to a frame still in flight
+    // and stays pending until its own wait resolves it.
+    m_GpuPassTimers.Resolve(m_RHI->m_NvrhiDevice,
+                            m_bHasCompletedFrame ? static_cast<uint32_t>(m_LastCompletedFrame + 1) : 0,
+                            m_bHasCompletedFrame);
+
+    // That older frame also used this back buffer: the swapchain has kFramesInFlight buffers and the index
+    // alternates. If a swapchain recreation ever breaks the parity, fall back to a full sync for that frame.
+    if (m_SwapChainImageIdx != m_FrameNumber % kFramesInFlight)
+    {
+        if (!m_bLoggedSwapchainParityMismatch)
+        {
+            SDL_Log("[FramePipeline] swapchain index %u does not match frame parity %u; falling back to waitForIdle",
+                    m_SwapChainImageIdx, static_cast<uint32_t>(m_FrameNumber % kFramesInFlight));
+            m_bLoggedSwapchainParityMismatch = true;
+        }
+
+        m_RHI->m_NvrhiDevice->waitForIdle();
+        for (FrameSubmission& other : m_FrameSubmissions)
+            other.m_bPending = false;
+        const uint32_t frameIndex = m_GpuPassTimers.GetFrameIndex();
+        m_GpuPassTimers.Resolve(m_RHI->m_NvrhiDevice, frameIndex > 0 ? frameIndex - 1 : 0, frameIndex > 0);
+    }
+}
+
 void Renderer::ScheduleAndRunAllRenderers()
 {
     PROFILE_FUNCTION();
-    
+
+    // Must precede Reset(): it may free heap blocks and drop physical handles, and the frame that owns the
+    // set this frame will use must have finished executing first.
+    WaitForGraphMemoryFrame();
+
     for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
     {
         renderer->m_bPassEnabled = false;
@@ -2603,22 +2670,26 @@ void Renderer::ExecutePendingCommandLists()
     PROFILE_FUNCTION();
     SINGLE_THREAD_GUARD();
 
-    // Wait for GPU to finish all work before presenting
+    const bool bFramePipelining = Config::Get().m_EnableFramePipelining;
+
+    // Without pipelining the GPU must be idle before this frame is submitted: the graph reuses the same
+    // transient memory every frame and deferred releases are flushed by the next Compile().
+    if (!bFramePipelining)
     {
         PROFILE_SCOPED("WaitForIdle");
         const uint64_t waitStartNs = SDL_GetTicksNS();
         m_RHI->m_NvrhiDevice->waitForIdle();
         m_ExecuteWaitTime = SDL_NS_TO_MS(static_cast<double>(SDL_GetTicksNS() - waitStartNs));
-     }
 
-    // Everything submitted by the frames before this one has now completed, so their GPU timestamps can be
-    // read. This sits after the wait and before this frame's lists are submitted, so a query is never reset
-    // while its own submission is still in flight.
-    m_GpuPassTimers.Resolve(m_RHI->m_NvrhiDevice);
+        // Every submission completed, so every published timer query is readable.
+        const uint32_t frameIndex = m_GpuPassTimers.GetFrameIndex();
+        m_GpuPassTimers.Resolve(m_RHI->m_NvrhiDevice, frameIndex > 0 ? frameIndex - 1 : 0, frameIndex > 0);
+    }
 
     m_CommandListFreeList.insert(m_CommandListFreeList.end(), m_InFlightCommandLists.begin(), m_InFlightCommandLists.end());
     m_InFlightCommandLists.clear();
 
+    bool bSubmitted = false;
     if (!m_PendingCommandLists.empty())
     {
         // Submit GPU profiling blocks in the same order as command list execution.
@@ -2659,6 +2730,24 @@ void Renderer::ExecutePendingCommandLists()
 
         m_InFlightCommandLists.insert(m_InFlightCommandLists.end(), m_PendingCommandLists.begin(), m_PendingCommandLists.end());
         m_PendingCommandLists.clear();
+        bSubmitted = true;
+    }
+
+    // Record which submission owns the graph heap set (and back buffer) this frame used. The frame that
+    // reuses that slot waits on this event in WaitForGraphMemoryFrame. Extra submissions with the same frame
+    // number (the scene load submits several times before the loop starts) simply overwrite the event: the
+    // newest fence value covers all of them.
+    if (bFramePipelining && bSubmitted)
+    {
+        FrameSubmission& submission = m_FrameSubmissions[m_FrameNumber % kFramesInFlight];
+        if (!submission.m_Event)
+            submission.m_Event = m_RHI->m_NvrhiDevice->createEventQuery();
+        if (submission.m_Event)
+        {
+            m_RHI->m_NvrhiDevice->setEventQuery(submission.m_Event.Get(), nvrhi::CommandQueue::Graphics);
+            submission.m_Frame = m_FrameNumber;
+            submission.m_bPending = true;
+        }
     }
 
     // Arm the consumers' event queries: each is signalled once everything submitted above has executed.

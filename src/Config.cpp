@@ -44,6 +44,16 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_EnableRenderGraphAliasing = false;
             SDL_Log("[Config] Render graph aliasing disabled via command line");
         }
+        else if (std::strcmp(arg, "--frame-pipelining") == 0)
+        {
+            s_Instance.m_EnableFramePipelining = true;
+            SDL_Log("[Config] Frame pipelining enabled via command line");
+        }
+        else if (std::strcmp(arg, "--no-frame-pipelining") == 0)
+        {
+            s_Instance.m_EnableFramePipelining = false;
+            SDL_Log("[Config] Frame pipelining disabled via command line");
+        }
         else if (std::strcmp(arg, "--disable-sampler-feedback") == 0)
         {
             s_Instance.m_DisableSamplerFeedback = true;
@@ -158,11 +168,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             s_Instance.m_bNoReSTIRDI = true;
             SDL_Log("[Config] ReSTIR DI disabled: sun shadow from the deferred pass' own ray");
-        }
-        else if (std::strcmp(arg, "--no-auto-exposure") == 0)
-        {
-            s_Instance.m_bNoAutoExposure = true;
-            SDL_Log("[Config] Auto exposure disabled: fixed exposure, so an A/B is not history dependent");
         }
         else if (std::strcmp(arg, "--debug") == 0)
         {
@@ -623,6 +628,8 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --execute-per-pass               Execute command lists per pass");
             SDL_Log("  --execute-per-pass-and-wait      Wait for idle after each pass execution");
             SDL_Log("  --disable-rendergraph-aliasing   Disable render graph aliasing");
+            SDL_Log("  --frame-pipelining                Record frame N+1 while the GPU executes frame N (default)");
+            SDL_Log("  --no-frame-pipelining             Wait for the GPU before recording each frame (serialized)");
             SDL_Log("  --disable-sampler-feedback       Disable sampler feedback (streaming requests the finest mip)");
             SDL_Log("  --enable-omm                     Build opacity micromaps (off by default; needs DXR 1.2)");
             SDL_Log("  --omm-max-level <n>              OMM bake subdivision level cap (default 6, valid 1..12)");

@@ -149,6 +149,13 @@ void RenderGraph::Reset()
     PROFILE_FUNCTION();
 
     m_AliasingEnabled = Config::Get().m_EnableRenderGraphAliasing;
+
+    // Frame pipelining: alternate the transient heap sets so this frame never allocates into (or rebinds
+    // resources inside) memory the GPU is still using. The renderer waits for the frame that used this set
+    // before Compile() runs; see Renderer::WaitForGraphMemoryFrame.
+    m_CurrentFrameSet = Config::Get().m_EnableFramePipelining
+        ? (g_Renderer.m_FrameNumber % kFrameSetCount)
+        : 0;
     
     const uint32_t kMaxTransientResourceLifetimeFrames = 3;
 
@@ -1076,7 +1083,7 @@ void RenderGraph::InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandLi
 // RenderGraph - Memory Management
 // ============================================================================
 
-nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
+nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size, uint32_t frameSet)
 {
     PROFILE_FUNCTION();
 
@@ -1098,6 +1105,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
             m_Heaps[i].m_Size = size;
             m_Heaps[i].m_LastFrameUsed = g_Renderer.m_FrameNumber;
             m_Heaps[i].m_HeapIdx = i;
+            m_Heaps[i].m_FrameSet = frameSet;
             
             HeapBlock block;
             block.m_Offset = 0;
@@ -1115,6 +1123,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size)
     entry.m_Size = size;
     entry.m_LastFrameUsed = g_Renderer.m_FrameNumber;
     entry.m_HeapIdx = static_cast<uint32_t>(m_Heaps.size());
+    entry.m_FrameSet = frameSet;
     
     HeapBlock block;
     block.m_Offset = 0;
@@ -1134,10 +1143,12 @@ void RenderGraph::SubAllocateResource(RenderGraphInternal::TransientResourceBase
     const nvrhi::MemoryRequirements memReq = resource->GetMemoryRequirements();
     size_t size = memReq.size;
 
-    // 1. Try to find a free block in existing heaps
+    // 1. Try to find a free block in existing heaps of this resource's frame set. Heaps of the other
+    //    frame in flight are still owned by the GPU and must never be touched.
     for (HeapEntry& heapEntry : m_Heaps)
     {
         if (!heapEntry.m_Heap) continue;
+        if (heapEntry.m_FrameSet != resource->m_FrameSet) continue;
 
         for (size_t i = 0; i < heapEntry.m_Blocks.size(); ++i)
         {
@@ -1192,7 +1203,7 @@ void RenderGraph::SubAllocateResource(RenderGraphInternal::TransientResourceBase
 
     // 2. No fit found, create a new heap (at least 1 MB)
     size_t heapSize = NextPow2(std::max(size_t(1024 * 1024), memReq.size));
-    CreateHeap(heapSize);
+    CreateHeap(heapSize, resource->m_FrameSet);
 
     // Retry allocation now that we have a new heap
     SubAllocateResource(resource, alignment);
@@ -1257,6 +1268,13 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
     {
         TransientResourceBase* resource = bIsBuffer ? (TransientResourceBase*)&m_Buffers[idx] : (TransientResourceBase*)&m_Textures[idx];
         const nvrhi::MemoryRequirements memReq = resource->GetMemoryRequirements();
+
+        // A resource keeps the set it was first allocated in: only a fresh resource picks the current frame's
+        // set (persistent resources get their own, never-recycled set). Reallocating on a set change would
+        // move live memory between heaps for no benefit.
+        const uint32_t frameSet = resource->m_IsAllocated
+            ? resource->m_FrameSet
+            : (resource->m_IsPersistent ? kPersistentFrameSet : m_CurrentFrameSet);
         
         // Trivial reuse: if already allocated and was an owner, skip logic.
         // Non-owners (aliased resources) must go through the aliasing/allocation
@@ -1307,6 +1325,9 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                 TransientResourceBase* candidate = bIsBuffer ? (TransientResourceBase*)&m_Buffers[candidateIdx] : (TransientResourceBase*)&m_Textures[candidateIdx];
                 if (!candidate->m_IsAllocated || !candidate->m_IsPhysicalOwner || candidate->m_IsPersistent)
                     continue;
+                // Aliasing reuses the candidate's bytes, so it must stay inside one frame's heap set.
+                if (candidate->m_FrameSet != frameSet)
+                    continue;
 
                 bool bCanAlias = resource->m_Lifetime.m_FirstPass > candidate->m_PhysicalLastPass;
                 if (bCanAlias)
@@ -1333,6 +1354,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                 resource->m_AliasedFromIndex = candidateIdx;
                 resource->m_IsAllocated = true;
                 resource->m_IsPhysicalOwner = false;
+                resource->m_FrameSet = frameSet;
                 
                 candidate->m_PhysicalLastPass = std::max(candidate->m_PhysicalLastPass, resource->m_Lifetime.m_LastPass);
 
@@ -1390,6 +1412,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
             uint64_t oldOffset = resource->m_Offset;
             const bool wasPreviouslyAllocated = resource->m_IsAllocated;
 
+            resource->m_FrameSet = frameSet;
             SubAllocateResource(resource, memReq.alignment);
 
             // SubAllocateResource must always produce a valid heap assignment.

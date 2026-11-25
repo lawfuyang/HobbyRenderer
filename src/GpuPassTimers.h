@@ -29,10 +29,14 @@ public:
     // Starts a frame: the scopes it records take their queries from the start of the pool again.
     void BeginFrame();
 
-    // Publishes the values of every scope recorded by an earlier frame. Has to be called at a point where
-    // the submissions that wrote those timestamps have completed - the render loop's wait-for-idle before
-    // it submits the next frame is exactly that point.
-    void Resolve(nvrhi::IDevice* device);
+    // Publishes the values of every scope recorded by an earlier frame that has completed. Frames still
+    // in flight are left pending and are published when their own submission completes. With frame
+    // pipelining enabled the completed frame is older than the frame that was just submitted, so the
+    // caller passes which frame (in BeginFrame's numbering) is known to be done.
+    void Resolve(nvrhi::IDevice* device, uint32_t inLastCompletedFrame, bool bHasCompletedFrame);
+
+    // The frame number Begin() is currently handing out slots for (one-based, incremented by BeginFrame).
+    uint32_t GetFrameIndex() const { return m_FrameIndex; }
 
     // Recording side, called through ScopedGpuProfile from the thread recording that pass. Begin returns
     // null when there is no query left, in which case End is not called for it.

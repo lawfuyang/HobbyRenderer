@@ -81,6 +81,10 @@ struct TransientResourceBase
     uint64_t m_Offset = 0;
     uint64_t m_BlockOffset = 0;
     uint32_t m_HeapIndex = UINT32_MAX;
+    // Which per-frame heap set this resource is allocated in (kPersistentFrameSet for persistent
+    // resources). Resources only ever alias inside their own set, so two frames in flight never share
+    // memory.
+    uint32_t m_FrameSet = 0;
     bool m_IsAllocated = false;
     bool m_IsDeclaredThisFrame = false;
     bool m_IsPersistent = false;
@@ -133,6 +137,12 @@ struct TransientBuffer : public TransientResourceBase
 class RenderGraph
 {
 public:
+    // Frame pipelining: transient heaps alternate between this many sets, one per frame in flight, so
+    // the CPU can record frame N+1 while the GPU still executes frame N. Persistent resources live in
+    // their own set and never cycle. Renderer::kFramesInFlight must match this.
+    static constexpr uint32_t kFrameSetCount = 2;
+    static constexpr uint32_t kPersistentFrameSet = UINT32_MAX;
+
     // ─── Nested types ──────────────────────────────────────────────────────
 
     struct Stats
@@ -244,6 +254,8 @@ private:
         size_t m_Size = 0;
         uint64_t m_LastFrameUsed = 0;
         uint32_t m_HeapIdx = UINT32_MAX;
+        // The per-frame set this heap belongs to (kPersistentFrameSet for persistent resources).
+        uint32_t m_FrameSet = 0;
         std::vector<HeapBlock> m_Blocks;
     };
 
@@ -260,7 +272,7 @@ private:
     // Generic resource allocation helper (avoids code duplication)
     void AllocateResourcesInternal(bool bIsBuffer, std::function<void(uint32_t, nvrhi::HeapHandle, uint64_t)> createAndBindResource);
 
-    nvrhi::HeapHandle CreateHeap(size_t size);
+    nvrhi::HeapHandle CreateHeap(size_t size, uint32_t frameSet);
     void SubAllocateResource(RenderGraphInternal::TransientResourceBase* resource, uint64_t alignment);
     void FreeBlock(uint32_t heapIdx, uint64_t blockOffset);
 
@@ -315,6 +327,8 @@ private:
     bool m_AliasingEnabled = true;
     bool m_IsCompiled = false;
     uint16_t m_CurrentPassIndex = 0;
+    // The heap set this frame allocates into (see kFrameSetCount). 0 when frame pipelining is off.
+    uint32_t m_CurrentFrameSet = 0;
     bool m_bForceInvalidateAllResources = false;
     // When true, informational SDL_Log messages (pool-reuse, aliasing, eviction,
     // desc-change, etc.) are emitted.  Kept false in production to avoid log spam.

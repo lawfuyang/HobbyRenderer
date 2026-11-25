@@ -419,8 +419,9 @@ public:
     // ─── Frame statistics & profiling ───
     // Whole loop iteration, including the frame-rate sleep; follows the GPU when it is the bottleneck.
     double m_FrameTime = 0.0;
-    // m_FrameTime without the WaitForIdle stall that ExecutePendingCommandLists takes when the GPU is
-    // behind. Recording and command list submission stay included, so this is the CPU cost of the frame.
+    // m_FrameTime without the GPU stall that the frame waits for (the graph-memory fence with frame
+    // pipelining, waitForIdle in ExecutePendingCommandLists without it). Recording and command list
+    // submission stay included, so this is the CPU cost of the frame.
     double m_CpuTime   = 0.0;
     double m_FPS       = 0.0;
     uint32_t m_TargetFPS = 200;
@@ -558,6 +559,30 @@ public:
     std::vector<nvrhi::CommandListHandle> m_CommandListFreeList;
     std::vector<nvrhi::CommandListHandle> m_PendingCommandLists;
     std::vector<nvrhi::CommandListHandle> m_InFlightCommandLists;
+
+    // ─── Frame pipelining ───
+
+    // One entry per frame in flight; must match RenderGraph::kFrameSetCount, since each slot owns one set
+    // of graph transient heaps and one swapchain back buffer.
+    static constexpr uint32_t kFramesInFlight = RenderGraph::kFrameSetCount;
+
+    struct FrameSubmission
+    {
+        nvrhi::EventQueryHandle m_Event;   // signalled after this frame's command lists execute
+        uint64_t m_Frame = 0;              // m_FrameNumber of the submission
+        bool m_bPending = false;           // the event has not been waited on yet
+    };
+    FrameSubmission m_FrameSubmissions[kFramesInFlight];
+
+    // Newest frame whose submission is known to have completed (valid when m_bHasCompletedFrame).
+    uint64_t m_LastCompletedFrame = 0;
+    bool m_bHasCompletedFrame = false;
+    bool m_bLoggedSwapchainParityMismatch = false;
+
+    // Waits for the submission that last used this frame's graph heap set (and back buffer) before the
+    // render graph allocates, and resolves GPU timers for the frames that completed. No-op when frame
+    // pipelining is off; ExecutePendingCommandLists then waits for idle before submitting instead.
+    void WaitForGraphMemoryFrame();
 
     // Event queries to signal once this frame's command lists have executed (see SignalEventAfterFrame)
     std::vector<nvrhi::EventQueryHandle> m_EventsToSignal;

@@ -16,6 +16,11 @@ struct Config
     // Enable render graph aliasing
     bool m_EnableRenderGraphAliasing = true;
 
+    // Allow the CPU to record frame N+1 while the GPU still executes frame N. The render graph keeps
+    // separate transient heap sets per frame in flight, so this costs one extra set of transient
+    // memory. --no-frame-pipelining restores the fully serialized submission.
+    bool m_EnableFramePipelining = true;
+
     // Disable sampler feedback entirely. Needed under tools that do not implement
     // it (e.g. RenderDoc 1.46). Texture streaming then falls back to requesting
     // the most detailed mip of every texture instead of the observed mips.

@@ -35,7 +35,7 @@ void GpuPassTimers::BeginFrame()
     m_NextSlot.store(0, std::memory_order_relaxed);
 }
 
-void GpuPassTimers::Resolve(nvrhi::IDevice* device)
+void GpuPassTimers::Resolve(nvrhi::IDevice* device, uint32_t inLastCompletedFrame, bool bHasCompletedFrame)
 {
     SDL_assert(device);
 
@@ -44,6 +44,12 @@ void GpuPassTimers::Resolve(nvrhi::IDevice* device)
         // Only what an earlier frame recorded: the half this frame is writing belongs to it and has not
         // been submitted yet, so its timestamps do not exist.
         if (!slot.m_bPending || slot.m_Frame >= m_FrameIndex)
+            continue;
+
+        // A frame that has not completed yet keeps its slots pending: resetting or reading its queries now
+        // would either read garbage or destroy the values that frame is about to write. It is published
+        // when its own submission completes, because the pool is reused on the same parity.
+        if (!bHasCompletedFrame || slot.m_Frame > inLastCompletedFrame)
             continue;
 
         slot.m_bPending = false;
@@ -56,7 +62,8 @@ void GpuPassTimers::Resolve(nvrhi::IDevice* device)
         device->resetTimerQuery(slot.m_Query);
     }
 
-    m_LastResolvedFrame = m_FrameIndex - 1;
+    if (bHasCompletedFrame)
+        m_LastResolvedFrame = inLastCompletedFrame;
 }
 
 nvrhi::ITimerQuery* GpuPassTimers::Begin(nvrhi::ICommandList* commandList, std::string_view name)
