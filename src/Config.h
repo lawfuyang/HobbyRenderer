@@ -187,6 +187,11 @@ struct Config
     // absorbed the spike, and a hitch is far too rare to catch by hand. 0 = off.
     float m_HitchDumpThresholdMs = 0.0f;
 
+    // Frame pacer, in frames per second. The loop sleeps to hit it, so a CPU-bound frame shows a sleep bar and a
+    // GPU that sits idle half the frame: how fast the CPU can submit cannot be measured while it is paced.
+    // 0 = uncapped.
+    uint32_t m_TargetFPS = 200;
+
     // Add more configuration options here as needed
     // int renderWidth = 1920;
     // int renderHeight = 1080;

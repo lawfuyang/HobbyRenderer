@@ -169,6 +169,21 @@ void Config::ParseCommandLine(int argc, char* argv[])
             s_Instance.m_bNoReSTIRDI = true;
             SDL_Log("[Config] ReSTIR DI disabled: sun shadow from the deferred pass' own ray");
         }
+        else if (std::strcmp(arg, "--target-fps") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                s_Instance.m_TargetFPS = static_cast<uint32_t>(std::atoi(argv[++i]));
+                if (s_Instance.m_TargetFPS > 0)
+                    SDL_Log("[Config] Frame pacer: %u FPS", s_Instance.m_TargetFPS);
+                else
+                    SDL_Log("[Config] Frame pacer off: the loop runs as fast as it can record");
+            }
+            else
+            {
+                SDL_LOG_ASSERT_FAIL("Missing value for --target-fps", "[Config] Missing value for --target-fps");
+            }
+        }
         else if (std::strcmp(arg, "--debug") == 0)
         {
             if (i + 1 < argc)
@@ -683,6 +698,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SDL_Log("  --camera-spin <deg/s>            Rotate the view automatically, for reproduction runs");
             SDL_Log("  --hitch-log <ms>                 Log every frame slower than this with streaming/VRAM state");
             SDL_Log("  --hitch-dump <ms>                Dump the profiler and exit on the first frame slower than this");
+            SDL_Log("  --target-fps <n>                 Frame pacer in FPS; 0 runs the loop unpaced (CPU/GPU overlap A/B)");
             SDL_Log("  --scene <path>                   Load the specified scene file");
             SDL_Log("  --help, -h                       Show this help message");
         }

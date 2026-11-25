@@ -679,11 +679,15 @@ void Renderer::Run()
             GraphicRHI::SwapchainImageCount);
     SDL_assert(GraphicRHI::SwapchainImageCount >= kFramesInFlight);
 
+    // The pacer, not the GPU, is what ends most debug-view frames: the loop sleeps to hit this and the GPU then idles
+    // for the rest of the frame. 0 leaves it unpaced, which is how the CPU's real submission rate is measured.
+    m_TargetFPS = Config::Get().m_TargetFPS;
+
     while (m_Running)
     {
         PROFILE_SCOPED("Frame");
         const uint64_t frameStart = SDL_GetTicksNS();
-        const uint32_t kFrameDurationNs = SDL_NS_PER_SECOND / m_TargetFPS;
+        const uint32_t kFrameDurationNs = m_TargetFPS > 0 ? SDL_NS_PER_SECOND / m_TargetFPS : 0;
 
         // Starts this frame's GPU timing. The values themselves are read back in ExecutePendingCommandLists,
         // which is where the previously submitted work is known to have finished.
@@ -906,7 +910,7 @@ void Renderer::Run()
         const uint64_t workTimeNs = SDL_GetTicksNS() - frameStart;
 
         // Sleep to maintain target framerate (if needed)
-        if (workTimeNs < kFrameDurationNs)
+        if (m_TargetFPS > 0 && workTimeNs < kFrameDurationNs)
         {
             PROFILE_SCOPED("Sleep");
             SDL_DelayPrecise(kFrameDurationNs - workTimeNs);
