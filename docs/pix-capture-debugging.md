@@ -2,7 +2,8 @@
 
 How to take, read, process and debug `.wpix` captures of this renderer with
 `pixtool.exe`, and what the capture can and cannot tell you. Written from the tool's own
-`--help` output plus measurements on this machine (PIX 2610.28, driver 616.92, RTX 3080).
+`--help` output plus measurements on this machine (PIX 2610.28 when written, 2611.19 now — the
+`pixtool` commands below are unchanged between them; driver 616.92, RTX 3080).
 
 Operational note: the opacity-micromap feature is off by default (`--enable-omm` turns it on, and
 `--pix-capture-load` captures the bake and BLAS builds where its data is created).
@@ -40,7 +41,7 @@ to scanning that directory.
 ## 2. The tool
 
 ```
-"C:\Program Files\Microsoft PIX\2610.28\pixtool.exe"
+"C:\Program Files\Microsoft PIX\2611.19\pixtool.exe"
 ```
 
 Every command line is a **sequence of commands**, executed left to right, so state carries
@@ -99,7 +100,7 @@ patterns such as `D3D:*`.
 ## 4. Recipes
 
 All paths are relative to the repository root and assume
-`PXT='C:\Program Files\Microsoft PIX\2610.28\pixtool.exe'`.
+`PXT='C:\Program Files\Microsoft PIX\2611.19\pixtool.exe'`.
 
 ### 4.1 Event list of a frame
 
@@ -248,7 +249,7 @@ get at data the other commands do not expose. It is large and slow — use it as
 ## 8. Quick reference
 
 ```powershell
-$PXT = 'C:\Program Files\Microsoft PIX\2610.28\pixtool.exe'
+$PXT = 'C:\Program Files\Microsoft PIX\2611.19\pixtool.exe'
 
 # event list, counters, per-pass image, playback, load capture
 & $PXT --output=quiet open-capture bin\captures\bistrox-frame90.wpix save-event-list bin\ev.csv
@@ -275,7 +276,7 @@ workflow. The install also ships the full reference as
 
 ### 9.1 Finding the install without hardcoding it
 
-Never bake `C:\Program Files\Microsoft PIX\2610.28` into a script. Two independent routes:
+Never bake `C:\Program Files\Microsoft PIX\2611.19` into a script. Two independent routes:
 
 1. **Just look next to the tool you already have.** `pixtool.exe` sits in the same folder as
    `include\`, `lib\` and `pixapi.dll`, so `(Get-Command pixtool.exe).Source | Split-Path` *is* the
@@ -364,7 +365,9 @@ the call fails with `E_PIX_DEVELOPER_MODE_NOT_ENABLED` (-1967390720).
 
 ### 9.4 What actually works on this machine
 
-- Only one install exists: `C:\Program Files\Microsoft PIX\2610.28` (retail). `include`, `lib\PixApi.lib`,
+- Only one install exists: `C:\Program Files\Microsoft PIX\2611.19` (retail; it was 2610.28 when this
+  section was written — the version-specific findings below were measured against 2610.28 and have not been
+  re-checked on 2611.19). `include`, `lib\PixApi.lib`,
   `pixapi.dll`, `PixApiCsExt.dll`, `docs\pixapi.zip` are all present; .NET SDK 10.0.403 is installed.
 - **The samples and the retail API do not line up.** Building `api\retail\ResourceViews\csharp` against
   2610.28 fails on `PixApiExtensions.OpenGpuCaptureDocument<T>` (missing `notifications` overload),
