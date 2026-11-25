@@ -4,6 +4,7 @@
 #include "OmmBaker.h"
 #include "Scene.h"
 #include "Renderer.h"
+#include "TaskExecutor.h"
 #include "TextureLoader.h"
 #include "Utilities.h"
 
@@ -181,7 +182,7 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
 
     if (!jobs.empty())
     {
-        auto runJob = [&](uint32_t jobIndex, uint32_t)
+        auto runJob = [&](uint32_t jobIndex)
         {
             BakeJob& job = jobs[jobIndex];
 
@@ -200,9 +201,8 @@ size_t BakeSceneOmm(Scene& scene, const std::vector<srrhi::VertexQuantized>& ver
         };
 
         const uint32_t jobCount = static_cast<uint32_t>(jobs.size());
-        SDL_Log("[OMM] Baking %u LOD jobs on %u worker threads", jobCount,
-                g_Renderer.m_TaskScheduler->GetThreadCount());
-        g_Renderer.m_TaskScheduler->ParallelFor(jobCount, runJob);
+        SDL_Log("[OMM] Baking %u LOD jobs on %u worker threads", jobCount, GetTaskWorkerCount());
+        ParallelFor(jobCount, runJob);
     }
 
     // A primitive counts as baked once any of its LODs produced masks; the rest keep an empty mask list.

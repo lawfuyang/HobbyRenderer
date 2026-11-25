@@ -1,6 +1,7 @@
 #include "RenderGraph.h"
 #include "Renderer.h"
 #include "Config.h"
+#include "TaskExecutor.h"
 #include "Utilities.h"
 
 #include "imgui.h"
@@ -322,7 +323,7 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
     nvrhi::CommandListHandle cmd = g_Renderer.AcquireCommandList();
 
     const bool bImmediateExecute = false; /* defer execution until after render graph compiles */
-    g_Renderer.m_TaskScheduler->ScheduleTask([pRenderer, cmd, passIndex]() {
+    ScheduleTask([pRenderer, cmd, passIndex]() {
         PROFILE_SCOPED(pRenderer->GetName());
         SimpleTimer cpuTimer;
         ScopedCommandList scopedCmd{ cmd, pRenderer->GetName() };

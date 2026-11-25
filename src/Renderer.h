@@ -9,7 +9,6 @@
 #include "RenderGraph.h"
 #include "Scene.h"
 #include "srrhi.h"
-#include "TaskScheduler.h"
 
 #include "shaders/ShaderIDs.h"
 #include "shaders/srrhi/cpp/Cluster.h"
@@ -408,9 +407,6 @@ public:
     // ─── Editor UI ───
     ImGuiLayer m_ImGuiLayer;
 
-    // ─── Task scheduling ───
-    std::unique_ptr<TaskScheduler> m_TaskScheduler;
-
     // ─── Scene ───
     Scene m_Scene;
 
@@ -615,6 +611,10 @@ private:
     // Write a BindingSetItem at a known index, return success.
     bool WriteBindlessItemAtIndex(uint32_t index, const nvrhi::BindingSetItem& item, const char* label);
 };
+
+// Mirrors SDL_Log to output.txt next to the executable (implemented in Renderer.cpp). The app's entry point
+// lives in AppMain.cpp, so it calls this by name.
+void InstallOutputLog();
 
 // Global accessor for the Renderer singleton.
 #define g_Renderer Renderer::GetInstance()

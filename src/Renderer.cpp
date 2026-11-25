@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "Utilities.h"
+#include "TaskExecutor.h"
 #include "Config.h"
 #include "ClusterLodScene.h"
 #include "CommonResources.h"
@@ -79,28 +80,6 @@ namespace
         }
     }
 
-    void InstallOutputLog()
-    {
-        const char* basePath = SDL_GetBasePath();
-        if (!basePath)
-        {
-            SDL_Log("[Log ] Could not resolve the exe folder: %s", SDL_GetError());
-            return;
-        }
-
-        const std::filesystem::path path = std::filesystem::path(basePath) / "output.txt";
-        gs_OutputLogFile = fopen(path.string().c_str(), "wb");
-        if (!gs_OutputLogFile)
-        {
-            SDL_Log("[Log ] Could not open %s for log output", path.string().c_str());
-            return;
-        }
-
-        SDL_GetLogOutputFunction(&gs_DefaultLogFn, &gs_DefaultLogUserdata);
-        SDL_SetLogOutputFunction(FileLogCallback, nullptr);
-        SDL_Log("[Log ] SDL_Log mirrored to %s", path.string().c_str());
-    }
-
     void InitSDL()
     {
         SDL_Log("[Init] Starting SDL initialization");
@@ -129,6 +108,30 @@ namespace
         SDL_Log("[Init] Window created (%dx%d)", windowW, windowH);
         return window;
     }
+}
+
+// Mirrors SDL_Log to output.txt next to the .exe (FileLogCallback above). A file-local name would tie this to
+// Renderer.cpp, but the app's main() lives in AppMain.cpp, so the app has to be able to call it from there.
+void InstallOutputLog()
+{
+    const char* basePath = SDL_GetBasePath();
+    if (!basePath)
+    {
+        SDL_Log("[Log ] Could not resolve the exe folder: %s", SDL_GetError());
+        return;
+    }
+
+    const std::filesystem::path path = std::filesystem::path(basePath) / "output.txt";
+    gs_OutputLogFile = fopen(path.string().c_str(), "wb");
+    if (!gs_OutputLogFile)
+    {
+        SDL_Log("[Log ] Could not open %s for log output", path.string().c_str());
+        return;
+    }
+
+    SDL_GetLogOutputFunction(&gs_DefaultLogFn, &gs_DefaultLogUserdata);
+    SDL_SetLogOutputFunction(FileLogCallback, nullptr);
+    SDL_Log("[Log ] SDL_Log mirrored to %s", path.string().c_str());
 }
 
 void Renderer::LoadShaders()
@@ -534,14 +537,11 @@ void Renderer::Initialize()
 
     PROFILE_FUNCTION();
 
-    m_TaskScheduler = std::make_unique<TaskScheduler>();
-
-    // Loading is one CPU-bound burst (mesh cook, acceleration structures, OMM bakes) that should use the whole
-    // machine; the frame loop goes back to the fixed pool below so per-frame scheduling cost stays predictable.
-    const uint32_t loadThreadCount = std::max(1u, std::thread::hardware_concurrency());
-    m_TaskScheduler->SetThreadCount(loadThreadCount);
-    SDL_Log("[TaskScheduler] Loading with %u worker threads (runtime pool: %u)",
-        loadThreadCount, TaskScheduler::kRuntimeThreadCount);
+    // One pool for the whole run, with a worker per logical core: loading is one CPU-bound burst (mesh cook,
+    // acceleration structures, OMM bakes) that wants the whole machine, and the frame loop then records its passes
+    // on those same threads. Shrinking it once the load is done would retire the load's microprofile rows and
+    // register a second set of threads, leaving a capture with a block of empty rows.
+    SDL_Log("[Tasks] %u worker threads", GetTaskWorkerCount());
 
     InitSDL();
 
@@ -661,11 +661,6 @@ void Renderer::Initialize()
     }
 
     ExecutePendingCommandLists();
-
-    // Everything that loads is done: hand the extra workers back before the first frame is recorded, because a
-    // burst of 28 idle workers waiting on the queue costs more than the 12 the frame loop is tuned for.
-    m_TaskScheduler->SetThreadCount(TaskScheduler::kRuntimeThreadCount);
-    SDL_Log("[TaskScheduler] Runtime pool: %u worker threads", m_TaskScheduler->GetThreadCount());
 }
 
 void Renderer::Run()
@@ -759,10 +754,10 @@ void Renderer::Run()
         const bool bSwapChainImageAcquireSuccess = m_RHI->AcquireNextSwapchainImage(&m_AcquiredSwapchainImageIdx);
         const uint64_t markAcquireNs = SDL_GetTicksNS();
         
-        m_TaskScheduler->ScheduleTask([this]() {
+        ScheduleTask([this]() {
             PROFILE_SCOPED("Garbage Collection");
             m_RHI->m_NvrhiDevice->runGarbageCollection();
-        });
+        }, /*bImmediateExecute=*/true);
 
         // Prepare ImGui UI (NewFrame + UI creation + ImGui::Render)
         m_ImGuiLayer.UpdateFrame();
@@ -836,7 +831,7 @@ void Renderer::Run()
         ScheduleAndRunAllRenderers();
 
         // Wait for all render passes to finish recording
-        m_TaskScheduler->ExecuteAllScheduledTasks();
+        WaitForAllTasks();
 
         m_RenderGraph.PostRender();
         const uint64_t markRecordNs = SDL_GetTicksNS();
@@ -981,6 +976,10 @@ void Renderer::Run()
 void Renderer::Shutdown()
 {
     ScopedTimerLog shutdownScope{"[Timing] Shutdown phase:"};
+
+    // The pool goes first: a worker reports its exit to microprofile as it leaves, and MicroProfileShutdown below
+    // frees the per-thread logs that report writes to. A pool whose threads outlive that call faults on the way out.
+    ShutdownTaskExecutor();
 
     // Every phase is logged, and the log ends with the device release (see ~D3D12GraphicRHI): a line
     // printed after that one means something still held a GPU handle past the device's lifetime.
@@ -2869,53 +2868,4 @@ ScopedCommandList::~ScopedCommandList()
     m_CommandList->close();
 
     tl_bScopedCommandListActive = false;
-}
-
-int main(int argc, char* argv[])
-{
-    InstallOutputLog();
-
-    // -----------------------------------------------------------------------
-    // Normal renderer mode
-    // -----------------------------------------------------------------------
-    Renderer renderer{};
-    Config::ParseCommandLine(argc, argv);
-
-    // RenderDoc hooks D3D12CreateDevice through this module's import table, so the DLL has to be in the
-    // process before Renderer::Initialize creates the device.
-    if (Config::Get().m_bRenderDoc && g_RenderDoc.Load(Config::Get().m_RenderDocDllPath))
-    {
-        const std::filesystem::path captureStem = Config::Get().m_ScenePath.empty()
-            ? std::filesystem::path{ "capture" }
-            : std::filesystem::path{ Config::Get().m_ScenePath }.stem();
-        g_RenderDoc.SetCapturePathTemplate((std::filesystem::path{ SDL_GetBasePath() } / "captures" / captureStem).string());
-    }
-
-    // PIX does not inject into the process the way RenderDoc does: PIXBeginCapture2 hands the frame to the
-    // capturer module, which therefore has to be loadable before the capture is taken. The capture file name
-    // comes from here, since PIX names nothing itself.
-    if (Config::Get().m_bPix && g_Pix.Load(Config::Get().m_PixCapturerDllPath))
-    {
-        if (!Config::Get().m_PixCaptureDir.empty())
-        {
-            g_Pix.SetCapturePathTemplate(Config::Get().m_PixCaptureDir);
-        }
-        else
-        {
-            const std::filesystem::path captureStem = Config::Get().m_ScenePath.empty()
-                ? std::filesystem::path{ "capture" }
-                : std::filesystem::path{ Config::Get().m_ScenePath }.stem();
-            g_Pix.SetCapturePathTemplate((std::filesystem::path{ SDL_GetBasePath() } / "captures" / captureStem).string());
-        }
-    }
-
-    renderer.Initialize();
-
-    renderer.Run();
-    renderer.Shutdown();
-
-    // Everything below happens in ~Renderer: its members release their GPU resources and m_RHI takes
-    // the device (and the Context those resources reference) down last.
-    SDL_Log("[Shutdown] Renderer going out of scope");
-    return 0;
 }

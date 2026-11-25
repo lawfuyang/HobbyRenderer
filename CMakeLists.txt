@@ -409,13 +409,21 @@ file(GLOB_RECURSE SOURCES
     "src/*.hpp"
 )
 
-# Create executable
-add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${IMGUI_SOURCES})
+# Everything is compiled straight into the executable: every renderer registers itself with a static initializer
+# (REGISTER_RENDERER), and those objects would be dropped if they sat in a static library that nothing references.
+set(APP_MAIN "${CMAKE_SOURCE_DIR}/src/AppMain.cpp")
+list(REMOVE_ITEM SOURCES "${APP_MAIN}")
+
+add_executable(${PROJECT_NAME} WIN32 ${APP_MAIN} ${SOURCES} ${IMGUI_SOURCES})
 
 # Define Windows-specific macros to prevent min/max macro conflicts
 if(MSVC)
     target_compile_definitions(${PROJECT_NAME} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
+
+# SDL_MAIN_HANDLED on every translation unit: SDL otherwise renames main() and defines the Windows entry point
+# in the headers, which collides with the one src/AppMain.cpp provides itself.
+target_compile_definitions(${PROJECT_NAME} PUBLIC SDL_MAIN_HANDLED)
 
 # Precompiled header to speed up builds.
 target_precompile_headers(${PROJECT_NAME} PRIVATE src/pch.h)
@@ -424,6 +432,9 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE src/pch.h)
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders)
 target_include_directories(${PROJECT_NAME} PRIVATE src/shaders/rtxdi/SharedShaderInclude/SharedShaderInclude)
+# taskflow (external/taskflow) is the task pool every parallel loop runs on. Header-only: the include path is all
+# it needs.
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/external/taskflow")
 # The Agility headers, so D3D12RHI.cpp exports the SDK version of the D3D12Core.dll staged above rather than
 # the Windows SDK's older one.
 target_include_directories(${PROJECT_NAME} PRIVATE "${AGILITY_SDK_INSTALL_DIR}/build/native/include")
