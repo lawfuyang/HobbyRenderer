@@ -79,6 +79,11 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
   several clusters, so its sphere is rarely occluded), sub-pixel clusters are dropped outright, and
   `--cluster-two-pass <0|1>` records what occlusion alone rejected so a second pass can revive it against
   the depth the first pass just wrote
+- **Budgeted traversal queues**: the per-bucket node and group queues and the meshlet job list are sized
+  as fixed budgets (`kMaxClusterNodeRefs`, `kMaxClusterGroupRefs`, `kMaxMeshletJobs`) instead of
+  instances × tree, which an instanced scene turns into billions of references. An append past the
+  capacity is dropped and counted (`ClusterCounters::m_RefCapped`, shown in the counters panel), so a
+  cap costs image coverage and never a buffer overrun
 - **Discrete LOD**: an instance whose cut resolves to a single level is seeded at that level's node and
   drawn whole, which costs the traversal nothing where it applies and gives ray tracing the level to match
 - **Debug views**: cluster ids, a 32-level LOD ramp, group bounds as wireframe boxes and a per-triangle
@@ -110,10 +115,11 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
   per-frame tile budgets, minmip tracking and packed-mip prefetch; `--disable-sampler-feedback` forces
   everything resident for A/B runs
 - **Cluster geometry streaming**: a cluster group is the streaming unit — its triangle and vertex words
-  are packed into one arena with a host free list, the traversal requests the groups it cannot draw and a
-  readback two frames later serves them, and an age filter sweeps only when the budget forced a trim. A
-  missing group is requested while the finest resident level is drawn, so a level streams in without a
-  hole
+  are packed into one arena with a host free list and the cooked cache stores that blob with its vertex
+  run meshopt-encoded (the Bistro cache is 1.47× smaller than the uncompressed form), the traversal
+  requests the groups it cannot draw and a readback two frames later serves them, and an age filter
+  sweeps only when the budget forced a trim. A missing group is requested while the finest resident
+  level is drawn, so a level streams in without a hole
 - **One VRAM budget for both**: `--stream-budget <MiB>` caps the texture tile heaps and the geometry arena
   together — the arena is sized from what the heaps leave and heaps are refused past what the arena leaves,
   with a floor at the coarsest-level cover so a tight budget draws coarse geometry instead of none
@@ -122,16 +128,21 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
   (`--cluster-stream-stats-frame <n>`, `--cluster-stream-age <frames>`)
 
 ### Engine and tooling
-- **Render graph**: transient resource allocation with aliasing, automatic dependency ordering, pass
-  toggling, per-pass submission (`--execute-per-pass`, `--execute-per-pass-and-wait`), optional
-  aliasing (`--disable-rendergraph-aliasing`), and a visualizer for resource lifetimes, heap usage and
-  pass access
+- **Render graph**: two-level recording (a setup pass declares, the recorded body replays), transient
+  allocation with aliasing, pass toggling, per-pass submission (`--execute-per-pass`,
+  `--execute-per-pass-and-wait`), optional aliasing (`--disable-rendergraph-aliasing`), and a visualizer
+  for resource lifetimes, heap usage and pass access. Passes record concurrently on the task pool, one
+  command list each, and submit in schedule order; the transitions inside a list come from nvrhi's
+  automatic resource-state tracking, and the graph requests a global sync barrier before the first pass
+  that touches an aliased resource
 - **srrhi**: a `.sr` shader-resource description compiled into C++ argument structs and HLSL binding
   code, so a pass's bindings are declared once (see PIPELINE.md)
 - **ShaderIDs**: `.cfg`-driven shader table generation
 - **Hot reload**: F5 recompiles and rebinds shaders without restarting
-- **Multithreaded recording**: 12-worker `TaskScheduler` with `ParallelFor`, parallel command-list
-  recording and deferred garbage collection
+- **Multithreaded recording**: one taskflow pool (`TaskExecutor`, a worker per logical core) shared by
+  the scene loader and the frame loop — `ParallelFor` for the load's parallel loops, the render graph's
+  deferred pass list recorded concurrently on the same pool, and deferred garbage collection. The
+  workers register with microprofile, so a CPU capture has one row per worker
 - **Profiling**: MicroProfile CPU scopes with HTML dump, per-scope GPU timer queries (`GpuPassTimers`,
   up to 256 scopes per frame), pipeline statistics, and a per-pass CPU/GPU table in the panel.
   `--hitch-log <ms>` logs frames slower than a threshold with streaming and VRAM state;
@@ -213,8 +224,12 @@ Every switch is parsed in `src/Config.cpp`; the useful ones:
 ## Architecture
 
 ### Render graph
-Passes declare what they read and write; the graph allocates transient targets, aliases them, orders the
-passes, and exposes a visualizer. PIPELINE.md has the details.
+Passes declare the resources they read and write; the graph sizes and aliases the transients from those
+declarations, gives every pass its own command list so the passes record concurrently on the task pool,
+and exposes a visualizer. Transitions inside a command list are nvrhi's automatic state tracking, so the
+graph itself places only the alias barriers. PIPELINE.md has the details, and
+`docs/render-graph-article-comparison.md` compares the design against a published render-graph write-up,
+including what it does not do yet (access kinds, batching, pass reordering).
 
 ### Renderers
 Each pass is an `IRenderer` registered with the renderer registry, with its own `Setup`/`Render` and its
@@ -242,6 +257,7 @@ Fetched and built by CMake (versions from `CMakeLists.txt`):
 - [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler) v1.9.2609 — HLSL → DXIL
 - [ShaderMake](https://github.com/NVIDIA-RTX/ShaderMake) — offline shader compilation
 - [meshoptimizer](https://github.com/zeux/meshoptimizer) — optimization, quantization, simplification
+- [taskflow](https://github.com/taskflow/taskflow) 4.1.0 — the task pool every parallel loop runs on
 - [MathLib](https://github.com/NVIDIA-RTX/MathLib) 11 — vector/matrix math
 - [RTXDI](https://github.com/NVIDIA-RTX/RTXDI) — ReSTIR DI/GI, ReGIR, light presampling
 - [NRD](https://github.com/NVIDIA-RTX/NRD) 4.18.0 — REBLUR denoising
