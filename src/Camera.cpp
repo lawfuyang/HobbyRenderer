@@ -97,44 +97,6 @@ void Camera::ProcessEvent(const SDL_Event& event)
     }
 }
 
-void Camera::Update()
-{
-    // Retrieve frame time from renderer (ms -> seconds)
-    
-    float dt = static_cast<float>(g_Renderer.GetFrameTimeMs() * 0.001);
-
-    // Compute exposure multiplier (manual mode)
-    float finalEV = m_ExposureValue - m_ExposureCompensation;
-    m_Exposure = 1.0f / (powf(2.0f, finalEV) * 1.2f);
-
-    if (dt <= 0.0f)
-        return;
-
-    // Movement in local space
-    Vector forward = DirectX::XMVectorSet(0, 0, 1, 0);
-    Vector right = DirectX::XMVectorSet(1, 0, 0, 0);
-
-    // Construct rotation from yaw/pitch
-    Vector rot = DirectX::XMQuaternionRotationRollPitchYaw(m_Pitch, m_Yaw, 0.0f);
-    Vector fw = DirectX::XMVector3Rotate(forward, rot);
-    Vector rt = DirectX::XMVector3Rotate(right, rot);
-
-    Vector pos = DirectX::XMLoadFloat3(reinterpret_cast<const Vector3*>(&m_Position));
-    Vector move = DirectX::XMVectorZero();
-    if (m_Forward) move = DirectX::XMVectorAdd(move, fw);
-    if (m_Back) move = DirectX::XMVectorSubtract(move, fw);
-    if (m_Left) move = DirectX::XMVectorSubtract(move, rt);
-    if (m_Right) move = DirectX::XMVectorAdd(move, rt);
-
-    if (DirectX::XMVector3NearEqual(move, DirectX::XMVectorZero(), DirectX::XMVectorReplicate(1e-6f)) == 0)
-    {
-        move = DirectX::XMVector3Normalize(move);
-        move = DirectX::XMVectorScale(move, m_MoveSpeed * dt);
-        pos = DirectX::XMVectorAdd(pos, move);
-        DirectX::XMStoreFloat3(reinterpret_cast<Vector3*>(&m_Position), pos);
-    }
-}
-
 Matrix Camera::GetViewMatrix() const
 {
     using namespace DirectX;
@@ -201,6 +163,71 @@ Matrix Camera::GetInvViewProjMatrix() const
     return out;
 }
 
+void Camera::SetFromMatrix(const Matrix& worldTransform)
+{
+    using namespace DirectX;
+    XMMATRIX m = XMLoadFloat4x4(&worldTransform);
+
+    // Extract position
+    XMVECTOR pos = m.r[3];
+    XMStoreFloat3(reinterpret_cast<Vector3*>(&m_Position), pos);
+
+    // Forward direction in world space
+    XMVECTOR worldForward = XMVector3TransformNormal(XMVectorSet(0, 0, 1, 0), m);
+    worldForward = XMVector3Normalize(worldForward);
+
+    // Compute yaw and pitch from forward direction
+    XMFLOAT3 fwd;
+    XMStoreFloat3(&fwd, worldForward);
+    m_Yaw = atan2f(fwd.x, fwd.z);
+    m_Pitch = -asinf(fwd.y);
+}
+
+void Camera::Reset()
+{
+    m_Position = { 0.0f, 0.0f, 0.0f };
+    m_Yaw = 0.0f;
+    m_Pitch = 0.0f;
+}
+
+void Camera::Update()
+{
+    // Retrieve frame time from renderer (ms -> seconds)
+    
+    float dt = static_cast<float>(g_Renderer.GetFrameTimeMs() * 0.001);
+
+    // Compute exposure multiplier (manual mode)
+    float finalEV = m_ExposureValue - m_ExposureCompensation;
+    m_Exposure = 1.0f / (powf(2.0f, finalEV) * 1.2f);
+
+    if (dt <= 0.0f)
+        return;
+
+    // Movement in local space
+    Vector forward = DirectX::XMVectorSet(0, 0, 1, 0);
+    Vector right = DirectX::XMVectorSet(1, 0, 0, 0);
+
+    // Construct rotation from yaw/pitch
+    Vector rot = DirectX::XMQuaternionRotationRollPitchYaw(m_Pitch, m_Yaw, 0.0f);
+    Vector fw = DirectX::XMVector3Rotate(forward, rot);
+    Vector rt = DirectX::XMVector3Rotate(right, rot);
+
+    Vector pos = DirectX::XMLoadFloat3(reinterpret_cast<const Vector3*>(&m_Position));
+    Vector move = DirectX::XMVectorZero();
+    if (m_Forward) move = DirectX::XMVectorAdd(move, fw);
+    if (m_Back) move = DirectX::XMVectorSubtract(move, fw);
+    if (m_Left) move = DirectX::XMVectorSubtract(move, rt);
+    if (m_Right) move = DirectX::XMVectorAdd(move, rt);
+
+    if (DirectX::XMVector3NearEqual(move, DirectX::XMVectorZero(), DirectX::XMVectorReplicate(1e-6f)) == 0)
+    {
+        move = DirectX::XMVector3Normalize(move);
+        move = DirectX::XMVectorScale(move, m_MoveSpeed * dt);
+        pos = DirectX::XMVectorAdd(pos, move);
+        DirectX::XMStoreFloat3(reinterpret_cast<Vector3*>(&m_Position), pos);
+    }
+}
+
 void Camera::FillPlanarViewConstants(srrhi::PlanarViewConstants& constants, float viewportWidth, float viewportHeight) const
 {
     using namespace DirectX;
@@ -253,31 +280,4 @@ void Camera::FillPlanarViewConstants(srrhi::PlanarViewConstants& constants, floa
 
     constants.m_ClipToWindowScale = Vector2(0.5f * viewportWidth, -0.5f * viewportHeight);
     constants.m_ClipToWindowBias = Vector2(0.5f * viewportWidth, 0.5f * viewportHeight);
-}
-
-void Camera::SetFromMatrix(const Matrix& worldTransform)
-{
-    using namespace DirectX;
-    XMMATRIX m = XMLoadFloat4x4(&worldTransform);
-
-    // Extract position
-    XMVECTOR pos = m.r[3];
-    XMStoreFloat3(reinterpret_cast<Vector3*>(&m_Position), pos);
-
-    // Forward direction in world space
-    XMVECTOR worldForward = XMVector3TransformNormal(XMVectorSet(0, 0, 1, 0), m);
-    worldForward = XMVector3Normalize(worldForward);
-
-    // Compute yaw and pitch from forward direction
-    XMFLOAT3 fwd;
-    XMStoreFloat3(&fwd, worldForward);
-    m_Yaw = atan2f(fwd.x, fwd.z);
-    m_Pitch = -asinf(fwd.y);
-}
-
-void Camera::Reset()
-{
-    m_Position = { 0.0f, 0.0f, 0.0f };
-    m_Yaw = 0.0f;
-    m_Pitch = 0.0f;
 }
