@@ -22,3 +22,6 @@
 [submodule "external/SHARC"]
 	path = external/SHARC
 	url = https://github.com/NVIDIA-RTX/SHARC
+[submodule "external/taskflow"]
+	path = external/taskflow
+	url = https://github.com/taskflow/taskflow
