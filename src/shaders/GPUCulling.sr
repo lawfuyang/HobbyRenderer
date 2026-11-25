@@ -21,6 +21,10 @@ cbuffer CullingConstants
     // 1 when the cluster path draws this bucket: the cluster traversal owns InstanceLOD then, because its discrete
     // LOD classification is what ray tracing has to agree with.
     uint m_UseClusterRendering;
+    // Capacity of the meshlet job list (Scene::m_MaxMeshletJobCount). The worst case - every instance emitting
+    // every meshlet group of its finest LOD - is only affordable without instancing, so an append past the end is
+    // dropped rather than written.
+    uint m_MaxMeshletJobs;
 };
 
 srinput GPUCullingInputs

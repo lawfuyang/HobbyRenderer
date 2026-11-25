@@ -118,7 +118,7 @@ struct ClusterGeometry
     uint m_UnreplacedLevels;
 };
 
-// 32 B, read back by the CPU for the counters panel and --cluster-stats-frame.
+// 52 B, read back by the CPU for the counters panel and --cluster-stats-frame.
 struct ClusterCounters
 {
     uint m_InstanceCount;    // instances that passed the instance tests
@@ -133,6 +133,7 @@ struct ClusterCounters
     uint m_CoarseClusterCount;      // drawn clusters that came from a level other than 0
     uint m_DiscreteInstanceCount;   // instances whose cut fits one LOD level, seeded at it
     uint m_DiscreteClusterCount;    // drawn clusters that came from such a discrete level
+    uint m_RefCapped;       // node and group refs dropped because their queue was full
 };
 
 // ── Geometry streaming ───────────────────────────────────────────────────────────────────────────────
@@ -210,7 +211,13 @@ cbuffer ClusterTraversalConstants
     uint  m_MaxLoads;
     // 0 keeps the metric cut for every instance, which is the image the continuous traversal produces.
     uint  m_EnableDiscreteLOD;
+    // Capacities of this bucket's node and group queues (Scene::m_MaxClusterNodeCount / GroupCount). The queues
+    // hold a budget rather than instances x tree, which an instanced scene pushes into the gigabytes, so an
+    // append past the end is dropped and counted instead of written.
+    uint  m_MaxNodeRefs;
+    uint  m_MaxGroupRefs;
     uint  m_Pad0;
+    uint  m_Pad1;
 };
 
 srinput ClusterTraversalInputs

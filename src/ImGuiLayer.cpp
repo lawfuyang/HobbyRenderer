@@ -298,7 +298,8 @@ void ImGuiLayer::UpdateFrame()
                     const srrhi::ClusterCounters& counters = g_Renderer.GetClusterCounters(bucketIndex);
                     ImGui::Text("%s: %u instances, %u nodes, %u groups", bucketName,
                         counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount);
-                    ImGui::Text("    %u clusters, %u capped", counters.m_ClusterCount, counters.m_ClusterCapped);
+                    ImGui::Text("    %u clusters, %u capped; %u refs dropped (queue full)", counters.m_ClusterCount,
+                        counters.m_ClusterCapped, counters.m_RefCapped);
                     ImGui::Text("    rejected %u nodes, %u groups -> %u revived", counters.m_RejectNodeCount,
                         counters.m_RejectGroupCount, counters.m_SecondPassClusterCount);
                 }

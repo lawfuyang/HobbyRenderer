@@ -10,6 +10,339 @@
 #include "Omm/OmmSceneBaker.h"
 #include "Omm/OmmRuntime.h"
 
+// Capacities of the per-bucket traversal queues and of the meshlet job list. These used to be sized by the
+// instances x tree worst case, which is what a scene with one instance per node needs and what a scene with
+// millions of EXT_mesh_gpu_instancing placements cannot afford: that worst case becomes billions of refs and
+// tens of GB, while one frame can only use a few million. The shaders drop an append past the end and count it
+// (ClusterCounters::m_RefCapped), so a cap costs image coverage, never a buffer overrun.
+constexpr uint32_t kMaxClusterJobs      = 4u << 20;   // 33.5 MB per bucket at 8 B per job
+constexpr uint32_t kMaxClusterNodeRefs  = 2u << 20;   // 25.2 MB per node queue at 12 B per ref
+constexpr uint32_t kMaxClusterGroupRefs = 2u << 20;   // 25.2 MB per group queue at 12 B per ref
+constexpr uint32_t kMaxMeshletJobs      = 4u << 20;   // 4.2 M x sizeof(MeshletJob)
+
+Scene::GeometryFootprint Scene::MeasureGeometryFootprint() const
+{
+	GeometryFootprint footprint;
+
+	// A triangle BLAS references the scene's own vertex block and index range, so both have to be resident for as
+	// long as the AS exists - that is the part of RT that disk-backed streaming cannot help with.
+	for (const Mesh& mesh : m_Meshes)
+	{
+		for (const Primitive& primitive : mesh.m_Primitives)
+			footprint.m_VertexBytes += uint64_t(primitive.m_VertexCount) * sizeof(srrhi::VertexQuantized);
+	}
+
+	uint64_t indexCount = 0;
+	for (const srrhi::MeshData& meshData : m_MeshData)
+	{
+		const uint32_t lodCount = std::min<uint32_t>(meshData.m_LODCount, srrhi::CommonConsts::MAX_LOD_COUNT);
+		for (uint32_t lod = 0; lod < lodCount; ++lod)
+		{
+			indexCount += meshData.m_IndexCounts[lod];
+			footprint.m_Triangles += meshData.m_IndexCounts[lod] / 3u;
+		}
+	}
+	footprint.m_IndexBytes = indexCount * sizeof(uint32_t);
+
+	// Measured, not guessed: threedscans_animals' 18.66 M triangles build 1 291.69 MB of BLAS at
+	// PreferFastTrace (Scene.cpp's own log line), i.e. 69 B per triangle.
+	constexpr uint64_t kBlasBytesPerTriangle = 69;
+	footprint.m_BlasBytes = footprint.m_Triangles * kBlasBytesPerTriangle;
+	footprint.m_ResidentBytes = footprint.m_VertexBytes + footprint.m_IndexBytes + footprint.m_BlasBytes;
+	return footprint;
+}
+
+void Scene::FinalizeLoadedScene()
+{
+    //SCOPED_TIMER("[Scene] Finalize Scene");
+
+    // 1. Identify dynamic nodes and sort them topologically
+    // Mark nodes targeted by animations as animated before the dynamic pass.
+    // Also collect dynamic material indices for emissive intensity animations.
+    m_DynamicMaterialIndices.clear();
+    for (const Animation& anim : m_Animations)
+    {
+        for (const AnimationChannel& chan : anim.m_Channels)
+        {
+            // Primary single-node target (glTF) and multi-node targets (JSON)
+            for (int ni : chan.m_NodeIndices)
+            {
+                if (ni >= 0 && ni < (int)m_Nodes.size())
+                    m_Nodes[ni].m_IsAnimated = true;
+                else
+                    SDL_Log("[Scene] FinalizeLoadedScene: animation '%s' has out-of-range node index %d (node count=%d)",
+                        anim.m_Name.c_str(), ni, (int)m_Nodes.size());
+            }
+            // Material targets (EmissiveIntensity)
+            for (int mi : chan.m_MaterialIndices)
+            {
+                if (mi >= 0 && mi < (int)m_Materials.size())
+                    m_DynamicMaterialIndices.push_back(mi);
+                else
+                    SDL_Log("[Scene] FinalizeLoadedScene: animation '%s' has out-of-range material index %d (material count=%d)",
+                        anim.m_Name.c_str(), mi, (int)m_Materials.size());
+            }
+        }
+    }
+    // Deduplicate dynamic material indices
+    std::sort(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end());
+    m_DynamicMaterialIndices.erase(std::unique(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end()), m_DynamicMaterialIndices.end());
+
+    m_DynamicNodeIndices.clear();
+    std::function<void(int, bool)> IdentifyDynamic = [&](int idx, bool parentDynamic)
+    {
+        Node& node = m_Nodes[idx];
+        node.m_IsDynamic = node.m_IsAnimated || node.m_LightIndex != -1 || parentDynamic;
+        if (node.m_IsDynamic)
+        {
+            m_DynamicNodeIndices.push_back(idx);
+        }
+        for (int childIdx : node.m_Children)
+        {
+            IdentifyDynamic(childIdx, node.m_IsDynamic);
+        }
+    };
+
+    for (int i = 0; i < (int)m_Nodes.size(); ++i)
+    {
+        if (m_Nodes[i].m_Parent == -1)
+        {
+            IdentifyDynamic(i, false);
+        }
+    }
+
+    // 2. Bucketize and fill instance data
+    m_InstanceData.clear();
+    struct InstInfo { srrhi::PerInstanceData data; int nodeIdx; uint32_t transformIndex; };
+    std::vector<InstInfo> opaqueStatic, opaqueDynamic;
+    std::vector<InstInfo> maskedStatic, maskedDynamic;
+    std::vector<InstInfo> transparentStatic, transparentDynamic;
+
+    for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
+    {
+        Node& node = m_Nodes[ni];
+        if (node.m_MeshIndex < 0) continue;
+        const Mesh& mesh = m_Meshes[node.m_MeshIndex];
+
+        // A node with EXT_mesh_gpu_instancing placements feeds one instance per placement: same mesh and same
+        // materials, its own world matrix and its own bounding sphere (a placement can scale). Without placements
+        // the node is the single instance, exactly as before. The node's own sphere is widened to cover the
+        // placements, because the scene bounds built from the nodes' spheres must still contain the scene.
+        const uint32_t placementCount = node.m_InstanceTransforms.empty() ? 1u : uint32_t(node.m_InstanceTransforms.size());
+        DirectX::BoundingSphere placementBounds{};
+        bool bHasPlacementBounds = false;
+
+        for (uint32_t placement = 0; placement < placementCount; ++placement)
+        {
+            Matrix world;
+            Vector3 center;
+            float radius;
+            if (node.m_InstanceTransforms.empty())
+            {
+                world = node.m_WorldTransform;
+                center = node.m_Center;
+                radius = node.m_Radius;
+            }
+            else
+            {
+                // Row-vector convention, as in Scene::Update: a placement lives in the node's own space.
+                DirectX::XMStoreFloat4x4(&world, DirectX::XMMatrixMultiply(
+                    DirectX::XMLoadFloat4x4(&node.m_InstanceTransforms[placement]),
+                    DirectX::XMLoadFloat4x4(&node.m_WorldTransform)));
+
+                const DirectX::BoundingSphere localSphere(mesh.m_Center, mesh.m_Radius);
+                DirectX::BoundingSphere worldSphere;
+                localSphere.Transform(worldSphere, DirectX::XMLoadFloat4x4(&world));
+                center = worldSphere.Center;
+                radius = worldSphere.Radius;
+
+                if (bHasPlacementBounds)
+                    DirectX::BoundingSphere::CreateMerged(placementBounds, placementBounds, worldSphere);
+                else
+                {
+                    placementBounds = worldSphere;
+                    bHasPlacementBounds = true;
+                }
+            }
+
+            for (const Primitive& prim : mesh.m_Primitives)
+            {
+                srrhi::PerInstanceData inst{};
+                inst.m_World = world;
+                inst.m_PrevWorld = world;
+                inst.m_MaterialIndex = prim.m_MaterialIndex;
+                inst.m_MeshDataIndex = prim.m_MeshDataIndex;
+                inst.m_Center = center;
+                inst.m_Radius = radius;
+
+                uint32_t alphaMode = prim.m_MaterialIndex >= 0 ? m_Materials[prim.m_MaterialIndex].m_GPU.m_AlphaMode : srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
+                bool isDynamic = node.m_IsDynamic;
+
+                if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) {
+                    if (isDynamic) opaqueDynamic.push_back({ inst, ni, placement });
+                    else opaqueStatic.push_back({ inst, ni, placement });
+                }
+                else if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK) {
+                    if (isDynamic) maskedDynamic.push_back({ inst, ni, placement });
+                    else maskedStatic.push_back({ inst, ni, placement });
+                }
+                else {
+                    if (isDynamic) transparentDynamic.push_back({ inst, ni, placement });
+                    else transparentStatic.push_back({ inst, ni, placement });
+                }
+            }
+        }
+
+        if (bHasPlacementBounds)
+        {
+            node.m_Center = placementBounds.Center;
+            node.m_Radius = placementBounds.Radius;
+        }
+    }
+
+    m_OpaqueBucket = { 0, (uint32_t)(opaqueStatic.size() + opaqueDynamic.size()) };
+    m_MaskedBucket = { m_OpaqueBucket.m_BaseIndex + m_OpaqueBucket.m_Count, (uint32_t)(maskedStatic.size() + maskedDynamic.size()) };
+    m_TransparentBucket = { m_MaskedBucket.m_BaseIndex + m_MaskedBucket.m_Count, (uint32_t)(transparentStatic.size() + transparentDynamic.size()) };
+
+    auto PushInstances = [&](const std::vector<InstInfo>& infos)
+    {
+        for (const InstInfo& info : infos)
+        {
+            m_Nodes[info.nodeIdx].m_InstanceIndices.push_back({ (uint32_t)m_InstanceData.size(), info.transformIndex });
+            m_InstanceData.push_back(info.data);
+        }
+    };
+
+    PushInstances(opaqueStatic);
+    PushInstances(opaqueDynamic);
+    PushInstances(maskedStatic);
+    PushInstances(maskedDynamic);
+    PushInstances(transparentStatic);
+	PushInstances(transparentDynamic);
+
+	// Worst-case number of meshlet jobs the base pass can emit: one job per meshlet group, with
+	// every instance rendering its most detailed LOD. Used to size the meshlet job buffer, so it is
+	// capped like the traversal queues above; GPUCulling drops the jobs past the end.
+	uint64_t meshletJobCount = 0;
+	for (const srrhi::PerInstanceData& inst : m_InstanceData)
+	{
+		const srrhi::MeshData& meshData = m_MeshData[inst.m_MeshDataIndex];
+
+		uint32_t maxMeshlets = 0;
+		for (uint32_t lod = 0; lod < meshData.m_LODCount; ++lod)
+		{
+			maxMeshlets = std::max(maxMeshlets, meshData.m_MeshletCounts[lod]);
+		}
+
+		meshletJobCount += DivideAndRoundUp(maxMeshlets, srrhi::CommonConsts::kThreadsPerGroup);
+	}
+	m_MaxMeshletJobCount = uint32_t(std::clamp<uint64_t>(meshletJobCount, 1ull, kMaxMeshletJobs));
+
+	// Worst-case cluster traversal work: every instance drawing every cluster, group and node of its
+	// primitive. The primitive is found through its MeshDataIndex, which is what the traversal indexes too.
+	std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData;
+	for (const Mesh& mesh : m_Meshes)
+	{
+		for (size_t pi = 0; pi < mesh.m_Primitives.size() && pi < mesh.m_Clusters.size(); ++pi)
+			clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
+	}
+
+	// Bounded per bucket rather than over the whole scene: each bucket owns its own traversal buffers, and the
+	// masked bucket is usually a small fraction of the opaque one, so a scene-wide bound would reserve that
+	// capacity a second time (see BasePassResources::DeclareResources for the trade-off this buys).
+	const BucketInfo* const bucketInfos[kClusterBucketCount] = { &m_OpaqueBucket, &m_MaskedBucket };
+	m_MaxClusterTreeDepth = 0;
+	for (uint32_t bucket = 0; bucket < kClusterBucketCount; ++bucket)
+	{
+		// 64-bit: an instanced scene's worst case exceeds uint32, and it is clamped to a budget below anyway.
+		uint64_t jobCount = 0;
+		uint64_t groupCount = 0;
+		uint64_t nodeCount = 0;
+
+		for (uint32_t i = 0; i < bucketInfos[bucket]->m_Count; ++i)
+		{
+			const srrhi::PerInstanceData& inst = m_InstanceData[bucketInfos[bucket]->m_BaseIndex + i];
+			const auto it = clustersByMeshData.find(inst.m_MeshDataIndex);
+			if (it == clustersByMeshData.end())
+				continue;
+
+			const ClusterLod::Counts counts = ClusterLod::GetCounts(*it->second);
+			jobCount += counts.m_ClusterCount;
+			groupCount += counts.m_GroupCount;
+			nodeCount += counts.m_NodeCount;
+			m_MaxClusterTreeDepth = std::max(m_MaxClusterTreeDepth, counts.m_MaxTreeDepth);
+		}
+
+		// At least one: these size structured buffers, and a zero-sized one is invalid. The worst case is capped:
+		// it is every instance visiting its whole tree, which for an instanced scene is billions of refs and tens
+		// of GB, while one frame can only emit a fraction of that. The traversal drops an append past the end and
+		// counts it (ClusterCounters::m_RefCapped), so a cap costs coverage, not correctness.
+		m_MaxClusterJobCount[bucket] = uint32_t(std::clamp<uint64_t>(jobCount, 1ull, kMaxClusterJobs));
+		m_MaxClusterGroupCount[bucket] = uint32_t(std::clamp<uint64_t>(groupCount, 1ull, kMaxClusterGroupRefs));
+		m_MaxClusterNodeCount[bucket] = uint32_t(std::clamp<uint64_t>(nodeCount, 1ull, kMaxClusterNodeRefs));
+	}
+
+	m_SceneBoundingSphere = DirectX::BoundingSphere{};
+	for (const Scene::Node& node : m_Nodes)
+	{
+		const DirectX::BoundingSphere nodeSphere(node.m_Center, node.m_Radius);
+		DirectX::BoundingSphere::CreateMerged(m_SceneBoundingSphere, m_SceneBoundingSphere, nodeSphere);
+	}
+
+    //SDL_Log("[Scene] Finalized: Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
+}
+
+// ─── Animation evaluation helper ─────────────────────────────────────────────
+
+// Evaluate an AnimationSampler at time t.
+// Returns a Vector4; for scalar attributes only .x is meaningful.
+void Scene::UpdateNodeBoundingSphere(int nodeIndex)
+{
+    Node& node = m_Nodes[nodeIndex];
+    if (node.m_MeshIndex >= 0 && node.m_MeshIndex < (int)m_Meshes.size())
+    {
+        const Mesh& mesh = m_Meshes[node.m_MeshIndex];
+        const DirectX::BoundingSphere localSphere(mesh.m_Center, mesh.m_Radius);
+        DirectX::BoundingSphere worldSphere;
+        localSphere.Transform(worldSphere, DirectX::XMLoadFloat4x4(&node.m_WorldTransform));
+        node.m_Center = worldSphere.Center;
+        node.m_Radius = worldSphere.Radius;
+    }
+}
+
+void Scene::EnsureDefaultDirectionalLight()
+{
+    // Sort so directional lights come last (Spot < Point < Directional by enum value).
+    std::sort(m_Lights.begin(), m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
+    {
+        return a.m_Type > b.m_Type;
+    });
+
+    if (m_Lights.empty() || m_Lights.back().m_Type != Scene::Light::Directional)
+    {
+        Scene::Light light;
+        light.m_Name      = "Default Directional";
+        light.m_Type      = Scene::Light::Directional;
+        light.m_Color     = Vector3{ 1.0f, 1.0f, 1.0f };
+        light.m_Intensity = 1.0f;
+        m_Lights.push_back(std::move(light));
+
+        m_Lights.back().m_NodeIndex = (int)m_Nodes.size();
+        Scene::Node& lightNode = m_Nodes.emplace_back();
+        lightNode.m_LightIndex = (int)m_Lights.size() - 1;
+
+        // Default sun angles: 45° pitch pointing downward along +Z in LH space.
+        constexpr float defaultPitch = DirectX::XM_PIDIV4; // 45 degrees
+        constexpr float defaultYaw   = 0.0f;
+        DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationRollPitchYaw(defaultPitch, defaultYaw, 0.0f);
+        DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
+
+        const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
+        DirectX::XMStoreFloat4x4(&lightNode.m_LocalTransform, localM);
+        lightNode.m_WorldTransform = lightNode.m_LocalTransform;
+    }
+}
+
 void Scene::LoadScene()
 {
 	const std::string& scenePath = Config::Get().m_ScenePath;
@@ -93,38 +426,6 @@ void Scene::LoadScene()
 		else
 			SDL_Log("[PIX] Load capture was not written");
 	}
-}
-
-Scene::GeometryFootprint Scene::MeasureGeometryFootprint() const
-{
-	GeometryFootprint footprint;
-
-	// A triangle BLAS references the scene's own vertex block and index range, so both have to be resident for as
-	// long as the AS exists - that is the part of RT that disk-backed streaming cannot help with.
-	for (const Mesh& mesh : m_Meshes)
-	{
-		for (const Primitive& primitive : mesh.m_Primitives)
-			footprint.m_VertexBytes += uint64_t(primitive.m_VertexCount) * sizeof(srrhi::VertexQuantized);
-	}
-
-	uint64_t indexCount = 0;
-	for (const srrhi::MeshData& meshData : m_MeshData)
-	{
-		const uint32_t lodCount = std::min<uint32_t>(meshData.m_LODCount, srrhi::CommonConsts::MAX_LOD_COUNT);
-		for (uint32_t lod = 0; lod < lodCount; ++lod)
-		{
-			indexCount += meshData.m_IndexCounts[lod];
-			footprint.m_Triangles += meshData.m_IndexCounts[lod] / 3u;
-		}
-	}
-	footprint.m_IndexBytes = indexCount * sizeof(uint32_t);
-
-	// Measured, not guessed: threedscans_animals' 18.66 M triangles build 1 291.69 MB of BLAS at
-	// PreferFastTrace (Scene.cpp's own log line), i.e. 69 B per triangle.
-	constexpr uint64_t kBlasBytesPerTriangle = 69;
-	footprint.m_BlasBytes = footprint.m_Triangles * kBlasBytesPerTriangle;
-	footprint.m_ResidentBytes = footprint.m_VertexBytes + footprint.m_IndexBytes + footprint.m_BlasBytes;
-	return footprint;
 }
 
 uint64_t Scene::GetRayTracingBudgetBytes() const
@@ -379,196 +680,6 @@ void Scene::BuildAccelerationStructures()
     }
 }
 
-void Scene::FinalizeLoadedScene()
-{
-    //SCOPED_TIMER("[Scene] Finalize Scene");
-
-    // 1. Identify dynamic nodes and sort them topologically
-    // Mark nodes targeted by animations as animated before the dynamic pass.
-    // Also collect dynamic material indices for emissive intensity animations.
-    m_DynamicMaterialIndices.clear();
-    for (const Animation& anim : m_Animations)
-    {
-        for (const AnimationChannel& chan : anim.m_Channels)
-        {
-            // Primary single-node target (glTF) and multi-node targets (JSON)
-            for (int ni : chan.m_NodeIndices)
-            {
-                if (ni >= 0 && ni < (int)m_Nodes.size())
-                    m_Nodes[ni].m_IsAnimated = true;
-                else
-                    SDL_Log("[Scene] FinalizeLoadedScene: animation '%s' has out-of-range node index %d (node count=%d)",
-                        anim.m_Name.c_str(), ni, (int)m_Nodes.size());
-            }
-            // Material targets (EmissiveIntensity)
-            for (int mi : chan.m_MaterialIndices)
-            {
-                if (mi >= 0 && mi < (int)m_Materials.size())
-                    m_DynamicMaterialIndices.push_back(mi);
-                else
-                    SDL_Log("[Scene] FinalizeLoadedScene: animation '%s' has out-of-range material index %d (material count=%d)",
-                        anim.m_Name.c_str(), mi, (int)m_Materials.size());
-            }
-        }
-    }
-    // Deduplicate dynamic material indices
-    std::sort(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end());
-    m_DynamicMaterialIndices.erase(std::unique(m_DynamicMaterialIndices.begin(), m_DynamicMaterialIndices.end()), m_DynamicMaterialIndices.end());
-
-    m_DynamicNodeIndices.clear();
-    std::function<void(int, bool)> IdentifyDynamic = [&](int idx, bool parentDynamic)
-    {
-        Node& node = m_Nodes[idx];
-        node.m_IsDynamic = node.m_IsAnimated || node.m_LightIndex != -1 || parentDynamic;
-        if (node.m_IsDynamic)
-        {
-            m_DynamicNodeIndices.push_back(idx);
-        }
-        for (int childIdx : node.m_Children)
-        {
-            IdentifyDynamic(childIdx, node.m_IsDynamic);
-        }
-    };
-
-    for (int i = 0; i < (int)m_Nodes.size(); ++i)
-    {
-        if (m_Nodes[i].m_Parent == -1)
-        {
-            IdentifyDynamic(i, false);
-        }
-    }
-
-    // 2. Bucketize and fill instance data
-    m_InstanceData.clear();
-    struct InstInfo { srrhi::PerInstanceData data; int nodeIdx; };
-    std::vector<InstInfo> opaqueStatic, opaqueDynamic;
-    std::vector<InstInfo> maskedStatic, maskedDynamic;
-    std::vector<InstInfo> transparentStatic, transparentDynamic;
-
-    for (int ni = 0; ni < (int)m_Nodes.size(); ++ni)
-    {
-        const Node& node = m_Nodes[ni];
-        if (node.m_MeshIndex < 0) continue;
-        const Mesh& mesh = m_Meshes[node.m_MeshIndex];
-        for (const Primitive& prim : mesh.m_Primitives)
-        {
-            srrhi::PerInstanceData inst{};
-            inst.m_World = node.m_WorldTransform;
-            inst.m_PrevWorld = node.m_WorldTransform;
-            inst.m_MaterialIndex = prim.m_MaterialIndex;
-            inst.m_MeshDataIndex = prim.m_MeshDataIndex;
-            inst.m_Center = node.m_Center;
-            inst.m_Radius = node.m_Radius;
-
-            uint32_t alphaMode = prim.m_MaterialIndex >= 0 ? m_Materials[prim.m_MaterialIndex].m_GPU.m_AlphaMode : srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
-            bool isDynamic = node.m_IsDynamic;
-
-            if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE) {
-                if (isDynamic) opaqueDynamic.push_back({ inst, ni });
-                else opaqueStatic.push_back({ inst, ni });
-            }
-            else if (alphaMode == srrhi::CommonConsts::ALPHA_MODE_MASK) {
-                if (isDynamic) maskedDynamic.push_back({ inst, ni });
-                else maskedStatic.push_back({ inst, ni });
-            }
-            else {
-                if (isDynamic) transparentDynamic.push_back({ inst, ni });
-                else transparentStatic.push_back({ inst, ni });
-            }
-        }
-    }
-
-    m_OpaqueBucket = { 0, (uint32_t)(opaqueStatic.size() + opaqueDynamic.size()) };
-    m_MaskedBucket = { m_OpaqueBucket.m_BaseIndex + m_OpaqueBucket.m_Count, (uint32_t)(maskedStatic.size() + maskedDynamic.size()) };
-    m_TransparentBucket = { m_MaskedBucket.m_BaseIndex + m_MaskedBucket.m_Count, (uint32_t)(transparentStatic.size() + transparentDynamic.size()) };
-
-    auto PushInstances = [&](const std::vector<InstInfo>& infos)
-    {
-        for (const InstInfo& info : infos)
-        {
-            m_Nodes[info.nodeIdx].m_InstanceIndices.push_back((uint32_t)m_InstanceData.size());
-            m_InstanceData.push_back(info.data);
-        }
-    };
-
-    PushInstances(opaqueStatic);
-    PushInstances(opaqueDynamic);
-    PushInstances(maskedStatic);
-    PushInstances(maskedDynamic);
-    PushInstances(transparentStatic);
-	PushInstances(transparentDynamic);
-
-	// Worst-case number of meshlet jobs the base pass can emit: one job per meshlet group, with
-	// every instance rendering its most detailed LOD. Used to size the meshlet job buffer.
-	m_MaxMeshletJobCount = 0;
-	for (const srrhi::PerInstanceData& inst : m_InstanceData)
-	{
-		const srrhi::MeshData& meshData = m_MeshData[inst.m_MeshDataIndex];
-
-		uint32_t maxMeshlets = 0;
-		for (uint32_t lod = 0; lod < meshData.m_LODCount; ++lod)
-		{
-			maxMeshlets = std::max(maxMeshlets, meshData.m_MeshletCounts[lod]);
-		}
-
-		m_MaxMeshletJobCount += DivideAndRoundUp(maxMeshlets, srrhi::CommonConsts::kThreadsPerGroup);
-	}
-	m_MaxMeshletJobCount = std::max(m_MaxMeshletJobCount, 1u);
-
-	// Worst-case cluster traversal work: every instance drawing every cluster, group and node of its
-	// primitive. The primitive is found through its MeshDataIndex, which is what the traversal indexes too.
-	std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData;
-	for (const Mesh& mesh : m_Meshes)
-	{
-		for (size_t pi = 0; pi < mesh.m_Primitives.size() && pi < mesh.m_Clusters.size(); ++pi)
-			clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
-	}
-
-	// Bounded per bucket rather than over the whole scene: each bucket owns its own traversal buffers, and the
-	// masked bucket is usually a small fraction of the opaque one, so a scene-wide bound would reserve that
-	// capacity a second time (see BasePassResources::DeclareResources for the trade-off this buys).
-	const BucketInfo* const bucketInfos[kClusterBucketCount] = { &m_OpaqueBucket, &m_MaskedBucket };
-	m_MaxClusterTreeDepth = 0;
-	for (uint32_t bucket = 0; bucket < kClusterBucketCount; ++bucket)
-	{
-		uint32_t jobCount = 0;
-		uint32_t groupCount = 0;
-		uint32_t nodeCount = 0;
-
-		for (uint32_t i = 0; i < bucketInfos[bucket]->m_Count; ++i)
-		{
-			const srrhi::PerInstanceData& inst = m_InstanceData[bucketInfos[bucket]->m_BaseIndex + i];
-			const auto it = clustersByMeshData.find(inst.m_MeshDataIndex);
-			if (it == clustersByMeshData.end())
-				continue;
-
-			const ClusterLod::Counts counts = ClusterLod::GetCounts(*it->second);
-			jobCount += counts.m_ClusterCount;
-			groupCount += counts.m_GroupCount;
-			nodeCount += counts.m_NodeCount;
-			m_MaxClusterTreeDepth = std::max(m_MaxClusterTreeDepth, counts.m_MaxTreeDepth);
-		}
-
-		// At least one: these size structured buffers, and a zero-sized one is invalid.
-		m_MaxClusterJobCount[bucket] = std::max(jobCount, 1u);
-		m_MaxClusterGroupCount[bucket] = std::max(groupCount, 1u);
-		m_MaxClusterNodeCount[bucket] = std::max(nodeCount, 1u);
-	}
-
-	m_SceneBoundingSphere = DirectX::BoundingSphere{};
-	for (const Scene::Node& node : m_Nodes)
-	{
-		const DirectX::BoundingSphere nodeSphere(node.m_Center, node.m_Radius);
-		DirectX::BoundingSphere::CreateMerged(m_SceneBoundingSphere, m_SceneBoundingSphere, nodeSphere);
-	}
-
-    //SDL_Log("[Scene] Finalized: Instances: Opaque: %u, Masked: %u, Transparent: %u", m_OpaqueBucket.m_Count, m_MaskedBucket.m_Count, m_TransparentBucket.m_Count);
-}
-
-// ─── Animation evaluation helper ─────────────────────────────────────────────
-
-// Evaluate an AnimationSampler at time t.
-// Returns a Vector4; for scalar attributes only .x is meaningful.
 static Vector4 EvaluateAnimSampler(const Scene::AnimationSampler& sampler, float t)
 {
     const auto& inputs  = sampler.m_Inputs;
@@ -758,11 +869,31 @@ void Scene::Update(float deltaTime)
 			UpdateNodeBoundingSphere(idx);
 
 			// Sync instances
-			for (uint32_t instIdx : node.m_InstanceIndices)
+			for (const Node::InstanceRef& ref : node.m_InstanceIndices)
 			{
-				m_InstanceData[instIdx].m_World = node.m_WorldTransform;
-				m_InstanceData[instIdx].m_Center = node.m_Center;
-				m_InstanceData[instIdx].m_Radius = node.m_Radius;
+				const uint32_t instIdx = ref.m_InstanceIndex;
+
+				if (node.m_InstanceTransforms.empty())
+				{
+					m_InstanceData[instIdx].m_World = node.m_WorldTransform;
+					m_InstanceData[instIdx].m_Center = node.m_Center;
+					m_InstanceData[instIdx].m_Radius = node.m_Radius;
+				}
+				else
+				{
+					// A placement follows the node: node world times the placement, and its own sphere.
+					const DirectX::XMMATRIX worldM = DirectX::XMMatrixMultiply(
+						DirectX::XMLoadFloat4x4(&node.m_InstanceTransforms[ref.m_TransformIndex]),
+						DirectX::XMLoadFloat4x4(&node.m_WorldTransform));
+					DirectX::XMStoreFloat4x4(&m_InstanceData[instIdx].m_World, worldM);
+
+					const Mesh& mesh = m_Meshes[node.m_MeshIndex];
+					const DirectX::BoundingSphere localSphere(mesh.m_Center, mesh.m_Radius);
+					DirectX::BoundingSphere worldSphere;
+					localSphere.Transform(worldSphere, worldM);
+					m_InstanceData[instIdx].m_Center = worldSphere.Center;
+					m_InstanceData[instIdx].m_Radius = worldSphere.Radius;
+				}
 
 				m_InstanceDirtyRange.first = std::min(m_InstanceDirtyRange.first, instIdx);
 				m_InstanceDirtyRange.second = std::max(m_InstanceDirtyRange.second, instIdx);
@@ -770,7 +901,7 @@ void Scene::Update(float deltaTime)
 				// Update RT instance transform
 				if (instIdx < m_RTInstanceDescs.size())
 				{
-					const Matrix& world = node.m_WorldTransform;
+					const Matrix& world = m_InstanceData[instIdx].m_World;
 					nvrhi::rt::AffineTransform transform;
 					transform[0] = world._11; transform[1] = world._21; transform[2] = world._31; transform[3] = world._41;
 					transform[4] = world._12; transform[5] = world._22; transform[6] = world._32; transform[7] = world._42;
@@ -808,51 +939,4 @@ void Scene::Shutdown()
 	// handles and containers on the way through, so no per-member release list has to be kept in
 	// sync with the class definition.
 	*this = Scene{};
-}
-
-void Scene::UpdateNodeBoundingSphere(int nodeIndex)
-{
-    Node& node = m_Nodes[nodeIndex];
-    if (node.m_MeshIndex >= 0 && node.m_MeshIndex < (int)m_Meshes.size())
-    {
-        const Mesh& mesh = m_Meshes[node.m_MeshIndex];
-        const DirectX::BoundingSphere localSphere(mesh.m_Center, mesh.m_Radius);
-        DirectX::BoundingSphere worldSphere;
-        localSphere.Transform(worldSphere, DirectX::XMLoadFloat4x4(&node.m_WorldTransform));
-        node.m_Center = worldSphere.Center;
-        node.m_Radius = worldSphere.Radius;
-    }
-}
-
-void Scene::EnsureDefaultDirectionalLight()
-{
-    // Sort so directional lights come last (Spot < Point < Directional by enum value).
-    std::sort(m_Lights.begin(), m_Lights.end(), [](const Scene::Light& a, const Scene::Light& b)
-    {
-        return a.m_Type > b.m_Type;
-    });
-
-    if (m_Lights.empty() || m_Lights.back().m_Type != Scene::Light::Directional)
-    {
-        Scene::Light light;
-        light.m_Name      = "Default Directional";
-        light.m_Type      = Scene::Light::Directional;
-        light.m_Color     = Vector3{ 1.0f, 1.0f, 1.0f };
-        light.m_Intensity = 1.0f;
-        m_Lights.push_back(std::move(light));
-
-        m_Lights.back().m_NodeIndex = (int)m_Nodes.size();
-        Scene::Node& lightNode = m_Nodes.emplace_back();
-        lightNode.m_LightIndex = (int)m_Lights.size() - 1;
-
-        // Default sun angles: 45° pitch pointing downward along +Z in LH space.
-        constexpr float defaultPitch = DirectX::XM_PIDIV4; // 45 degrees
-        constexpr float defaultYaw   = 0.0f;
-        DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationRollPitchYaw(defaultPitch, defaultYaw, 0.0f);
-        DirectX::XMStoreFloat4(&lightNode.m_Rotation, quat);
-
-        const DirectX::XMMATRIX localM = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&lightNode.m_Rotation));
-        DirectX::XMStoreFloat4x4(&lightNode.m_LocalTransform, localM);
-        lightNode.m_WorldTransform = lightNode.m_LocalTransform;
-    }
 }

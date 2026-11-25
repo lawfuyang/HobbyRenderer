@@ -253,6 +253,7 @@ protected:
         cullData.SetHZBHeight(handles.hzb ? handles.hzb->getDesc().height : 0);
         cullData.SetPhase(args.m_CullingPhase);
         cullData.SetUseMeshletRendering(g_Renderer.m_UseMeshletRendering ? 1 : 0);
+        cullData.SetMaxMeshletJobs(g_Renderer.m_UseMeshletRendering ? g_Renderer.m_Scene.m_MaxMeshletJobCount : 0u);
         cullData.SetP00(projectionMatrix.m[0][0]);
         cullData.SetP11(projectionMatrix.m[1][1]);
         cullData.SetForcedLOD(Config::Get().m_ForcedLOD);
@@ -468,6 +469,12 @@ protected:
         // Streaming is always on: the traversal asks for any group the arena does not hold, and the age filter
         // hands back the ones the camera has left. Without cluster data there is no table to read, so it is off.
         const GeometryStreaming* streaming = g_Renderer.m_GeometryStreaming.get();
+        // The queues hold a budget (Scene::FinalizeLoadedScene), so the traversal has to know the capacities it
+        // may fill: an append past one is dropped and counted instead of writing past the buffer.
+        const uint32_t clusterBucket = args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE ?
+            Scene::kClusterBucketOpaque : Scene::kClusterBucketMasked;
+        data.SetMaxNodeRefs(scene.m_MaxClusterNodeCount[clusterBucket]);
+        data.SetMaxGroupRefs(scene.m_MaxClusterGroupCount[clusterBucket]);
         data.SetStreamingEnabled(streaming != nullptr ? 1u : 0u);
         data.SetFrameIndex(streaming != nullptr ? streaming->GetFrameIndex() : 0u);
         data.SetMaxLoads(streaming != nullptr ? streaming->GetMaxLoads() : 0u);

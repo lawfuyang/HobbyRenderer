@@ -109,6 +109,8 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 uint jobIndex;
                 InterlockedAdd(g_MeshletJobCount[0], 1, jobIndex);
+                if (g_Culling.m_MaxMeshletJobs != 0 && jobIndex >= g_Culling.m_MaxMeshletJobs)
+                    continue;
 
                 srrhi::MeshletJob job;
                 job.m_InstanceIndex     = actualInstanceIndex;

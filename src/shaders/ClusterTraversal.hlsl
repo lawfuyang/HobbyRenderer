@@ -77,6 +77,50 @@ static const uint kNoForcedLOD = 0xFFFFFFFFu;
 // reference renderer's CULL_MIN_PIXEL_SIZE: nothing of the cluster can land on a sample below that.
 static const float2 kMinClusterPixelSize = 1.0f;
 
+// The node and group queues hold a budget, not the instances x tree worst case that a non-instanced scene makes
+// affordable (Scene::FinalizeLoadedScene caps the counts). An append past the end is dropped and counted, and the
+// count every pass reads is clamped to the same capacity, so a full queue costs image coverage - which the
+// counters panel reports - instead of writing past a structured buffer.
+uint NodeQueueCountClamped()
+{
+	return min(g_NodeQueueCountIn[0], g_Traversal.m_MaxNodeRefs);
+}
+
+uint GroupQueueCountClamped()
+{
+	return min(g_GroupQueueCount[0], g_Traversal.m_MaxGroupRefs);
+}
+
+uint RejectNodeCountClamped()
+{
+	return min(g_RejectNodeCount[0], g_Traversal.m_MaxNodeRefs);
+}
+
+uint RejectGroupCountClamped()
+{
+	return min(g_RejectGroupCount[0], g_Traversal.m_MaxGroupRefs);
+}
+
+void AppendNodeRef(srrhi::ClusterNodeRef ref)
+{
+	uint slot;
+	InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
+	if (slot < g_Traversal.m_MaxNodeRefs)
+		g_NodeQueueOut[slot] = ref;
+	else
+		InterlockedAdd(g_Counters[0].m_RefCapped, 1);
+}
+
+void AppendGroupRef(srrhi::ClusterGroupRef ref)
+{
+	uint slot;
+	InterlockedAdd(g_GroupQueueCount[0], 1, slot);
+	if (slot < g_Traversal.m_MaxGroupRefs)
+		g_GroupQueue[slot] = ref;
+	else
+		InterlockedAdd(g_Counters[0].m_RefCapped, 1);
+}
+
 // ClusterLod::Node, whose two halves are packed into one uint because neither HLSL nor srrhi has bitfields.
 bool NodeIsLeaf(uint packed)
 {
@@ -355,12 +399,8 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		// already sitting in the group queue this pass walks, so they are not copied.
 		const uint itemIndex = dispatchThreadId.x;
 
-		if (itemIndex < g_RejectNodeCount[0])
-		{
-			uint nodeSlot;
-			InterlockedAdd(g_NodeQueueCountOut[0], 1, nodeSlot);
-			g_NodeQueueOut[nodeSlot] = g_RejectNodes[itemIndex];
-		}
+		if (itemIndex < RejectNodeCountClamped())
+			AppendNodeRef(g_RejectNodes[itemIndex]);
 		return;
 	}
 
@@ -416,7 +456,10 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 			rejectedRoot.m_InstanceIndex = instanceIndex;
 			rejectedRoot.m_NodeIndex = geometry.m_NodeOffset;
 			rejectedRoot.m_Flags = seedFlags;
-			g_RejectNodes[rejectSlot] = rejectedRoot;
+			if (rejectSlot < g_Traversal.m_MaxNodeRefs)
+				g_RejectNodes[rejectSlot] = rejectedRoot;
+			else
+				InterlockedAdd(g_Counters[0].m_RefCapped, 1);
 		}
 		else
 		{
@@ -429,7 +472,10 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 				rejectedRoot.m_InstanceIndex = instanceIndex;
 				rejectedRoot.m_NodeIndex = levelRootBase + level;
 				rejectedRoot.m_Flags = seedFlags;
-				g_RejectNodes[rejectSlot + written] = rejectedRoot;
+				if (rejectSlot + written < g_Traversal.m_MaxNodeRefs)
+					g_RejectNodes[rejectSlot + written] = rejectedRoot;
+				else
+					InterlockedAdd(g_Counters[0].m_RefCapped, 1);
 				written++;
 			}
 		}
@@ -444,14 +490,11 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	if (bRootIsLeaf)
 	{
-		uint slot;
-		InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
-
 		srrhi::ClusterNodeRef nodeRef;
 		nodeRef.m_InstanceIndex = instanceIndex;
 		nodeRef.m_NodeIndex = geometry.m_NodeOffset;
 		nodeRef.m_Flags = seedFlags;
-		g_NodeQueueOut[slot] = nodeRef;
+		AppendNodeRef(nodeRef);
 		return;
 	}
 
@@ -468,27 +511,21 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		// meet the same cut test they always did.
 		if (classification.m_bDiscrete && NodeIsLeaf(seedNode.m_Packed))
 		{
-			uint groupSlot;
-			InterlockedAdd(g_GroupQueueCount[0], 1, groupSlot);
-
 			srrhi::ClusterGroupRef discreteGroup;
 			discreteGroup.m_InstanceIndex = instanceIndex;
 			discreteGroup.m_GroupIndex = NodeGetGroupIndex(seedNode.m_Packed);
 			discreteGroup.m_Flags = seedFlags;
-			g_GroupQueue[groupSlot] = discreteGroup;
+			AppendGroupRef(discreteGroup);
 
 			InterlockedAdd(g_Counters[0].m_GroupCount, 1);
 			continue;
 		}
 
-		uint slot;
-		InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
-
 		srrhi::ClusterNodeRef nodeRef;
 		nodeRef.m_InstanceIndex = instanceIndex;
 		nodeRef.m_NodeIndex = seedNodeIndex;
 		nodeRef.m_Flags = seedFlags;
-		g_NodeQueueOut[slot] = nodeRef;
+		AppendNodeRef(nodeRef);
 	}
 }
 
@@ -496,7 +533,7 @@ void ClusterTraversalInit_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
 	const uint itemIndex = dispatchThreadId.x;
-	if (itemIndex >= g_NodeQueueCountIn[0])
+	if (itemIndex >= NodeQueueCountClamped())
 		return;
 
 	const srrhi::ClusterNodeRef nodeRef = g_NodeQueueIn[itemIndex];
@@ -538,21 +575,21 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 					rejectedChild.m_InstanceIndex = nodeRef.m_InstanceIndex;
 					rejectedChild.m_NodeIndex = childIndex;
 					rejectedChild.m_Flags = nodeRef.m_Flags;
-					g_RejectNodes[rejectSlot] = rejectedChild;
+					if (rejectSlot < g_Traversal.m_MaxNodeRefs)
+						g_RejectNodes[rejectSlot] = rejectedChild;
+					else
+						InterlockedAdd(g_Counters[0].m_RefCapped, 1);
 
 					InterlockedAdd(g_Counters[0].m_RejectNodeCount, 1);
 				}
 				continue;
 			}
 
-			uint slot;
-			InterlockedAdd(g_NodeQueueCountOut[0], 1, slot);
-
 			srrhi::ClusterNodeRef childRef;
 			childRef.m_InstanceIndex = nodeRef.m_InstanceIndex;
 			childRef.m_NodeIndex = childIndex;
 			childRef.m_Flags = nodeRef.m_Flags;
-			g_NodeQueueOut[slot] = childRef;
+			AppendNodeRef(childRef);
 		}
 
 		return;
@@ -576,14 +613,11 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 		return;
 	}
 
-	uint slot;
-	InterlockedAdd(g_GroupQueueCount[0], 1, slot);
-
 	srrhi::ClusterGroupRef groupRef;
 	groupRef.m_InstanceIndex = nodeRef.m_InstanceIndex;
 	groupRef.m_GroupIndex = groupIndex;
 	groupRef.m_Flags = nodeRef.m_Flags;
-	g_GroupQueue[slot] = groupRef;
+	AppendGroupRef(groupRef);
 
 	InterlockedAdd(g_Counters[0].m_GroupCount, 1);
 }
@@ -592,7 +626,7 @@ void ClusterTraversalRun_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
 	const uint itemIndex = dispatchThreadId.x;
-	if (itemIndex >= g_GroupQueueCount[0])
+	if (itemIndex >= GroupQueueCountClamped())
 		return;
 
 	const srrhi::ClusterGroupRef groupRef = g_GroupQueue[itemIndex];
@@ -654,7 +688,10 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 			rejectedGroup.m_InstanceIndex = groupRef.m_InstanceIndex;
 			rejectedGroup.m_GroupIndex = groupRef.m_GroupIndex;
 			rejectedGroup.m_Flags = groupRef.m_Flags;
-			g_RejectGroups[rejectSlot] = rejectedGroup;
+			if (rejectSlot < g_Traversal.m_MaxGroupRefs)
+				g_RejectGroups[rejectSlot] = rejectedGroup;
+			else
+				InterlockedAdd(g_Counters[0].m_RefCapped, 1);
 
 			InterlockedAdd(g_Counters[0].m_RejectGroupCount, 1);
 		}
@@ -767,7 +804,7 @@ void ClusterBuildArgs_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	// The second pass' seed grid: one thread per entry of the larger reject list. Nothing rejected leaves the
 	// grid empty, which is how a static camera skips the second pass entirely.
-	const uint rejectCount = max(g_RejectNodeCount[0], g_RejectGroupCount[0]);
+	const uint rejectCount = max(RejectNodeCountClamped(), RejectGroupCountClamped());
 	const uint rejectGrid = (rejectCount + srrhi::CommonConsts::kThreadsPerGroup - 1) / srrhi::CommonConsts::kThreadsPerGroup;
 
 	g_ClusterIndirectArgs[kIndirectSlotSecondPassInit].m_ThreadGroupCountX = rejectGrid;
@@ -776,7 +813,7 @@ void ClusterBuildArgs_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
 	// The per-cluster re-test walks the first pass' group queue, which pass 1 leaves untouched.
 	const uint rejectClusterGrid =
-		(g_GroupQueueCount[0] + srrhi::CommonConsts::kThreadsPerGroup - 1) / srrhi::CommonConsts::kThreadsPerGroup;
+		(GroupQueueCountClamped() + srrhi::CommonConsts::kThreadsPerGroup - 1) / srrhi::CommonConsts::kThreadsPerGroup;
 
 	g_ClusterIndirectArgs[kIndirectSlotRejectClusters].m_ThreadGroupCountX = rejectClusterGrid;
 	g_ClusterIndirectArgs[kIndirectSlotRejectClusters].m_ThreadGroupCountY = 1;
@@ -790,7 +827,7 @@ void ClusterBuildArgs_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 void ClusterRejectClusters_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
 	const uint itemIndex = dispatchThreadId.x;
-	if (itemIndex >= g_Pass0GroupCount[0])
+	if (itemIndex >= GroupQueueCountClamped())
 		return;
 
 	const srrhi::ClusterGroupRef groupRef = g_Pass0Groups[itemIndex];
