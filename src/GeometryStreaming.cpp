@@ -48,7 +48,7 @@ nvrhi::BufferHandle GeometryStreaming::CreateArenaBuffer(uint32_t elements) cons
     return g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
 }
 
-const uint8_t* GeometryStreaming::GetGroupBlob(uint32_t groupIndex, uint32_t& outByteSize) const
+const uint8_t* GeometryStreaming::GetGroupBlob(uint32_t groupIndex, uint32_t& outByteSize)
 {
     outByteSize = 0;
     if (!m_BlobFile || !m_BlobFile->IsValid() || groupIndex >= m_GroupFiles.size())
@@ -56,8 +56,29 @@ const uint8_t* GeometryStreaming::GetGroupBlob(uint32_t groupIndex, uint32_t& ou
 
     const ClusterLod::GroupBlobRef& ref = m_GroupFiles[groupIndex];
     SDL_assert(uint64_t(ref.m_FileOffset) + ref.m_ByteSize <= m_BlobFile->GetSize());
-    outByteSize = ref.m_ByteSize;
-    return static_cast<const uint8_t*>(m_BlobFile->GetDataAt(size_t(ref.m_FileOffset)));
+    if (uint64_t(ref.m_FileOffset) + ref.m_ByteSize > m_BlobFile->GetSize())
+        return nullptr;
+
+    const uint8_t* stored = static_cast<const uint8_t*>(m_BlobFile->GetDataAt(size_t(ref.m_FileOffset)));
+    if (ref.m_ByteSize == ref.m_RawByteSize)
+    {
+        outByteSize = ref.m_ByteSize;   // stored verbatim
+        return stored;
+    }
+
+    // The vertex run is meshopt-encoded on disk; the arena wants the blob back as it was built.
+    const ClusterLod::StreamGroup& blob = m_GroupBlobs[groupIndex];
+    m_BlobScratch.resize(ref.m_RawByteSize);
+    if (!ClusterLod::DecodeGroupBlob(stored, ref.m_ByteSize, blob.m_TriangleCount, blob.m_VertexCount,
+            m_BlobScratch.data()))
+    {
+        SDL_Log("[ClusterLod] geometry streaming: group %u blob at %llu (%u B) does not decode; it stays unloaded",
+            groupIndex, static_cast<unsigned long long>(ref.m_FileOffset), ref.m_ByteSize);
+        return nullptr;
+    }
+
+    outByteSize = ref.m_RawByteSize;
+    return m_BlobScratch.data();
 }
 
 void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData& data)
@@ -101,13 +122,13 @@ void GeometryStreaming::Initialize(nvrhi::ICommandList* cmd, ClusterLod::GpuData
         for (uint32_t g = 0; g < m_GroupCount; ++g)
         {
             const uint64_t bytes = uint64_t(m_GroupBlobs[g].GetBlobElements()) * sizeof(uint32_t);
-            const uint64_t end   = uint64_t(m_GroupFiles[g].m_FileOffset) + bytes;
-            SDL_assert(m_GroupFiles[g].m_ByteSize == bytes);
+            const uint64_t end   = uint64_t(m_GroupFiles[g].m_FileOffset) + m_GroupFiles[g].m_ByteSize;
+            SDL_assert(m_GroupFiles[g].m_RawByteSize == bytes);
             SDL_assert(end <= fileBytes);
-            if (m_GroupFiles[g].m_ByteSize != bytes || end > fileBytes)
+            if (m_GroupFiles[g].m_RawByteSize != bytes || end > fileBytes)
             {
                 SDL_Log("[ClusterLod] geometry streaming: group %u blob %u B at %llu does not fit the cooked file "
-                        "(%llu B, expected %llu B); streaming disabled",
+                        "(%llu B, expected %llu B raw); streaming disabled",
                     g, m_GroupFiles[g].m_ByteSize, static_cast<unsigned long long>(m_GroupFiles[g].m_FileOffset),
                     static_cast<unsigned long long>(fileBytes), static_cast<unsigned long long>(bytes));
                 m_BlobFile.reset();

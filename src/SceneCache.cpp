@@ -23,17 +23,23 @@ namespace
     constexpr uint32_t kAttributeWords = sizeof(srrhi::VertexQuantized) / sizeof(uint32_t);
     static_assert(sizeof(srrhi::VertexQuantized) == 6 * sizeof(uint32_t));
 
-    uint32_t GroupBlobByteSize(const GroupSource& source)
+    struct GroupCounts
     {
-        uint32_t words = 0;
+        uint32_t m_Triangles = 0;
+        uint32_t m_Vertices = 0;
+    };
+
+    GroupCounts CountGroup(const GroupSource& source)
+    {
+        GroupCounts counts;
         for (uint32_t i = 0; i < source.m_Group->m_ClusterCount; ++i)
         {
             const ClusterLod::Cluster& cluster = source.m_Clusters->m_Clusters[source.m_Group->m_ClusterOffset + i];
-            words += cluster.GetTriangleCount() + kAttributeWords * cluster.GetVertexCount();
+            counts.m_Triangles += cluster.GetTriangleCount();
+            counts.m_Vertices += cluster.GetVertexCount();
         }
-        return (words * uint32_t(sizeof(uint32_t)) + 15u) & ~15u;
+        return counts;
     }
-
     void WriteZeroBytes(std::ostream& os, uint64_t count)
     {
         static const char kZeros[256] = {};
@@ -144,32 +150,10 @@ bool SaveCookedMesh(
         }
     }
 
-    outBlobs.m_Groups.clear();
-    outBlobs.m_Groups.reserve(groupSources.size());
-    uint64_t blobBytes = 0;
-    for (const GroupSource& source : groupSources)
-    {
-        ClusterLod::GroupBlobRef ref;
-        ref.m_FileOffset = blobBytes;
-        ref.m_ByteSize   = GroupBlobByteSize(source);
-        blobBytes += ref.m_ByteSize;
-        outBlobs.m_Groups.push_back(ref);
-    }
-
-    const uint64_t tableBytes   = sizeof(uint64_t) + uint64_t(outBlobs.m_Groups.size()) * sizeof(ClusterLod::GroupBlobRef);
-    const uint64_t sectionStart = (uint64_t(os.tellp()) + tableBytes + 4095u) & ~uint64_t(4095);
-    for (ClusterLod::GroupBlobRef& ref : outBlobs.m_Groups)
-        ref.m_FileOffset += sectionStart;   // absolute from now on, which is what the reader hands out
-
-    WritePOD(os, uint64_t(outBlobs.m_Groups.size()));
-    for (const ClusterLod::GroupBlobRef& ref : outBlobs.m_Groups)
-        WritePOD(os, ref);
-    WriteZeroBytes(os, sectionStart - uint64_t(os.tellp()));
-
-    // The blob words themselves. A group's triangles come first, then every cluster vertex's attributes - the
-    // same VertexQuantized the scene's global vertex buffer holds, so the cluster path renders identical pixels
-    // while only the cut's vertices ever reach VRAM.
+    // The blob stored for a group is its arena blob with the vertex run meshopt-encoded, so its size is only
+    // known once it has been encoded: the table comes from one pass over the groups and the data from a second.
     std::vector<uint32_t> words;
+    std::vector<uint8_t> stored;
     auto packGroup = [&words](const GroupSource& source)
     {
         words.clear();
@@ -201,13 +185,50 @@ bool SaveCookedMesh(
         }
     };
 
+    outBlobs.m_Groups.clear();
+    outBlobs.m_Groups.reserve(groupSources.size());
+    uint64_t blobBytes = 0;
+    uint64_t rawBytes  = 0;
+    for (const GroupSource& source : groupSources)
+    {
+        const GroupCounts counts = CountGroup(source);
+        packGroup(source);
+        if (!ClusterLod::EncodeGroupBlob(words.data(), counts.m_Triangles, counts.m_Vertices, stored))
+        {
+            SDL_Log("[SceneCache] Failed to encode a group blob while saving cache: %s", cachePath.string().c_str());
+            return false;
+        }
+
+        ClusterLod::GroupBlobRef ref;
+        ref.m_FileOffset  = blobBytes;
+        ref.m_ByteSize    = uint32_t(stored.size());
+        ref.m_RawByteSize = ClusterLod::GroupBlobRawBytes(counts.m_Triangles, counts.m_Vertices);
+        blobBytes += ref.m_ByteSize;
+        rawBytes += ref.m_RawByteSize;
+        outBlobs.m_Groups.push_back(ref);
+    }
+
+    const uint64_t tableBytes   = sizeof(uint64_t) + uint64_t(outBlobs.m_Groups.size()) * sizeof(ClusterLod::GroupBlobRef);
+    const uint64_t sectionStart = (uint64_t(os.tellp()) + tableBytes + 4095u) & ~uint64_t(4095);
+    for (ClusterLod::GroupBlobRef& ref : outBlobs.m_Groups)
+        ref.m_FileOffset += sectionStart;   // absolute from now on, which is what the reader hands out
+
+    WritePOD(os, uint64_t(outBlobs.m_Groups.size()));
+    for (const ClusterLod::GroupBlobRef& ref : outBlobs.m_Groups)
+        WritePOD(os, ref);
+    WriteZeroBytes(os, sectionStart - uint64_t(os.tellp()));
+
     for (size_t i = 0; i < groupSources.size(); ++i)
     {
-        const ClusterLod::GroupBlobRef& ref = outBlobs.m_Groups[i];
+        const GroupCounts counts = CountGroup(groupSources[i]);
         packGroup(groupSources[i]);
-        SDL_assert(words.size() * sizeof(uint32_t) <= ref.m_ByteSize);
-        os.write(reinterpret_cast<const char*>(words.data()), std::streamsize(words.size() * sizeof(uint32_t)));
-        WriteZeroBytes(os, ref.m_ByteSize - words.size() * sizeof(uint32_t));
+        if (!ClusterLod::EncodeGroupBlob(words.data(), counts.m_Triangles, counts.m_Vertices, stored))
+        {
+            SDL_Log("[SceneCache] Failed to encode a group blob while saving cache: %s", cachePath.string().c_str());
+            return false;
+        }
+        SDL_assert(stored.size() == outBlobs.m_Groups[i].m_ByteSize);
+        os.write(reinterpret_cast<const char*>(stored.data()), std::streamsize(stored.size()));
     }
 
     outBlobs.m_Path = cachePath;
@@ -220,25 +241,38 @@ bool SaveCookedMesh(
 
     os.close();
 
-    // Read the section back and compare it to the packing. This is the check that catches an offset or ordering
-    // mistake in the table - at load every such file looks valid. Skipped for very large sections, where the extra
-    // read costs more than it is worth.
+    if (rawBytes != 0)
+    {
+        SDL_Log("[SceneCache] Group blobs: %.1f MB on disk from %.1f MB of arena data (%.2fx)",
+            double(blobBytes) / (1 << 20), double(rawBytes) / (1 << 20), double(rawBytes) / double(blobBytes));
+    }
+
+    // Read the section back, decode it and compare it to the packing. This is the check that catches an offset
+    // or ordering mistake in the table - at load every such file looks valid. Skipped for very large sections,
+    // where the extra read costs more than it is worth.
     if (blobBytes != 0 && blobBytes <= (256ull << 20))
     {
         std::ifstream verify(cachePath, std::ios::binary);
         std::vector<uint32_t> expected;
-        std::vector<uint32_t> actual;
+        std::vector<uint8_t> loaded;
+        std::vector<uint8_t> raw;
         for (size_t i = 0; i < groupSources.size() && verify.is_open(); ++i)
         {
             const ClusterLod::GroupBlobRef& ref = outBlobs.m_Groups[i];
+            const GroupCounts counts = CountGroup(groupSources[i]);
             packGroup(groupSources[i]);
-            expected.assign(ref.m_ByteSize / sizeof(uint32_t), 0u);
+            expected.assign(ref.m_RawByteSize / sizeof(uint32_t), 0u);
             std::copy(words.begin(), words.end(), expected.begin());
-            actual.assign(expected.size(), 0u);
 
+            loaded.assign(ref.m_ByteSize, 0);
             verify.seekg(std::streamoff(ref.m_FileOffset));
-            verify.read(reinterpret_cast<char*>(actual.data()), std::streamsize(actual.size() * sizeof(uint32_t)));
-            if (!verify.good() || memcmp(actual.data(), expected.data(), actual.size() * sizeof(uint32_t)) != 0)
+            verify.read(reinterpret_cast<char*>(loaded.data()), std::streamsize(loaded.size()));
+
+            raw.assign(ref.m_RawByteSize, 0);
+            if (!verify.good() ||
+                !ClusterLod::DecodeGroupBlob(loaded.data(), ref.m_ByteSize, counts.m_Triangles, counts.m_Vertices,
+                    raw.data()) ||
+                memcmp(raw.data(), expected.data(), expected.size() * sizeof(uint32_t)) != 0)
             {
                 SDL_Log("[SceneCache] Blob verification failed for group %zu at offset %llu: %s", i,
                     static_cast<unsigned long long>(ref.m_FileOffset), cachePath.string().c_str());
@@ -308,33 +342,15 @@ bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, 
         ClusterLod::WriteToStream(os, clusters);
         header.m_ClusterBytes = uint64_t(os.tellp() - metadataStart);
 
-        // The blob table, with offsets relative to the blob region that follows it. Every group's blob is the
-        // same layout the arena holds: its triangles, then six words of VertexQuantized per cluster vertex.
-        std::vector<ClusterLod::GroupBlobRef> refs(clusters.m_Groups.size());
-        uint64_t blobBytes = 0;
-        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
-        {
-            const ClusterLod::Group& group = clusters.m_Groups[g];
-            uint32_t words = 0;
-            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
-            {
-                const ClusterLod::Cluster& cluster = clusters.m_Clusters[group.m_ClusterOffset + i];
-                words += cluster.GetTriangleCount() + 6u * cluster.GetVertexCount();
-            }
-            refs[g].m_FileOffset = blobBytes;
-            refs[g].m_ByteSize = (words * uint32_t(sizeof(uint32_t)) + 15u) & ~15u;
-            blobBytes += refs[g].m_ByteSize;
-        }
-        header.m_BlobBytes = blobBytes;
-
-        WritePOD(os, uint32_t(refs.size()));
-        for (const ClusterLod::GroupBlobRef& ref : refs)
-            WritePOD(os, ref);
-
+        // The blob table, with offsets relative to the blob region that follows it. Each group's blob is the
+        // arena layout - its triangles, then six words of VertexQuantized per cluster vertex - with the vertex
+        // run meshopt-encoded, so a size is only known once the group has been encoded: one pass sizes the
+        // table, the second writes the data.
         std::vector<uint32_t> words;
-        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+        std::vector<uint8_t> stored;
+        std::vector<GroupCounts> groupCounts(clusters.m_Groups.size());
+        auto packGroup = [&clusters, &vertices, &words](const ClusterLod::Group& group)
         {
-            const ClusterLod::Group& group = clusters.m_Groups[g];
             words.clear();
             for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
             {
@@ -359,10 +375,55 @@ bool WriteCookedPart(const std::filesystem::path& partPath, uint32_t meshIndex, 
                         words.push_back(attributeWords[w]);
                 }
             }
-            os.write(reinterpret_cast<const char*>(words.data()), std::streamsize(words.size() * sizeof(uint32_t)));
-            // The table promises a 16-byte aligned blob, so the tail is zero-filled exactly as the arena sees it.
-            SDL_assert(words.size() * sizeof(uint32_t) <= refs[g].m_ByteSize);
-            WriteZeroBytes(os, refs[g].m_ByteSize - words.size() * sizeof(uint32_t));
+        };
+
+        std::vector<ClusterLod::GroupBlobRef> refs(clusters.m_Groups.size());
+        uint64_t blobBytes = 0;
+        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+        {
+            const ClusterLod::Group& group = clusters.m_Groups[g];
+            for (uint32_t i = 0; i < group.m_ClusterCount; ++i)
+            {
+                const ClusterLod::Cluster& cluster = clusters.m_Clusters[group.m_ClusterOffset + i];
+                groupCounts[g].m_Triangles += cluster.GetTriangleCount();
+                groupCounts[g].m_Vertices += cluster.GetVertexCount();
+            }
+
+            packGroup(group);
+            if (!ClusterLod::EncodeGroupBlob(words.data(), groupCounts[g].m_Triangles, groupCounts[g].m_Vertices,
+                    stored))
+            {
+                SDL_Log("[SceneCache] Failed to encode a group blob while saving part: %s", tempPath.string().c_str());
+                os.close();
+                std::filesystem::remove(tempPath, ec);
+                return false;
+            }
+
+            refs[g].m_FileOffset  = blobBytes;
+            refs[g].m_ByteSize    = uint32_t(stored.size());
+            refs[g].m_RawByteSize = ClusterLod::GroupBlobRawBytes(groupCounts[g].m_Triangles,
+                groupCounts[g].m_Vertices);
+            blobBytes += refs[g].m_ByteSize;
+        }
+        header.m_BlobBytes = blobBytes;
+
+        WritePOD(os, uint32_t(refs.size()));
+        for (const ClusterLod::GroupBlobRef& ref : refs)
+            WritePOD(os, ref);
+
+        for (size_t g = 0; g < clusters.m_Groups.size(); ++g)
+        {
+            packGroup(clusters.m_Groups[g]);
+            if (!ClusterLod::EncodeGroupBlob(words.data(), groupCounts[g].m_Triangles, groupCounts[g].m_Vertices,
+                    stored))
+            {
+                SDL_Log("[SceneCache] Failed to encode a group blob while saving part: %s", tempPath.string().c_str());
+                os.close();
+                std::filesystem::remove(tempPath, ec);
+                return false;
+            }
+            SDL_assert(stored.size() == refs[g].m_ByteSize);
+            os.write(reinterpret_cast<const char*>(stored.data()), std::streamsize(stored.size()));
         }
 
         if (!os.good())

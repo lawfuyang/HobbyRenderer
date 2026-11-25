@@ -169,8 +169,9 @@ private:
 
     nvrhi::BufferHandle CreateArenaBuffer(uint32_t elements) const;
 
-    // The mapped bytes of one group's arena blob, or nullptr when the mapping is unusable.
-    const uint8_t* GetGroupBlob(uint32_t groupIndex, uint32_t& outByteSize) const;
+    // The bytes of one group's arena blob, or nullptr when the mapping is unusable. A blob stored compressed is
+    // decoded into m_BlobScratch first, so the pointer is only valid until the next call.
+    const uint8_t* GetGroupBlob(uint32_t groupIndex, uint32_t& outByteSize);
 
     uint32_t m_FrameIndex = 0;
     uint32_t m_GroupCount = 0;
@@ -182,6 +183,7 @@ private:
     // The cooked data the blobs are uploaded from: the mapped mesh file and its per-group ranges.
     std::unique_ptr<MemoryMappedDataReader> m_BlobFile;
     std::vector<ClusterLod::GroupBlobRef> m_GroupFiles;   // parallel to m_GroupBlobs
+    std::vector<uint8_t> m_BlobScratch;                  // one decoded blob, reused per load
 
     std::vector<ClusterLod::StreamGroup> m_GroupBlobs;
 

@@ -37,6 +37,62 @@ namespace ClusterLod
 
 namespace
 {
+    // The stream the vertex codec encodes: one VertexQuantized per cluster vertex.
+    constexpr size_t kBlobVertexStride = sizeof(srrhi::VertexQuantized);
+}
+
+uint32_t GroupBlobRawBytes(uint32_t triangleCount, uint32_t vertexCount)
+{
+    const uint32_t words = triangleCount + 6u * vertexCount;
+    return (words * uint32_t(sizeof(uint32_t)) + 15u) & ~15u;
+}
+
+uint32_t GroupBlobStoredBytesBound(uint32_t triangleCount, uint32_t vertexCount)
+{
+    return triangleCount * uint32_t(sizeof(uint32_t)) +
+        uint32_t(meshopt_encodeVertexBufferBound(vertexCount, kBlobVertexStride));
+}
+
+bool EncodeGroupBlob(const uint32_t* words, uint32_t triangleCount, uint32_t vertexCount,
+                     std::vector<uint8_t>& outStored)
+{
+    const size_t triangleBytes = size_t(triangleCount) * sizeof(uint32_t);
+    outStored.resize(size_t(GroupBlobStoredBytesBound(triangleCount, vertexCount)));
+    std::memcpy(outStored.data(), words, triangleBytes);
+
+    if (vertexCount == 0)
+    {
+        outStored.resize(triangleBytes);
+        return true;
+    }
+
+    const size_t encoded = meshopt_encodeVertexBuffer(outStored.data() + triangleBytes,
+        outStored.size() - triangleBytes, reinterpret_cast<const char*>(words) + triangleBytes, vertexCount,
+        kBlobVertexStride);
+    if (encoded == 0)
+        return false;
+
+    outStored.resize(triangleBytes + encoded);
+    return true;
+}
+
+bool DecodeGroupBlob(const uint8_t* stored, uint32_t storedBytes, uint32_t triangleCount, uint32_t vertexCount,
+                     uint8_t* outRaw)
+{
+    const size_t triangleBytes = size_t(triangleCount) * sizeof(uint32_t);
+    if (storedBytes < triangleBytes)
+        return false;
+
+    std::memcpy(outRaw, stored, triangleBytes);
+    if (vertexCount == 0)
+        return true;
+
+    return meshopt_decodeVertexBuffer(outRaw + triangleBytes, vertexCount, kBlobVertexStride,
+               stored + triangleBytes, storedBytes - uint32_t(triangleBytes)) == 0;
+}
+
+namespace
+{
 
     uint32_t GetClusterGroup(const PrimitiveClusters& clusters, uint32_t clusterIndex)
     {

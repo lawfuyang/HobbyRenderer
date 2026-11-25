@@ -100,16 +100,28 @@ namespace ClusterLod
         void Clear();
     };
 
-    // Where one group's words live in the cooked mesh file. The bytes are the group's arena blob verbatim:
-    // `GetBlobElements()` words, 16-byte aligned, the group's clusters' triangles followed by every cluster
-    // vertex's attributes (a VertexQuantized, six words each). A load is therefore one copy out of the mapping -
-    // no group data has to be materialised in system RAM.
+    // Where one group's words live in the cooked mesh file. The arena blob is `GetBlobElements()` words, 16-byte
+    // aligned: the group's clusters' triangles, then every cluster vertex's attributes (a VertexQuantized, six
+    // words each). On disk that blob is stored with its vertex run meshopt-encoded (see EncodeGroupBlob), so the
+    // record carries both the stored size and the size the arena reads back.
     struct GroupBlobRef
     {
-        uint64_t m_FileOffset = 0;   // byte offset into the cooked mesh file
-        uint32_t m_ByteSize = 0;
-        uint32_t m_Unused = 0;       // keeps the record 16 B so the table reads as one vector
+        uint64_t m_FileOffset = 0;    // byte offset into the cooked mesh file
+        uint32_t m_ByteSize = 0;      // bytes stored: the encoded vertex run plus the raw triangle words
+        uint32_t m_RawByteSize = 0;   // bytes the arena reads back, 16-byte aligned
     };
+
+    // The stored blob is the arena blob with its vertex run meshopt-encoded:
+    //     [triangle words: 4 B each][meshopt_encodeVertexBuffer of the 6-word VertexQuantized stream]
+    // The triangles stay raw: a word already packs three 8-bit cluster-local indices, so 4 B per triangle, and
+    // the index codec would need an unpack and a repack at both ends for a few percent. Encode and decode live
+    // together so the layout is written down in one place.
+    uint32_t GroupBlobRawBytes(uint32_t triangleCount, uint32_t vertexCount);
+    uint32_t GroupBlobStoredBytesBound(uint32_t triangleCount, uint32_t vertexCount);
+    bool EncodeGroupBlob(const uint32_t* words, uint32_t triangleCount, uint32_t vertexCount,
+                         std::vector<uint8_t>& outStored);
+    bool DecodeGroupBlob(const uint8_t* stored, uint32_t storedBytes, uint32_t triangleCount, uint32_t vertexCount,
+                         uint8_t* outRaw);
 
     // The cooked file a scene's group blobs are streamed from, and the table that locates them. Filled by
     // SceneCache::LoadOrCookMeshData and consumed by GeometryStreaming at scene load.

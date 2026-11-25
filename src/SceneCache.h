@@ -23,10 +23,13 @@ namespace SceneCache
     // var     var    VerticesQ: [count:uint64_t][srrhi::VertexQuantized * count]
     // var     var    Indices:   [count:uint64_t][uint32_t * count]
     // var     8      Group blobs: [count:uint64_t][ClusterLod::GroupBlobRef * count]
-    // var     var    Blob data:  padded to the next 4 KiB; one 16-byte aligned blob per group, in the order
-    //                            BuildGpuData flattens groups (mesh, primitive, group). Inserting the table here
-    //                            keeps the per-primitive records small: a loaded scene streams the words from
-    //                            this section instead of holding them in system RAM.
+    // var     var    Blob data:  padded to the next 4 KiB; one blob per group, in the order BuildGpuData
+    //                            flattens groups (mesh, primitive, group). Each blob is the arena layout (the
+    //                            group's triangle words, then six words of VertexQuantized per cluster vertex)
+    //                            with the vertex run meshopt-encoded, so the file is smaller than the arena
+    //                            copy; the record carries both sizes. Inserting the table here keeps the
+    //                            per-primitive records small: a loaded scene streams the words from this
+    //                            section instead of holding them in system RAM.
     // ─────────────────────────────────────────────────────────────────────────────
 
     // Magic: "RLFY" = 0x59464C52
@@ -44,7 +47,8 @@ namespace SceneCache
     // 9: a group blob carries every cluster vertex's attributes after its triangles (six words each), so the
     //    cluster path no longer reads the scene-global vertex buffer.
     // 10: the cluster record carries the +-1 lod overlap table (one 8 b record per group plus its links).
-    constexpr uint32_t kCookedMeshVersion = 10;
+    // 11: group blobs store their vertex run meshopt-encoded (ClusterLod::EncodeGroupBlob).
+    constexpr uint32_t kCookedMeshVersion = 11;
 
     // ── Streamed import: one part file per primitive ──────────────────────────
     //
@@ -61,7 +65,7 @@ namespace SceneCache
     //   var     Cluster metadata: ClusterLod::WriteToStream(PrimitiveClusters)
     //   var     Group blob table: [count:uint32_t][ClusterLod::GroupBlobRef * count], offsets relative to the
     //           blob region below
-    //   var     Blob region: the group blobs exactly as the arena holds them
+    //   var     Blob region: the group blobs in the cooked cache's stored form (vertex run meshopt-encoded)
     struct CookedPartHeader
     {
         uint32_t m_Magic = 0;
@@ -87,7 +91,8 @@ namespace SceneCache
     constexpr uint32_t kCookedPartMagic = 0x54524150;   // "PART"
     // 2: the cooked triangle range is recorded, so a changed --split-primitive-tris invalidates earlier parts.
     // 3: the part's cluster record carries the +-1 lod overlap table.
-    constexpr uint32_t kCookedPartVersion = 3;
+    // 4: the part's group blobs store their vertex run meshopt-encoded.
+    constexpr uint32_t kCookedPartVersion = 4;
 
     // `<cachePath>.parts/<mesh>_<primitive>.part`
     std::filesystem::path GetPartPath(const std::filesystem::path& cachePath, uint32_t meshIndex, uint32_t primitiveIndex);
