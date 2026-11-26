@@ -850,6 +850,17 @@ void Renderer::Run()
         m_RenderGraph.PostRender();
         const uint64_t markRecordNs = SDL_GetTicksNS();
 
+        // The graph's own Markdown export, for a scripted layout comparison: two runs dumped on the same frame
+        // must write byte-identical files.
+        if (Config::Get().m_RenderGraphDumpFrame == static_cast<int>(m_FrameNumber))
+        {
+            const std::string dumpPath =
+                (std::filesystem::path{ SDL_GetBasePath() } / ("rendergraph_dump_" + std::to_string(m_FrameNumber) + ".md")).string();
+            std::ofstream dumpFile(dumpPath, std::ios::binary);
+            dumpFile << m_RenderGraph.ExportToString();
+            SDL_Log("[RenderGraph] Wrote %s", dumpPath.c_str());
+        }
+
         // Update texture streaming -> post-render phase:
         // ResolveFeedback (reads sampler feedback written by GBuffer pass) + EndFrame.
         UpdateStreamingPostRender();

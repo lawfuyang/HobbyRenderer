@@ -180,6 +180,7 @@ void PrintHelp()
     SDL_Log("  --hitch-log <ms>                 Log every frame slower than this with streaming/VRAM state");
     SDL_Log("  --hitch-dump <ms>                Dump the profiler and exit on the first frame slower than this");
     SDL_Log("  --target-fps <n>                 Frame pacer in FPS; 0 runs the loop unpaced (CPU/GPU overlap A/B)");
+    SDL_Log("  --dump-rendergraph <n>           Write the render graph Markdown export after frame n");
     SDL_Log("  --scene <path>                   Load the specified scene file");
     SDL_Log("  --help, -h                       Show this help message");
 }
@@ -283,6 +284,10 @@ void Config::ParseCommandLine(int argc, char* argv[])
             {
                 SDL_Log("[Config] Frame pacer off: the loop runs as fast as it can record");
             }
+        }
+        else if (args.Is("--dump-rendergraph"))
+        {
+            ReadInt(args, cfg.m_RenderGraphDumpFrame, "Render graph export on frame");
         }
         else if (args.Is("--debug"))
         {

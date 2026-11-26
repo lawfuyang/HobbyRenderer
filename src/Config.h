@@ -192,6 +192,10 @@ struct Config
     // 0 = uncapped.
     uint32_t m_TargetFPS = 200;
 
+    // Write the render graph's Markdown export after this frame. Two runs dumped on the same frame must produce
+    // byte-identical files; that is how a change is shown to be layout-neutral. -1 = off.
+    int m_RenderGraphDumpFrame = -1;
+
     // Add more configuration options here as needed
     // int renderWidth = 1920;
     // int renderHeight = 1080;
