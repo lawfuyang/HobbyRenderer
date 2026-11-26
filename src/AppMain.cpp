@@ -24,6 +24,10 @@ static int RunApplication(int argc, char* argv[])
     Renderer renderer{};
     Config::ParseCommandLine(argc, argv);
 
+    // --help prints the list during parsing; nothing below (tool DLLs, device creation) belongs to it.
+    if (Config::Get().m_bShowHelp)
+        return 0;
+
     // RenderDoc hooks D3D12CreateDevice through this module's import table, so the DLL has to be in the
     // process before Renderer::Initialize creates the device.
     if (Config::Get().m_bRenderDoc && g_RenderDoc.Load(Config::Get().m_RenderDocDllPath))

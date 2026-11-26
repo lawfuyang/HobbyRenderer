@@ -14,6 +14,7 @@ RGTextureHandle g_RG_GBufferEmissive;
 RGTextureHandle g_RG_GBufferMotionVectors;
 RGTextureHandle g_RG_HDRColor;
 RGTextureHandle g_RG_ExposureTexture;
+RGTextureHandle g_RG_VisibilityBuffer;
 
 // ============================================================================
 // Renderer Implementations
@@ -102,6 +103,25 @@ public:
             renderGraph.DeclareTexture(gbufferDesc, g_RG_GBufferMotionVectors);
         }
 
+        // Visibility buffer: one id per pixel for the cluster resolve. R32_UINT, render target only; the resolve
+        // (not part of this pass) reads it. Declared only when the path is on, so the raster path keeps the same
+        // transient set and the same cost as before.
+        if (g_Renderer.m_EnableVisibilityBuffer && g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
+        {
+            RGTextureDesc desc;
+            desc.m_NvrhiDesc.width = width;
+            desc.m_NvrhiDesc.height = height;
+            desc.m_NvrhiDesc.format = nvrhi::Format::R32_UINT;
+            desc.m_NvrhiDesc.debugName = "VisibilityBuffer_RG";
+            desc.m_NvrhiDesc.isRenderTarget = true;
+            // clearTextureUInt takes the UAV path only for a UAV texture; the render-target path would call
+            // ClearRenderTargetView with float values on an integer format, which D3D12 rejects.
+            desc.m_NvrhiDesc.isUAV = true;
+            desc.m_NvrhiDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            desc.m_NvrhiDesc.keepInitialState = true;
+            renderGraph.DeclareTexture(desc, g_RG_VisibilityBuffer);
+        }
+
         // HZB Texture (Persistent)
         if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
         {
@@ -172,6 +192,13 @@ public:
             commandList->clearTextureFloat(gbufferORM, nvrhi::AllSubresources, nvrhi::Color{});
             commandList->clearTextureFloat(gbufferEmissive, nvrhi::AllSubresources, nvrhi::Color{});
             commandList->clearTextureFloat(gbufferMotion, nvrhi::AllSubresources, nvrhi::Color{});
+
+            // Zero means "no surface" for the id decode, so the target is cleared every frame.
+            if (g_Renderer.m_EnableVisibilityBuffer)
+            {
+                nvrhi::TextureHandle visibility = renderGraph.GetTexture(g_RG_VisibilityBuffer, RGResourceAccessMode::Write);
+                commandList->clearTextureUInt(visibility, nvrhi::AllSubresources, 0);
+            }
 
             if (m_NeedHZBClear)
             {

@@ -105,7 +105,8 @@ cmake --build build --config Debug --target HobbyRenderer
 
 Reference set (cheap → expensive): `Cornell` (deterministic, tiny), `bunny` (per-corner normals,
 simplification stress), `Sponza` (masked geometry, large distant triangles), `Bistro/bistrox`
-(props = small triangles, the performance case), `DragonAttenuation` (no alpha test).
+(props = small triangles, the performance case), `DragonAttenuation` (no alpha test),
+`threedscans_animals` (6M+ vertices, the dense-cluster case).
 
 **Disk note:** a Bistro frame capture is ~1.3 GB and a frame-0 (load) capture ~177 MB. Do the A/B
 image work on Cornell/Sponza and keep Bistro for the performance run; delete captures after each
@@ -146,7 +147,7 @@ flowchart LR
 
 | Milestone | After | Pass criteria | Tools |
 |---|---|---|---|
-| **M0** | P0 | Baseline artefacts exist for all five scenes and re-run to the same numbers (within run-to-run noise) | app, PIX, RenderDoc |
+| **M0** | P0 | Baseline artefacts exist for all six scenes; **cluster counters are exact** across runs; debug-view images are bit-exact only when texture residency has settled (measured: Cornell/animals yes, Bistro no) — so image gates use a pixel budget, never a hash | app, PIX, RenderDoc |
 | **M1** | P1 | `--vis-buffer 1` is Class A identical to `--vis-buffer 0` (the pass is declared but not ordered) | app, `passdiff` |
 | **M2** | P3 | Depth **Class A** identical; debug views 3/4/5/6/7 **Class B** within budget; composite **Class B**; `hazards`/`rootsig-check`/`crosscheck` clean | PIX, RenderDoc, `rdc-tools` |
 | **M3** | P4 | Masked silhouettes and mode-4 view **Class B**; depth still **Class A** | same |
@@ -206,6 +207,37 @@ identical.
    compare with the existing image compare used for the FSR/cluster work; expect 0.
 2. RenderDoc `passdiff` between the two captures: identical pass trees, only the disabled marker.
 3. `--rhidebug` on both: 0 D3D12 errors.
+
+**Result (measured 2026-11-26).** M1 passes, with three findings worth keeping:
+
+| Check | Result |
+|---|---|
+| `--debug 4 --no-taa`, Cornell, flag off vs on | **identical** (SHA-256 `258CD73F…`), and equal to the Phase 0 baseline hash → the off path is unchanged |
+| Composite, flag off, two runs | differ — the composite is not a usable channel (see the baseline README); M1 must be gated on a debug view |
+| `--rhidebug` full frame, flag on | exit 0, 0 assertions, 0 error lines |
+| `--rendergraph-strict-access`, flag on | exit 0, 0 asserts |
+| `--rhidebug --rhidebug-gpu` on a minimal frame (`--no-indirect --no-denoise --no-restir-di --no-sky --no-taa`) | exit 0, 0 asserts |
+| `--rhidebug --rhidebug-gpu` full frame | dies in D3D12 GPU-based validation instrumentation (`!dbg attachment points at wrong subprogram`, LLVM dump); **also dies with `--vis-buffer 0`** → pre-existing, not this work |
+| `--rendergraph-own-barriers`, `--cluster 0`, `--execute-per-pass` with the flag on | all exit 0 |
+
+The one real bug the layers caught: an integer target cleared through nvrhi's render-target path
+issues `ClearRenderTargetView` with float values on `R32_UINT`, which D3D12 rejects at the first
+frame. The target therefore carries the UAV flag and `UnorderedAccess` as its initial state, so
+`clearTextureUInt` takes the `ClearUnorderedAccessViewUint` path.
+
+Capture evidence (Cornell frame 30, `--vis-buffer` off/on):
+
+- **PIX**: GPU order is `Opaque Renderer` (row 39) → `MaskedPass` (279) → `Visibility Resolve`
+  (289) → `HZBGeneratorPhase2` (304). The on capture has +25 API events and **no new draws or
+  dispatches**: one `ClearUnorderedAccessViewUint`, one command list (Reset/Close/SetDescriptorHeaps/
+  ResolveQueryData), the rest timer queries. Every pre-existing pass is ×1.0000 instructions in the
+  counter A/B; the new marker rows are 56 + 14 instructions. With the flag off neither marker exists
+  (1168 events; on: 1193).
+- **RenderDoc**: `verify` → `problems: 0`; the action list places `VisibilityRaster` inside the
+  opaque pass and `Visibility Resolve` / `VisibilityResolve` between `MaskedPass` and
+  `HZBGeneratorPhase2`. `replay_dump counters --per-pass` publishes counters but produces no results
+  for this capture, so PIX stays the counter source. `passdiff` is not a usable verdict for this pair
+  (the added pass shifts event numbering; it reported added/removed paths on both sides).
 
 **Rollback:** the flag defaults off, so a failed M1 costs nothing but the two new files.
 
@@ -722,8 +754,13 @@ Copy into the PR/commit description for each phase and tick what ran.
 ```text
 Phase __ gate
 [ ] builds Debug, 0 warnings introduced
-[ ] --vis-buffer 0 is Class A identical to baseline (screenshots + passdiff)
+[ ] --vis-buffer 0 is Class A identical to baseline (debug view, not the composite)
 [ ] --rhidebug: 0 D3D12 errors, 0 nvrhi messages
+[ ] --rendergraph-strict-access: 0 asserts (a pass may not bind a resource it did not declare)
+[ ] --rhidebug-gpu on a minimal frame (--no-indirect --no-denoise --no-restir-di --no-sky
+    --no-taa): 0 asserts. The full frame is expected to die in D3D12 GBV instrumentation
+    (`!dbg attachment points at wrong subprogram`), with or without the visibility buffer.
+[ ] --rendergraph-own-barriers and --execute-per-pass: both exit 0 with the flag on
 [ ] depth Class A identical (vis on vs off)
 [ ] debug views 3/4/5/6/7/9 within the stated Class B budget
 [ ] composite within run-to-run noise floor (fixed pose, flags pinned)

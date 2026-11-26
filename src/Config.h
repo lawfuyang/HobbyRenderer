@@ -10,6 +10,9 @@ struct Config
     // Path to a scene to load (empty = none)
     std::string m_ScenePath = "";
 
+    // --help printed the list; the application exits before the renderer starts.
+    bool m_bShowHelp = false;
+
     bool ExecutePerPass = false;
     bool ExecutePerPassAndWait = false;
 
@@ -94,6 +97,15 @@ struct Config
     uint32_t m_SplitPrimitiveTriangles = 2000000;
     // Prints the streaming residency stats on this frame. -1 = never.
     int m_ClusterStreamStatsFrame = -1;
+
+    // Renders the opaque and masked cluster buckets into a visibility buffer and resolves it into the G-buffer,
+    // instead of shading the G-buffer in the raster pass. Off = the raster path, unchanged. The resolve lands
+    // after the plumbing, so turning this on today adds only a cleared target and an empty scheduled pass.
+    bool m_EnableVisibilityBuffer = false;
+
+    // Prints the visibility-buffer resolve stats on this frame. -1 = never. Nothing reads it until the
+    // visibility resolve exists; the flag is parsed now so capture scripts and the help text are stable.
+    int m_VisBufferStatsFrame = -1;
 
     // TAA is on by default; a pixel-exact A/B needs it off, and the panel was the only way to turn it off.
     bool m_bNoTAA = false;

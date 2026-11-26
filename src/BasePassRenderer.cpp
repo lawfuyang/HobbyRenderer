@@ -824,7 +824,18 @@ protected:
 
             commandList->setMeshletState(meshState);
             // One DispatchMesh over the visible-cluster list; ClusterBuildArgs wrote that count into the args.
-            commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
+            // The visibility path keeps the same dispatch and changes only what the pixel shader writes; the scope
+            // below is the capture vocabulary the resolve work keys on, and it exists only when the path is on, so
+            // the raster path's event list is unchanged.
+            if (g_Renderer.m_EnableVisibilityBuffer)
+            {
+                PROFILE_GPU_SCOPED("VisibilityRaster", commandList);
+                commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
+            }
+            else
+            {
+                commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
+            }
 
             if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
             {

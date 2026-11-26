@@ -449,6 +449,10 @@ public:
     // runtime; --cluster-draw sets its A/B start value (see Config::m_ClusterDrawEnabled).
     bool m_EnableClusterRendering = true;
 
+    // Visibility buffer: the opaque/masked cluster buckets write ids into this target and a resolve turns them back
+    // into the G-buffer. The panel's checkbox owns this at runtime; --vis-buffer sets its start value.
+    bool m_EnableVisibilityBuffer = false;
+
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
     static constexpr uint32_t kClusterCounterReadbackBuffers = 2;
     struct ClusterCountersReadback

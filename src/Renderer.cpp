@@ -442,6 +442,8 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
     m_EnableClusterRendering = Config::Get().m_ClusterDrawEnabled < 0 ? Config::Get().m_EnableClusterLod
                                                                      : Config::Get().m_ClusterDrawEnabled != 0;
+    m_EnableVisibilityBuffer = Config::Get().m_EnableVisibilityBuffer;
+    SDL_Log("[Init] Visibility buffer: %s", m_EnableVisibilityBuffer ? "on" : "off");
     if (Config::Get().m_bNoTAA)
         m_bTAAEnabled = false;
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
@@ -1663,6 +1665,7 @@ void Renderer::ScheduleAndRunAllRenderers()
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OpaqueRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("MaskedPassRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("VisibilityResolveRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HZBGeneratorPhase2"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TLASRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("SHARCRenderer"));

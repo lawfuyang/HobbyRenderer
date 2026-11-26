@@ -172,6 +172,8 @@ void PrintHelp()
     SDL_Log("  --import-limit-primitives <n>    Stop the streamed import after n primitives (0 = all)");
     SDL_Log("  --split-primitive-tris <n>       Split primitives into n-triangle parts (0 = never)");
     SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
+    SDL_Log("  --vis-buffer <0|1>               Render the opaque/masked buckets into a visibility buffer (default 0)");
+    SDL_Log("  --vis-buffer-stats-frame <n>     Print the visibility-buffer resolve stats on frame n");
     SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
     SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
     SDL_Log("  --restir-checkerboard <0|1>      Override the preset's checkerboard rendering (Balanced/highperf on, highquality off)");
@@ -240,6 +242,10 @@ void Config::ParseCommandLine(int argc, char* argv[])
         else if (args.Is("--cluster"))
         {
             ReadBool(args, cfg.m_EnableClusterLod, "Cluster LOD");
+        }
+        else if (args.Is("--vis-buffer"))
+        {
+            ReadBool(args, cfg.m_EnableVisibilityBuffer, "Visibility buffer");
         }
         else if (args.Is("--cluster-stats"))
         {
@@ -399,6 +405,10 @@ void Config::ParseCommandLine(int argc, char* argv[])
         else if (args.Is("--cluster-stream-stats-frame"))
         {
             ReadInt(args, cfg.m_ClusterStreamStatsFrame, "Cluster streaming stats printed on frame");
+        }
+        else if (args.Is("--vis-buffer-stats-frame"))
+        {
+            ReadInt(args, cfg.m_VisBufferStatsFrame, "Visibility buffer stats printed on frame");
         }
         else if (args.Is("--no-taa"))
         {
@@ -564,6 +574,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
         else if (args.Is("--help") || args.Is("-h"))
         {
             PrintHelp();
+            cfg.m_bShowHelp = true;
         }
         else
         {

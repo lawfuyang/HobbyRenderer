@@ -224,6 +224,14 @@ void ImGuiLayer::UpdateFrame()
             if (!bHasClusterData)
                 ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
 
+            // Plumbing switch: the target exists and the resolve pass is scheduled, but the resolve is still empty,
+            // so the image must not change. The capture vocabulary (VisibilityRaster / VisibilityResolve) is what
+            // the later phases key on.
+            ImGui::Checkbox("Visibility buffer", &g_Renderer.m_EnableVisibilityBuffer);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Rasterises cluster ids into a visibility buffer and resolves them into the G-buffer.\n"
+                    "Currently plumbing only, so the image must not change.");
+
             ImGui::SeparatorText("Cluster traversal");
             ImGui::SliderFloat("LOD pixel error", &Config::Get().m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
             ImGui::SliderInt("Forced cluster LOD", &Config::Get().m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,
