@@ -614,49 +614,72 @@ state its descriptor names, and every change between consecutive passes counts o
 a full Bistro frame and for a full FlyingWorld frame, 9 for a debug view — next to the 1600-odd `Barrier`
 events a PIX capture of the Bistro frame holds with the round trips in place.
 
-**P2.2 is not shipped, because it faults the driver.** The whole of §4.2 was built and measured: the
-timeline, the per-pass seeding (`beginTrackingTextureState`/`beginTrackingBufferState` for every transient
-the pass touches), the transitions to the declared state at the pass's start, a re-sync at the pass's end so
-the next list's starting state is what the plan says, and `keepInitialState=false` on the transients the
-graph owns (persistent resources left alone — lists outside the graph touch them). It does not run: the
-process dies on the first frame inside `nvwgf2umx.dll` (`0xc0000005`, fault offset `0x7c971a`) with every
-pass's barriers already recorded and no `NVRHI` or `D3D12` error logged. What the bisect established:
+**P2.2 ships behind `--rendergraph-own-barriers` (off by default), and it is not yet a win.** §4.2 is built:
+the timeline, the per-pass seeding (`beginTrackingTextureState`/`beginTrackingBufferState` for every transient
+the pass touches), the transition to the declared state at the pass's start, a conditional re-sync at its end so
+the next list's starting state is what the plan says, and `keepInitialState=false` on the transients the graph
+owns (persistent resources left alone — lists outside the graph touch them).
 
-| variant | result |
-|---|---|
-| flag on, as designed | driver fault on frame 1 |
-| `--disable-rendergraph-aliasing` / `--no-frame-pipelining` / `--execute-per-pass-and-wait` | same fault |
-| Release build (no asserts, no `SDL_assert`) | same fault |
-| seeding kept, texture transitions skipped | same fault |
-| seeding kept, buffer transitions skipped | same fault |
-| seeding kept, `keepInitialState` left `true` | same fault |
-| seeding skipped, transitions kept | runs further, then reports "Unknown prior state" for every transient (as expected) |
+*The crash was three separate defects, not one.* The first attempt died in `nvwgf2umx.dll` (`0xc0000005`, offset
+`0x7c971a`) with no `NVRHI` or `D3D12` line in the log, which is why nothing was found the first time: the layer
+reports through `OutputDebugString`, and this app only drains `ID3D12InfoQueue` at swapchain, present and
+shutdown, so a validation break kills it silently. Reading the layer's text needed a `DebugView`-style capture of
+the `DBWIN_BUFFER` section from a second process. With that in place the defects named themselves:
 
-So the seeding is the common factor in every crashing variant, and the fault is in the driver's handling of
-the command stream that results, not in a nvrhi report we can read. Root-causing it needs a debugger
-attached to the fault (the WER report for the crash is in
-`C:\ProgramData\Microsoft\Windows\WER\ReportArchive`), or nvrhi's own single-barrier bisect switch
-(`bDebugBarriers` in `d3d12-state-tracking.cpp`), which was not turned on here. The flag and the emission
-path were removed rather than shipped broken; `Compile()` keeps the timeline, because the number it produces
-is worth having and costs nothing.
+| what the layer said | what it was | fix |
+|---|---|---|
+| nothing — the process died in `Compile()` | the state models are written by the create-and-bind callback, which runs before anything had sized them: an out-of-bounds store into an empty `std::vector`, i.e. heap corruption whose symptom was the driver fault | size the models at the top of `Compile()`, before the allocation pass |
+| `INCOMPATIBLE_BARRIER_ACCESS`: UAV access on `RTXDIPrimitiveLightBuffer`, which is not `ALLOW_UNORDERED_ACCESS` | P2.1's untyped-write rule resolved *every* buffer write to `UnorderedAccess`, including a buffer that `canHaveUAVs=false` and is written by `commandList->writeBuffer`. Harmless while nothing consumed the declared state; a rejected barrier once something did | the untyped write resolves from the descriptor: `UnorderedAccess` when the buffer allows UAVs, else `CopyDest` |
+| `INCOMPATIBLE_BARRIER_LAYOUT` on `GBufferAlbedo_RG` (claimed `COMMON`, expected `RENDER_TARGET`) | a placed resource is created *in* its descriptor's `initialState` layout, so a new handle's entry state is that layout — not `Common`, which is what nvrhi assumes for a resource it has never submitted | seed a slot whose handle was just created at `initialState` |
 
-What that leaves: 47 transitions a frame, all of which nvrhi already emits — the round trip this item
-targets is `initialState` at `CommandList::close()` plus the transition back out of it, which is roughly
-twice that. Any future attempt should start from the debug-layer-validated variant with the seeding and
-`keepInitialState=false` together, on a build whose driver faults can be inspected.
+The third one also corrects the plan: §4.2.3 said "the initial transition from `Common` for newly created
+resources", and D3D12 rejects exactly that when the descriptor asks for a non-`COMMON` layout.
 
-**Verification of what did ship.** Bistro (the scene this item was smoke-tested on, with
-`bin/camera_state.json` frozen so both builds render the same view) and FlyingWorld, both
-`--hide-ui --no-taa`:
+*Why it does not pay off yet.* Transitions counted in `CommandList::commitBarriers()` over a 30-frame Bistro run
+(`--hide-ui --no-taa`, frozen camera): **48 470 with nvrhi's automatic barriers, 49 097 with the graph owning
+them — +1.3 %**. The round trips `keepInitialState` costs are gone, but the timeline's entry states follow the
+*declarations*, and where a pass binds a resource in a state it did not declare the end-of-pass re-sync has to
+emit a barrier to make the plan true. Those declarations are not accurate today, and the strict checker names
+them: `RTXDIRenderer` declares writes of eight `NRD Transient` textures it never binds, and `TransparentPass`
+declares a write of `DepthBuffer_RG` which it only samples. With accurate declarations the re-sync becomes a
+no-op and the removed round trips would be the whole difference. Two variants were measured on the way:
 
-* `--rhidebug` and `--rhidebug-gpu`: 0 D3D12 errors, 0 warnings, clean exit on both scenes.
-* `--rendergraph-strict-access`: 0 undeclared bindings, 0 state mismatches, on both scenes.
-* PIX, frame 90, same frozen camera against the P1 build: **1558 events in both, 0 differing**; counters
-  `smsp__inst_executed.sum` +0.12 %, `l1tex__t_sectors.sum` +0.01 %, i.e. inside the reproduction noise.
-  P2.1 records what a pass declared; it does not change what the pass submits.
-* RenderDoc, frame 90: Bistro `problems: 0`, 20756 chunks, 58 calls, 144 markers; FlyingWorld
-  `problems: 0`, 31107 chunks, 45 calls, 126 markers — identical to the P1 captures, as expected.
-* `--dump-rendergraph` on the same frame differs from the P1 dump only in the new summary line.
+| variant | 30-frame transitions | note |
+|---|---|---|
+| nvrhi's automatic barriers (default) | 48 470 | baseline |
+| graph-owned, seed + declared state, unconditional end re-sync | 50 930 | +5.1 % |
+| graph-owned, seed + declared state, end re-sync only where the pass deviated | 49 097 | +1.3 %, shipped |
+| graph-owned, seed only, no end re-sync | 46 562 | −4.0 %, but the model drifts: `INCOMPATIBLE_BARRIER_LAYOUT` on `DepthBuffer_RG` |
+| graph-owned, model read back from the tracker after every pass | 43 805 | −9.6 %, but a single model cannot be updated by concurrently recorded passes |
+
+The read-back variant is the one worth revisiting: it measured the best by a wide margin, and the reason it is
+wrong is not the idea but the threading — `ScheduleRenderer` queues one task per pass and the executor runs them
+concurrently, so a shared per-slot model has no defined order (observed: seeds that were already the frame's end
+state). Per-pass models keyed by pass index, reconciled in pass order at the start of the next frame, would be
+the shape to try. The other prerequisite is declaration accuracy (the P1.2b work item), which is what turns the
+end-of-pass re-sync from a cost into a no-op.
+
+**Verification of what did ship.** Bistro (with `bin/camera_state.json` frozen so both builds render the same
+view) and FlyingWorld, both `--hide-ui --no-taa`:
+
+* `--rhidebug` (with `--rendergraph-own-barriers --rendergraph-strict-access`): 0 D3D12 messages, 0 undeclared
+  bindings, 0 state mismatches, clean exit on both scenes.
+* `--rhidebug --rhidebug-gpu` (same switches): 0 D3D12 errors, clean exit on both scenes, the only text in the
+  layer's stream the `CheckFeatureSupport` deprecation warning. This combination used to be unusable: GPU-based
+  validation stopped on `EXECUTION ERROR #1387: GPU_BASED_VALIDATION_STRUCTURED_BUFFER_STRIDE_MISMATCH` for
+  `DummyUAVStructuredBuffer` (descriptor stride 16, `GPUCulling.hlsl` declaring a 12-byte `DispatchIndirectArguments`
+  at that slot) — with the flag off too, so it was never this item's doing. A structured UAV descriptor carries the
+  element stride its shader declares and D3D12 compares them, so one placeholder cannot fill a `uint` slot (4 bytes)
+  and a `DispatchIndirectArguments` slot (12) at once; `CommonResources` now makes one placeholder per element stride,
+  the first time a slot asks for it, and every unfilled slot asks with `sizeof` of the type its shader declares
+  (`GetDummyStructuredSRV/UAV`).
+  Frames 1-4 of both scenes exercise every pass, so this covers the same shaders the `--rhidebug` run does.
+* Image parity, frame 3: the renderer is stochastic between runs (two baseline runs differ in 46.6 % of pixels,
+  mean |Δ| 0.37/255), and the own-barriers frame sits inside that spread (16.4 %, mean |Δ| 0.12, mean luma 81.88
+  vs 81.83, no 64×64 tile above 6/255). Nothing structural differs.
+* PIX/RenderDoc, P2.1's captures (unchanged by this item since the flag is off by default): frame-90 Bistro 1558
+  events, 0 differing against P1, counters within noise; RenderDoc `problems: 0` on both scenes.
+
 
 ---
 
