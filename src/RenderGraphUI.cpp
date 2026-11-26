@@ -46,8 +46,8 @@ void RenderGraph::RenderDebugUI()
                    m_Stats.m_AliasingSavingsBytes / (1024.0 * 1024.0));
         ImGui::Text("Alias barriers: %u   Memory-requirement queries: %u",
                    m_Stats.m_NumAliasBarriers, m_Stats.m_NumMemoryRequirementQueries);
-        ImGui::Text("Declared state changes: %u (what owning the barriers would cost)",
-                   m_Stats.m_NumDeclaredStateChanges);
+        ImGui::Text("Declared state changes: %u%s", m_Stats.m_NumDeclaredStateChanges,
+                   OwnsBarriers() ? " (placed by the graph)" : " (what owning them would cost)");
         
         if (ImGui::TreeNode("Lifetime Visualization"))
         {

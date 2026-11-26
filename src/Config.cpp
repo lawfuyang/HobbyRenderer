@@ -182,6 +182,7 @@ void PrintHelp()
     SDL_Log("  --target-fps <n>                 Frame pacer in FPS; 0 runs the loop unpaced (CPU/GPU overlap A/B)");
     SDL_Log("  --dump-rendergraph <n>           Write the render graph Markdown export after frame n");
     SDL_Log("  --rendergraph-strict-access      Assert when a pass binds a graph resource it did not declare");
+    SDL_Log("  --rendergraph-own-barriers       Let the render graph place the barriers of its transients");
     SDL_Log("  --relayout                       Rebuild the render graph's transient layout once");
     SDL_Log("  --camera <n>                     Apply the scene's glTF camera n after load (-1 = the saved view)");
     SDL_Log("  --scene <path>                   Load the specified scene file");
@@ -296,6 +297,10 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             SetFlag(cfg.m_bStrictRenderGraphAccess, true,
                 "Render graph access checking on: undeclared bindings assert");
+        }
+        else if (args.Is("--rendergraph-own-barriers"))
+        {
+            SetFlag(cfg.m_bOwnRenderGraphBarriers, true, "Render graph owns the transients' barriers");
         }
         else if (args.Is("--relayout"))
         {

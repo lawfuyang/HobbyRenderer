@@ -198,6 +198,7 @@ void RenderGraph::Reset()
     m_PassNames.clear();
     m_PassAccesses.clear();
     m_PassAccessRecords.clear();
+    m_PassBarriers.clear();
     m_PassNeedsGlobalSyncBarrier.clear();
     // was interrupted (e.g. a renderer's Setup() threw or returned early after
     // declaring resources).  BeginSetup() also clears these, but Reset() is the
@@ -388,6 +389,7 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         g_Renderer.m_RenderGraph.SetActivePass(passIndex);
 
         g_Renderer.m_RenderGraph.InsertGlobalSyncBarriers(passIndex, scopedCmd);
+        g_Renderer.m_RenderGraph.EmitPassBarriers(passIndex, scopedCmd);
 
         {
             // Every scope recorded from here on is listed under this renderer in the Profiler panel.
@@ -395,6 +397,7 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
             pRenderer->Render(scopedCmd, g_Renderer.m_RenderGraph);
         }
 
+        g_Renderer.m_RenderGraph.EndPassBarriers(passIndex, scopedCmd);
         g_Renderer.m_RenderGraph.SetActivePass(0);
         pRenderer->m_CPUTime = static_cast<float>(cpuTimer.TotalMilliseconds());
     }, bImmediateExecute);
@@ -869,7 +872,12 @@ void RenderGraph::ReadBuffer(RGBufferHandle handle, nvrhi::ResourceStates state)
 
 void RenderGraph::WriteBuffer(RGBufferHandle handle)
 {
-    WriteBuffer(handle, nvrhi::ResourceStates::UnorderedAccess);
+    // What an untyped write means, from the descriptor alone: a buffer that allows UAVs is written as one, and a
+    // buffer that does not (`writeBuffer`, a CPU-side upload) only through a copy. Naming UnorderedAccess for a
+    // buffer without the flag is a barrier D3D12 rejects, so the descriptor decides.
+    const bool bCanHaveUAVs = handle.IsValid() && handle.m_Index < m_Buffers.size() &&
+        m_Buffers[handle.m_Index].m_Desc.m_NvrhiDesc.canHaveUAVs;
+    WriteBuffer(handle, bCanHaveUAVs ? nvrhi::ResourceStates::UnorderedAccess : nvrhi::ResourceStates::CopyDest);
 }
 
 void RenderGraph::WriteBuffer(RGBufferHandle handle, nvrhi::ResourceStates state)
@@ -1002,6 +1010,15 @@ void RenderGraph::Compile()
     for (const TransientTexture& tex : m_Textures) if (tex.m_IsDeclaredThisFrame) m_Stats.m_NumTextures++;
     for (const TransientBuffer& buf : m_Buffers) if (buf.m_IsDeclaredThisFrame) m_Stats.m_NumBuffers++;
 
+    // The models are indexed by slot by the bind callbacks below, which run before the plan is built, so they have
+    // to cover every slot by then. A slot that already had a state keeps it: the frame that left the memory in that
+    // state is the one that put it there.
+    if (m_bOwnBarriers)
+    {
+        m_TextureStates.resize(m_Textures.size(), nvrhi::ResourceStates::Common);
+        m_BufferStates.resize(m_Buffers.size(), nvrhi::ResourceStates::Common);
+    }
+
     AllocateResourcesInternal(
         false,  // bIsBuffer
         [this, device](uint32_t idx, nvrhi::HeapHandle heap, uint64_t offset)
@@ -1040,6 +1057,17 @@ void RenderGraph::Compile()
                         (unsigned long long)offset);
 
             texture.m_Desc.m_NvrhiDesc.isVirtual = true;
+            // Owning barriers also means owning the end-of-frame state: the round trip back to `initialState` at
+            // close() is exactly the transition pair being removed. A persistent resource keeps its initial state,
+            // because lists outside the graph touch those and the plan does not cover them.
+            if (m_bOwnBarriers && !texture.m_IsPersistent)
+            {
+                texture.m_Desc.m_NvrhiDesc.keepInitialState = false;
+                // A brand-new handle is in the layout its descriptor asked to be created in, so that is where the
+                // list that first touches it starts -- for this handle, and only for it: a slot whose handle was
+                // reused keeps the state the last frame left it in.
+                m_TextureStates[idx] = texture.m_Desc.m_NvrhiDesc.initialState;
+            }
             // Defer release of old physical resource — the GPU from the previous
             // frame may still have work in-flight referencing it.  Old handles are
             // collected and freed at the start of the next Compile(), after the GPU
@@ -1100,6 +1128,11 @@ void RenderGraph::Compile()
                         (unsigned long long)offset);
 
             buffer.m_Desc.m_NvrhiDesc.isVirtual = true;
+            if (m_bOwnBarriers && !buffer.m_IsPersistent)
+            {
+                buffer.m_Desc.m_NvrhiDesc.keepInitialState = false;
+                m_BufferStates[idx] = buffer.m_Desc.m_NvrhiDesc.initialState;
+            }
             // Defer release of old physical resource — same reasoning as for textures.
             if (buffer.m_PhysicalBuffer)
                 m_DeferredReleaseBuffers.push_back(std::move(buffer.m_PhysicalBuffer));
@@ -1242,7 +1275,7 @@ void RenderGraph::Compile()
         ? m_Stats.m_UnAliasedBytes - m_Stats.m_AliasedBytes
         : 0;
 
-    BuildStateTimeline();
+    BuildBarrierPlan();
 
     m_IsCompiled = true;
 }
@@ -1419,20 +1452,33 @@ void RenderGraph::InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandLi
     }
 }
 
-void RenderGraph::BuildStateTimeline()
+void RenderGraph::SetOwnBarriers(bool bOwn)
 {
-    // Every slot starts the frame where its descriptor says it does, because that is where nvrhi's own tracking
-    // puts an untracked resource (`keepInitialState`), and each pass then asks for the state its declarations name.
-    // What is counted is where that timeline changes: one transition per run of passes that agree, which is what
-    // consecutive reads merging into one state means.
-    m_TextureStates.assign(m_Textures.size(), nvrhi::ResourceStates::Common);
-    m_BufferStates.assign(m_Buffers.size(), nvrhi::ResourceStates::Common);
-    for (uint32_t i = 0; i < static_cast<uint32_t>(m_Textures.size()); ++i)
-        m_TextureStates[i] = m_Textures[i].m_Desc.m_NvrhiDesc.initialState;
-    for (uint32_t i = 0; i < static_cast<uint32_t>(m_Buffers.size()); ++i)
-        m_BufferStates[i] = m_Buffers[i].m_Desc.m_NvrhiDesc.initialState;
+    m_bOwnBarriers = bOwn;
+}
 
-    m_Stats.m_NumDeclaredStateChanges = 0;
+void RenderGraph::BuildBarrierPlan()
+{
+    // Without the graph owning the barriers, nvrhi restores each descriptor's `initialState` at every close(), so the
+    // frame's timeline starts there and the count is the size of the opportunity. With it, the model describes the GPU
+    // between frames -- the plan's last state is where the next frame finds the memory, because EndPassBarriers made it
+    // so -- and the walk below advances it to the frame's end.
+    if (!m_bOwnBarriers)
+    {
+        m_TextureStates.assign(m_Textures.size(), nvrhi::ResourceStates::Common);
+        m_BufferStates.assign(m_Buffers.size(), nvrhi::ResourceStates::Common);
+        for (uint32_t i = 0; i < static_cast<uint32_t>(m_Textures.size()); ++i)
+            m_TextureStates[i] = m_Textures[i].m_Desc.m_NvrhiDesc.initialState;
+        for (uint32_t i = 0; i < static_cast<uint32_t>(m_Buffers.size()); ++i)
+            m_BufferStates[i] = m_Buffers[i].m_Desc.m_NvrhiDesc.initialState;
+    }
+    else
+    {
+        m_TextureStates.resize(m_Textures.size(), nvrhi::ResourceStates::Common);
+        m_BufferStates.resize(m_Buffers.size(), nvrhi::ResourceStates::Common);
+    }
+
+    m_PassBarriers.assign(m_CurrentPassIndex + 1, {});    m_Stats.m_NumDeclaredStateChanges = 0;
 
     for (uint16_t passIndex = 1; passIndex <= static_cast<uint16_t>(m_PassAccessRecords.size()); ++passIndex)
     {
@@ -1453,7 +1499,9 @@ void RenderGraph::BuildStateTimeline()
                 bIsBuffer ? static_cast<const RenderGraphInternal::TransientResourceBase&>(m_Buffers[record.m_Resource])
                           : static_cast<const RenderGraphInternal::TransientResourceBase&>(m_Textures[record.m_Resource]);
 
-            if (!resource.m_IsDeclaredThisFrame)
+            // Persistent resources stay on nvrhi's own tracking: lists outside the graph touch them, and the plan
+            // does not cover those.
+            if (!resource.m_IsDeclaredThisFrame || resource.m_IsPersistent)
                 continue;
 
             // Sampling a depth texture is `DepthRead`, not `ShaderResource`: D3D12 only allows the depth-stencil
@@ -1487,13 +1535,89 @@ void RenderGraph::BuildStateTimeline()
         {
             nvrhi::ResourceStates& state = op.m_bIsBuffer ? m_BufferStates[op.m_Resource]
                                                           : m_TextureStates[op.m_Resource];
+            // Where the resource is before this pass runs: the last state the timeline put it in, which is what the
+            // pass's list has to be seeded with.
+            const nvrhi::ResourceStates entryState = state;
             if (state != op.m_State)
             {
                 ++m_Stats.m_NumDeclaredStateChanges;
                 state = op.m_State;
             }
+
+            if (m_bOwnBarriers)
+                m_PassBarriers[passIndex].push_back({ op.m_Resource, op.m_bIsBuffer, entryState, op.m_State });
         }
     }
+}
+
+void RenderGraph::EmitPassBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList)
+{
+    if (!m_bOwnBarriers || passIndex >= m_PassBarriers.size())
+        return;
+
+    const std::vector<BarrierOp>& ops = m_PassBarriers[passIndex];
+    if (ops.empty())
+        return;
+
+    // Tell the list where each resource it touches starts -- these transients no longer fall back on
+    // `keepInitialState` -- and then ask for the state this pass declared. A pass that wants what the previous one
+    // left costs a tracking call and no barrier, which is what merges consecutive reads.
+    for (const BarrierOp& op : ops)
+    {
+        if (op.m_bIsBuffer)
+        {
+            nvrhi::IBuffer* buffer = m_Buffers[op.m_Resource].m_PhysicalBuffer;
+            SDL_assert(buffer != nullptr);
+            commandList->beginTrackingBufferState(buffer, op.m_EntryState);
+            commandList->setBufferState(buffer, op.m_State);
+        }
+        else
+        {
+            nvrhi::ITexture* texture = m_Textures[op.m_Resource].m_PhysicalTexture;
+            SDL_assert(texture != nullptr);
+            commandList->beginTrackingTextureState(texture, nvrhi::AllSubresources, op.m_EntryState);
+            commandList->setTextureState(texture, nvrhi::AllSubresources, op.m_State);
+        }
+    }
+    commandList->commitBarriers();
+}
+
+void RenderGraph::EndPassBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList)
+{
+    if (!m_bOwnBarriers || passIndex >= m_PassBarriers.size())
+        return;
+
+    // Put a resource back in the state the plan recorded for it, but only where the pass did not leave it there.
+    // The tracker is this list's own, so asking it costs no barrier and settles the question: a pass that bound the
+    // resource the way it declared needs nothing, and one that used it some other way (a depth buffer sampled by a
+    // pass that declared it as a write, a resource declared but never bound) gets the single barrier that keeps the
+    // next list's starting state true instead of guessed.
+    bool bAnyBarrier = false;
+    for (const BarrierOp& op : m_PassBarriers[passIndex])
+    {
+        if (op.m_bIsBuffer)
+        {
+            nvrhi::IBuffer* buffer = m_Buffers[op.m_Resource].m_PhysicalBuffer;
+            SDL_assert(buffer != nullptr);
+            if (commandList->getBufferState(buffer) == op.m_State)
+                continue;
+
+            commandList->setBufferState(buffer, op.m_State);
+        }
+        else
+        {
+            nvrhi::ITexture* texture = m_Textures[op.m_Resource].m_PhysicalTexture;
+            SDL_assert(texture != nullptr);
+            if (commandList->getTextureSubresourceState(texture, 0, 0) == op.m_State)
+                continue;
+
+            commandList->setTextureState(texture, nvrhi::AllSubresources, op.m_State);
+        }
+        bAnyBarrier = true;
+    }
+
+    if (bAnyBarrier)
+        commandList->commitBarriers();
 }
 
 // ============================================================================

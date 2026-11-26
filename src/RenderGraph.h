@@ -177,8 +177,8 @@ public:
         // per-resource cache is warm; anything else means a descriptor keeps changing.
         uint32_t m_NumMemoryRequirementQueries = 0;
         // Transitions the declarations imply for this frame: one per change of state between consecutive passes
-        // that touch a resource. Owning the barriers would cost this many instead of the per-pass `initialState`
-        // round trip nvrhi pays, so the number is the size of the opportunity, not something the graph acts on.
+        // that touch a resource. With `--rendergraph-own-barriers` these are the barriers the graph places;
+        // without it nvrhi places its own and the number is the size of the opportunity.
         uint32_t m_NumDeclaredStateChanges = 0;
     };
 
@@ -250,6 +250,20 @@ public:
     // Insert global sync barriers for a given pass into the command list.
     // Must be called at the start of each pass's command list recording, before any GPU work.
     void InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList) const;
+
+    // ─── Graph-owned barriers (`--rendergraph-own-barriers`) ────────────────
+
+    // With this on, the graph owns the state of every transient it allocates: it tells each pass's command list
+    // where the resources that pass uses start, which is the one thing `keepInitialState` used to do for every list
+    // (and by transitioning back to `initialState` at every close, cost a transition pair per pass). Automatic
+    // barriers stay enabled, so the transition into each binding's state and every UAV hazard barrier are still
+    // nvrhi's, placed from a starting point that is now true instead of assumed.
+    void SetOwnBarriers(bool bOwn);
+    bool OwnsBarriers() const { return m_bOwnBarriers; }
+
+    // Called from the pass's own task, before and after its recorded commands.
+    void EmitPassBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList);
+    void EndPassBarriers(uint16_t passIndex, nvrhi::ICommandList* commandList);
 
     // Returns the pass index for the current pass (valid after BeginPass, before Compile)
     uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
@@ -347,9 +361,9 @@ private:
     // Helper for updating resource lifetimes
     void UpdateResourceLifetime(RenderGraphInternal::ResourceLifetime& lifetime, uint16_t currentPass);
 
-    // Turns the per-pass access records into the frame's state timeline and counts where it changes: a run of
-    // passes that ask for the same state costs nothing, which is how consecutive reads merge.
-    void BuildStateTimeline();
+    // Turns the per-pass access records into the frame's state timeline, fills m_PassBarriers when the graph owns
+    // the barriers, and counts where the timeline changes.
+    void BuildBarrierPlan();
 
     // ─── Deferred release ──────────────────────────────────────────────────
 
@@ -396,11 +410,26 @@ private:
     // Typed access records, one list per pass (0-based, parallel to m_PassAccesses).
     std::vector<std::vector<AccessRecord>> m_PassAccessRecords;
 
-    // The state the graph believes each slot's memory is in, rebuilt from the descriptors at the start of every
-    // Compile() and advanced pass by pass. Only the transitions are counted (`Stats::m_NumDeclaredStateChanges`):
-    // the graph does not place barriers from this, nvrhi's own tracking does.
+    // One resource a pass's command list has to place a barrier for: the state it starts the list in and the one
+    // the pass declared. Equal states mean the pass needs no transition, only the seeding.
+    struct BarrierOp
+    {
+        uint32_t m_Resource = 0;
+        bool m_bIsBuffer = false;
+        nvrhi::ResourceStates m_EntryState = nvrhi::ResourceStates::Common;
+        nvrhi::ResourceStates m_State = nvrhi::ResourceStates::Common;
+    };
+
+    // Where the declarations say each resource goes: one list per pass (1-based, index 0 unused).
+    std::vector<std::vector<BarrierOp>> m_PassBarriers;
+
+    // The state the graph believes each slot's memory is in. With the graph owning barriers these carry over from
+    // frame to frame (they describe the GPU, not the frame) and a slot whose handle was just created starts at the
+    // layout the descriptor asked to be created in, which is `initialState`. Without it they are rebuilt from the
+    // descriptors every frame, because nvrhi restores `initialState` at close().
     std::vector<nvrhi::ResourceStates> m_TextureStates;
     std::vector<nvrhi::ResourceStates> m_BufferStates;
+    bool m_bOwnBarriers = false;
 
     // Declared-vs-actual checker state (ValidateActualAccess, debug runs only). The maps are rebuilt by Compile()
     // from the physical handles it just bound; the per-pass sets are filled while the passes record.

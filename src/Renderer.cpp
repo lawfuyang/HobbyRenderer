@@ -1643,6 +1643,7 @@ void Renderer::ScheduleAndRunAllRenderers()
         renderer->m_bPassEnabled = false;
     }
 
+    m_RenderGraph.SetOwnBarriers(Config::Get().m_bOwnRenderGraphBarriers);
     m_RenderGraph.Reset();
 
     m_RenderGraph.BeginSetup();

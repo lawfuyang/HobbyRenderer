@@ -20,6 +20,9 @@ struct Config
     // separate transient heap sets per frame in flight, so this costs one extra set of transient
     // memory. --no-frame-pipelining restores the fully serialized submission.
     bool m_EnableFramePipelining = true;
+    // Let the render graph place the barriers of the transients it allocates (--rendergraph-own-barriers) instead of
+    // letting each descriptor's `initialState` round-trip through every command list.
+    bool m_bOwnRenderGraphBarriers = false;
 
     // Disable sampler feedback entirely. Needed under tools that do not implement
     // it (e.g. RenderDoc 1.46). Texture streaming then falls back to requesting
