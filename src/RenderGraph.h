@@ -92,6 +92,15 @@ struct TransientResourceBase
     nvrhi::HeapHandle m_Heap;
 
     virtual nvrhi::MemoryRequirements GetMemoryRequirements() const = 0;
+
+    // The descriptor is the only input to the requirements, so one query per descriptor is enough. The cache is
+    // invalidated wherever m_Desc is reassigned (see InvalidateMemoryRequirements in DeclareTexture/DeclareBuffer).
+    const nvrhi::MemoryRequirements& GetCachedMemoryRequirements() const;
+    void InvalidateMemoryRequirements() { m_HasCachedMemoryRequirements = false; }
+
+    mutable nvrhi::MemoryRequirements m_CachedMemoryRequirements{};
+    mutable bool m_HasCachedMemoryRequirements = false;
+
     virtual ~TransientResourceBase() = default;
 };
 
@@ -155,6 +164,18 @@ public:
         uint32_t m_NumAliasedBuffers = 0;
         size_t m_TotalTextureMemory = 0;
         size_t m_TotalBufferMemory = 0;
+        // Memory accounting, filled by Compile() from the cached requirements: what the live heaps hold, the
+        // largest single free block, the sum every declared resource asked for, the physical owners' share of
+        // it, and the difference (what aliasing saved).
+        size_t m_HeapBytes = 0;
+        size_t m_LargestFreeBlockBytes = 0;
+        size_t m_UnAliasedBytes = 0;
+        size_t m_AliasedBytes = 0;
+        size_t m_AliasingSavingsBytes = 0;
+        uint32_t m_NumAliasBarriers = 0;
+        // Virtual-resource creations spent querying memory requirements this frame. Steady state is 0 once the
+        // per-resource cache is warm; anything else means a descriptor keeps changing.
+        uint32_t m_NumMemoryRequirementQueries = 0;
     };
 
     // ─── Lifecycle ─────────────────────────────────────────────────────────
@@ -222,7 +243,9 @@ public:
     uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
 
     // ─── Debug & diagnostics ───────────────────────────────────────────────
-
+    // Pass names are indexed 1-based everywhere a pass index is stored, while m_PassNames is 0-based. Every
+    // diagnostic goes through this so an out-of-range index reads "<invalid>" instead of throwing.
+    const char* PassName(uint16_t passIndex1Based) const;
     void RenderDebugUI();
     std::string ExportToString() const;
 
@@ -325,6 +348,8 @@ private:
     // Frame state
     Stats m_Stats;
     bool m_AliasingEnabled = true;
+    // One-time log when aliasing was requested but the device has no enhanced barriers (see Reset).
+    bool m_bLoggedAliasingWithoutEnhancedBarriers = false;
     bool m_IsCompiled = false;
     uint16_t m_CurrentPassIndex = 0;
     // The heap set this frame allocates into (see kFrameSetCount). 0 when frame pipelining is off.

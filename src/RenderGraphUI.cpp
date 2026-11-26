@@ -36,6 +36,16 @@ void RenderGraph::RenderDebugUI()
         
         ImGui::Text("Buffer Memory: %.2f MB", 
                    m_Stats.m_TotalBufferMemory / (1024.0 * 1024.0));
+
+        ImGui::Text("Heaps: %.2f MB (largest free block %.2f MB)",
+                   m_Stats.m_HeapBytes / (1024.0 * 1024.0),
+                   m_Stats.m_LargestFreeBlockBytes / (1024.0 * 1024.0));
+        ImGui::Text("Without aliasing: %.2f MB, aliased: %.2f MB (saved %.2f MB)",
+                   m_Stats.m_UnAliasedBytes / (1024.0 * 1024.0),
+                   m_Stats.m_AliasedBytes / (1024.0 * 1024.0),
+                   m_Stats.m_AliasingSavingsBytes / (1024.0 * 1024.0));
+        ImGui::Text("Alias barriers: %u   Memory-requirement queries: %u",
+                   m_Stats.m_NumAliasBarriers, m_Stats.m_NumMemoryRequirementQueries);
         
         if (ImGui::TreeNode("Lifetime Visualization"))
         {
@@ -106,7 +116,7 @@ void RenderGraph::RenderDebugUI()
                         ImGui::BeginTooltip();
                         ImGui::Text("Resource: %s", name.c_str());
                         ImGui::Text("Type: %s", typeName);
-                        ImGui::Text("Size: %.2f MB", resource.m_Desc.GetMemoryRequirements().size / (1024.0 * 1024.0));
+                        ImGui::Text("Size: %.2f MB", resource.GetCachedMemoryRequirements().size / (1024.0 * 1024.0));
                         ImGui::Text("Lifetime: Pass %u to %u", resource.m_Lifetime.m_FirstPass, resource.m_Lifetime.m_LastPass);
                         
                         if (resource.m_Lifetime.m_FirstPass > 0 && resource.m_Lifetime.m_FirstPass <= m_PassNames.size())
@@ -203,7 +213,7 @@ void RenderGraph::RenderDebugUI()
                         ImGui::Text("N/A");
                     
                     ImGui::TableNextColumn();
-                    ImGui::Text("%.2f", texture.m_Desc.GetMemoryRequirements().size / (1024.0 * 1024.0));
+                    ImGui::Text("%.2f", texture.GetCachedMemoryRequirements().size / (1024.0 * 1024.0));
 
                     ImGui::TableNextColumn();
                     ImGui::Text("%d", texture.m_HeapIndex != UINT32_MAX ? (int)texture.m_HeapIndex : -1);
@@ -282,7 +292,7 @@ void RenderGraph::RenderDebugUI()
                         ImGui::Text("N/A");
                     
                     ImGui::TableNextColumn();
-                    ImGui::Text("%.2f", buffer.m_Desc.GetMemoryRequirements().size / (1024.0 * 1024.0));
+                    ImGui::Text("%.2f", buffer.GetCachedMemoryRequirements().size / (1024.0 * 1024.0));
 
                     ImGui::TableNextColumn();
                     ImGui::Text("%d", buffer.m_HeapIndex != UINT32_MAX ? (int)buffer.m_HeapIndex : -1);
@@ -484,7 +494,23 @@ std::string RenderGraph::ExportToString() const
     ss << "- Textures: " << m_Stats.m_NumTextures << " (Allocated: " << m_Stats.m_NumAllocatedTextures << ", Aliased: " << m_Stats.m_NumAliasedTextures << ")\n";
     ss << "- Buffers: " << m_Stats.m_NumBuffers << " (Allocated: " << m_Stats.m_NumAllocatedBuffers << ", Aliased: " << m_Stats.m_NumAliasedBuffers << ")\n";
     ss << "- Texture Memory: " << m_Stats.m_TotalTextureMemory / (1024.0 * 1024.0) << " MB\n";
-    ss << "- Buffer Memory: " << m_Stats.m_TotalBufferMemory / (1024.0 * 1024.0) << " MB\n\n";
+    ss << "- Buffer Memory: " << m_Stats.m_TotalBufferMemory / (1024.0 * 1024.0) << " MB\n";
+    ss << "- Heaps: " << m_Stats.m_HeapBytes / (1024.0 * 1024.0) << " MB (largest free block "
+       << m_Stats.m_LargestFreeBlockBytes / (1024.0 * 1024.0) << " MB)\n";
+    ss << "- Without aliasing: " << m_Stats.m_UnAliasedBytes / (1024.0 * 1024.0) << " MB, aliased: "
+       << m_Stats.m_AliasedBytes / (1024.0 * 1024.0) << " MB (saved "
+       << m_Stats.m_AliasingSavingsBytes / (1024.0 * 1024.0) << " MB)\n";
+    ss << "- Alias barriers: " << m_Stats.m_NumAliasBarriers
+       << "   Memory-requirement queries: " << m_Stats.m_NumMemoryRequirementQueries << "\n\n";
+
+    // The access sets are unordered, so their iteration order differs run to run. Sort the indices before
+    // printing: the dump is compared between runs to prove a change is behaviour-neutral.
+    auto sortedIndices = [](const std::unordered_set<uint32_t>& indices)
+    {
+        std::vector<uint32_t> sorted(indices.begin(), indices.end());
+        std::sort(sorted.begin(), sorted.end());
+        return sorted;
+    };
 
     ss << "## Render Passes\n";
     for (uint32_t i = 0; i < (uint32_t)m_PassNames.size(); ++i)
@@ -497,16 +523,16 @@ std::string RenderGraph::ExportToString() const
         if (!access.m_ReadTextures.empty() || !access.m_WriteTextures.empty())
         {
             ss << "   - Textures:";
-            for (uint32_t idx : access.m_ReadTextures) ss << " [R]" << m_Textures[idx].m_Desc.m_NvrhiDesc.debugName;
-            for (uint32_t idx : access.m_WriteTextures) ss << " [W]" << m_Textures[idx].m_Desc.m_NvrhiDesc.debugName;
+            for (uint32_t idx : sortedIndices(access.m_ReadTextures)) ss << " [R]" << m_Textures[idx].m_Desc.m_NvrhiDesc.debugName;
+            for (uint32_t idx : sortedIndices(access.m_WriteTextures)) ss << " [W]" << m_Textures[idx].m_Desc.m_NvrhiDesc.debugName;
             ss << "\n";
         }
 
         if (!access.m_ReadBuffers.empty() || !access.m_WriteBuffers.empty())
         {
             ss << "   - Buffers:";
-            for (uint32_t idx : access.m_ReadBuffers) ss << " [R]" << m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName;
-            for (uint32_t idx : access.m_WriteBuffers) ss << " [W]" << m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName;
+            for (uint32_t idx : sortedIndices(access.m_ReadBuffers)) ss << " [R]" << m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName;
+            for (uint32_t idx : sortedIndices(access.m_WriteBuffers)) ss << " [W]" << m_Buffers[idx].m_Desc.m_NvrhiDesc.debugName;
             ss << "\n";
         }
 
@@ -523,7 +549,7 @@ std::string RenderGraph::ExportToString() const
         ss << "- " << tex.m_Desc.m_NvrhiDesc.debugName << "\n";
         ss << "  - Size: " << tex.m_Desc.m_NvrhiDesc.width << "x" << tex.m_Desc.m_NvrhiDesc.height << " (" << nvrhi::utils::FormatToString(tex.m_Desc.m_NvrhiDesc.format) << ")\n";
         ss << "  - Lifetime: Pass " << tex.m_Lifetime.m_FirstPass << " to " << tex.m_Lifetime.m_LastPass << "\n";
-        ss << "  - Memory: " << tex.m_Desc.GetMemoryRequirements().size / (1024.0 * 1024.0) << " MB\n";
+        ss << "  - Memory: " << tex.GetCachedMemoryRequirements().size / (1024.0 * 1024.0) << " MB\n";
         ss << "  - Physical: Heap " << (tex.m_HeapIndex != UINT32_MAX ? (int)tex.m_HeapIndex : -1) << ", Offset " << tex.m_Offset << "\n";
         if (tex.m_AliasedFromIndex != UINT32_MAX)
         {
@@ -538,7 +564,7 @@ std::string RenderGraph::ExportToString() const
         ss << "- " << buf.m_Desc.m_NvrhiDesc.debugName << "\n";
         ss << "  - Size: " << buf.m_Desc.m_NvrhiDesc.byteSize << " bytes (Stride: " << buf.m_Desc.m_NvrhiDesc.structStride << ")\n";
         ss << "  - Lifetime: Pass " << buf.m_Lifetime.m_FirstPass << " to " << buf.m_Lifetime.m_LastPass << "\n";
-        ss << "  - Memory: " << buf.m_Desc.GetMemoryRequirements().size / (1024.0 * 1024.0) << " MB\n";
+        ss << "  - Memory: " << buf.GetCachedMemoryRequirements().size / (1024.0 * 1024.0) << " MB\n";
         ss << "  - Physical: Heap " << (buf.m_HeapIndex != UINT32_MAX ? (int)buf.m_HeapIndex : -1) << ", Offset " << buf.m_Offset << "\n";
         if (buf.m_AliasedFromIndex != UINT32_MAX)
         {

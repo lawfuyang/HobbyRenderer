@@ -10,6 +10,10 @@ using namespace RenderGraphInternal;
 
 static thread_local uint16_t t_ActivePassIndex = 0;
 
+// Counts the virtual resource creations that a memory-requirement query costs. Reset() clears it and Compile()
+// copies it into Stats, so a steady-state frame reporting anything but 0 means a descriptor keeps changing.
+static uint32_t gs_MemoryRequirementQueries = 0;
+
 template <class T>
 inline void hash_combine(std::size_t& seed, const T& v)
 {
@@ -17,6 +21,9 @@ inline void hash_combine(std::size_t& seed, const T& v)
     seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
+// ComputeHash is also the key of the memory-requirement cache (TransientResourceBase::GetCachedMemoryRequirements),
+// so every field that feeds GetMemoryRequirements must be hashed here: a descriptor change that leaves the hash
+// unchanged would keep stale requirements.
 size_t RGTextureDesc::ComputeHash() const
 {
     size_t seed = 0;
@@ -42,6 +49,7 @@ size_t RGTextureDesc::ComputeHash() const
     return seed;
 }
 
+// See the note above RGTextureDesc::ComputeHash: this hash also keys the memory-requirement cache.
 size_t RGBufferDesc::ComputeHash() const
 {
     size_t seed = 0;
@@ -60,6 +68,7 @@ nvrhi::MemoryRequirements RGTextureDesc::GetMemoryRequirements() const
     nvrhi::TextureDesc tempDesc = m_NvrhiDesc;
     tempDesc.isVirtual = true;
     nvrhi::TextureHandle tempTex = g_Renderer.m_RHI->m_NvrhiDevice->createTexture(tempDesc);
+    gs_MemoryRequirementQueries++;
     return g_Renderer.m_RHI->m_NvrhiDevice->getTextureMemoryRequirements(tempTex);
 }
 
@@ -68,7 +77,18 @@ nvrhi::MemoryRequirements RGBufferDesc::GetMemoryRequirements() const
     nvrhi::BufferDesc tempDesc = m_NvrhiDesc;
     tempDesc.isVirtual = true;
     nvrhi::BufferHandle tempBuf = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(tempDesc);
+    gs_MemoryRequirementQueries++;
     return g_Renderer.m_RHI->m_NvrhiDevice->getBufferMemoryRequirements(tempBuf);
+}
+
+const nvrhi::MemoryRequirements& RenderGraphInternal::TransientResourceBase::GetCachedMemoryRequirements() const
+{
+    if (!m_HasCachedMemoryRequirements)
+    {
+        m_CachedMemoryRequirements = GetMemoryRequirements();
+        m_HasCachedMemoryRequirements = true;
+    }
+    return m_CachedMemoryRequirements;
 }
 
 // ============================================================================
@@ -148,7 +168,18 @@ void RenderGraph::Reset()
 {
     PROFILE_FUNCTION();
 
-    m_AliasingEnabled = Config::Get().m_EnableRenderGraphAliasing;
+    // Aliased memory is only used correctly when nvrhi emits an aliasing barrier, and only the enhanced-barrier
+    // path does: insertGlobalSyncBarrier() sets a flag that commitBarriers() consumes there and ignores on the
+    // legacy path. A device without enhanced barriers therefore must not alias at all.
+    const bool bEnhancedBarriers = g_Renderer.m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::EnhancedBarriers);
+    m_AliasingEnabled = Config::Get().m_EnableRenderGraphAliasing && bEnhancedBarriers;
+    if (Config::Get().m_EnableRenderGraphAliasing && !bEnhancedBarriers && !m_bLoggedAliasingWithoutEnhancedBarriers)
+    {
+        m_bLoggedAliasingWithoutEnhancedBarriers = true;
+        SDL_Log("[RenderGraph] Aliasing disabled: this device has no enhanced barriers, and the legacy barrier path "
+                "ignores the aliasing barrier, so aliased memory would be used without one. "
+                "Pass --disable-rendergraph-aliasing to silence this.");
+    }
 
     // Frame pipelining: alternate the transient heap sets so this frame never allocates into (or rebinds
     // resources inside) memory the GPU is still using. The renderer waits for the frame that used this set
@@ -163,6 +194,7 @@ void RenderGraph::Reset()
     m_IsCompiled = false;
     m_IsInsideSetup = false; // safety: ensure setup state is clean at frame start
     m_Stats = Stats{};
+    gs_MemoryRequirementQueries = 0;
     m_PassNames.clear();
     m_PassAccesses.clear();
     m_PassNeedsGlobalSyncBarrier.clear();
@@ -492,6 +524,8 @@ bool RenderGraph::DeclareTexture(const RGTextureDesc& desc, RGTextureHandle& out
             texture.m_IsPhysicalOwner = false;
             texture.m_Heap            = nullptr;
             texture.m_HeapIndex       = UINT32_MAX;
+            // The hash is the cache key, so only a changed descriptor makes the cached requirements stale.
+            texture.InvalidateMemoryRequirements();
             isNewlyAllocated = true;
         }
 
@@ -592,6 +626,8 @@ bool RenderGraph::DeclareBuffer(const RGBufferDesc& desc, RGBufferHandle& output
             buffer.m_IsPhysicalOwner = false;
             buffer.m_Heap           = nullptr;
             buffer.m_HeapIndex      = UINT32_MAX;
+            // The hash is the cache key, so only a changed descriptor makes the cached requirements stale.
+            buffer.InvalidateMemoryRequirements();
             isNewlyAllocated = true;
         }
 
@@ -809,8 +845,9 @@ void RenderGraph::Compile()
 
         if (tex.m_DeclarationPass > firstAccessPass)
         {
-            SDL_Log("[RenderGraph] ERROR: Texture '%s' (index %u) accessed in pass %u but only declared in pass %u",
-                tex.m_Desc.m_NvrhiDesc.debugName.c_str(), i, firstAccessPass, tex.m_DeclarationPass);
+            SDL_Log("[RenderGraph] ERROR: Texture '%s' (index %u) accessed in pass %u ('%s') but only declared in pass %u ('%s')",
+                tex.m_Desc.m_NvrhiDesc.debugName.c_str(), i, firstAccessPass, PassName(firstAccessPass),
+                tex.m_DeclarationPass, PassName(tex.m_DeclarationPass));
             SDL_assert(false && "Resource accessed before it was declared");
         }
     }
@@ -843,7 +880,7 @@ void RenderGraph::Compile()
         if (buf.m_DeclarationPass > firstAccessPass)
         {
             SDL_Log("[RenderGraph] ERROR: Buffer '%s' accessed in pass '%s' but only declared in pass '%s'",
-                buf.m_Desc.m_NvrhiDesc.debugName.c_str(), m_PassNames.at(firstAccessPass), m_PassNames.at(buf.m_DeclarationPass));
+                buf.m_Desc.m_NvrhiDesc.debugName.c_str(), PassName(firstAccessPass), PassName(buf.m_DeclarationPass));
             SDL_assert(false && "Resource accessed before it was declared");
         }
     }
@@ -1042,7 +1079,52 @@ void RenderGraph::Compile()
         }
     }
 
+    // Memory accounting, from the cached requirements: what the heaps hold, the largest single free block, what
+    // every declared resource asked for, the owners' share of it, and the difference aliasing bought.
+    m_Stats.m_NumAliasBarriers = static_cast<uint32_t>(
+        std::count(m_PassNeedsGlobalSyncBarrier.begin(), m_PassNeedsGlobalSyncBarrier.end(), true));
+    m_Stats.m_NumMemoryRequirementQueries = gs_MemoryRequirementQueries;
+
+    m_Stats.m_HeapBytes = 0;
+    m_Stats.m_LargestFreeBlockBytes = 0;
+    for (const HeapEntry& heap : m_Heaps)
+    {
+        if (!heap.m_Heap)
+            continue;
+        m_Stats.m_HeapBytes += heap.m_Size;
+        for (const HeapBlock& block : heap.m_Blocks)
+        {
+            if (block.m_IsFree && block.m_Size > m_Stats.m_LargestFreeBlockBytes)
+                m_Stats.m_LargestFreeBlockBytes = block.m_Size;
+        }
+    }
+
+    m_Stats.m_UnAliasedBytes = 0;
+    for (const TransientTexture& tex : m_Textures)
+    {
+        if (tex.m_IsDeclaredThisFrame && tex.m_Lifetime.IsValid())
+            m_Stats.m_UnAliasedBytes += tex.GetCachedMemoryRequirements().size;
+    }
+    for (const TransientBuffer& buf : m_Buffers)
+    {
+        if (buf.m_IsDeclaredThisFrame && buf.m_Lifetime.IsValid())
+            m_Stats.m_UnAliasedBytes += buf.GetCachedMemoryRequirements().size;
+    }
+
+    m_Stats.m_AliasedBytes = m_Stats.m_TotalTextureMemory + m_Stats.m_TotalBufferMemory;
+    m_Stats.m_AliasingSavingsBytes = m_Stats.m_UnAliasedBytes > m_Stats.m_AliasedBytes
+        ? m_Stats.m_UnAliasedBytes - m_Stats.m_AliasedBytes
+        : 0;
+
     m_IsCompiled = true;
+}
+
+const char* RenderGraph::PassName(uint16_t passIndex1Based) const
+{
+    if (passIndex1Based == 0 || passIndex1Based > m_PassNames.size())
+        return "<invalid>";
+
+    return m_PassNames[passIndex1Based - 1];
 }
 
 void RenderGraph::PostRender()
@@ -1140,7 +1222,7 @@ nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size, uint32_t frameSet)
 
 void RenderGraph::SubAllocateResource(RenderGraphInternal::TransientResourceBase* resource, uint64_t alignment)
 {
-    const nvrhi::MemoryRequirements memReq = resource->GetMemoryRequirements();
+    const nvrhi::MemoryRequirements& memReq = resource->GetCachedMemoryRequirements();
     size_t size = memReq.size;
 
     // 1. Try to find a free block in existing heaps of this resource's frame set. Heaps of the other
@@ -1267,7 +1349,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
     for (uint32_t idx : sortedIndices)
     {
         TransientResourceBase* resource = bIsBuffer ? (TransientResourceBase*)&m_Buffers[idx] : (TransientResourceBase*)&m_Textures[idx];
-        const nvrhi::MemoryRequirements memReq = resource->GetMemoryRequirements();
+        const nvrhi::MemoryRequirements& memReq = resource->GetCachedMemoryRequirements();
 
         // A resource keeps the set it was first allocated in: only a fresh resource picks the current frame's
         // set (persistent resources get their own, never-recycled set). Reallocating on a set change would
@@ -1332,7 +1414,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                 bool bCanAlias = resource->m_Lifetime.m_FirstPass > candidate->m_PhysicalLastPass;
                 if (bCanAlias)
                 {
-                    const nvrhi::MemoryRequirements candidateMemReq = candidate->GetMemoryRequirements();
+                    const nvrhi::MemoryRequirements& candidateMemReq = candidate->GetCachedMemoryRequirements();
                     bCanAlias = memReq.size <= candidateMemReq.size;
 
                     if (bCanAlias && memReq.alignment > 0)
