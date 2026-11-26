@@ -224,13 +224,13 @@ void ImGuiLayer::UpdateFrame()
             if (!bHasClusterData)
                 ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
 
-            // Plumbing switch: the target exists and the resolve pass is scheduled, but the resolve is still empty,
-            // so the image must not change. The capture vocabulary (VisibilityRaster / VisibilityResolve) is what
-            // the later phases key on.
+            // The ids are the raster pass' output now; the resolve that turns them back into G-buffer values is
+            // still a debug view, so the image is expected to be the id hash rather than the scene.
             ImGui::Checkbox("Visibility buffer", &g_Renderer.m_EnableVisibilityBuffer);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Rasterises cluster ids into a visibility buffer and resolves them into the G-buffer.\n"
-                    "Currently plumbing only, so the image must not change.");
+                    "Needs the cluster draw: with it off the raster path stays in use.\n"
+                    "The resolve currently shows the ids as hash colours.");
 
             ImGui::SeparatorText("Cluster traversal");
             ImGui::SliderFloat("LOD pixel error", &Config::Get().m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");

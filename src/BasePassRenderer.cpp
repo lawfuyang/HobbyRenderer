@@ -19,6 +19,7 @@ extern RGTextureHandle g_RG_GBufferORM;
 extern RGTextureHandle g_RG_GBufferEmissive;
 extern RGTextureHandle g_RG_GBufferMotionVectors;
 extern RGTextureHandle g_RG_HDRColor;
+extern RGTextureHandle g_RG_VisibilityBuffer;
 RGTextureHandle g_RG_OpaqueColor;
 
 // ClusterTraversal.hlsl writes three grids into the cluster indirect buffer; these are their slots, in the same
@@ -155,6 +156,8 @@ public:
         nvrhi::TextureHandle motion;
         nvrhi::TextureHandle hdr;
         nvrhi::TextureHandle opaque;
+        // Set when the visibility path is on: the cluster draws write ids into this instead of the G-buffer.
+        nvrhi::TextureHandle visibility;
     };
     
     virtual void Render(nvrhi::CommandListHandle commandList, const RenderGraph& renderGraph) override = 0;
@@ -181,6 +184,8 @@ protected:
         bool m_BackFaceCull = false;
         // Byte offset into the cluster indirect buffer of the grid this draw consumes.
         uint32_t m_ClusterIndirectOffset = 0;
+        // Which id list the visibility path writes with this draw (see ClusterVis.hlsl's packing).
+        uint32_t m_VisListIndex = 0;
     };
 
     // True when this bucket's base pass draws through the cluster mesh shader, which is also the condition for the
@@ -672,7 +677,16 @@ protected:
 
         const uint32_t effectiveDebugMode = uint32_t(Config::Get().m_DebugMode);
 
-        const nvrhi::FramebufferHandle framebuffer = bUseAlphaBlend ? 
+        // The visibility path replaces what the opaque cluster bucket's pixel shader writes, so it applies to a
+        // cluster draw of the opaque bucket only: the transparent bucket has no cluster path, and the masked
+        // bucket keeps the G-buffer until it gets its own id list.
+        const bool bVisPath = g_Renderer.IsVisibilityBufferActive() && bDrawClusters &&
+            args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
+
+        const nvrhi::FramebufferHandle framebuffer = bVisPath ?
+            g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(
+                nvrhi::FramebufferDesc().addColorAttachment(handles.visibility).setDepthAttachment(depthTexture)) :
+            bUseAlphaBlend ? 
             g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(hdrColor).setDepthAttachment(depthTexture)) :
             g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(
             nvrhi::FramebufferDesc()
@@ -685,7 +699,13 @@ protected:
             .setDepthAttachment(depthTexture));
 
         nvrhi::FramebufferInfoEx fbInfo;
-        if (bUseAlphaBlend)
+        if (bVisPath)
+        {
+            // One integer target. The depth and stencil state stays the raster path's, so the stencil the deferred
+            // pass tests against still marks the same surfaces.
+            fbInfo.colorFormats = { nvrhi::Format::R32_UINT };
+        }
+        else if (bUseAlphaBlend)
         {
             fbInfo.colorFormats = { Renderer::HDR_COLOR_FORMAT };
         }
@@ -744,6 +764,7 @@ protected:
         cb.SetEnableSky(g_Renderer.m_EnableSky ? 1 : 0);
         cb.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
         cb.SetForcedTextureMip(g_Renderer.m_ForcedTextureMip);
+        cb.SetVisListIndex(args.m_VisListIndex);
 
         commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
@@ -809,9 +830,11 @@ protected:
         if (bDrawClusters)
         {
             nvrhi::MeshletPipelineDesc clusterPipelineDesc;
-            clusterPipelineDesc.AS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERBASEPASS_ASMAIN);
-            clusterPipelineDesc.MS = g_Renderer.GetShaderHandle(ShaderID::CLUSTERBASEPASS_MSMAIN);
-            clusterPipelineDesc.PS = g_Renderer.GetShaderHandle(psID);
+            // The visibility path swaps the whole cluster pipeline: its mesh shader emits the reduced vertex output
+            // and the per-primitive ids, and its pixel shader writes the packed id instead of six G-buffer values.
+            clusterPipelineDesc.AS = g_Renderer.GetShaderHandle(bVisPath ? ShaderID::CLUSTERVIS_ASMAIN : ShaderID::CLUSTERBASEPASS_ASMAIN);
+            clusterPipelineDesc.MS = g_Renderer.GetShaderHandle(bVisPath ? ShaderID::CLUSTERVIS_MSMAIN : ShaderID::CLUSTERBASEPASS_MSMAIN);
+            clusterPipelineDesc.PS = g_Renderer.GetShaderHandle(bVisPath ? ShaderID::CLUSTERVIS_PSMAIN : psID);
             clusterPipelineDesc.renderState = renderState;
             clusterPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
 
@@ -824,10 +847,9 @@ protected:
 
             commandList->setMeshletState(meshState);
             // One DispatchMesh over the visible-cluster list; ClusterBuildArgs wrote that count into the args.
-            // The visibility path keeps the same dispatch and changes only what the pixel shader writes; the scope
-            // below is the capture vocabulary the resolve work keys on, and it exists only when the path is on, so
+            // The scope is the capture vocabulary the resolve work keys on, and it exists only on the id path, so
             // the raster path's event list is unchanged.
-            if (g_Renderer.m_EnableVisibilityBuffer)
+            if (bVisPath)
             {
                 PROFILE_GPU_SCOPED("VisibilityRaster", commandList);
                 commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
@@ -837,7 +859,9 @@ protected:
                 commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
             }
 
-            if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
+            // The two cluster overlays write the six G-buffer targets, which the visibility path's single id target
+            // cannot hold; with ids in that target the overlays have nothing readable to overlay either.
+            if (!bVisPath && effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
             {
                 // The bounds overlay shares this dispatch list, framebuffer and depth buffer, but it must not
                 // write depth: the HZB built from it at the end of the opaque pass decides the next frame's
@@ -865,7 +889,7 @@ protected:
                 commandList->setMeshletState(overlayMeshState);
                 commandList->dispatchMeshIndirect(args.m_ClusterIndirectOffset, 1);
             }
-            else if (effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES)
+            else if (!bVisPath && effectiveDebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES)
             {
                 // Per-triangle view: the same triangles again, one vertex triple each, so the pixel shader can
                 // colour them by index. The depth test is read-equal (identical positions, so identical depth)
@@ -983,7 +1007,6 @@ public:
     {
         BasePassResources& res = m_BasePassResources;
         res.DeclareResources(renderGraph, GetName(), Scene::kClusterBucketOpaque);
-
         renderGraph.WriteBuffer(res.m_VisibleCountBuffer);
         renderGraph.WriteBuffer(res.m_VisibleIndirectBuffer);
 
@@ -1018,12 +1041,21 @@ public:
         }
 
         renderGraph.WriteTexture(g_RG_DepthTexture);
-        renderGraph.WriteTexture(g_RG_GBufferAlbedo);
-        renderGraph.WriteTexture(g_RG_GBufferNormals);
-        renderGraph.WriteTexture(g_RG_GBufferGeoNormals);
-        renderGraph.WriteTexture(g_RG_GBufferORM);
-        renderGraph.WriteTexture(g_RG_GBufferEmissive);
-        renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
+        // The visibility path moves this bucket's output into the id buffer, so the pass binds no G-buffer target at
+        // all and the resolve declares those writes instead. The depth it writes is the raster path's, untouched.
+        if (g_Renderer.IsVisibilityBufferActive())
+        {
+            renderGraph.WriteTexture(g_RG_VisibilityBuffer);
+        }
+        else
+        {
+            renderGraph.WriteTexture(g_RG_GBufferAlbedo);
+            renderGraph.WriteTexture(g_RG_GBufferNormals);
+            renderGraph.WriteTexture(g_RG_GBufferGeoNormals);
+            renderGraph.WriteTexture(g_RG_GBufferORM);
+            renderGraph.WriteTexture(g_RG_GBufferEmissive);
+            renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
+        }
 
         const std::string counterName = std::string{ GetName() } + " HZB SPD Atomic Counter";
         renderGraph.DeclareBuffer(RenderGraph::GetSPDAtomicCounterDesc(counterName.c_str()), m_RG_SPDAtomicCounter);
@@ -1057,12 +1089,22 @@ public:
 
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
         handles.hzb = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Write) : nullptr;
-        handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
-        handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
-        handles.geoNormals = renderGraph.GetTexture(g_RG_GBufferGeoNormals, RGResourceAccessMode::Write);
-        handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
-        handles.emissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
-        handles.motion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
+        if (g_Renderer.IsVisibilityBufferActive())
+        {
+            // The ids replace the G-buffer targets for this pass, so it neither binds them nor declares them: asking
+            // the graph for a write it did not declare is an error, and declaring a write it does not perform would
+            // order the deferred pass behind a pass that never touched those targets.
+            handles.visibility = renderGraph.GetTexture(g_RG_VisibilityBuffer, RGResourceAccessMode::Write);
+        }
+        else
+        {
+            handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
+            handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
+            handles.geoNormals = renderGraph.GetTexture(g_RG_GBufferGeoNormals, RGResourceAccessMode::Write);
+            handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
+            handles.emissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
+            handles.motion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
+        }
 
         if (g_Renderer.m_EnableClusterRendering)
         {
@@ -1123,6 +1165,8 @@ public:
             BasePassRenderingArgs secondPassArgs = args;
             secondPassArgs.m_BucketName = "Opaque (Revived)";
             secondPassArgs.m_ClusterIndirectOffset = kClusterSecondPassMeshSlot * sizeof(srrhi::DispatchIndirectArguments);
+            // Its own list: the ids of the clusters only the two-pass culling found must not alias the first pass'.
+            secondPassArgs.m_VisListIndex = 1;
 
             RenderInstances(commandList, secondPassArgs, secondPassHandles);
         }

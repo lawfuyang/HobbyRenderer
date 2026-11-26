@@ -41,17 +41,6 @@ srrhi::VertexQuantized ReadClusterVertex(uint streamBase, srrhi::ClusterRecord c
     return vq;
 }
 
-float3 HashColor(uint id)
-{
-    uint h = id * 0x27D4EB2Du;
-    h = h ^ (h >> 15);
-    h = h * 0x85EBCA6Bu;
-    h = h ^ (h >> 13);
-    h = h * 0xC2B2AE35u;
-    h = h ^ (h >> 16);
-    return float3((h & 0xFF) / 255.0f, ((h >> 8) & 0xFF) / 255.0f, ((h >> 16) & 0xFF) / 255.0f);
-}
-
 struct VSOut
 {
     float4 Position : SV_POSITION;

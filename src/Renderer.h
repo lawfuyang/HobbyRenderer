@@ -453,6 +453,10 @@ public:
     // into the G-buffer. The panel's checkbox owns this at runtime; --vis-buffer sets its start value.
     bool m_EnableVisibilityBuffer = false;
 
+    // The ids can only come from the cluster raster, so the switch alone is not enough: with the cluster draw off
+    // there is nothing to write them, and the raster path stays the only one that can produce the G-buffer.
+    bool IsVisibilityBufferActive() const { return m_EnableVisibilityBuffer && m_EnableClusterRendering; }
+
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
     static constexpr uint32_t kClusterCounterReadbackBuffers = 2;
     struct ClusterCountersReadback

@@ -1698,6 +1698,9 @@ void Renderer::ScheduleDebugView()
     schedule("ClearRenderer");
     schedule("OpaqueRenderer");
     schedule("MaskedPassRenderer");
+    // The visibility path's albedo comes out of the resolve rather than the raster, so a view that reads the
+    // G-buffer has to run it; it gates itself on the same switch the raster does.
+    schedule("VisibilityResolveRenderer");
     schedule("HZBGeneratorPhase2");
     schedule("TLASRenderer");
     schedule("RTXDIRenderer");

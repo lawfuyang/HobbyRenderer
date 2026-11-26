@@ -26,6 +26,10 @@ cbuffer BasePassConstants
     uint m_EnableSky;
     uint m_OpaqueColorMipCount;
     int m_ForcedTextureMip;
+
+    // Which list of cluster ids this draw writes into the visibility buffer, when the visibility path is on:
+    // 0 = the opaque pass' own list, 1 = the two-pass culled list, 2 = the masked bucket. Unused by the raster path.
+    uint m_VisListIndex;
 };
 
 srinput BasePassInputs

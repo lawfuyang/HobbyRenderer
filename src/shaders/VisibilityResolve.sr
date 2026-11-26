@@ -1,0 +1,16 @@
+// The target's size, supplied by the pass: a pixel shader that asks the texture for it with GetDimensions pays a
+// fetch on every pixel for a number the caller already has.
+cbuffer VisibilityResolveConstants
+{
+    uint m_Width;
+    uint m_Height;
+};
+
+// The visibility buffer the cluster buckets rasterised, one packed id per pixel (0 = no surface).
+srinput VisibilityResolveInputs
+{
+    [push_constant]
+    VisibilityResolveConstants m_ResolveConstants;
+
+    Texture2D<uint> VisibilityBuffer;   // t0
+};

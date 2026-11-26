@@ -14,6 +14,18 @@ uint32_t DivideAndRoundUp(uint32_t dividend, uint32_t divisor)
     return (dividend + divisor - 1) / divisor;
 }
 
+// A stable colour per id, for the views that colour geometry by an index rather than by its material.
+float3 HashColor(uint id)
+{
+    uint h = id * 0x27D4EB2Du;
+    h = h ^ (h >> 15);
+    h = h * 0x85EBCA6Bu;
+    h = h ^ (h >> 13);
+    h = h * 0xC2B2AE35u;
+    h = h ^ (h >> 16);
+    return float3((h & 0xFF) / 255.0f, ((h >> 8) & 0xFF) / 255.0f, ((h >> 16) & 0xFF) / 255.0f);
+}
+
 // Standard MatrixMultiply helper to enforce consistent multiplication order: mul(vector, matrix)
 float4 MatrixMultiply(float4 v, float4x4 m)
 {

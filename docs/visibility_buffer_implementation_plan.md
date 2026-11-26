@@ -287,6 +287,76 @@ because the resolve is not enabled — so gate this phase on the *buffer content
    convert/inspect; a `.dds` keeps the DXGI format.
 5. **Cluster cut unchanged:** `--cluster-no-culling --cluster-stats-frame 5` still says `(match)`.
 
+**Result (measured 2026-11-26).** Phase 2 is in: the opaque cluster bucket writes ids, and the resolve turns them
+into the albedo target as a hash colour. As built, in the order it mattered:
+
+| Task | As built |
+|---|---|
+| P2.1 | `src/shaders/ClusterVis.hlsl` — AS/MS/PS, `out primitives`, registered in `shaders.cfg` as `CLUSTERVIS_*` |
+| P2.2 | the job index rides in `ClusterVisPayload` from `groupId.x` and out through the per-primitive struct: a mesh pipeline's pixel shader has no `SV_PrimitiveID` of its own, so `SV_PrimitiveID` is *carried* in the primitive output, as the Xbox sample does |
+| P2.3 | `list:2 \| (job+1):23 \| triangle:7`; the list index is a new `BasePassConstants::m_VisListIndex` in `BasePass.sr` (the per-frame CB, not the cooked-mesh layout in `Cluster.sr`) |
+| P2.4 | a `bVisPath` branch selects a `{ R32_UINT, depth }` framebuffer and the ClusterVis pipeline; the depth/stencil state is the raster path's, so stencil 1 still marks the same surfaces |
+| P2.5 | `OpaqueRenderer::Setup` declares the id write *instead of* the six G-buffer writes, and `Render` stops asking for them (asking for a write it did not declare is an error) |
+| P2.6 | the revived pass sets `m_VisListIndex = 1` |
+| P2.7 | `VisibilityResolveRenderer` + `VisibilityResolve.hlsl/.sr`: `Load` the id, write `HashColor(id)` into albedo, black where it is 0 |
+
+What the plan did not anticipate:
+
+- **`--debug <n>` runs a different schedule** (`Renderer::ScheduleDebugView`), and it did not include the resolve —
+  so the albedo stayed at its clear value and the id view was black. The resolve is now in that list; it gates
+  itself on the same switch, so the raster path's debug views are unchanged.
+- **The two cluster overlays (modes 14/15) write six G-buffer targets** and would fail pipeline creation against a
+  single id target, so they are skipped on the id path.
+- **`list` and `triangle` are reserved words in HLSL**; the packing locals are `idList` and `triangleIndex`.
+- `HashColor` moved to `Common.hlsli` (it was `BasePassCommon`'s, and the resolve is not a base-pass shader).
+- `Renderer::IsVisibilityBufferActive()` is `flag && cluster draw`: with `--cluster 0` there is no raster to write
+  ids, so the switch falls back to the raster path instead of letting the resolve draw a cleared buffer.
+
+Correctness (Cornell, frame 60, RenderDoc + PIX):
+
+| Check | Result |
+|---|---|
+| depth `D24S8`, vis on vs off | **bit-identical**: 0 differing bytes of 8,294,400 |
+| surface coverage | stencil == 1: **354,070** px; non-zero ids: **354,070** px — exact |
+| resolve decode | albedo equals `HashColor(id)` at **all 2,073,600** pixels, 0 mismatches, alpha 255 everywhere |
+| id histogram | list bits all 0, `job+1` in 1..3, `triangle` 0..29, 16 distinct ids |
+| PIX `save-resource --marker=VisibilityRaster --rtv=0` | 354,073 non-zero words (the 3 extra are the DDS tail/capture timing), same histogram — the two tools agree to 0.0008 % |
+| `--cluster-no-culling --cluster-stats-frame 5` | `(match)` |
+| `--cluster 0 --vis-buffer 1` vs `0` (`--debug 4`) | **identical** hash `258CD73F…` — the fallback is clean |
+| `--vis-buffer 0` (`--debug 4`) | `258CD73F…`, the Phase 0 baseline hash — the off path is untouched |
+| `--rhidebug` | exit 0, 0 asserts, 0 D3D12 messages |
+| `--rhidebug --rhidebug-gpu` on the minimal frame, flag on and off | exit 0, 0 asserts |
+| `rdc-tools verify` | `problems: 0` (1 padding note) |
+| `rdc-tools hazards` | 4 findings (2 distinct) on the HZB at the SPD mip dispatch — **same count and shape as the raster-path capture**, so no new finding |
+| `replay_dump crosscheck` | 56 findings, all the pre-existing "cluster binding outside the root signature's declared range" class (raster capture: 104); no target/format finding, 50 targets checked |
+| `rootsig-check` / `samplers` | notes only; **0 samplers bound at the sampled events** — the id path samples nothing, which is the point |
+
+Performance (Cornell frame 60, full schedule, PIX `smsp__inst_executed.sum` / `l1tex__t_sectors.sum` per
+top-level pass):
+
+| Pass | inst off | inst on | ratio | sectors off | sectors on | ratio |
+|---|---|---|---|---|---|---|
+| Opaque Renderer | 5,685,631 | 1,963,982 | **0.3454** | 2,558,951 | 1,290,634 | **0.5044** |
+| Visibility Resolve | — | 1,216,771 | new | — | 518,406 | new |
+| SHARCRenderer | 4,319,033 | 1,711,549 | 0.3963 | 2,100,898 | 1,348,287 | 0.6418 |
+| RTXDIRenderer | 267,440,382 | 263,083,338 | 0.9837 | 92,294,340 | 90,333,300 | 0.9788 |
+| HDRPostProcess | 7,850,611 | 7,813,351 | 0.9953 | 1,559,139 | 1,559,139 | 1.0000 |
+| Sky / Bloom / Deferred / FSR3 TAA / TLAS | | | **1.0000** | | | 1.0000 |
+| HZBGeneratorPhase2 | 1,820,370 | 1,822,545 | 1.0012 | 1,289,871 | 1,288,125 | 0.9986 |
+| **totals** | 1,393,509,101 | 1,353,557,522 | **0.9713** | 529,052,766 | 507,164,906 | **0.9586** |
+
+The controls are ×1.0000, so the A/B is valid. The raster loses two thirds of its instructions and half its
+sectors: the material sampling left it. The new resolve is 1.2 M instructions — one `Load` and one store per
+pixel, no material work. `SHARCRenderer` and `RTXDIRenderer` move because this phase's resolve writes *albedo
+only*, so the normals they read are the clear value; that is the intermediate state, not a verdict. The
+performance decision belongs to Phase 6, when the resolve writes all six targets.
+
+Two things to carry forward. `--rendergraph-strict-access` reports one new warning — *"pass 'Opaque Renderer'
+declares a write of texture 'VisibilityBuffer_RG' but never binds it"* — because the checker only sees the
+resources the pass's *helper* passes (the HZB compute) bind, not the mesh state; the identical warning already
+exists for `HDRPostProcess`/`ExposureTexture`. And the revived pass' list 1 has no pixels in any capture so far:
+with a settled camera it is empty by construction, so it needs a moving-camera capture to be observed.
+
 **Rollback:** flag off restores the old framebuffer and PS selection in one branch; delete the
 shader if the phase is abandoned.
 
