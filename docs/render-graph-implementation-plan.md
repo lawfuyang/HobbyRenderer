@@ -434,11 +434,12 @@ measured at 0.8–25 % — no image change attributable to P1.
 RenderDoc (FlyingWorld, frame 90): `problems: 0`, 31107 chunks, 45 draw/dispatch calls, 126 markers, the
 same 10 hazard findings in the same two classes as the baseline (5 loop + 5 state, all bindless-range
 artifacts where one descriptor table is reported as SRV and UAV at once) and the same root-signature
-verdict (0 certain, 3 question). **Bistro's RenderDoc capture cannot be analysed by this toolchain**: its
-frame data is 1.4 GB with a 2.2 GB LZ4 body, which the analyser's C API rejects
-(`section too large for the LZ4 decoder … the C API takes int sizes`). Capturing a different frame does not
-help — the size is the scene's textures and acceleration structures, not the frame — so Bistro's evidence
-comes from PIX, and FlyingWorld carries the RenderDoc half.
+verdict (0 certain, 3 question). **Bistro's RenderDoc capture could not be analysed when this was written**:
+its frame data is 1.4 GB with a 2.2 GB LZ4 body, which the analyser's C API rejected
+(`section too large for the LZ4 decoder … the C API takes int sizes`). That has since been fixed in the
+analyser (only the per-call destination capacity needed clamping, not the section size), and the capture now
+analyses: `problems: 0`, 20756 chunks, 58 draw/dispatch calls, 144 markers, the same 10 hazard findings
+(5 loop + 5 state) and 0 certain / 3 question root signatures. Both scenes now have a RenderDoc verdict.
 
 Validation: `--rhidebug-gpu` is clean on both scenes (0 D3D12 errors, 0 warnings, clean exit), and
 `--rendergraph-strict-access` reports no violation and no unused declaration on either scene. Cameras:
@@ -462,7 +463,8 @@ have been audited too.
 `RGResourceAccessMode` is `Read|Write` only, so the graph cannot emit transitions and delegates them
 to nvrhi.
 
-**Design.**
+**Design.** (As built the enums below were not needed: the overloads take `nvrhi::ResourceStates`
+directly and the untyped calls resolve from the resource's descriptor — see §4.3.)
 
 ```cpp
 enum class RGPassKind : uint8_t { Graphics, Compute, RayTracing, Transfer };
@@ -578,6 +580,86 @@ keep automatic barriers; audit that no such list touches a graph transient.
 
 ---
 
+### 4.3 P2 as built and measured (2026-11-26)
+**P2.1 shipped — with nvrhi's own vocabulary rather than the enums this plan sketched.** There is no
+`RGTextureAccess`/`RGBufferAccess`/`RGPassKind`: `ReadTexture`/`WriteTexture`/`ReadBuffer`/`WriteBuffer`
+take an `nvrhi::ResourceStates` directly, because that is what the timeline, the barrier plan and the
+debug layer all speak, and a translation table between two vocabularies would only have been a place for
+them to disagree.
+
+The untyped calls still work and resolve from what the resource *is*, not from what kind of pass declares
+it: a read is `ShaderResource`; a texture write is `DepthWrite` for a depth format, else `RenderTarget` when
+the descriptor says `isRenderTarget`, else `UnorderedAccess` (which is what `isUAV` allows); a buffer write
+is `UnorderedAccess`, as `DeclareBuffer` already implies. That rule turned out to cover every write in both
+frames, so **no call site needed the typed form at all** — the overloads exist for the passes that will
+eventually want a state their descriptor cannot express, and nothing in the renderer uses them today.
+Every declaration is still recorded twice: in the sets the existing checks use, and as an `AccessRecord`
+carrying the state, in declaration order per pass.
+
+`ValidateActualAccess` now reports the state a binding *requires* rather than a coarse "read/write" flag —
+`ShaderResource` for an SRV or constant buffer, `UnorderedAccess` for a UAV, `RenderTarget`/`DepthWrite` for
+an attachment, `DepthRead` for a framebuffer marked read-only, `IndirectArgument` for a dispatch's
+argument buffer — and compares it against the declared state. The v1 rules it needed while being built
+(a `Compute` pass kind for RTXDI, explicit states on the five storage-image writes and two render-target
+writes) are gone: with the descriptor-based defaults both scenes report **zero undeclared bindings and zero
+state mismatches** under `--rendergraph-strict-access`, with no per-site typing.
+
+One rule the plan did not anticipate survives in the timeline: **a plain read of a depth-format texture is
+`DepthRead`**, not `ShaderResource`, because D3D12 only allows the depth-stencil layouts on a depth
+resource.
+
+`Stats::m_NumDeclaredStateChanges` is the "would-be barrier" counter the plan asked for: the frame's
+declared timeline is built in `Compile()` from the access records, starting each resource at the initial
+state its descriptor names, and every change between consecutive passes counts once. **47 transitions** for
+a full Bistro frame and for a full FlyingWorld frame, 9 for a debug view — next to the 1600-odd `Barrier`
+events a PIX capture of the Bistro frame holds with the round trips in place.
+
+**P2.2 is not shipped, because it faults the driver.** The whole of §4.2 was built and measured: the
+timeline, the per-pass seeding (`beginTrackingTextureState`/`beginTrackingBufferState` for every transient
+the pass touches), the transitions to the declared state at the pass's start, a re-sync at the pass's end so
+the next list's starting state is what the plan says, and `keepInitialState=false` on the transients the
+graph owns (persistent resources left alone — lists outside the graph touch them). It does not run: the
+process dies on the first frame inside `nvwgf2umx.dll` (`0xc0000005`, fault offset `0x7c971a`) with every
+pass's barriers already recorded and no `NVRHI` or `D3D12` error logged. What the bisect established:
+
+| variant | result |
+|---|---|
+| flag on, as designed | driver fault on frame 1 |
+| `--disable-rendergraph-aliasing` / `--no-frame-pipelining` / `--execute-per-pass-and-wait` | same fault |
+| Release build (no asserts, no `SDL_assert`) | same fault |
+| seeding kept, texture transitions skipped | same fault |
+| seeding kept, buffer transitions skipped | same fault |
+| seeding kept, `keepInitialState` left `true` | same fault |
+| seeding skipped, transitions kept | runs further, then reports "Unknown prior state" for every transient (as expected) |
+
+So the seeding is the common factor in every crashing variant, and the fault is in the driver's handling of
+the command stream that results, not in a nvrhi report we can read. Root-causing it needs a debugger
+attached to the fault (the WER report for the crash is in
+`C:\ProgramData\Microsoft\Windows\WER\ReportArchive`), or nvrhi's own single-barrier bisect switch
+(`bDebugBarriers` in `d3d12-state-tracking.cpp`), which was not turned on here. The flag and the emission
+path were removed rather than shipped broken; `Compile()` keeps the timeline, because the number it produces
+is worth having and costs nothing.
+
+What that leaves: 47 transitions a frame, all of which nvrhi already emits — the round trip this item
+targets is `initialState` at `CommandList::close()` plus the transition back out of it, which is roughly
+twice that. Any future attempt should start from the debug-layer-validated variant with the seeding and
+`keepInitialState=false` together, on a build whose driver faults can be inspected.
+
+**Verification of what did ship.** Bistro (the scene this item was smoke-tested on, with
+`bin/camera_state.json` frozen so both builds render the same view) and FlyingWorld, both
+`--hide-ui --no-taa`:
+
+* `--rhidebug` and `--rhidebug-gpu`: 0 D3D12 errors, 0 warnings, clean exit on both scenes.
+* `--rendergraph-strict-access`: 0 undeclared bindings, 0 state mismatches, on both scenes.
+* PIX, frame 90, same frozen camera against the P1 build: **1558 events in both, 0 differing**; counters
+  `smsp__inst_executed.sum` +0.12 %, `l1tex__t_sectors.sum` +0.01 %, i.e. inside the reproduction noise.
+  P2.1 records what a pass declared; it does not change what the pass submits.
+* RenderDoc, frame 90: Bistro `problems: 0`, 20756 chunks, 58 calls, 144 markers; FlyingWorld
+  `problems: 0`, 31107 chunks, 45 calls, 126 markers — identical to the P1 captures, as expected.
+* `--dump-rendergraph` on the same frame differs from the P1 dump only in the new summary line.
+
+---
+
 ## 5. P3 — scheduling
 
 ### 5.1 P3.1 ASAP pass scheduling + kind sorting (effort L)
@@ -603,9 +685,11 @@ batches as needed. This is length-of-longest-chain layering; it is optimal for b
 scheduled index, not the declaration index. Add a `m_ScheduledIndex[passIndex]` map and assert
 `m_PhysicalLastPass` is documented as "scheduled order".
 
-**5.1.5 Kind sorting.** Within a batch, stable-sort passes by `GetPassKind()` (Graphics < Compute <
+**5.1.5 Kind sorting.** Within a batch, stable-sort passes by kind (Graphics < Compute <
 Transfer order chosen to minimise NVIDIA subchannel switches; measure). Passes that must stay in
 declaration order (e.g. two passes writing the same resource) are already ordered by dependencies.
+`IRenderer::GetPassKind()` does not exist today — P2.1 carried one only until the untyped write
+declarations turned out to need no pass kind (§4.3), so P3.1 reintroduces it for this purpose.
 
 **Verification.**
 
