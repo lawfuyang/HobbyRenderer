@@ -129,7 +129,7 @@ public:
             inputs.m_HistogramConstants.SetMaxLogLuminance(kMaxLogLuminance);
 
             inputs.SetHDRColor(HDRInput);
-            inputs.SetHistogram(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+            inputs.SetHistogram(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(uint32_t)));
 
             nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
@@ -167,7 +167,7 @@ public:
                 nvrhi::TextureHandle exposureTexture = renderGraph.GetTexture(g_RG_ExposureTexture, RGResourceAccessMode::Write);
 
                 inputs.SetExposure(exposureBuffer);
-                inputs.SetHistogramInput(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().DummySRVStructuredBuffer);
+                inputs.SetHistogramInput(luminanceHistogram ? luminanceHistogram : CommonResources::GetInstance().GetDummyStructuredSRV(sizeof(uint32_t)));
                 inputs.SetExposureTexture(exposureTexture, 0);
 
                 nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);

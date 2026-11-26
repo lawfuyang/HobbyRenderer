@@ -1941,10 +1941,10 @@ public:
         // GI resampling are skipped), so always use dummy buffers for the binding set.
         nvrhi::BufferHandle  giReservoirBuf    = (bDoReSTIRGI && !bCombinedMode)
             ? renderGraph.GetBuffer(m_RG_GIReservoirBuffer,  RGResourceAccessMode::Write)
-            : cr.DummyUAVStructuredBuffer;
+            : cr.GetDummyStructuredUAV(sizeof(RTXDI_PackedGIReservoir));
         nvrhi::BufferHandle  secondaryGBufBuf  = (bDoReSTIRGI && !bCombinedMode)
             ? renderGraph.GetBuffer(m_RG_SecondaryGBuffer,   RGResourceAccessMode::Write)
-            : cr.DummyUAVStructuredBuffer;
+            : cr.GetDummyStructuredUAV(sizeof(srrhi::SecondaryGBufferData));
 
         // Denoising path outputs
         const bool bDenoise = g_Renderer.m_EnableReSTIRDenoising;
@@ -1981,9 +1981,10 @@ public:
         // current G-buffer so the temporal pass starts with a clean slate.
         if (m_bClearOnNextRender)
         {
-            // Zero the GI reservoir buffer so temporal resampling finds no
-            // valid reservoirs on the first frame (weight = 0 → no contribution).
-            if (bDoReSTIRGI && giReservoirBuf && giReservoirBuf != cr.DummyUAVStructuredBuffer)
+            // Zero the GI reservoir buffer so temporal resampling finds no valid reservoirs on the first frame
+            // (weight = 0 → no contribution). Only the real buffer is cleared: when the GI path is off the slot
+            // holds the placeholder above, which is shared with every other unfilled slot of that stride.
+            if (bDoReSTIRGI && !bCombinedMode && giReservoirBuf)
                 commandList->clearBufferUInt(giReservoirBuf, 0u);
 
             // Re-seed history textures from the current G-buffer so the temporal
@@ -2067,9 +2068,11 @@ public:
             }
             else
             {
-                resamplingInputs.SetSHARCHashEntries (cr.DummyUAVStructuredBuffer);
-                resamplingInputs.SetSHARCResolved    (cr.DummyUAVStructuredBuffer);
-                resamplingInputs.SetSHARCAccumulation(cr.DummyUAVStructuredBuffer);
+                // SHARC's elements are 8 bytes (a hash entry) and 16 bytes (the packed/accumulated pairs); the
+                // placeholders have to match what ResamplingPassInputs declares for each slot.
+                resamplingInputs.SetSHARCHashEntries (cr.GetDummyStructuredUAV(sizeof(uint64_t)));
+                resamplingInputs.SetSHARCResolved    (cr.GetDummyStructuredUAV(16u));
+                resamplingInputs.SetSHARCAccumulation(cr.GetDummyStructuredUAV(16u));
             }
         }
 

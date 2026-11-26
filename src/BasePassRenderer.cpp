@@ -268,12 +268,14 @@ protected:
         inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
         inputs.SetVisibleArgs(handles.visibleIndirect);
         inputs.SetVisibleCount(handles.visibleCount);
-        inputs.SetOccludedIndices(handles.occludedIndices ? handles.occludedIndices : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetOccludedCount(handles.occludedCount ? handles.occludedCount : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetDispatchIndirectArgs((args.m_CullingPhase == 0 && handles.occludedIndirect) ? handles.occludedIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetMeshletJobs(handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetMeshletJobCount(handles.meshletJobCount ? handles.meshletJobCount : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetMeshletIndirectArgs(handles.meshletIndirect ? handles.meshletIndirect : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetOccludedIndices(handles.occludedIndices ? handles.occludedIndices : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(uint32_t)));
+        inputs.SetOccludedCount(handles.occludedCount ? handles.occludedCount : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(uint32_t)));
+        inputs.SetDispatchIndirectArgs((args.m_CullingPhase == 0 && handles.occludedIndirect) ? handles.occludedIndirect
+            : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(srrhi::DispatchIndirectArguments)));
+        inputs.SetMeshletJobs(handles.meshletJob ? handles.meshletJob : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(srrhi::MeshletJob)));
+        inputs.SetMeshletJobCount(handles.meshletJobCount ? handles.meshletJobCount : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(uint32_t)));
+        inputs.SetMeshletIndirectArgs(handles.meshletIndirect ? handles.meshletIndirect
+            : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(srrhi::DispatchIndirectArguments)));
         inputs.SetInstanceLOD(g_Renderer.m_Scene.m_InstanceLODBuffer);
 
         nvrhi::BindingSetDesc cullBset = Renderer::CreateBindingSetDesc(inputs);
@@ -384,7 +386,7 @@ protected:
         inputs.SetHZB(hzb ? hzb : CommonResources::GetInstance().DefaultTextureBlack);
         inputs.SetLevelMeshLODs(scene.m_ClusterLevelMeshLODBuffer);
         inputs.SetDiscreteLODLevels(g_Renderer.m_GeometryStreaming ?
-            g_Renderer.m_GeometryStreaming->GetDiscreteLevelBuffer() : CommonResources::GetInstance().DummySRVStructuredBuffer);
+            g_Renderer.m_GeometryStreaming->GetDiscreteLevelBuffer() : CommonResources::GetInstance().GetDummyStructuredSRV(sizeof(uint32_t)));
         inputs.SetNodeQueueIn(handles.clusterNodeQueue[queueIn]);
         inputs.SetNodeQueueOut(handles.clusterNodeQueue[queueOut]);
         inputs.SetNodeQueueCountIn(handles.clusterNodeQueueCount[queueIn]);
@@ -410,9 +412,9 @@ protected:
         // Geometry streaming: the residency table the traversal tests and requests against, plus the list and the
         // counters a missing group is asked for through.
         const GeometryStreaming* streaming = g_Renderer.m_GeometryStreaming.get();
-        inputs.SetGroupStates(streaming ? streaming->GetGroupStateBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetLoadRequests(streaming ? streaming->GetLoadRequestBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
-        inputs.SetStreamCounters(streaming ? streaming->GetStreamCounterBuffer() : CommonResources::GetInstance().DummyUAVStructuredBuffer);
+        inputs.SetGroupStates(streaming ? streaming->GetGroupStateBuffer() : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(srrhi::ClusterGroupState)));
+        inputs.SetLoadRequests(streaming ? streaming->GetLoadRequestBuffer() : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(uint32_t)));
+        inputs.SetStreamCounters(streaming ? streaming->GetStreamCounterBuffer() : CommonResources::GetInstance().GetDummyStructuredUAV(sizeof(srrhi::ClusterStreamCounters)));
         // The traversal writes the LOD ray tracing is patched with, so the two paths share one classification.
         inputs.SetInstanceLOD(scene.m_InstanceLODBuffer);
 
@@ -753,7 +755,7 @@ protected:
         inputs.SetMeshlets(g_Renderer.m_Scene.m_MeshletBuffer);
         inputs.SetMeshletVertices(g_Renderer.m_Scene.m_MeshletVerticesBuffer);
         inputs.SetMeshletTriangles(g_Renderer.m_Scene.m_MeshletTrianglesBuffer);
-        inputs.SetMeshletJobs(meshletJob ? meshletJob : CommonResources::GetInstance().DummySRVStructuredBuffer);
+        inputs.SetMeshletJobs(meshletJob ? meshletJob : CommonResources::GetInstance().GetDummyStructuredSRV(sizeof(srrhi::MeshletJob)));
         inputs.SetMeshData(g_Renderer.m_Scene.m_MeshDataBuffer);
         inputs.SetHZB(handles.hzb ? handles.hzb : CommonResources::GetInstance().DefaultTextureBlack);
         inputs.SetSceneAS(g_Renderer.m_Scene.m_TLAS);
@@ -761,15 +763,20 @@ protected:
         inputs.SetOpaqueColor(opaqueColor);
         inputs.SetLights(g_Renderer.m_Scene.m_LightBuffer);
 
-        // The cluster draw's own inputs. Every one of them is a dummy when the cluster path is not drawing, so
-        // the binding layout stays the same for the transparent and legacy paths.
+        // The cluster draw's own inputs. Every one of them is a placeholder when the cluster path is not drawing, so
+        // the binding layout stays the same for the transparent and legacy paths -- of the element type the shader
+        // declares for that slot, since that is what the descriptor's stride is checked against.
         const Scene& scene = g_Renderer.m_Scene;
-        const nvrhi::BufferHandle dummyStructured = CommonResources::GetInstance().DummySRVStructuredBuffer;
-        inputs.SetClusterJobs(bDrawClusters ? handles.clusterJobs : dummyStructured);
-        inputs.SetClusterRecords(scene.m_ClusterRecordBuffer ? scene.m_ClusterRecordBuffer : dummyStructured);
-        inputs.SetClusterStreamData(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetStreamDataBuffer() : dummyStructured);
-        inputs.SetClusterGroups(scene.m_ClusterGroupBuffer ? scene.m_ClusterGroupBuffer : dummyStructured);
-        inputs.SetClusterGroupStates(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetGroupStateBuffer() : dummyStructured);
+        const CommonResources& common = CommonResources::GetInstance();
+        inputs.SetClusterJobs(bDrawClusters ? handles.clusterJobs : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterJob)));
+        inputs.SetClusterRecords(scene.m_ClusterRecordBuffer ? scene.m_ClusterRecordBuffer
+            : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterRecord)));
+        inputs.SetClusterStreamData(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetStreamDataBuffer()
+            : common.GetDummyStructuredSRV(sizeof(uint32_t)));
+        inputs.SetClusterGroups(scene.m_ClusterGroupBuffer ? scene.m_ClusterGroupBuffer
+            : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterGroup)));
+        inputs.SetClusterGroupStates(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetGroupStateBuffer()
+            : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterGroupState)));
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 

@@ -286,27 +286,6 @@ void CommonResources::Initialize()
             DummyUAVByteAddressBuffer = device->createBuffer(bufferDesc);
         }
 
-        // DummySRVStructuredBuffer
-        {
-            nvrhi::BufferDesc bufferDesc;
-            bufferDesc.byteSize = 16;
-            bufferDesc.structStride = 16;
-            bufferDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-            bufferDesc.debugName = "DummySRVStructuredBuffer";
-            DummySRVStructuredBuffer = device->createBuffer(bufferDesc);
-        }
-
-        // DummyUAVStructuredBuffer
-        {
-            nvrhi::BufferDesc bufferDesc;
-            bufferDesc.byteSize = 16;
-            bufferDesc.structStride = 16;
-            bufferDesc.canHaveUAVs = true;
-            bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            bufferDesc.debugName = "DummyUAVStructuredBuffer";
-            DummyUAVStructuredBuffer = device->createBuffer(bufferDesc);
-        }
-
         // DummySRVTypedBuffer
         {
             nvrhi::BufferDesc bufferDesc;
@@ -581,8 +560,6 @@ void CommonResources::Initialize()
 
         commandList->setPermanentBufferState(DummySRVByteAddressBuffer, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentBufferState(DummyUAVByteAddressBuffer, nvrhi::ResourceStates::UnorderedAccess);
-        commandList->setPermanentBufferState(DummySRVStructuredBuffer, nvrhi::ResourceStates::ShaderResource);
-        commandList->setPermanentBufferState(DummyUAVStructuredBuffer, nvrhi::ResourceStates::UnorderedAccess);
         commandList->setPermanentBufferState(DummySRVTypedBuffer, nvrhi::ResourceStates::ShaderResource);
         commandList->setPermanentBufferState(DummyUAVTypedBuffer, nvrhi::ResourceStates::UnorderedAccess);
 
@@ -590,6 +567,43 @@ void CommonResources::Initialize()
     }
 
     SDL_Log("[CommonResources] Initialized successfully");
+}
+
+nvrhi::BufferHandle CommonResources::GetOrCreateDummyStructured(std::unordered_map<uint32_t, nvrhi::BufferHandle>& cache,
+                                                               uint32_t structStride, bool bUav) const
+{
+    // Passes record on several threads, so the cache is filled under a lock and the device is never asked for two
+    // placeholders at once. A slot that has been seen costs a lookup and nothing else.
+    const std::lock_guard lock{ m_DummyStructuredMutex };
+
+    const auto it = cache.find(structStride);
+    if (it != cache.end())
+        return it->second;
+
+    nvrhi::BufferDesc desc;
+    desc.byteSize = uint64_t(structStride) * 4;   // a shader that writes into the placeholder stays inside it
+    desc.structStride = structStride;
+    desc.canHaveUAVs = bUav;
+    // The state is the one every binding of the placeholder expects, so nvrhi's own tracking has a starting point
+    // and puts it back there after each list that uses it.
+    desc.initialState = bUav ? nvrhi::ResourceStates::UnorderedAccess : nvrhi::ResourceStates::ShaderResource;
+    desc.keepInitialState = true;
+    desc.debugName = std::string{ bUav ? "DummyUAVStructured" : "DummySRVStructured" } + std::to_string(structStride);
+
+    nvrhi::BufferHandle buffer = g_Renderer.m_RHI->m_NvrhiDevice->createBuffer(desc);
+    SDL_assert(buffer != nullptr && "Failed to create a structured placeholder");
+    cache.emplace(structStride, buffer);
+    return buffer;
+}
+
+nvrhi::BufferHandle CommonResources::GetDummyStructuredSRV(uint32_t structStride) const
+{
+    return GetOrCreateDummyStructured(m_DummyStructuredSRV, structStride, false);
+}
+
+nvrhi::BufferHandle CommonResources::GetDummyStructuredUAV(uint32_t structStride) const
+{
+    return GetOrCreateDummyStructured(m_DummyStructuredUAV, structStride, true);
 }
 
 void CommonResources::RegisterDefaultTextures()

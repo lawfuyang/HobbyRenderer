@@ -89,14 +89,31 @@ public:
     // Default buffers
     nvrhi::BufferHandle DummySRVByteAddressBuffer;
     nvrhi::BufferHandle DummyUAVByteAddressBuffer;
-    nvrhi::BufferHandle DummySRVStructuredBuffer;
-    nvrhi::BufferHandle DummyUAVStructuredBuffer;
     nvrhi::BufferHandle DummySRVTypedBuffer;
     nvrhi::BufferHandle DummyUAVTypedBuffer;
+
+    // Placeholders for the structured slots a renderer leaves unfilled. A structured buffer's descriptor carries the
+    // element stride its shader declares and D3D12 compares the two, so a slot filled with a placeholder of another
+    // element size is a validation error (`GPU_BASED_VALIDATION_STRUCTURED_BUFFER_STRIDE_MISMATCH`) rather than a
+    // harmless empty resource -- and the slots in this renderer declare `uint`, `MeshletJob`, `ClusterGroupState`, ...
+    // So there is one placeholder per element stride, made the first time a slot asks for it: `structStride` is
+    // `sizeof` of the type that slot's shader declares.
+    nvrhi::BufferHandle GetDummyStructuredSRV(uint32_t structStride) const;
+    nvrhi::BufferHandle GetDummyStructuredUAV(uint32_t structStride) const;
 
     // Default meshes
     CommonMesh UnitSphereMesh;
 
     CommonResources() = default;
     ~CommonResources();
+
+private:
+    nvrhi::BufferHandle GetOrCreateDummyStructured(std::unordered_map<uint32_t, nvrhi::BufferHandle>& cache,
+                                                   uint32_t structStride, bool bUav) const;
+
+    // A cache rather than part of what the object *is*: filling it is what a const accessor does. Passes record on
+    // several threads, so it grows under a lock; after that a stride is only read.
+    mutable std::mutex m_DummyStructuredMutex;
+    mutable std::unordered_map<uint32_t, nvrhi::BufferHandle> m_DummyStructuredSRV;
+    mutable std::unordered_map<uint32_t, nvrhi::BufferHandle> m_DummyStructuredUAV;
 };
