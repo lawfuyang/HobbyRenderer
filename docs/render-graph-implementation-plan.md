@@ -183,6 +183,53 @@ pass is involved — from a diagnostic path.
 last index and the last+1. Run the same frame twice and diff `ExportToString()` output — must be
 byte-identical.
 
+### 2.4 P0 as built and measured (2026-11-26)
+
+Shipped: the requirement cache (P0.1), the enhanced-barrier gate (P0.2 step 1 only — the legacy
+aliasing barrier of step 2 was deliberately not built), the `PassName()` helper plus sorted export
+(P0.3), and the §1.1 statistics. The `--target-fps`/`--dump-rendergraph` switches exist because the
+numbers below cannot be produced without them.
+
+1. `TransientResourceBase::GetCachedMemoryRequirements()` caches the query and is invalidated **only**
+   when the descriptor hash changes (`DeclareTexture`/`DeclareBuffer`, inside the `m_Hash != hash`
+   branch). That detail is the whole fix: renderers redeclare every resource every frame, so an
+   invalidation on each declaration leaves the cache permanently cold — the first version did exactly
+   that and still reported 127 queries/frame.
+2. `Stats::m_NumMemoryRequirementQueries` counts the virtual-resource creations a query costs (reset in
+   `Reset()`, copied in `Compile()`), which is what turns "fewer driver calls" into a number:
+   **127 → 0 queries per frame** in steady state.
+3. `Compile()` now also fills `m_HeapBytes`, `m_LargestFreeBlockBytes`, `m_UnAliasedBytes`,
+   `m_AliasedBytes`, `m_AliasingSavingsBytes` and `m_NumAliasBarriers`; the panel and the export show
+   them. Sponza at 1080p: heaps 828 MB, largest free block 15.1 MB, 691.5 MB unaliased vs 666.6 MB
+   aliased (24.9 MB saved by aliasing, 7 alias barriers).
+4. Aliasing is now gated on `Feature::EnhancedBarriers` in `Reset()`, with a one-time log when it was
+   requested but disabled. The device here supports them, so aliasing stays on (the export's savings
+   above prove it).
+
+Measured on Sponza, `--hide-ui --target-fps 0 --hitch-dump 1`, same build otherwise:
+
+| scope | before | after |
+|---|---|---|
+| `RenderGraph::Compile` | 1.156 ms/frame | **0.496 ms/frame** (−57 %) |
+| memory-requirement queries | 127/frame | **0/frame** |
+| `CreateBufferAndBindMemory` | 0.242 ms / 46.6 calls | 0.249 ms / 46.6 calls (unchanged, as intended) |
+
+Frame time is unchanged at 12.4–12.6 ms because that frame is GPU-bound; the win is CPU-side and would
+show in the debug-view/CPU-bound frames this plan's later items target.
+
+Verification: `--rhidebug`, `--rhidebug-gpu` and `--rhidebug --debug 4` are all clean (0 errors,
+0 warnings, clean exit). Two runs dumped on frame 60 produce **byte-identical** `rendergraph_dump_60.md`.
+A pre-P0 build and this one captured on the same frame produce identical RenderDoc histograms (7314
+chunks, 52 calls, 130 markers, 151 `List_Barrier`) and **PIX event lists that match position for
+position (1428 rows, 0 mismatches, 184 `Barrier` events in both)**, with the same `verify problems: 0`,
+the same 6 hazard findings (bindless-range artefacts) and the same sampler/root-signature verdicts.
+Screenshots differ only in single-pixel stochastic speckle (46 pixels above Δ8, scattered over the whole
+frame, none contiguous).
+
+Not done, deliberately: the legacy aliasing barrier (P0.2 step 2), the `RenderGraphTests` target (§1.3,
+which P1.1/P2.2 own), and the `--relayout` / `--rendergraph-strict-access` / `--rendergraph-own-barriers`
+/ `--rendergraph-reorder` switches (§1.2), which belong to the items that use them.
+
 ---
 
 ## 3. P1 — memory and knowledge
@@ -571,6 +618,12 @@ artefacts) with and without pipelining; the two PIX captures produce **1400 even
 positional name match of 1400/1400** and identical counters (instructions +0.24 %, sectors +0.02 %) and
 both replay with exit 0. Screenshots with `--no-taa --no-auto-exposure` differ on 1.05 % of pixels
 (max Δ6), which is below the run-to-run noise floor of the same build (ON vs ON: 4.41 %, max Δ9).
+
+Caveat on those pairs: `--no-auto-exposure` was listed in `--help` but never parsed until 2026-11-26
+(`Config::ParseCommandLine` had no branch for it, so every run logged it as an unknown argument), so the
+adaptation history was live on both sides. The comparison still holds — the noise floor was measured
+with the same flag set — but a future exactness A/B gets a genuinely fixed exposure now that the flag
+does something.
 
 Performance: the first measurement showed pipelining 6 % slower with GPU time +0.5 ms, but that does
 not survive clock control — `nvidia-smi` samples show `OFF`'s absolute frame time moving 9.00 → 9.76 ms
