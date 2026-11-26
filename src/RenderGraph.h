@@ -243,9 +243,27 @@ public:
     uint16_t GetCurrentPassIndex() const { return m_CurrentPassIndex; }
 
     // ─── Debug & diagnostics ───────────────────────────────────────────────
+
+    // Asks the next Compile() to rebuild the transient placement from scratch (`--relayout`).
+    void RequestLayoutRebuild() { m_bRebuildLayoutPending = true; }
     // Pass names are indexed 1-based everywhere a pass index is stored, while m_PassNames is 0-based. Every
     // diagnostic goes through this so an out-of-range index reads "<invalid>" instead of throwing.
     const char* PassName(uint16_t passIndex1Based) const;
+
+    // A graph resource a pass actually bound while recording, and whether that use writes it.
+    struct UsedResource
+    {
+        const nvrhi::IResource* m_Resource = nullptr;
+        bool m_bWrite = false;
+    };
+
+    // Compares what a pass really bound against what its Setup declared. A binding the graph never learned about is
+    // invisible to lifetimes, aliasing and any barrier plan built on them, so with `--rendergraph-strict-access`
+    // each one logs and asserts. A handle that is not a graph transient (bindless static textures, scene-owned
+    // buffers) is skipped: the lookup miss is expected and says nothing about the pass. Called by the renderer's
+    // pass helpers, which are the ones that see the binding sets.
+    void ValidateActualAccess(std::span<const UsedResource> usedResources);
+
     void RenderDebugUI();
     std::string ExportToString() const;
 
@@ -291,6 +309,10 @@ private:
     };
 
     // ─── Resource allocation & heap sub-allocation ─────────────────────────
+
+    // Frees every non-persistent placement and hands each transient heap back as a single free block, so the next
+    // allocation pass rebuilds the layout from scratch (`--relayout`).
+    void RebuildLayout();
 
     // Generic resource allocation helper (avoids code duplication)
     void AllocateResourcesInternal(bool bIsBuffer, std::function<void(uint32_t, nvrhi::HeapHandle, uint64_t)> createAndBindResource);
@@ -344,6 +366,18 @@ private:
     PassAccess m_PendingPassAccess;
     std::vector<uint32_t> m_PendingDeclaredTextures;
     std::vector<uint32_t> m_PendingDeclaredBuffers;
+
+    // Declared-vs-actual checker state (ValidateActualAccess, debug runs only). The maps are rebuilt by Compile()
+    // from the physical handles it just bound; the per-pass sets are filled while the passes record.
+    std::unordered_map<const nvrhi::IResource*, uint32_t> m_TextureSlots;
+    std::unordered_map<const nvrhi::IResource*, uint32_t> m_BufferSlots;
+    std::vector<std::unordered_set<uint32_t>> m_PassUsedTextures;
+    std::vector<std::unordered_set<uint32_t>> m_PassUsedBuffers;
+    std::vector<bool> m_PassAccessChecked;
+    // Every violation already reported, so an audit run prints each one once instead of once per frame.
+    std::unordered_set<uint64_t> m_ReportedAccessViolations;
+    // Set by Renderer when --relayout was passed; consumed by the next Compile().
+    bool m_bRebuildLayoutPending = false;
 
     // Frame state
     Stats m_Stats;

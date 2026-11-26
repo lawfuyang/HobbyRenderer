@@ -206,6 +206,13 @@ void RenderGraph::Reset()
     m_PendingDeclaredTextures.clear();
     m_PendingDeclaredBuffers.clear();
 
+    // Declared-vs-actual checker state is per frame; the reverse maps are rebuilt by Compile().
+    m_TextureSlots.clear();
+    m_BufferSlots.clear();
+    m_PassUsedTextures.clear();
+    m_PassUsedBuffers.clear();
+    m_PassAccessChecked.clear();
+
     // Mark all resources as not declared this frame and reset lifetimes
     for (TransientTexture& texture : m_Textures)
     {
@@ -289,6 +296,10 @@ void RenderGraph::BeginPass(const char* name)
     m_CurrentPassIndex++;
     m_PassNames.push_back(name);
     m_PassAccesses.push_back(m_PendingPassAccess); // Copy pending accesses from Setup
+    // Checker bookkeeping, indexed like m_PassAccesses (0-based, pass indices are 1-based).
+    m_PassUsedTextures.emplace_back();
+    m_PassUsedBuffers.emplace_back();
+    m_PassAccessChecked.push_back(false);
     
     // Update resources declared in Setup with the correct pass index
     for (uint32_t texIdx : m_PendingDeclaredTextures)
@@ -817,6 +828,13 @@ void RenderGraph::Compile()
     // before submitting the current frame's work (which we are about to compile).
     FlushDeferredReleases();
 
+    // `--relayout` throws the placement away on the frame it is seen, so the allocation pass below rebuilds it.
+    if (m_bRebuildLayoutPending)
+    {
+        m_bRebuildLayoutPending = false;
+        RebuildLayout();
+    }
+
     // Resource validation
     for (uint32_t i = 0; i < (uint32_t)m_Textures.size(); ++i)
     {
@@ -1008,6 +1026,24 @@ void RenderGraph::Compile()
         }
     );
 
+    // Reverse map for the declared-vs-actual checker: the handles the passes will bind, back to the slot that
+    // declared them. Only this frame's declared resources are mapped, which is all a pass can legitimately bind.
+    if (Config::Get().m_bStrictRenderGraphAccess)
+    {
+        for (uint32_t i = 0; i < (uint32_t)m_Textures.size(); ++i)
+        {
+            const TransientTexture& tex = m_Textures[i];
+            if (tex.m_IsDeclaredThisFrame && tex.m_PhysicalTexture)
+                m_TextureSlots[tex.m_PhysicalTexture.Get()] = i;
+        }
+        for (uint32_t i = 0; i < (uint32_t)m_Buffers.size(); ++i)
+        {
+            const TransientBuffer& buf = m_Buffers[i];
+            if (buf.m_IsDeclaredThisFrame && buf.m_PhysicalBuffer)
+                m_BufferSlots[buf.m_PhysicalBuffer.Get()] = i;
+        }
+    }
+
     // Build per-pass global sync barrier info.
     // For each aliased resource, mark its first pass as needing a global sync barrier.
     // Also validates that aliased resources are write-only on their first use.
@@ -1024,27 +1060,24 @@ void RenderGraph::Compile()
             const PassAccess& firstAccess = m_PassAccesses[lifetime.m_FirstPass - 1];
 
             bool hasWrite = false;
-            bool hasRead = false;
             if (isBuffer)
-            {
                 hasWrite = firstAccess.m_WriteBuffers.count(index) > 0;
-                hasRead = firstAccess.m_ReadBuffers.count(index) > 0;
-            }
             else
-            {
                 hasWrite = firstAccess.m_WriteTextures.count(index) > 0;
-                hasRead = firstAccess.m_ReadTextures.count(index) > 0;
-            }
 
-            if (!hasWrite || hasRead)
+            // The aliased bytes hold another resource's data, so its first user has to write them before anything
+            // relies on them. A read in the same pass is not a hazard by itself: the passes that build a mip chain
+            // (Bloom's pyramids, the HZB) write the mip and then sample it, and the graph cannot see that order.
+            // What the check has to reject is a first user that only reads, because it would consume the previous
+            // occupant's bytes.
+            if (!hasWrite)
             {
-                SDL_Log("[RenderGraph] ERROR: Aliased %s '%s' first used in pass %u must be write-only. hasWrite=%d hasRead=%d",
+                SDL_Log("[RenderGraph] ERROR: Aliased %s '%s' is first used in pass %u ('%s') which never writes it",
                     isBuffer ? "buffer" : "texture",
                     debugName,
                     lifetime.m_FirstPass,
-                    hasWrite ? 1 : 0,
-                    hasRead ? 1 : 0);
-                SDL_assert(false && "Aliased resource first use must be write-only");
+                    PassName(lifetime.m_FirstPass));
+                SDL_assert(false && "Aliased resource first use must write it");
             }
 
             const uint16_t passIdx = lifetime.m_FirstPass;
@@ -1127,8 +1160,107 @@ const char* RenderGraph::PassName(uint16_t passIndex1Based) const
     return m_PassNames[passIndex1Based - 1];
 }
 
+void RenderGraph::ValidateActualAccess(std::span<const UsedResource> usedResources)
+{
+    if (!Config::Get().m_bStrictRenderGraphAccess)
+        return;
+
+    const uint16_t passIndex = GetActivePassIndex();
+    if (passIndex == 0 || passIndex > m_PassAccesses.size() || passIndex >= m_PassAccessChecked.size())
+        return;
+
+    const PassAccess& access = m_PassAccesses[passIndex - 1];
+    m_PassAccessChecked[passIndex] = true;
+
+    for (const UsedResource& used : usedResources)
+    {
+        if (!used.m_Resource)
+            continue;
+
+        bool bIsTexture = true;
+        uint32_t index = UINT32_MAX;
+        if (const auto textureIt = m_TextureSlots.find(used.m_Resource); textureIt != m_TextureSlots.end())
+        {
+            index = textureIt->second;
+        }
+        else if (const auto bufferIt = m_BufferSlots.find(used.m_Resource); bufferIt != m_BufferSlots.end())
+        {
+            index = bufferIt->second;
+            bIsTexture = false;
+        }
+
+        // Not a transient of this frame: bindless static textures, scene-owned buffers, the graph's own heaps.
+        // The miss is expected and says nothing about the pass.
+        if (index == UINT32_MAX)
+            continue;
+
+        (bIsTexture ? m_PassUsedTextures[passIndex] : m_PassUsedBuffers[passIndex]).insert(index);
+
+        const char* name = bIsTexture ? m_Textures[index].m_Desc.m_NvrhiDesc.debugName.c_str()
+                                      : m_Buffers[index].m_Desc.m_NvrhiDesc.debugName.c_str();
+
+        const bool bDeclared = used.m_bWrite
+            ? (bIsTexture ? access.m_WriteTextures.count(index) > 0 : access.m_WriteBuffers.count(index) > 0)
+            : (bIsTexture ? access.m_ReadTextures.count(index) > 0 : access.m_ReadBuffers.count(index) > 0);
+
+        if (bDeclared)
+            continue;
+
+        // A read that was declared as a write is the case this checker exists for: the graph sees the pass as the
+        // resource's writer, so the real reader/writer order never enters the lifetime. Reported once per process
+        // and flag combination: the audit wants the list, not a line per frame, and a fix has to be made anyway.
+        const uint64_t key = (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1) | (used.m_bWrite ? 1ull : 0ull);
+        if (m_ReportedAccessViolations.insert(key).second)
+        {
+            SDL_Log("[RenderGraph] ERROR: pass '%s' bound %s '%s' as %s without declaring that access in Setup()",
+                PassName(passIndex), bIsTexture ? "texture" : "buffer", name, used.m_bWrite ? "a write" : "a read");
+        }
+    }
+}
+
 void RenderGraph::PostRender()
 {
+    // Declarations the passes never exercised, for the passes the checker actually saw. A pass that binds through
+    // a path the checker does not cover is skipped rather than reported wholesale: only a pass with at least one
+    // validated binding can be judged.
+    if (Config::Get().m_bStrictRenderGraphAccess)
+    {
+        for (uint16_t passIndex = 1; passIndex <= (uint16_t)m_PassAccesses.size(); ++passIndex)
+        {
+            if (passIndex >= m_PassAccessChecked.size() || !m_PassAccessChecked[passIndex])
+                continue;
+
+            const PassAccess& access = m_PassAccesses[passIndex - 1];
+            const std::unordered_set<uint32_t>& usedTextures = m_PassUsedTextures[passIndex];
+            const std::unordered_set<uint32_t>& usedBuffers = m_PassUsedBuffers[passIndex];
+
+            for (uint32_t index : access.m_ReadTextures)
+            {
+                if (!usedTextures.count(index) && m_ReportedAccessViolations.insert((1ull << 63) | (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1)).second)
+                    SDL_Log("[RenderGraph] WARNING: pass '%s' declares a read of texture '%s' but never binds it",
+                        PassName(passIndex), m_Textures[index].m_Desc.m_NvrhiDesc.debugName.c_str());
+            }
+            for (uint32_t index : access.m_WriteTextures)
+            {
+                if (!usedTextures.count(index) && m_ReportedAccessViolations.insert((1ull << 63) | (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1) | 1ull).second)
+                    SDL_Log("[RenderGraph] WARNING: pass '%s' declares a write of texture '%s' but never binds it",
+                        PassName(passIndex), m_Textures[index].m_Desc.m_NvrhiDesc.debugName.c_str());
+            }
+            for (uint32_t index : access.m_ReadBuffers)
+            {
+                if (!usedBuffers.count(index) && m_ReportedAccessViolations.insert((1ull << 62) | (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1)).second)
+                    SDL_Log("[RenderGraph] WARNING: pass '%s' declares a read of buffer '%s' but never binds it",
+                        PassName(passIndex), m_Buffers[index].m_Desc.m_NvrhiDesc.debugName.c_str());
+            }
+            for (uint32_t index : access.m_WriteBuffers)
+            {
+                if (!usedBuffers.count(index) && m_ReportedAccessViolations.insert((1ull << 62) | (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1) | 1ull).second)
+                    SDL_Log("[RenderGraph] WARNING: pass '%s' declares a write of buffer '%s' but never binds it",
+                        PassName(passIndex), m_Buffers[index].m_Desc.m_NvrhiDesc.debugName.c_str());
+            }
+        }
+    }
+
     m_IsCompiled = false;
     // Decrement the post-Shutdown() invalidation countdown here (end of frame)
     // so the flag stays true for the *entire* current frame's DeclareTexture
@@ -1164,6 +1296,60 @@ void RenderGraph::InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandLi
 // ============================================================================
 // RenderGraph - Memory Management
 // ============================================================================
+
+void RenderGraph::RebuildLayout()
+{
+    // Every transient keeps its descriptor; what goes is the placement. Transient heaps are handed back as one
+    // free block each, so the allocation pass that follows starts from an empty frame. The persistent set is left
+    // alone: those resources are never aliased and their handles are expected to stay stable across frames.
+    uint32_t textureCount = 0;
+    uint32_t bufferCount = 0;
+
+    for (TransientTexture& texture : m_Textures)
+    {
+        if (texture.m_IsPersistent)
+            continue;
+
+        texture.m_IsAllocated = false;
+        texture.m_IsPhysicalOwner = false;
+        texture.m_AliasedFromIndex = UINT32_MAX;
+        texture.m_Heap = nullptr;
+        texture.m_HeapIndex = UINT32_MAX;
+        texture.m_Offset = 0;
+        texture.m_BlockOffset = 0;
+        ++textureCount;
+    }
+
+    for (TransientBuffer& buffer : m_Buffers)
+    {
+        if (buffer.m_IsPersistent)
+            continue;
+
+        buffer.m_IsAllocated = false;
+        buffer.m_IsPhysicalOwner = false;
+        buffer.m_AliasedFromIndex = UINT32_MAX;
+        buffer.m_Heap = nullptr;
+        buffer.m_HeapIndex = UINT32_MAX;
+        buffer.m_Offset = 0;
+        buffer.m_BlockOffset = 0;
+        ++bufferCount;
+    }
+
+    for (HeapEntry& heap : m_Heaps)
+    {
+        if (!heap.m_Heap || heap.m_FrameSet == kPersistentFrameSet)
+            continue;
+
+        heap.m_Blocks.clear();
+        HeapBlock block;
+        block.m_Offset = 0;
+        block.m_Size = heap.m_Size;
+        block.m_IsFree = true;
+        heap.m_Blocks.push_back(block);
+    }
+
+    SDL_Log("[RenderGraph] Layout rebuilt: %u texture(s) and %u buffer(s) re-placed", textureCount, bufferCount);
+}
 
 nvrhi::HeapHandle RenderGraph::CreateHeap(size_t size, uint32_t frameSet)
 {
@@ -1340,6 +1526,10 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         }
     }
 
+    // Placement order is first-pass, not the article's longest-lived-first: both were measured on the FlyingWorld
+    // and Bistro frames (see docs/render-graph-implementation-plan.md 3.4) and longest-first needed one more 1 MB
+    // heap (829 MB vs 828 MB), because this allocator does not pack — a resource aliases the whole retired block of
+    // an *earlier* resource, so sweeping in time order hands each one the candidates whose lifetime has just ended.
     std::sort(sortedIndices.begin(), sortedIndices.end(), [this, bIsBuffer](uint32_t a, uint32_t b) {
         return (bIsBuffer ? m_Buffers[a].m_Lifetime.m_FirstPass : m_Textures[a].m_Lifetime.m_FirstPass) <
             (bIsBuffer ? m_Buffers[b].m_Lifetime.m_FirstPass : m_Textures[b].m_Lifetime.m_FirstPass);
@@ -1401,10 +1591,16 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
         bool aliased = false;
         if (m_AliasingEnabled && !resource->m_IsPersistent)
         {
+            // First fit among the resources placed before this one: those are the only ones already holding memory,
+            // and in time order they are exactly the ones whose lifetime may have ended.
             for (uint32_t candidateIdx : sortedIndices)
             {
                 if (candidateIdx == idx) break;
-                TransientResourceBase* candidate = bIsBuffer ? (TransientResourceBase*)&m_Buffers[candidateIdx] : (TransientResourceBase*)&m_Textures[candidateIdx];
+
+                TransientResourceBase* candidate = bIsBuffer
+                    ? (TransientResourceBase*)&m_Buffers[candidateIdx]
+                    : (TransientResourceBase*)&m_Textures[candidateIdx];
+
                 if (!candidate->m_IsAllocated || !candidate->m_IsPhysicalOwner || candidate->m_IsPersistent)
                     continue;
                 // Aliasing reuses the candidate's bytes, so it must stay inside one frame's heap set.
@@ -1422,7 +1618,7 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
                         bCanAlias = (candidate->m_Offset % memReq.alignment) == 0;
                     }
                 }
-                
+
                 if (bCanAlias)
                 {
                     // Store candidate's heap info in locals BEFORE overwriting resource fields,
@@ -1478,13 +1674,13 @@ void RenderGraph::AllocateResourcesInternal(bool bIsBuffer, std::function<void(u
 
                 if (bIsBuffer) m_Stats.m_NumAliasedBuffers++;
                 else m_Stats.m_NumAliasedTextures++;
-                    
-                    aliased = true;
-                    break;
+
+                aliased = true;
+                break;
                 }
             }
         }
-        
+
         if (!aliased)
         {
             // Save old heap/offset so the callback can detect changes after SubAllocateResource

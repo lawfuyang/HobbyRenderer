@@ -642,15 +642,27 @@ void Renderer::Initialize()
         }
     }
 
+    // A scene's own cameras are otherwise only reachable from the panel, so a scripted run has to name the one it
+    // wants. Applied after the saved camera state, which is the pose a previous run left behind.
+    if (const int cameraIndex = Config::Get().m_CameraIndex; cameraIndex >= 0)
+    {
+        if (cameraIndex < static_cast<int>(m_Scene.m_Cameras.size()))
+        {
+            m_Scene.m_SelectedCameraIndex = cameraIndex;
+            SetCameraFromSceneCamera(m_Scene.m_Cameras[cameraIndex]);
+            SDL_Log("[Camera] glTF camera %d applied (%s)", cameraIndex,
+                m_Scene.m_Cameras[cameraIndex].m_Name.c_str());
+        }
+        else
+        {
+            SDL_Log("[Camera] glTF camera %d does not exist: the scene has %zu", cameraIndex, m_Scene.m_Cameras.size());
+            SDL_assert(false && "--camera index out of range for this scene");
+        }
+    }
+
     // A comparison against another renderer needs the same projection on both sides. The FOV otherwise stays at
     // ProjectionParams' default until a camera is picked in the panel, so the state restore above does not set it.
     if (const float fovDegrees = Config::Get().m_FovDegrees; fovDegrees > 0.0f)
-    {
-        ProjectionParams projection = m_Scene.m_Camera.GetProjection();
-        projection.fovY = DirectX::XMConvertToRadians(fovDegrees);
-        m_Scene.m_Camera.SetProjection(projection);
-        SDL_Log("[Camera] Vertical FOV overridden to %.2f degrees", fovDegrees);
-    }
 
     if (const float exposureStops = Config::Get().m_ExposureCompensationStops; exposureStops != 0.0f)
     {
@@ -1619,6 +1631,13 @@ void Renderer::ScheduleAndRunAllRenderers()
     // set this frame will use must have finished executing first.
     WaitForGraphMemoryFrame();
 
+    // `--relayout` is a one-shot request: hand it to the graph, which rebuilds the placement in Compile().
+    if (Config::Get().m_bRelayout)
+    {
+        Config::Get().m_bRelayout = false;
+        m_RenderGraph.RequestLayoutRebuild();
+    }
+
     for (const std::shared_ptr<IRenderer>& renderer : m_Renderers)
     {
         renderer->m_bPassEnabled = false;
@@ -2237,6 +2256,8 @@ void Renderer::AddFullScreenPass(const RenderPassParams& params)
         params.commandList->setPushConstants(params.pushConstants, params.pushConstantsSize);
     }
     params.commandList->dispatchMesh(1, 1, 1);
+
+    ValidatePassAccess(params);
 }
 
 void Renderer::AddComputePass(const RenderPassParams& params)
@@ -2308,6 +2329,70 @@ void Renderer::AddComputePass(const RenderPassParams& params)
     {
         params.commandList->dispatchIndirect(params.dispatchParams.indirectOffsetBytes);
     }
+
+    ValidatePassAccess(params);
+}
+
+void Renderer::ValidatePassAccess(const RenderPassParams& params) const
+{
+    if (!Config::Get().m_bStrictRenderGraphAccess)
+        return;
+
+    std::vector<RenderGraph::UsedResource> used;
+    used.reserve(params.bindingSetDesc.bindings.size() + 4);
+
+    auto addBindings = [&used](const nvrhi::BindingSetDesc& desc)
+    {
+        for (const nvrhi::BindingSetItem& item : desc.bindings)
+        {
+            switch (item.type)
+            {
+            // A UAV is read-write, but what the graph needs from it is the write: a pass that declares a write is
+            // also allowed to read it later in the frame's lifetime order.
+            case nvrhi::ResourceType::Texture_UAV:
+            case nvrhi::ResourceType::TypedBuffer_UAV:
+            case nvrhi::ResourceType::StructuredBuffer_UAV:
+            case nvrhi::ResourceType::RawBuffer_UAV:
+            case nvrhi::ResourceType::SamplerFeedbackTexture_UAV:
+                used.push_back({ item.resourceHandle, true });
+                break;
+
+            case nvrhi::ResourceType::Texture_SRV:
+            case nvrhi::ResourceType::TypedBuffer_SRV:
+            case nvrhi::ResourceType::StructuredBuffer_SRV:
+            case nvrhi::ResourceType::RawBuffer_SRV:
+            case nvrhi::ResourceType::ConstantBuffer:
+            case nvrhi::ResourceType::VolatileConstantBuffer:
+                used.push_back({ item.resourceHandle, false });
+                break;
+
+            default:
+                // Samplers, the acceleration structure and push constants are not graph transients.
+                break;
+            }
+        }
+    };
+
+    addBindings(params.bindingSetDesc);
+    for (const RenderPassParams::BindingSetDescAndRegisterSpace& extra : params.additionalBindingSets)
+        addBindings(extra.bindingSetDesc);
+
+    if (params.framebuffer)
+    {
+        const nvrhi::FramebufferDesc& framebufferDesc = params.framebuffer->getDesc();
+        for (const nvrhi::FramebufferAttachment& attachment : framebufferDesc.colorAttachments)
+        {
+            if (attachment.texture)
+                used.push_back({ attachment.texture, !attachment.isReadOnly });
+        }
+        if (framebufferDesc.depthAttachment.texture)
+            used.push_back({ framebufferDesc.depthAttachment.texture, !framebufferDesc.depthAttachment.isReadOnly });
+    }
+
+    if (params.dispatchParams.indirectBuffer)
+        used.push_back({ params.dispatchParams.indirectBuffer.Get(), false });
+
+    g_Renderer.m_RenderGraph.ValidateActualAccess(used);
 }
 
 void Renderer::GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, uint32_t reductionType)

@@ -300,6 +300,9 @@ public:
 
     void AddComputePass(const RenderPassParams& params);
     void AddFullScreenPass(const RenderPassParams& params);
+    // Feeds `RenderGraph::ValidateActualAccess` from the binding sets, framebuffer and indirect arguments of a pass
+    // helper call. No cost unless `--rendergraph-strict-access` is on.
+    void ValidatePassAccess(const RenderPassParams& params) const;
     void GenerateMipsUsingSPD(nvrhi::TextureHandle texture, nvrhi::BufferHandle spdAtomicCounter, nvrhi::CommandListHandle commandList, const char* markerName, uint32_t reductionType);
     nvrhi::ShaderHandle GetShaderHandle(uint32_t shaderID) const;
 

@@ -196,6 +196,18 @@ struct Config
     // byte-identical files; that is how a change is shown to be layout-neutral. -1 = off.
     int m_RenderGraphDumpFrame = -1;
 
+    // Render graph access checking: compare what a pass actually binds against what it declared in Setup, and
+    // assert on a binding the graph never learned about. Off by default — it is the audit that a new pass, or a
+    // change to an existing one, is run under.
+    bool m_bStrictRenderGraphAccess = false;
+
+    // Rebuild the transient layout from scratch once, so a fresh placement can be compared with the sticky one.
+    bool m_bRelayout = false;
+
+    // Index into the loaded scene's glTF cameras, applied after the saved camera state. -1 = keep the saved view.
+    // Scenes with several cameras otherwise need the panel to see anything but the first.
+    int m_CameraIndex = -1;
+
     // Add more configuration options here as needed
     // int renderWidth = 1920;
     // int renderHeight = 1080;

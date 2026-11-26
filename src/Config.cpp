@@ -181,6 +181,9 @@ void PrintHelp()
     SDL_Log("  --hitch-dump <ms>                Dump the profiler and exit on the first frame slower than this");
     SDL_Log("  --target-fps <n>                 Frame pacer in FPS; 0 runs the loop unpaced (CPU/GPU overlap A/B)");
     SDL_Log("  --dump-rendergraph <n>           Write the render graph Markdown export after frame n");
+    SDL_Log("  --rendergraph-strict-access      Assert when a pass binds a graph resource it did not declare");
+    SDL_Log("  --relayout                       Rebuild the render graph's transient layout once");
+    SDL_Log("  --camera <n>                     Apply the scene's glTF camera n after load (-1 = the saved view)");
     SDL_Log("  --scene <path>                   Load the specified scene file");
     SDL_Log("  --help, -h                       Show this help message");
 }
@@ -288,6 +291,19 @@ void Config::ParseCommandLine(int argc, char* argv[])
         else if (args.Is("--dump-rendergraph"))
         {
             ReadInt(args, cfg.m_RenderGraphDumpFrame, "Render graph export on frame");
+        }
+        else if (args.Is("--rendergraph-strict-access"))
+        {
+            SetFlag(cfg.m_bStrictRenderGraphAccess, true,
+                "Render graph access checking on: undeclared bindings assert");
+        }
+        else if (args.Is("--relayout"))
+        {
+            SetFlag(cfg.m_bRelayout, true, "Render graph layout will be rebuilt once");
+        }
+        else if (args.Is("--camera"))
+        {
+            ReadInt(args, cfg.m_CameraIndex, "glTF camera index");
         }
         else if (args.Is("--debug"))
         {
