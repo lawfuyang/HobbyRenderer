@@ -352,6 +352,108 @@ old ordering behind `--legacy-alias-order` for one release if a regression is su
 
 ---
 
+### 3.4 P1 as built and measured (2026-11-26)
+
+Shipped: P1.2a (the access corrections), P1.2b (the checker), and of P1.1 only §3.3.1 (`--relayout` /
+`RebuildLayout()`), because §3.3.2/§3.3.3 measured as a regression and were reverted. `--camera <n>` was
+added alongside `--rendergraph-strict-access` because the audit needed per-camera frames, not only the
+default view.
+
+**P1.2a — the corrections.** The Bloom case was not "a write that is really a read": the pass *does* both.
+The prefilter samples `TAAOutput` and the composite adds into it, so the declaration is now
+`Read + Write` (the down/up pyramids likewise: each mip level is written and the next level reads it).
+Everything else the audit found, and the file that owns each:
+
+| pass | correction |
+|---|---|
+| Base Pass (Opaque) | reads `DepthBuffer` (depth test); under occlusion culling also reads `HZB` and `OccludedIndirectBuffer` |
+| HZBGeneratorPhase2 | reads `HZB` — the mip chain reads its own output |
+| HDRPostProcess | reads `LuminanceHistogram` (auto exposure) and `ExposureBuffer` |
+| Deferred | depth attachment flagged `isReadOnly` (sampled by lighting, stencil test still reads it) |
+| RTXDI | SHARC buffers declared read *and* write in combined mode; reads of the history colour/normal/ORM/geometry-normal/linear-depth/denoiser-normal-roughness/PDF textures and of `NeighborOffsets`, `GeometryInstanceToLight`, `LightData`, `PrepareLightsTasks`, `PrimitiveLight`; the two stencil-only framebuffers flagged `isReadOnly` |
+
+**P1.2b — the checker.** `Renderer::ValidatePassAccess` runs at the end of `AddComputePass` and
+`AddFullScreenPass` and hands the graph a neutral `span<UsedResource>` (SRVs and constant buffers →
+read, UAVs → write, colour/depth attachments → write unless `isReadOnly`, `dispatchParams.indirectBuffer`
+→ read). `RenderGraph::ValidateActualAccess` maps each handle through `m_TextureSlots`/`m_BufferSlots`
+and logs each *distinct* miss once
+(`pass '%s' bound %s '%s' as a read/write without declaring that access in Setup()`).
+`PostRender` adds the inverse warning (declared, never bound) for the checked passes, deduplicated the
+same way. `--rendergraph-strict-access` turns the log into an assert; with the flag off
+`ValidatePassAccess` returns before it builds the list and `Compile()` does not build the reverse maps,
+so the default frame pays nothing.
+
+Two rules changed while wiring this up:
+
+* The aliasing check in `Compile()` previously demanded that an aliased resource's first use be
+  **write-only**. Mip chains read their own output inside one pass, so the rule is now "the first use must
+  *write* the resource"; a first user that only reads it is still an error.
+* Anything bound but not a transient of this frame (bindless static textures, scene-owned buffers, the
+  graph's own heaps) is skipped silently — those are not graph resources.
+
+**P1.1 — as built, and why §3.3.2/§3.3.3 were not kept.** `--relayout` sets `m_bRebuildLayoutPending`,
+which makes the next `Compile()` call `RebuildLayout()`: every non-persistent placement is freed and the
+transient heaps' block lists are reset (the persistent frame set is skipped), then allocation re-runs. On
+Bistro it reports `Layout rebuilt: 30 texture(s) and 71 buffer(s) re-placed` and the peak is unchanged at
+828 MB — the hook is in place for P4 and for the allocator tests, but it does not by itself move the peak.
+
+The article's ordering (longest-lived first) plus tightest-fit candidate selection were both built and
+measured on the FlyingWorld and Bistro frames: peak **829 MB vs 828 MB**, i.e. one heap worse. Tightest-fit
+alone was neutral. Both were reverted to first-pass ordering and first fit (with the `break` that first fit
+needs). The reason the article's heuristic does not transfer is in the mechanism, not the measurement: this
+allocator gives an aliasing resource the *whole* retired block of an *earlier-placed* resource, so sweeping
+in time order hands each resource exactly the candidates whose lifetime has just ended; sorting
+longest-lived-first breaks that alignment and strands blocks. Packing partial blocks (§3.3.5) would be
+where an ordering heuristic starts to pay, and that stays closed until the numbers ask for it.
+
+**Verification (both named scenes, frame 90, `--hide-ui --no-taa --no-auto-exposure`).**
+
+A pre-P1 build (HEAD) and this one were captured on the same frame and compared through PIX. The
+comparison is only meaningful with the view held fixed: the camera comes from `bin/camera_state.json`, so
+the file was copied from a reference copy before every run (the earlier attempt without that step compared
+two different viewpoints and produced a bogus −4 % / +104 % counter "difference"; `--camera` cannot be used
+to pin the baseline because it is itself part of this item).
+
+| scope | P0 baseline | P1 |
+|---|---|---|
+| PIX events in the frame (FlyingWorld / Bistro) | 1253 / 1558 | **1253 / 1558 — 0 differing** |
+| `smsp__inst_executed.sum`, FlyingWorld | 6.058 e9 | 6.053 e9 (−0.08 %) |
+| `l1tex__t_sectors.sum`, FlyingWorld | 2.644 e9 | 2.634 e9 (−0.39 %) |
+| `smsp__inst_executed.sum`, Bistro | 8.125 e9 | 8.127 e9 (+0.02 %) |
+| `l1tex__t_sectors.sum`, Bistro | 4.390 e9 | 4.392 e9 (+0.05 %) |
+| heap bytes (panel/dump) | 828 MB | 828 MB |
+
+The event-name sequences are identical position for position on both scenes and `--dump-rendergraph`
+output on the same frame differs only in the declaration lines, with every heap block, offset and alias
+decision unchanged. So P1 changed neither the submitted work nor the memory layout, and the counter deltas
+are inside the ~0.1 % reproduction noise of this GPU. Screenshots at frame 20 taken with the same frozen
+camera: FlyingWorld 46 pixels above Δ8 (max Δ52), i.e. the stochastic speckle the same build shows between
+two of its own runs (21 px); Bistro 6021 pixels (0.29 %) against a scene whose own run-to-run spread was
+measured at 0.8–25 % — no image change attributable to P1.
+
+RenderDoc (FlyingWorld, frame 90): `problems: 0`, 31107 chunks, 45 draw/dispatch calls, 126 markers, the
+same 10 hazard findings in the same two classes as the baseline (5 loop + 5 state, all bindless-range
+artifacts where one descriptor table is reported as SRV and UAV at once) and the same root-signature
+verdict (0 certain, 3 question). **Bistro's RenderDoc capture cannot be analysed by this toolchain**: its
+frame data is 1.4 GB with a 2.2 GB LZ4 body, which the analyser's C API rejects
+(`section too large for the LZ4 decoder … the C API takes int sizes`). Capturing a different frame does not
+help — the size is the scene's textures and acceleration structures, not the frame — so Bistro's evidence
+comes from PIX, and FlyingWorld carries the RenderDoc half.
+
+Validation: `--rhidebug-gpu` is clean on both scenes (0 D3D12 errors, 0 warnings, clean exit), and
+`--rendergraph-strict-access` reports no violation and no unused declaration on either scene. Cameras:
+FlyingWorld exposes 7 glTF cameras, all applied and rendered without an error line (`CameraCarrots`,
+`CameraCrystal`, `CameraMain`, `CameraMine`, `CameraSky`, `CameraSky2`, `CameraTomb`); Bistro exposes 1
+(`Camera`). Each camera renders a distinct, correct view.
+
+**Not done, deliberately.** §3.3.4 (`RenderGraphAllocator` extraction) and §3.3.5 (partial-block packing)
+are untouched: the extraction is only worth it once a placement policy beats first fit, and the two
+candidates tried here did not. The checker stays log-only by default; making it an assert everywhere is a
+later item, once the remaining direct-binding sites (the ones outside `AddComputePass`/`AddFullScreenPass`)
+have been audited too.
+
+---
+
 ## 4. P2 — typed accesses and graph-owned barriers
 
 ### 4.1 P2.1 Typed access API (effort M, no behaviour change)
