@@ -176,6 +176,10 @@ public:
         // Virtual-resource creations spent querying memory requirements this frame. Steady state is 0 once the
         // per-resource cache is warm; anything else means a descriptor keeps changing.
         uint32_t m_NumMemoryRequirementQueries = 0;
+        // Transitions the declarations imply for this frame: one per change of state between consecutive passes
+        // that touch a resource. Owning the barriers would cost this many instead of the per-pass `initialState`
+        // round trip nvrhi pays, so the number is the size of the opportunity, not something the graph acts on.
+        uint32_t m_NumDeclaredStateChanges = 0;
     };
 
     // ─── Lifecycle ─────────────────────────────────────────────────────────
@@ -200,12 +204,20 @@ public:
 
     // ─── Resource access registration ──────────────────────────────────────
 
-    // Declare how a pass uses a resource (called during Setup phase).
+    // Declare how a pass uses a resource (called during Setup phase). The state is an `nvrhi::ResourceStates`
+    // because that is the vocabulary the barrier plan and the state timeline speak; the untyped overloads mean
+    // what the resource itself implies: a read is `ShaderResource`, a texture write is the state its descriptor
+    // makes possible (`DepthWrite` for a depth format, else `RenderTarget` or `UnorderedAccess`), and a buffer
+    // write is `UnorderedAccess` (what `DeclareBuffer` already implies).
     void ReadTexture(RGTextureHandle handle);
+    void ReadTexture(RGTextureHandle handle, nvrhi::ResourceStates state);
     void WriteTexture(RGTextureHandle handle);
+    void WriteTexture(RGTextureHandle handle, nvrhi::ResourceStates state);
 
     void ReadBuffer(RGBufferHandle handle);
+    void ReadBuffer(RGBufferHandle handle, nvrhi::ResourceStates state);
     void WriteBuffer(RGBufferHandle handle);
+    void WriteBuffer(RGBufferHandle handle, nvrhi::ResourceStates state);
 
     // ─── Pass management (render-loop internals) ───────────────────────────
 
@@ -250,11 +262,11 @@ public:
     // diagnostic goes through this so an out-of-range index reads "<invalid>" instead of throwing.
     const char* PassName(uint16_t passIndex1Based) const;
 
-    // A graph resource a pass actually bound while recording, and whether that use writes it.
+    // A graph resource a pass actually bound while recording, and the state that binding requires of it.
     struct UsedResource
     {
         const nvrhi::IResource* m_Resource = nullptr;
-        bool m_bWrite = false;
+        nvrhi::ResourceStates m_State = nvrhi::ResourceStates::ShaderResource;
     };
 
     // Compares what a pass really bound against what its Setup declared. A binding the graph never learned about is
@@ -308,6 +320,15 @@ private:
         std::unordered_set<uint32_t> m_WriteBuffers;
     };
 
+    // One decided use of one resource, in the order the pass declared it. The sets above answer "did this pass
+    // declare it?" in O(1); these records carry the state, which is what a timeline needs.
+    struct AccessRecord
+    {
+        uint32_t m_Resource = 0;
+        nvrhi::ResourceStates m_State = nvrhi::ResourceStates::ShaderResource;
+        bool m_bIsBuffer = false;
+    };
+
     // ─── Resource allocation & heap sub-allocation ─────────────────────────
 
     // Frees every non-persistent placement and hands each transient heap back as a single free block, so the next
@@ -325,6 +346,10 @@ private:
 
     // Helper for updating resource lifetimes
     void UpdateResourceLifetime(RenderGraphInternal::ResourceLifetime& lifetime, uint16_t currentPass);
+
+    // Turns the per-pass access records into the frame's state timeline and counts where it changes: a run of
+    // passes that ask for the same state costs nothing, which is how consecutive reads merge.
+    void BuildStateTimeline();
 
     // ─── Deferred release ──────────────────────────────────────────────────
 
@@ -364,8 +389,18 @@ private:
     // Setup-phase state
     bool m_IsInsideSetup = false;
     PassAccess m_PendingPassAccess;
+    std::vector<AccessRecord> m_PendingAccessRecords;
     std::vector<uint32_t> m_PendingDeclaredTextures;
     std::vector<uint32_t> m_PendingDeclaredBuffers;
+
+    // Typed access records, one list per pass (0-based, parallel to m_PassAccesses).
+    std::vector<std::vector<AccessRecord>> m_PassAccessRecords;
+
+    // The state the graph believes each slot's memory is in, rebuilt from the descriptors at the start of every
+    // Compile() and advanced pass by pass. Only the transitions are counted (`Stats::m_NumDeclaredStateChanges`):
+    // the graph does not place barriers from this, nvrhi's own tracking does.
+    std::vector<nvrhi::ResourceStates> m_TextureStates;
+    std::vector<nvrhi::ResourceStates> m_BufferStates;
 
     // Declared-vs-actual checker state (ValidateActualAccess, debug runs only). The maps are rebuilt by Compile()
     // from the physical handles it just bound; the per-pass sets are filled while the passes record.

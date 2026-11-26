@@ -2354,7 +2354,7 @@ void Renderer::ValidatePassAccess(const RenderPassParams& params) const
             case nvrhi::ResourceType::StructuredBuffer_UAV:
             case nvrhi::ResourceType::RawBuffer_UAV:
             case nvrhi::ResourceType::SamplerFeedbackTexture_UAV:
-                used.push_back({ item.resourceHandle, true });
+                used.push_back({ item.resourceHandle, nvrhi::ResourceStates::UnorderedAccess });
                 break;
 
             case nvrhi::ResourceType::Texture_SRV:
@@ -2363,7 +2363,7 @@ void Renderer::ValidatePassAccess(const RenderPassParams& params) const
             case nvrhi::ResourceType::RawBuffer_SRV:
             case nvrhi::ResourceType::ConstantBuffer:
             case nvrhi::ResourceType::VolatileConstantBuffer:
-                used.push_back({ item.resourceHandle, false });
+                used.push_back({ item.resourceHandle, nvrhi::ResourceStates::ShaderResource });
                 break;
 
             default:
@@ -2379,18 +2379,23 @@ void Renderer::ValidatePassAccess(const RenderPassParams& params) const
 
     if (params.framebuffer)
     {
+        // An attachment is written unless the framebuffer marks it read-only, which is where a depth buffer that is
+        // only sampled (and stencil-tested) goes.
         const nvrhi::FramebufferDesc& framebufferDesc = params.framebuffer->getDesc();
         for (const nvrhi::FramebufferAttachment& attachment : framebufferDesc.colorAttachments)
         {
             if (attachment.texture)
-                used.push_back({ attachment.texture, !attachment.isReadOnly });
+                used.push_back({ attachment.texture, attachment.isReadOnly ? nvrhi::ResourceStates::ShaderResource
+                                                                          : nvrhi::ResourceStates::RenderTarget });
         }
         if (framebufferDesc.depthAttachment.texture)
-            used.push_back({ framebufferDesc.depthAttachment.texture, !framebufferDesc.depthAttachment.isReadOnly });
+            used.push_back({ framebufferDesc.depthAttachment.texture,
+                             framebufferDesc.depthAttachment.isReadOnly ? nvrhi::ResourceStates::DepthRead
+                                                                        : nvrhi::ResourceStates::DepthWrite });
     }
 
     if (params.dispatchParams.indirectBuffer)
-        used.push_back({ params.dispatchParams.indirectBuffer.Get(), false });
+        used.push_back({ params.dispatchParams.indirectBuffer.Get(), nvrhi::ResourceStates::IndirectArgument });
 
     g_Renderer.m_RenderGraph.ValidateActualAccess(used);
 }

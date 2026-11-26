@@ -197,12 +197,14 @@ void RenderGraph::Reset()
     gs_MemoryRequirementQueries = 0;
     m_PassNames.clear();
     m_PassAccesses.clear();
+    m_PassAccessRecords.clear();
     m_PassNeedsGlobalSyncBarrier.clear();
     // was interrupted (e.g. a renderer's Setup() threw or returned early after
     // declaring resources).  BeginSetup() also clears these, but Reset() is the
     // authoritative frame-start reset and must leave the graph in a fully clean
     // state regardless of what happened last frame.
     m_PendingPassAccess = {};
+    m_PendingAccessRecords.clear();
     m_PendingDeclaredTextures.clear();
     m_PendingDeclaredBuffers.clear();
 
@@ -212,6 +214,7 @@ void RenderGraph::Reset()
     m_PassUsedTextures.clear();
     m_PassUsedBuffers.clear();
     m_PassAccessChecked.clear();
+    m_PendingAccessRecords.clear();
 
     // Mark all resources as not declared this frame and reset lifetimes
     for (TransientTexture& texture : m_Textures)
@@ -296,6 +299,7 @@ void RenderGraph::BeginPass(const char* name)
     m_CurrentPassIndex++;
     m_PassNames.push_back(name);
     m_PassAccesses.push_back(m_PendingPassAccess); // Copy pending accesses from Setup
+    m_PassAccessRecords.push_back(m_PendingAccessRecords);
     // Checker bookkeeping, indexed like m_PassAccesses (0-based, pass indices are 1-based).
     m_PassUsedTextures.emplace_back();
     m_PassUsedBuffers.emplace_back();
@@ -320,6 +324,7 @@ void RenderGraph::BeginPass(const char* name)
     for (uint32_t bufIdx : m_PendingPassAccess.m_WriteBuffers) UpdateResourceLifetime(m_Buffers[bufIdx].m_Lifetime, m_CurrentPassIndex);
 
     m_PendingPassAccess = {};
+    m_PendingAccessRecords.clear();
     m_PendingDeclaredTextures.clear();
     m_PendingDeclaredBuffers.clear();
 }
@@ -363,6 +368,7 @@ void RenderGraph::ScheduleRenderer(IRenderer* pRenderer)
         m_PendingDeclaredTextures.clear();
         m_PendingDeclaredBuffers.clear();
         m_PendingPassAccess = {};
+        m_PendingAccessRecords.clear();
         pRenderer->m_CPUTime = 0.0f;
         return;
     }
@@ -717,7 +723,58 @@ bool RenderGraph::DeclarePersistentBuffer(const RGBufferDesc& desc, RGBufferHand
 // RenderGraph - Resource Access
 // ============================================================================
 
+namespace
+{
+// Whether a state claims the resource. The ones that do not are the read states and the copy/resolve sources.
+bool IsWriteState(nvrhi::ResourceStates state)
+{
+    return (state & (nvrhi::ResourceStates::UnorderedAccess
+                     | nvrhi::ResourceStates::RenderTarget
+                     | nvrhi::ResourceStates::DepthWrite
+                     | nvrhi::ResourceStates::StreamOut
+                     | nvrhi::ResourceStates::CopyDest
+                     | nvrhi::ResourceStates::ResolveDest
+                     | nvrhi::ResourceStates::AccelStructWrite
+                     | nvrhi::ResourceStates::ShadingRateSurface)) != nvrhi::ResourceStates::Unknown;
+}
+
+// `nvrhi::utils` has no state-to-string helper, so the diagnostics name the states this renderer uses. Everything
+// else falls back to the numeric form the D3D12 debug layer would print.
+const char* StateName(nvrhi::ResourceStates state)
+{
+    switch (state)
+    {
+    case nvrhi::ResourceStates::ShaderResource: return "ShaderResource";
+    case nvrhi::ResourceStates::PixelShaderResource: return "PixelShaderResource";
+    case nvrhi::ResourceStates::NonPixelShaderResource: return "NonPixelShaderResource";
+    case nvrhi::ResourceStates::UnorderedAccess: return "UnorderedAccess";
+    case nvrhi::ResourceStates::RenderTarget: return "RenderTarget";
+    case nvrhi::ResourceStates::DepthWrite: return "DepthWrite";
+    case nvrhi::ResourceStates::DepthRead: return "DepthRead";
+    case nvrhi::ResourceStates::CopySource: return "CopySource";
+    case nvrhi::ResourceStates::CopyDest: return "CopyDest";
+    case nvrhi::ResourceStates::ResolveSource: return "ResolveSource";
+    case nvrhi::ResourceStates::ResolveDest: return "ResolveDest";
+    case nvrhi::ResourceStates::Present: return "Present";
+    case nvrhi::ResourceStates::ConstantBuffer: return "ConstantBuffer";
+    case nvrhi::ResourceStates::VertexBuffer: return "VertexBuffer";
+    case nvrhi::ResourceStates::IndexBuffer: return "IndexBuffer";
+    case nvrhi::ResourceStates::IndirectArgument: return "IndirectArgument";
+    case nvrhi::ResourceStates::AccelStructBuildInput: return "AccelStructBuildInput";
+    case nvrhi::ResourceStates::AccelStructRead: return "AccelStructRead";
+    case nvrhi::ResourceStates::AccelStructWrite: return "AccelStructWrite";
+    case nvrhi::ResourceStates::Common: return "Common";
+    default: return "a composite state";
+    }
+}
+} // namespace
+
 void RenderGraph::ReadTexture(RGTextureHandle handle)
+{
+    ReadTexture(handle, nvrhi::ResourceStates::ShaderResource);
+}
+
+void RenderGraph::ReadTexture(RGTextureHandle handle, nvrhi::ResourceStates state)
 {
     SDL_assert(m_IsInsideSetup && "ReadTexture must be called during Setup phase");
 
@@ -736,9 +793,32 @@ void RenderGraph::ReadTexture(RGTextureHandle handle)
     }
 
     m_PendingPassAccess.m_ReadTextures.insert(handle.m_Index);
+    m_PendingAccessRecords.push_back({ handle.m_Index, state, false });
 }
 
 void RenderGraph::WriteTexture(RGTextureHandle handle)
+{
+    SDL_assert(handle.IsValid() && handle.m_Index < m_Textures.size());
+    if (!handle.IsValid() || handle.m_Index >= m_Textures.size())
+    {
+        SDL_assert(false && "Invalid texture handle");
+        return;
+    }
+
+    // What an untyped write means, from the descriptor alone: a depth format is written as depth, a render-target
+    // texture as a colour attachment, and anything else (a storage image, which `isUAV` is what allows) as a UAV.
+    // A pass that writes a texture in a way its descriptor does not suggest says so with the typed form.
+    const nvrhi::TextureDesc& desc = m_Textures[handle.m_Index].m_Desc.m_NvrhiDesc;
+    nvrhi::ResourceStates state = nvrhi::ResourceStates::UnorderedAccess;
+    if (nvrhi::getFormatInfo(desc.format).hasDepth)
+        state = nvrhi::ResourceStates::DepthWrite;
+    else if (desc.isRenderTarget)
+        state = nvrhi::ResourceStates::RenderTarget;
+
+    WriteTexture(handle, state);
+}
+
+void RenderGraph::WriteTexture(RGTextureHandle handle, nvrhi::ResourceStates state)
 {
     SDL_assert(m_IsInsideSetup && "WriteTexture must be called during Setup phase");
 
@@ -757,9 +837,15 @@ void RenderGraph::WriteTexture(RGTextureHandle handle)
     }
 
     m_PendingPassAccess.m_WriteTextures.insert(handle.m_Index);
+    m_PendingAccessRecords.push_back({ handle.m_Index, state, false });
 }
 
 void RenderGraph::ReadBuffer(RGBufferHandle handle)
+{
+    ReadBuffer(handle, nvrhi::ResourceStates::ShaderResource);
+}
+
+void RenderGraph::ReadBuffer(RGBufferHandle handle, nvrhi::ResourceStates state)
 {
     SDL_assert(m_IsInsideSetup && "ReadBuffer must be called during Setup phase");
 
@@ -778,9 +864,15 @@ void RenderGraph::ReadBuffer(RGBufferHandle handle)
     }
 
     m_PendingPassAccess.m_ReadBuffers.insert(handle.m_Index);
+    m_PendingAccessRecords.push_back({ handle.m_Index, state, true });
 }
 
 void RenderGraph::WriteBuffer(RGBufferHandle handle)
+{
+    WriteBuffer(handle, nvrhi::ResourceStates::UnorderedAccess);
+}
+
+void RenderGraph::WriteBuffer(RGBufferHandle handle, nvrhi::ResourceStates state)
 {
     SDL_assert(m_IsInsideSetup && "WriteBuffer must be called during Setup phase");
 
@@ -799,6 +891,7 @@ void RenderGraph::WriteBuffer(RGBufferHandle handle)
     }
 
     m_PendingPassAccess.m_WriteBuffers.insert(handle.m_Index);
+    m_PendingAccessRecords.push_back({ handle.m_Index, state, true });
 }
 
 // ============================================================================
@@ -1149,6 +1242,8 @@ void RenderGraph::Compile()
         ? m_Stats.m_UnAliasedBytes - m_Stats.m_AliasedBytes
         : 0;
 
+    BuildStateTimeline();
+
     m_IsCompiled = true;
 }
 
@@ -1199,21 +1294,52 @@ void RenderGraph::ValidateActualAccess(std::span<const UsedResource> usedResourc
         const char* name = bIsTexture ? m_Textures[index].m_Desc.m_NvrhiDesc.debugName.c_str()
                                       : m_Buffers[index].m_Desc.m_NvrhiDesc.debugName.c_str();
 
-        const bool bDeclared = used.m_bWrite
+        // The record the pass declared for this resource, if any: the sets say whether, this says which state. A
+        // pass that reads and writes one resource declares both; a read is satisfied by either (a write implies
+        // one), so the state check below only applies to what the binding actually writes.
+        const AccessRecord* declaredWrite = nullptr;
+        for (const AccessRecord& record : m_PassAccessRecords[passIndex - 1])
+        {
+            if (record.m_Resource == index && record.m_bIsBuffer == !bIsTexture && IsWriteState(record.m_State))
+            {
+                declaredWrite = &record;
+                break;
+            }
+        }
+
+        const bool bWrite = IsWriteState(used.m_State);
+        const bool bDeclared = bWrite
             ? (bIsTexture ? access.m_WriteTextures.count(index) > 0 : access.m_WriteBuffers.count(index) > 0)
             : (bIsTexture ? access.m_ReadTextures.count(index) > 0 : access.m_ReadBuffers.count(index) > 0);
 
-        if (bDeclared)
-            continue;
-
-        // A read that was declared as a write is the case this checker exists for: the graph sees the pass as the
-        // resource's writer, so the real reader/writer order never enters the lifetime. Reported once per process
-        // and flag combination: the audit wants the list, not a line per frame, and a fix has to be made anyway.
-        const uint64_t key = (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1) | (used.m_bWrite ? 1ull : 0ull);
-        if (m_ReportedAccessViolations.insert(key).second)
+        if (!bDeclared)
         {
-            SDL_Log("[RenderGraph] ERROR: pass '%s' bound %s '%s' as %s without declaring that access in Setup()",
-                PassName(passIndex), bIsTexture ? "texture" : "buffer", name, used.m_bWrite ? "a write" : "a read");
+            // A read that was declared as a write is the case this checker exists for: the graph sees the pass as
+            // the resource's writer, so the real reader/writer order never enters the lifetime. Reported once per
+            // process and flag combination: the audit wants the list, not a line per frame, and a fix has to be
+            // made anyway.
+            const uint64_t key = (static_cast<uint64_t>(passIndex) << 40) | (static_cast<uint64_t>(index) << 1) | (bWrite ? 1ull : 0ull);
+            if (m_ReportedAccessViolations.insert(key).second)
+            {
+                SDL_Log("[RenderGraph] ERROR: pass '%s' bound %s '%s' as %s without declaring that access in Setup()",
+                    PassName(passIndex), bIsTexture ? "texture" : "buffer", name, bWrite ? "a write" : "a read");
+            }
+            continue;
+        }
+
+        // The state, where the binding says something about it: a UAV binding is `UnorderedAccess` and an
+        // attachment is `RenderTarget` or `DepthWrite`. A declaration naming another one still declares the write,
+        // so this is not a lifetime bug -- but it is the wrong target state, which is what a barrier plan acts on.
+        if (bWrite && declaredWrite &&
+            (declaredWrite->m_State & used.m_State) == nvrhi::ResourceStates::Unknown)
+        {
+            const uint64_t key = (1ull << 48) | (static_cast<uint64_t>(passIndex) << 40) | static_cast<uint64_t>(index);
+            if (m_ReportedAccessViolations.insert(key).second)
+            {
+                SDL_Log("[RenderGraph] ERROR: pass '%s' declared %s '%s' as %s but bound it as %s",
+                    PassName(passIndex), bIsTexture ? "texture" : "buffer", name,
+                    StateName(declaredWrite->m_State), StateName(used.m_State));
+            }
         }
     }
 }
@@ -1290,6 +1416,83 @@ void RenderGraph::InsertGlobalSyncBarriers(uint16_t passIndex, nvrhi::ICommandLi
     if (m_PassNeedsGlobalSyncBarrier[passIndex])
     {
         commandList->insertGlobalSyncBarrier();
+    }
+}
+
+void RenderGraph::BuildStateTimeline()
+{
+    // Every slot starts the frame where its descriptor says it does, because that is where nvrhi's own tracking
+    // puts an untracked resource (`keepInitialState`), and each pass then asks for the state its declarations name.
+    // What is counted is where that timeline changes: one transition per run of passes that agree, which is what
+    // consecutive reads merging into one state means.
+    m_TextureStates.assign(m_Textures.size(), nvrhi::ResourceStates::Common);
+    m_BufferStates.assign(m_Buffers.size(), nvrhi::ResourceStates::Common);
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_Textures.size()); ++i)
+        m_TextureStates[i] = m_Textures[i].m_Desc.m_NvrhiDesc.initialState;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_Buffers.size()); ++i)
+        m_BufferStates[i] = m_Buffers[i].m_Desc.m_NvrhiDesc.initialState;
+
+    m_Stats.m_NumDeclaredStateChanges = 0;
+
+    for (uint16_t passIndex = 1; passIndex <= static_cast<uint16_t>(m_PassAccessRecords.size()); ++passIndex)
+    {
+        // One state per resource per pass: a pass that both reads and writes (Bloom's additive composite, the
+        // depth-tested opaque pass) is described by the write, which is the stronger claim.
+        struct PassResourceState
+        {
+            uint32_t m_Resource;
+            bool m_bIsBuffer;
+            nvrhi::ResourceStates m_State;
+        };
+        std::vector<PassResourceState> passStates;
+
+        for (const AccessRecord& record : m_PassAccessRecords[passIndex - 1])
+        {
+            const bool bIsBuffer = record.m_bIsBuffer;
+            const RenderGraphInternal::TransientResourceBase& resource =
+                bIsBuffer ? static_cast<const RenderGraphInternal::TransientResourceBase&>(m_Buffers[record.m_Resource])
+                          : static_cast<const RenderGraphInternal::TransientResourceBase&>(m_Textures[record.m_Resource]);
+
+            if (!resource.m_IsDeclaredThisFrame)
+                continue;
+
+            // Sampling a depth texture is `DepthRead`, not `ShaderResource`: D3D12 only allows the depth-stencil
+            // layouts on a depth resource, and a plain read of one means the former.
+            const nvrhi::ResourceStates state = (!bIsBuffer && record.m_State == nvrhi::ResourceStates::ShaderResource &&
+                    nvrhi::getFormatInfo(m_Textures[record.m_Resource].m_Desc.m_NvrhiDesc.format).hasDepth)
+                ? nvrhi::ResourceStates::DepthRead
+                : record.m_State;
+
+            PassResourceState* existing = nullptr;
+            for (PassResourceState& op : passStates)
+            {
+                if (op.m_Resource == record.m_Resource && op.m_bIsBuffer == bIsBuffer)
+                {
+                    existing = &op;
+                    break;
+                }
+            }
+
+            if (existing)
+            {
+                if (IsWriteState(record.m_State))
+                    existing->m_State = state;
+                continue;
+            }
+
+            passStates.push_back({ record.m_Resource, bIsBuffer, state });
+        }
+
+        for (const PassResourceState& op : passStates)
+        {
+            nvrhi::ResourceStates& state = op.m_bIsBuffer ? m_BufferStates[op.m_Resource]
+                                                          : m_TextureStates[op.m_Resource];
+            if (state != op.m_State)
+            {
+                ++m_Stats.m_NumDeclaredStateChanges;
+                state = op.m_State;
+            }
+        }
     }
 }
 

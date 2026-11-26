@@ -46,6 +46,8 @@ void RenderGraph::RenderDebugUI()
                    m_Stats.m_AliasingSavingsBytes / (1024.0 * 1024.0));
         ImGui::Text("Alias barriers: %u   Memory-requirement queries: %u",
                    m_Stats.m_NumAliasBarriers, m_Stats.m_NumMemoryRequirementQueries);
+        ImGui::Text("Declared state changes: %u (what owning the barriers would cost)",
+                   m_Stats.m_NumDeclaredStateChanges);
         
         if (ImGui::TreeNode("Lifetime Visualization"))
         {
@@ -501,8 +503,8 @@ std::string RenderGraph::ExportToString() const
        << m_Stats.m_AliasedBytes / (1024.0 * 1024.0) << " MB (saved "
        << m_Stats.m_AliasingSavingsBytes / (1024.0 * 1024.0) << " MB)\n";
     ss << "- Alias barriers: " << m_Stats.m_NumAliasBarriers
-       << "   Memory-requirement queries: " << m_Stats.m_NumMemoryRequirementQueries << "\n\n";
-
+           << "   Memory-requirement queries: " << m_Stats.m_NumMemoryRequirementQueries << "\n"
+           << "- Declared state changes: " << m_Stats.m_NumDeclaredStateChanges << "\n\n";
     // The access sets are unordered, so their iteration order differs run to run. Sort the indices before
     // printing: the dump is compared between runs to prove a change is behaviour-neutral.
     auto sortedIndices = [](const std::unordered_set<uint32_t>& indices)
