@@ -84,6 +84,12 @@ public:
 
         renderGraph.WriteTexture(g_RG_ExposureTexture);
 
+        // The adaptation chain inside this pass reads back what it wrote: the luminance histogram feeds Exposure
+        // Adaptation, and the exposure buffer is read by Tonemapping and by the readback copy below.
+        if (bAutoExposure)
+            renderGraph.ReadBuffer(m_RG_LuminanceHistogram);
+        renderGraph.ReadBuffer(m_RG_ExposureBuffer);
+
         return true;
     }
 

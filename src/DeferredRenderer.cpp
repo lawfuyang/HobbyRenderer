@@ -113,10 +113,10 @@ public:
         fbDesc.addColorAttachment(hdrColor);
         fbDesc.setDepthAttachment(depthTexture);
 
-        // On Vulkan, we need to set the depth attachment as read-only to be able to sample from it in the shader while it's also bound as a depth attachment
-        // D3D12 allows this without a special flag. As a result, D3D12 will push 2 of the same barriers for the depth buffer
-        // pretty sure this is a bug in the nvrhi D3D12 backend
-        //fbDesc.depthAttachment.isReadOnly = true;
+        // Depth is only sampled here (depth test and depth writes are off, the stencil test reads it), so the
+        // attachment is read-only. That is also what the graph needs to know: this pass is not the depth buffer's
+        // writer, and declaring it as one would order every later reader behind it.
+        fbDesc.depthAttachment.isReadOnly = true;
 
         nvrhi::FramebufferHandle framebuffer = device->createFramebuffer(fbDesc);
 

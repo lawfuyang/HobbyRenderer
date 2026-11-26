@@ -39,6 +39,11 @@ public:
         desc.m_NvrhiDesc.debugName = "Bloom_UpPyramid_RG";
         renderGraph.DeclareTexture(desc, m_RG_BloomUpPyramid);
 
+        // DeclareTexture implies a write. The pass also samples everything it writes: the prefilter reads the TAA
+        // output, and the downsample/upsample steps read the mips the step before wrote.
+        renderGraph.ReadTexture(g_RG_TAAOutput);
+        renderGraph.ReadTexture(m_RG_BloomDownPyramid);
+        renderGraph.ReadTexture(m_RG_BloomUpPyramid);
         renderGraph.WriteTexture(g_RG_TAAOutput);
 
         return true;

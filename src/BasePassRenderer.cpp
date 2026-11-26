@@ -989,6 +989,16 @@ public:
             WriteClusterBuffers(renderGraph);
         }
 
+        // DeclareTexture implies a write. The pass also reads everything it wrote earlier in its own recording: the
+        // depth it depth-tests against, the HZB it builds for the second culling pass, and the indirect arguments
+        // that pass consumes.
+        renderGraph.ReadTexture(g_RG_DepthTexture);
+        if (g_Renderer.m_EnableOcclusionCulling)
+        {
+            renderGraph.ReadTexture(g_RG_HZBTexture);
+            renderGraph.ReadBuffer(res.m_OccludedIndirectBuffer);
+        }
+
         renderGraph.WriteTexture(g_RG_DepthTexture);
         renderGraph.WriteTexture(g_RG_GBufferAlbedo);
         renderGraph.WriteTexture(g_RG_GBufferNormals);
@@ -1253,6 +1263,10 @@ public:
             renderGraph.DeclareTexture(desc, g_RG_OpaqueColor);
         }
 
+        // This pass samples the HDR colour it blends into (the pow2 downsample) and reads the pow2 opaque
+        // colour back for transmission.
+        renderGraph.ReadTexture(g_RG_HDRColor);
+        renderGraph.ReadTexture(g_RG_OpaqueColor);
         renderGraph.WriteTexture(g_RG_HDRColor);
         renderGraph.WriteTexture(g_RG_DepthTexture);
 
@@ -1344,7 +1358,9 @@ public:
         
         if (!g_Renderer.m_EnableOcclusionCulling) return false;
 
+        // The mip chain is built from the mip above it, so the pass reads the HZB it writes.
         renderGraph.ReadTexture(g_RG_DepthTexture);
+        renderGraph.ReadTexture(g_RG_HZBTexture);
         renderGraph.WriteTexture(g_RG_HZBTexture);
 
         const std::string counterName = std::string{ GetName() } + " HZB SPD Atomic Counter";

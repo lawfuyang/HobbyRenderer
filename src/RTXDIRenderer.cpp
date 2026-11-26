@@ -1399,7 +1399,6 @@ public:
         renderGraph.ReadTexture(g_RG_GBufferORM);
         renderGraph.ReadTexture(g_RG_GBufferMotionVectors);
         renderGraph.ReadTexture(g_RG_GBufferEmissive);
-
         // ------------------------------------------------------------------
         // FullSample per-frame resources
         // ------------------------------------------------------------------
@@ -1551,10 +1550,37 @@ public:
         }
         if (bCombinedMode)
         {
+            // The SHARC cache is updated in place by this pass's SharcIndirectUpdate, so it is both read and written.
             renderGraph.ReadBuffer(g_RG_SHARCHashEntries);
             renderGraph.ReadBuffer(g_RG_SHARCResolved);
             renderGraph.ReadBuffer(g_RG_SHARCAccumulation);
+            renderGraph.WriteBuffer(g_RG_SHARCHashEntries);
+            renderGraph.WriteBuffer(g_RG_SHARCResolved);
+            renderGraph.WriteBuffer(g_RG_SHARCAccumulation);
         }
+
+        // What the passes inside this renderer consume as inputs after writing it earlier in the frame: the
+        // temporal histories, the PDFs the presampling stage reads, and the GBuffer intermediates NRD and the
+        // compositing pass sample. Fetching a handle with Write only says the pass may write it, not that it is
+        // the resource's writer in the graph's eyes.
+        renderGraph.ReadTexture(m_DepthHistory);
+        renderGraph.ReadTexture(m_GBufferAlbedoHistory);
+        renderGraph.ReadTexture(m_GbufferNormalsHistory);
+        renderGraph.ReadTexture(m_GBufferORMHistory);
+        renderGraph.ReadTexture(m_GeoNormalsHistory);
+        renderGraph.ReadTexture(m_RG_LinearDepth);
+        renderGraph.ReadTexture(m_RG_DenoiserNormalRoughness);
+        renderGraph.ReadTexture(m_RG_EnvLightPDFTexture);
+        renderGraph.ReadTexture(m_RG_LocalLightPDFTexture);
+        // The compositing pass samples both of these after the denoiser wrote them in this same pass.
+        renderGraph.ReadTexture(g_RG_RTXDISpecularOutput);
+        if (g_Renderer.m_EnableReSTIRDenoising)
+            renderGraph.ReadTexture(g_RG_RTXDIDiffuseOutput);
+        renderGraph.ReadBuffer(m_RG_NeighborOffsetsBuffer);
+        renderGraph.ReadBuffer(m_RG_GeometryInstanceToLight);
+        renderGraph.ReadBuffer(m_RG_LightDataBuffer);
+        renderGraph.ReadBuffer(m_RG_PrepareLightsTasks);
+        renderGraph.ReadBuffer(m_RG_PrimitiveLightBuffer);
 
         return true;
     }
@@ -2090,6 +2116,9 @@ public:
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(denoiserNRTex);
             ppFbDesc.setDepthAttachment(depthTex);
+            // The depth attachment exists for the stencil test only (both depth test and writes are off), so it is
+            // read, not written.
+            ppFbDesc.depthAttachment.isReadOnly = true;
             nvrhi::FramebufferHandle ppFb = device->createFramebuffer(ppFbDesc);
 
             // Surfaces Pass (Stencil == 1)
@@ -2627,6 +2656,8 @@ public:
             nvrhi::FramebufferDesc ppFbDesc;
             ppFbDesc.addColorAttachment(compositedTex);
             ppFbDesc.setDepthAttachment(depthTex);
+            // Stencil-only depth, as in the PostprocessGBuffer pass above.
+            ppFbDesc.depthAttachment.isReadOnly = true;
             nvrhi::FramebufferHandle ppFb = device->createFramebuffer(ppFbDesc);
 
             // Surfaces Pass (Stencil == 1)
