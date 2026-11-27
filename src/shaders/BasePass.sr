@@ -30,6 +30,11 @@ cbuffer BasePassConstants
     // Which list of cluster ids this draw writes into the visibility buffer, when the visibility path is on:
     // 0 = the opaque pass' own list, 1 = the two-pass culled list, 2 = the masked bucket. Unused by the raster path.
     uint m_VisListIndex;
+
+    // The G-buffer's size, which the resolve turns a clip position into pixels with. The raster path has no use for
+    // it and the resolve must not ask the texture, so it travels with the rest of the frame's view state.
+    uint m_Width;
+    uint m_Height;
 };
 
 srinput BasePassInputs
@@ -58,4 +63,8 @@ srinput BasePassInputs
     StructuredBuffer<uint>          ClusterStreamData;    // t15, the streaming arena: triangle and vertex words
     StructuredBuffer<ClusterGroup>  ClusterGroups;        // t16
     StructuredBuffer<ClusterGroupState> ClusterGroupStates; // t17, resolves a cluster's store through the group
+
+    // The two-pass culled list, which the visibility ids' list 1 names. Only the resolve reads it: the revived draw
+    // binds its list to ClusterJobs above, and the raster path never looks at this slot.
+    StructuredBuffer<ClusterJob>    ClusterJobsSecond;    // t19
 };

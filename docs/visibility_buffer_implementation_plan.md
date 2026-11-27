@@ -414,6 +414,83 @@ transposed 2×2 determinant or a missing `2/viewport` scale fails this immediate
    (one `R32_UINT` plus the six G-buffer formats).
 6. PIX `perform-single-playback` exit 0.
 
+**Result (measured 2026-11-26).** Phase 3 is in: the resolve decodes the id, rebuilds the interpolant from the
+triangle and writes all six G-buffer targets. As built:
+
+| Task | As built |
+|---|---|
+| P3.1 | no separate port: the barycentrics are the signed-area form in screen space, then `1/w` weighting, and they live in `VisibilityResolve.hlsl` because nothing else needs them |
+| P3.2 | `VisibilityResolve.sr` holds **only** the id texture, in `[space(1)]`; the pass binds `srrhi::BasePassInputs` at space 0, so the material evaluation is the raster path's own code on the same bindings |
+| P3.3 | decode → `ClusterJob` → `ClusterRecord` → `ClusterStreamBase` → 3 micro-indices → 3 vertices → `PrepareVSOut`'s per-vertex transform and tangent frame → 2D barycentrics → `1/w` weights |
+| P3.4 | the material block **moved** into `src/shaders/GBufferMaterial.hlsli` (`EvaluateGBufferMaterial`), so the raster path and the resolve are one implementation; the streamed sampler is used unchanged (implicit derivatives of the reconstructed uv, and it writes the sampler feedback residency needs) |
+| P3.5 | all six targets, including `GeoNormal` from the interpolated vertex normal and motion vectors through `ComputeMotionVectors` |
+| P3.6 | the debug-colour block came along with the move, so modes 1/2/8/12/13 and the streaming-mip view work in both paths |
+| P3.7 | scheduled and declared: id read, both job lists read, six G-buffer writes |
+
+Three things that had to be added to make that shape work, none of them in the plan:
+
+- **The resolve has to reach the job list the raster drew from.** A `ClusterRecord` does not name its instance, so
+  the id is a slot in the *raster's* list, and the list lives in the base pass' own transients. The pass that fills
+  a list now publishes it in `g_RG_VisClusterJobLists` (`BasePassCommon.h`, one handle per id list), and
+  `BasePass.sr` gained a `ClusterJobsSecond` slot for list 1 — the resolve reads both because one frame can hold
+  ids from both opaque lists.
+- **The G-buffer's size travels in `BasePassConstants`** (`m_Width`/`m_Height`): the resolve turns clip positions
+  into pixel centres and must not ask a texture for its dimensions.
+- **`EvaluateGBufferMaterial` cannot discard and keep `[earlydepthstencil]`**, which the streamed sampler needs, so
+  an empty id returns the zero target instead of discarding. That is the raster path's clear value, so the result is
+  the same; it also means this phase leaves masked geometry's pixels at zero, because the resolve writes every
+  pixel the ids do not cover. Phase 4 is what fixes that, and it is why Sponza's foliage/railings are missing with
+  the flag on today.
+
+Correctness (RenderDoc, `--debug 4`, same frame and pose, G-buffer dumps compared byte by byte):
+
+| Target | Cornell | Sponza (textured, grazing floor) |
+|---|---|---|
+| Albedo | **bit-identical** | 0.79 % differ, 53 % of them on an id boundary, worst byte delta 39 |
+| Normals | **bit-identical** | 2.32 % differ, mostly 1 LSB (24 k of 48 k), worst 255 at mip transitions |
+| GeoNormals | **bit-identical** | **bit-identical** |
+| ORM | **bit-identical** | 0.52 % differ, 76 % on an id boundary, worst 49 |
+| Emissive | **bit-identical** | **bit-identical** |
+| Motion | 17 % differ, ≤ 0.16 px (p99 = 0.037, p99.9 = 0.062) | same shape |
+
+The two bit-identical targets are the proof: `GeoNormal` is `EncodeNormal(normalize(interpolatedNormal))`, so the
+reconstructed vertex interpolation and the weights are exact; `Emissive` covers the untextured factor path. What
+differs on Sponza is the *texture sampling* — `Sample` with implicit derivatives on a surface seen at a grazing
+angle picks a neighbouring mip, which is the Class C difference the plan predicted, not an interpolation error.
+Motion vectors differ only where the motion itself is a fraction of a pixel, and by less than 0.16 px at worst.
+
+Gates: `--rhidebug` exit 0 with 0 asserts; `--rendergraph-strict-access` 0 asserts (only the two known
+"declares a write it never binds" warnings, both pre-existing shapes); `--rhidebug-gpu` on the minimal frame exit 0
+with the flag on and off; `--cluster-no-culling --cluster-stats-frame 5` still `(match)`; `--vis-buffer 0` still
+hashes `258CD73F…`; `--cluster-two-pass 1`, `--cluster-draw 0` and `--no-indirect --no-denoise --no-sky` all exit 0.
+`rdc-tools`: `verify` 0 problems; `hazards` the same 4 findings (2 distinct, HZB/SPD) as both earlier captures;
+`rootsig-check` notes only; `crosscheck` 110 targets, no target/format finding; `samplers` reports 0 samplers at the
+sampled events because Cornell has no textures — the textured case is the Sponza capture above.
+
+Performance (Cornell frame 60, normal schedule, PIX `smsp__inst_executed.sum` / `l1tex__t_sectors.sum`):
+
+| Pass | inst off | inst on | ratio | sectors off | sectors on | ratio |
+|---|---|---|---|---|---|---|
+| Opaque Renderer | 5,654,595 | 1,965,942 | **0.3477** | 2,619,148 | 1,290,560 | **0.4927** |
+| Visibility Resolve | — | 15,276,631 | new | — | 3,142,038 | new |
+| Sky / Bloom / Deferred / FSR3 TAA / TLAS / HDR | | | **1.0000** | | | 1.0000 |
+| SHARCRenderer | 4,287,961 | 4,291,454 | 1.0008 | 2,099,043 | 2,102,193 | 1.0015 |
+| HZBGeneratorPhase2 | 1,820,246 | 1,821,424 | 1.0006 | 1,289,997 | 1,288,172 | 0.9986 |
+| RTXDIRenderer | 260,186,968 | 267,438,590 | 1.0279 | 92,296,834 | 92,553,233 | 1.0028 |
+
+That `SHARCRenderer` is back to ×1.000 — after phase 2's ×0.40, when the normals it reads were the clear value — is
+the counter-side confirmation that the G-buffer is real again. RTXDI's instruction count moves between repeated
+identical runs by this much (its two "off" captures measured 260.2 M and 267.4 M), while its sector count is
+reproducible to 0.3 %, so its row is noise, not a regression.
+
+The raster's saving is 3.7 M instructions and 1.3 M sectors; the resolve costs 15.3 M and 3.1 M. On Cornell — a few
+dozen enormous triangles filling the screen, where the Filmic Worlds prior says a visibility buffer is a wash — the
+net is *more* work. That is the expected shape of the intermediate result, not the verdict: Phase 6 measures a dense
+scene (Bistro, animals), which is where the per-pixel win is supposed to appear.
+
+**Rollback:** delete `VisibilityResolveRenderer` from the schedule and the flag stays a no-op; the G-buffer material
+code is shared, so the raster path keeps working untouched.
+
 ---
 
 ## 8. Phase 4 — Masked bucket

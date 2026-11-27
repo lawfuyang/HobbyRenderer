@@ -17,6 +17,8 @@ static_assert(sizeof(srrhi::DispatchIndirectArguments) == 12,
 // grid, its mesh dispatch, and the grid of the pass that re-tests the per-cluster rejections.
 constexpr uint32_t kClusterIndirectSlotCount = 4;
 
+RGBufferHandle g_RG_VisClusterJobLists[kVisIdListCount];
+
 void BasePassResources::Initialize()
 {
     // Create pipeline statistics queries for double buffering

@@ -41,6 +41,18 @@ srrhi::VertexQuantized ReadClusterVertex(uint streamBase, srrhi::ClusterRecord c
     return vq;
 }
 
+// The visibility id, 32 bits, zero meaning "no surface":
+//     31..30  list      0 = the opaque pass' own list, 1 = the two-pass culled list, 2 = the masked bucket
+//     29..7   job + 1   1-based, so no visible job encodes as zero
+//     6..0    triangle  the triangle's index inside its cluster
+// The raster packs it and the resolve unpacks it, so the shifts live here, where neither side can change one
+// without the other.
+static const uint kVisListShift     = 30u;
+static const uint kVisJobShift      = 7u;
+static const uint kVisListMask      = 0x3u;
+static const uint kVisJobMask       = 0x7FFFFFu;
+static const uint kVisTriangleMask  = 0x7Fu;
+
 struct VSOut
 {
     float4 Position : SV_POSITION;

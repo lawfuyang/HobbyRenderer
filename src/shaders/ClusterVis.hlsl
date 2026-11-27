@@ -23,12 +23,6 @@
 static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobs    = srrhi::BasePassInputs::GetClusterJobs();
 static const StructuredBuffer<srrhi::ClusterRecord> g_ClusterRecords = srrhi::BasePassInputs::GetClusterRecords();
 
-static const uint kVisListShift     = 30u;
-static const uint kVisJobShift      = 7u;
-static const uint kVisListMask      = 0x3u;
-static const uint kVisJobMask       = 0x7FFFFFu;
-static const uint kVisTriangleMask  = 0x7Fu;
-
 struct ClusterVisPayload
 {
     uint m_InstanceIndex;

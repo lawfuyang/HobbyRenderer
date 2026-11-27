@@ -765,6 +765,8 @@ protected:
         cb.SetSunDirection(g_Renderer.m_Scene.GetSunDirection());
         cb.SetForcedTextureMip(g_Renderer.m_ForcedTextureMip);
         cb.SetVisListIndex(args.m_VisListIndex);
+        cb.SetWidth(w);
+        cb.SetHeight(h);
 
         commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
@@ -798,6 +800,8 @@ protected:
             : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterGroup)));
         inputs.SetClusterGroupStates(g_Renderer.m_GeometryStreaming ? g_Renderer.m_GeometryStreaming->GetGroupStateBuffer()
             : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterGroupState)));
+        // Only the resolve decodes a list-1 id, so the raster draws never read this slot.
+        inputs.SetClusterJobsSecond(common.GetDummyStructuredSRV(sizeof(srrhi::ClusterJob)));
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
@@ -1028,6 +1032,14 @@ public:
         if (g_Renderer.m_EnableClusterRendering)
         {
             WriteClusterBuffers(renderGraph);
+
+            // The resolve decodes an id against the list it was written from, so the lists this bucket fills have to
+            // be reachable from the pass that reads the ids. The masked bucket publishes list 2 itself.
+            if (g_Renderer.IsVisibilityBufferActive())
+            {
+                g_RG_VisClusterJobLists[0] = res.m_ClusterJobs;
+                g_RG_VisClusterJobLists[1] = res.m_ClusterJobsSecond;
+            }
         }
 
         // DeclareTexture implies a write. The pass also reads everything it wrote earlier in its own recording: the
