@@ -92,6 +92,18 @@ float3 GetStreamingMipDebugColor(uint minMipIndex, uint2 minMipDims, float2 uv)
     return GetStreamingMipLUTColor(mipLevel);
 }
 
+bool MaterialHasAlbedo(srrhi::MaterialConstants mat)
+{
+    return (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0;
+}
+
+// The alpha the masked bucket tests. Shared so that the raster path and the id raster cannot disagree about which
+// texels survive: a difference here is a fringe of missing or extra pixels along every silhouette.
+float AlbedoAlpha(srrhi::MaterialConstants mat, float4 albedoSample, bool hasAlbedo)
+{
+    return hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
+}
+
 GBufferOut EvaluateGBufferMaterial(VSOut input)
 {
     // Instance + material
@@ -99,7 +111,7 @@ GBufferOut EvaluateGBufferMaterial(VSOut input)
     srrhi::MaterialConstants mat = g_Materials[inst.m_MaterialIndex];
 
     // Texture sampling (only when present)
-    bool hasAlbedo = (mat.m_TextureFlags & srrhi::CommonConsts::TEXFLAG_ALBEDO) != 0;
+    bool hasAlbedo = MaterialHasAlbedo(mat);
     float4 albedoSample = hasAlbedo
         ? SampleBindlessStreamedTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
                                         mat.m_AlbedoMinMipIndex, mat.m_AlbedoFeedbackIndex, input.uv,
@@ -107,7 +119,7 @@ GBufferOut EvaluateGBufferMaterial(VSOut input)
         : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
 
     // Alpha test (discard) as early as possible
-    float alpha = hasAlbedo ? (albedoSample.w * mat.m_BaseColor.w) : mat.m_BaseColor.w;
+    float alpha = AlbedoAlpha(mat, albedoSample, hasAlbedo);
 
 #if defined(ALPHA_TEST)
     if (alpha < mat.m_AlphaCutoff)

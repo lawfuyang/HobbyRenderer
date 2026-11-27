@@ -246,15 +246,18 @@ static std::string ComputeKey(const ShaderMetadata& m)
 }
 
 // ============================================================
-// ComputeOutputFile — mirrors GetShaderOutputPath() in Renderer.cpp
+// ComputeOutputFile — mirrors ShaderMake's naming (ShaderMake.cpp, "Compiled shader name")
 // Returns a path relative to exeDir (e.g. "shaders/dxil/Bloom_Prefilter_PSMain.dxil")
 // ============================================================
 static std::string ComputeOutputFile(const ShaderMetadata& m)
 {
+    // ShaderMake inserts the output suffix (-s) first and the entry point after it, so a suffixed entry point is
+    // `<stem><suffix>_<entry>.dxil`. Composing it the other way round named a file that the compiler never writes,
+    // and the loader then read whatever stale binary happened to carry that name.
     std::string outName = m.sourcePath.stem().string();
+    outName += m.suffix;
     if (m.entryPoint != "main")
         outName += "_" + m.entryPoint;
-    outName += m.suffix;
 
     const fs::path parentDir = m.sourcePath.parent_path();
     if (!parentDir.empty() && parentDir != ".")

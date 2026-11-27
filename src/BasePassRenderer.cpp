@@ -677,11 +677,10 @@ protected:
 
         const uint32_t effectiveDebugMode = uint32_t(Config::Get().m_DebugMode);
 
-        // The visibility path replaces what the opaque cluster bucket's pixel shader writes, so it applies to a
-        // cluster draw of the opaque bucket only: the transparent bucket has no cluster path, and the masked
-        // bucket keeps the G-buffer until it gets its own id list.
+        // The visibility path replaces what a cluster bucket's pixel shader writes, for every bucket that has one: the
+        // transparent bucket keeps the vertex-shader path and the G-buffer.
         const bool bVisPath = g_Renderer.IsVisibilityBufferActive() && bDrawClusters &&
-            args.m_AlphaMode == srrhi::CommonConsts::ALPHA_MODE_OPAQUE;
+            args.m_AlphaMode != srrhi::CommonConsts::ALPHA_MODE_BLEND;
 
         const nvrhi::FramebufferHandle framebuffer = bVisPath ?
             g_Renderer.m_RHI->m_NvrhiDevice->createFramebuffer(
@@ -802,6 +801,7 @@ protected:
             : common.GetDummyStructuredSRV(sizeof(srrhi::ClusterGroupState)));
         // Only the resolve decodes a list-1 id, so the raster draws never read this slot.
         inputs.SetClusterJobsSecond(common.GetDummyStructuredSRV(sizeof(srrhi::ClusterJob)));
+        inputs.SetClusterJobsMasked(common.GetDummyStructuredSRV(sizeof(srrhi::ClusterJob)));
 
         nvrhi::BindingSetDesc bset = Renderer::CreateBindingSetDesc(inputs);
 
@@ -836,9 +836,12 @@ protected:
             nvrhi::MeshletPipelineDesc clusterPipelineDesc;
             // The visibility path swaps the whole cluster pipeline: its mesh shader emits the reduced vertex output
             // and the per-primitive ids, and its pixel shader writes the packed id instead of six G-buffer values.
+            // The masked bucket gets the variant that resolves its alpha test in the raster.
+            const uint32_t visPsID = bUseAlphaTest ? ShaderID::CLUSTERVIS_PSMAINALPHATEST_ALPHATEST_ALPHA_TEST_1
+                                                   : ShaderID::CLUSTERVIS_PSMAIN;
             clusterPipelineDesc.AS = g_Renderer.GetShaderHandle(bVisPath ? ShaderID::CLUSTERVIS_ASMAIN : ShaderID::CLUSTERBASEPASS_ASMAIN);
             clusterPipelineDesc.MS = g_Renderer.GetShaderHandle(bVisPath ? ShaderID::CLUSTERVIS_MSMAIN : ShaderID::CLUSTERBASEPASS_MSMAIN);
-            clusterPipelineDesc.PS = g_Renderer.GetShaderHandle(bVisPath ? ShaderID::CLUSTERVIS_PSMAIN : psID);
+            clusterPipelineDesc.PS = g_Renderer.GetShaderHandle(bVisPath ? visPsID : psID);
             clusterPipelineDesc.renderState = renderState;
             clusterPipelineDesc.bindingLayouts = { layout, g_Renderer.GetStaticTextureBindingLayout(), g_Renderer.GetStaticSamplerBindingLayout() };
 
@@ -1217,15 +1220,31 @@ public:
         if (g_Renderer.m_EnableClusterRendering)
         {
             WriteClusterBuffers(renderGraph);
+
+            // The masked bucket is id list 2. The resolve needs its own list, not the opaque one: a job index is a
+            // slot in the list its bucket filled.
+            if (g_Renderer.IsVisibilityBufferActive())
+            {
+                g_RG_VisClusterJobLists[2] = res.m_ClusterJobs;
+            }
         }
 
         renderGraph.WriteTexture(g_RG_DepthTexture);
-        renderGraph.WriteTexture(g_RG_GBufferAlbedo);
-        renderGraph.WriteTexture(g_RG_GBufferNormals);
-        renderGraph.WriteTexture(g_RG_GBufferGeoNormals);
-        renderGraph.WriteTexture(g_RG_GBufferORM);
-        renderGraph.WriteTexture(g_RG_GBufferEmissive);
-        renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
+        // The visibility path moves this bucket's output into the id buffer, so it binds no G-buffer target; the
+        // resolve declares those writes instead.
+        if (g_Renderer.IsVisibilityBufferActive())
+        {
+            renderGraph.WriteTexture(g_RG_VisibilityBuffer);
+        }
+        else
+        {
+            renderGraph.WriteTexture(g_RG_GBufferAlbedo);
+            renderGraph.WriteTexture(g_RG_GBufferNormals);
+            renderGraph.WriteTexture(g_RG_GBufferGeoNormals);
+            renderGraph.WriteTexture(g_RG_GBufferORM);
+            renderGraph.WriteTexture(g_RG_GBufferEmissive);
+            renderGraph.WriteTexture(g_RG_GBufferMotionVectors);
+        }
 
         return true;
     }
@@ -1254,12 +1273,20 @@ public:
 
         handles.depth = renderGraph.GetTexture(g_RG_DepthTexture, RGResourceAccessMode::Write);
         handles.hzb = g_Renderer.m_EnableOcclusionCulling ? renderGraph.GetTexture(g_RG_HZBTexture, RGResourceAccessMode::Read) : nullptr;
-        handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
-        handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
-        handles.geoNormals = renderGraph.GetTexture(g_RG_GBufferGeoNormals, RGResourceAccessMode::Write);
-        handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
-        handles.emissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
-        handles.motion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
+        if (g_Renderer.IsVisibilityBufferActive())
+        {
+            // The ids replace the G-buffer targets for this pass too, so it neither binds nor declares them.
+            handles.visibility = renderGraph.GetTexture(g_RG_VisibilityBuffer, RGResourceAccessMode::Write);
+        }
+        else
+        {
+            handles.albedo = renderGraph.GetTexture(g_RG_GBufferAlbedo, RGResourceAccessMode::Write);
+            handles.normals = renderGraph.GetTexture(g_RG_GBufferNormals, RGResourceAccessMode::Write);
+            handles.geoNormals = renderGraph.GetTexture(g_RG_GBufferGeoNormals, RGResourceAccessMode::Write);
+            handles.orm = renderGraph.GetTexture(g_RG_GBufferORM, RGResourceAccessMode::Write);
+            handles.emissive = renderGraph.GetTexture(g_RG_GBufferEmissive, RGResourceAccessMode::Write);
+            handles.motion = renderGraph.GetTexture(g_RG_GBufferMotionVectors, RGResourceAccessMode::Write);
+        }
 
         if (g_Renderer.m_EnableClusterRendering)
         {
@@ -1277,6 +1304,8 @@ public:
         args.m_BucketName = g_Renderer.m_EnableOcclusionCulling ? "Masked" : "Masked (No Occlusion)";
         args.m_CullingPhase = 0;
         args.m_AlphaMode = srrhi::CommonConsts::ALPHA_MODE_MASK;
+        // Its own id list: the masked job indices are slots in this bucket's own visible-cluster list.
+        args.m_VisListIndex = 2;
 
         PerformOcclusionCulling(commandList, args, handles);
 

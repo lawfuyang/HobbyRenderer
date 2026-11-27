@@ -24,6 +24,7 @@ static const Texture2D<uint> g_VisibilityBuffer = srrhi::VisibilityResolveInputs
 
 static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobs       = srrhi::BasePassInputs::GetClusterJobs();
 static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobsSecond = srrhi::BasePassInputs::GetClusterJobsSecond();
+static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobsMasked = srrhi::BasePassInputs::GetClusterJobsMasked();
 static const StructuredBuffer<srrhi::ClusterRecord> g_ClusterRecords    = srrhi::BasePassInputs::GetClusterRecords();
 
 // One attribute of the triangle, weighted by the perspective-correct barycentrics.
@@ -65,10 +66,25 @@ GBufferOut PSMain(FullScreenVertexOut input)
     const uint jobIndex = ((id >> kVisJobShift) & kVisJobMask) - 1u;
     const uint triangleIndex = id & kVisTriangleMask;
 
-    // The id names a slot in the list the raster drew from, and one frame can hold ids from both opaque lists.
+    // The id names a slot in the list its bucket drew from, and one frame can hold ids from all three.
     srrhi::ClusterJob job = g_ClusterJobs[jobIndex];
     if (idList == 1u)
         job = g_ClusterJobsSecond[jobIndex];
+    else if (idList == 2u)
+        job = g_ClusterJobsMasked[jobIndex];
+
+    // The per-triangle view is native here, and cheaper than the raster path's version: the id already carries the
+    // triangle's index inside its cluster, so this needs no second draw and no re-emitted corners. The colour is
+    // the one that view uses, so the two paths show the same picture.
+    if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_TRIANGLES)
+    {
+        GBufferOut triangleView = (GBufferOut)0;
+        triangleView.Albedo = float4(HashColor(triangleIndex * 0x9E3779B1u + job.m_ClusterIndex * 0x85EBCA77u), 1.0f);
+        triangleView.Normal = float2(0.5f, 0.5f);
+        triangleView.ORM = float2(0.5f, 0.0f);
+        triangleView.Emissive = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        return triangleView;
+    }
 
     const srrhi::ClusterRecord cluster = g_ClusterRecords[job.m_ClusterIndex];
     const srrhi::PerInstanceData instance = g_Instances[job.m_InstanceIndex];
@@ -126,9 +142,13 @@ GBufferOut PSMain(FullScreenVertexOut input)
                       float4(TransformNormal(v1.m_Tangent.xyz, instance.m_World), v1.m_Tangent.w),
                       float4(TransformNormal(v2.m_Tangent.xyz, instance.m_World), v2.m_Tangent.w), weights);
     o.worldPos = Blend(w0.xyz, w1.xyz, w2.xyz, weights);
-    o.prevWorldPos = Blend(MatrixMultiply(float4(v0.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
-                           MatrixMultiply(float4(v1.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
-                           MatrixMultiply(float4(v2.m_Pos, 1.0f), instance.m_PrevWorld).xyz, weights);
+    // The previous world position as the current one plus the blended per-vertex delta: a vertex whose transform has
+    // not changed contributes an exact zero, so a static object's motion is exactly zero, the same guarantee the
+    // raster path gets from interpolating two identical sets of vertex positions.
+    o.prevWorldPos = o.worldPos + Blend(
+        w0.xyz - MatrixMultiply(float4(v0.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
+        w1.xyz - MatrixMultiply(float4(v1.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
+        w2.xyz - MatrixMultiply(float4(v2.m_Pos, 1.0f), instance.m_PrevWorld).xyz, weights);
 
     // The values the raster path carried through its interpolant, so the instance, cluster and LOD debug views keep
     // working. A cluster has no meshlet, so that id stays invalid, exactly as the cluster mesh shader leaves it.

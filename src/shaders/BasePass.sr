@@ -67,4 +67,7 @@ srinput BasePassInputs
     // The two-pass culled list, which the visibility ids' list 1 names. Only the resolve reads it: the revived draw
     // binds its list to ClusterJobs above, and the raster path never looks at this slot.
     StructuredBuffer<ClusterJob>    ClusterJobsSecond;    // t19
+
+    // The masked bucket's list, which the visibility ids' list 2 names. Same arrangement as ClusterJobsSecond.
+    StructuredBuffer<ClusterJob>    ClusterJobsMasked;    // t20
 };

@@ -455,7 +455,13 @@ public:
 
     // The ids can only come from the cluster raster, so the switch alone is not enough: with the cluster draw off
     // there is nothing to write them, and the raster path stays the only one that can produce the G-buffer.
-    bool IsVisibilityBufferActive() const { return m_EnableVisibilityBuffer && m_EnableClusterRendering; }
+    // The culling-bounds view is the second exception: it is a line overlay into the G-buffer, which the id path
+    // does not carry, so that view keeps the raster path instead of drawing nothing.
+    bool IsVisibilityBufferActive() const
+    {
+        return m_EnableVisibilityBuffer && m_EnableClusterRendering &&
+            Config::Get().m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS;
+    }
 
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
     static constexpr uint32_t kClusterCounterReadbackBuffers = 2;

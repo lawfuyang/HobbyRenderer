@@ -1,4 +1,5 @@
 #include "BasePassCommon.hlsli"
+#include "GBufferMaterial.hlsli"
 
 /*
 	Visibility raster (docs/visibility_buffer_implementation_plan.md §6).
@@ -13,6 +14,11 @@
 
 	A mesh pipeline gives its pixel shader no SV_PrimitiveID, so the triangle index can only reach it through the
 	mesh shader's per-primitive output; the job index rides in the same struct.
+
+	The alpha-tested variant resolves the test here, in the raster, exactly as the G-buffer path does - the uv is the
+	rasteriser's own interpolant and the albedo sample goes through the same streamed sampler, so the two make the
+	same decision texel for texel. Deferring the test to the resolve would leave nothing behind the discarded texels
+	to shade, which is the hole this variant exists to prevent.
 
 	Packing, 32 bits, and zero means "no surface":
 	    31..30  list      0 = the opaque pass' own list, 1 = the two-pass culled pass, 2 = the masked bucket
@@ -112,10 +118,36 @@ void MSMain(
     }
 }
 
-uint PSMain(VisPrimitiveOut primitive) : SV_TARGET
+uint PackVisId(uint jobIndex, uint triangleIndex)
 {
     const uint idList = g_PerFrame.m_VisListIndex & kVisListMask;
-    const uint job = (primitive.m_JobIndex + 1u) & kVisJobMask;
-    const uint triangleIndex = primitive.m_TriangleIndex & kVisTriangleMask;
-    return (idList << kVisListShift) | (job << kVisJobShift) | triangleIndex;
+    const uint job = (jobIndex + 1u) & kVisJobMask;
+    return (idList << kVisListShift) | (job << kVisJobShift) | (triangleIndex & kVisTriangleMask);
+}
+
+uint PSMain(VisPrimitiveOut primitive) : SV_TARGET
+{
+    return PackVisId(primitive.m_JobIndex, primitive.m_TriangleIndex);
+}
+
+// The masked bucket: the same alpha test the G-buffer path runs, then the id. The uv is the rasteriser's interpolant
+// and the sample goes through the streamed sampler (which also writes the feedback the streaming needs), so the
+// survives/stays-empty decision matches the raster path's texel for texel.
+uint PSMainAlphaTest(VisPrimitiveOut primitive, VisVertexOut vertex) : SV_TARGET
+{
+    const srrhi::ClusterJob job = g_ClusterJobs[primitive.m_JobIndex];
+    const srrhi::PerInstanceData instance = g_Instances[job.m_InstanceIndex];
+    const srrhi::MaterialConstants mat = g_Materials[instance.m_MaterialIndex];
+
+    const bool hasAlbedo = MaterialHasAlbedo(mat);
+    const float4 albedoSample = hasAlbedo
+        ? SampleBindlessStreamedTexture(mat.m_AlbedoTextureIndex, mat.m_AlbedoSamplerIndex,
+                                        mat.m_AlbedoMinMipIndex, mat.m_AlbedoFeedbackIndex, vertex.uv,
+                                        g_PerFrame.m_ForcedTextureMip, uint2(mat.m_MinMipDimsX, mat.m_MinMipDimsY))
+        : float4(mat.m_BaseColor.xyz, mat.m_BaseColor.w);
+
+    if (AlbedoAlpha(mat, albedoSample, hasAlbedo) < mat.m_AlphaCutoff)
+        discard;
+
+    return PackVisId(primitive.m_JobIndex, primitive.m_TriangleIndex);
 }

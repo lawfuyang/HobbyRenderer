@@ -28,9 +28,10 @@ public:
 
         renderGraph.ReadTexture(g_RG_VisibilityBuffer);
 
-        // An id names a slot in the list the raster drew from, and one frame can hold ids from both opaque lists.
+        // An id names a slot in the list its bucket drew from, and one frame can hold ids from all three lists.
         renderGraph.ReadBuffer(g_RG_VisClusterJobLists[0]);
         renderGraph.ReadBuffer(g_RG_VisClusterJobLists[1]);
+        renderGraph.ReadBuffer(g_RG_VisClusterJobLists[2]);
 
         // The six writes the raster pass no longer performs. Everything else the pass binds is scene-owned, a
         // placeholder, or a buffer it fills itself (the per-frame block).
@@ -61,6 +62,7 @@ public:
 
         nvrhi::BufferHandle clusterJobs = renderGraph.GetBuffer(g_RG_VisClusterJobLists[0], RGResourceAccessMode::Read);
         nvrhi::BufferHandle clusterJobsSecond = renderGraph.GetBuffer(g_RG_VisClusterJobLists[1], RGResourceAccessMode::Read);
+        nvrhi::BufferHandle clusterJobsMasked = renderGraph.GetBuffer(g_RG_VisClusterJobLists[2], RGResourceAccessMode::Read);
 
         const uint32_t width = g_Renderer.m_RHI->m_SwapchainExtent.x;
         const uint32_t height = g_Renderer.m_RHI->m_SwapchainExtent.y;
@@ -103,6 +105,7 @@ public:
         inputs.SetClusterGroups(scene.m_ClusterGroupBuffer);
         inputs.SetClusterGroupStates(g_Renderer.m_GeometryStreaming->GetGroupStateBuffer());
         inputs.SetClusterJobsSecond(clusterJobsSecond);
+        inputs.SetClusterJobsMasked(clusterJobsMasked);
 
         // The ids, in their own register space.
         srrhi::VisibilityResolveInputs visInputs;

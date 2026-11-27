@@ -522,6 +522,74 @@ Goal: alpha-tested geometry enters the vis buffer with the test resolved in the 
    half-tested texels surviving.
 4. `samplers` on the new capture: same verdict as baseline.
 
+**Result (measured 2026-11-27).** The masked bucket is on the id path:
+
+| Task | As built |
+|---|---|
+| P4.1 | `PSMainAlphaTest` in `ClusterVis.hlsl` (`CLUSTERVIS_PSMAINALPHATEST_ALPHATEST_ALPHA_TEST_1`): it samples the albedo through the same streamed sampler with the rasteriser's own interpolated uv, so its decision matches the raster's texel for texel; the rule itself (`AlbedoAlpha`, `MaterialHasAlbedo`) moved into `GBufferMaterial.hlsli` so the two paths share it rather than agreeing by inspection |
+| P4.2 | `bVisPath` now covers every cluster bucket except the blended one, so the masked pass selects the same framebuffer and declares/fetches the id target instead of the G-buffer |
+| P4.3 | the masked pass publishes its list as `g_RG_VisClusterJobLists[2]`; the resolve binds it (`ClusterJobsMasked`, `t20`) and decodes list id 2 |
+| P4.4 | the alpha sample is a pixel-shader sample with implicit derivatives, which is what writes the sampler feedback the streaming needs — and it resolves the same mips the raster path does because the uv is the rasteriser's |
+
+**A build bug this phase found, and fixed.** Adding the alpha variant made the app assert `Failed to read shader
+file`: `ShaderIDsGenerator` composed the dxil path as `<stem>_<entry><suffix>.dxil` while ShaderMake writes
+`<stem><suffix>_<entry>.dxil`. For the two *pre-existing* suffixed entries the registered path happened to exist as a
+4-day-old file, so the masked raster shader and the **transparent bucket** had been loading stale binaries — which is
+why this phase's first Sponza run died instead of quietly shading with them. `ComputeOutputFile` in
+`ShaderIDsGenerator/src/main.cpp` now composes stem + suffix + entry. Keys and PIX marker names are unchanged; only
+the registered paths move, and they now name files the compiler actually writes.
+
+Validation:
+
+| Check | Result |
+|---|---|
+| id lists, Bistro frame 60 | 1,930,390 list-0 px + **143,210 list-2 px** — the masked bucket is in view and does resolve |
+| depth, vis on vs off (Bistro) | 11,720 px differ — **the same magnitude as raster vs raster (11,972)**, so it is this scene's streaming-driven alpha-test instability, not this path |
+| GeoNormals magnitude, vis vs raster (Bistro) | 200,079 px differ: 147 k by less than 1 % of the encoded value, 51 k at ~1 ulp, **219 above 0.2 — fewer large differences than the raster's own run-to-run floor (282)** |
+| albedo / normals / ORM (Bistro) | 19 % / 37 % / 2.7 % differ, concentrated on the **54 % of pixels that sit on a triangle boundary**, where screen-space barycentrics are precision-limited on sub-pixel triangles |
+| `--rhidebug`, `--rendergraph-strict-access` | exit 0, 0 asserts, the same two known warnings |
+| `--rhidebug-gpu`, minimal frame, Bistro, flag on and off | exit 0, 0 asserts |
+| `rdc-tools verify` / `hazards` | `problems: 0` / the same 4 findings (2 distinct, HZB-SPD) as every capture since Phase 0 |
+| PIX order (Bistro) | Opaque → `VisibilityRaster` → MaskedPass → `VisibilityResolve` → HZB → TLAS → SHARC → RTXDI → Deferred → Sky → Transparent → TAA → Bloom |
+
+The residue on Bistro is the conditioning of screen-space barycentrics on sub-pixel and sliver triangles, not a
+decode error: it is small (sub-1 % of the encoded value for 73 % of the differing pixels) and at the boundary
+density this scene has, the raster path's own two runs disagree at a fifth of the count. The ray/plane
+reconstruction Filmic Worlds uses is the better-conditioned alternative and belongs in the backlog.
+
+**Performance, three scenes** (PIX, frame 60, normal schedule, `smsp__inst_executed.sum` per top-level pass; control
+passes Deferred / Bloom / FSR3 TAA / HZB are ×1.0000 in all three, so each A/B is valid):
+
+| Scene | Opaque Renderer | MaskedPass | Visibility Resolve | Net instructions |
+|---|---|---|---|---|
+| Cornell — a few enormous triangles | 5.65 M → 1.97 M (×0.348) | — | 15.3 M | **+9.6 M** |
+| Bistro — dense props and foliage | 261.7 M → 15.5 M (**×0.059**) | 56.8 M → 12.9 M (×0.228) | 113.9 M | **−176.2 M** |
+| animals — 6 M vertices, dense clusters | 229.5 M → 91.5 M (×0.399) | — | 52.8 M | **−85.2 M** |
+
+Sectors move with the instructions: Bistro's opaque pass 80.7 M → 4.9 M and its masked pass 18.3 M → 7.0 M against a
+resolve of 35.2 M; animals 78.8 M → 30.3 M against 24.3 M. `TransparentPass` stays ×0.9995 and `SHARCRenderer`
+×0.999–1.038 — the latter is the only consumer that drifts, and it reads the normals whose small boundary differences
+are described above.
+
+That is the shape the analysis predicted: a wash on gigantic triangles, a 5× net win where triangles are dense, and a
+~2.4× net win on the high-vertex-count scene. Phase 6 turns this into the recorded verdict.
+
+**Debug views on the id path (verified 2026-11-27).** Every view renders, and each one was compared against the
+raster path's own picture (Cornell frame 20, full sweep; Bistro frame 20 for the views Cornell leaves blank):
+
+| View | Result |
+|---|---|
+| 1 instances, 2 meshlets, 8 LOD, 12 clusters, 13 cluster LOD | **bit-identical** — the id carries instance, cluster and LOD level, so `GetDebugColor` computes the same values |
+| 3 normals, 4 albedo, 5 roughness, 6 metallic, 7 emissive, 11 streaming mip | **bit-identical on Cornell**; on Bistro they inherit exactly the boundary-precision deltas measured above |
+| 9 motion vectors | bit-identical on Cornell; on Bistro it now matches the raster's noise floor instead of showing 19× more lit pixels. The reconstruction forms `prevWorldPos` as `worldPos + <blended per-vertex delta>`, so an object whose transform has not changed contributes an exact zero — the same guarantee the raster path gets from interpolating two identical vertex-position sets, and a property TAA relies on |
+| 14 culling bounds | **falls back to the raster path**: it is a line overlay into the G-buffer, which the id target cannot carry, so `IsVisibilityBufferActive()` excludes that view rather than drawing nothing |
+| 15 per-triangle | **native in the resolve, no overlay**: the id already carries the triangle's index, so the view needs no second draw and no re-emitted corners. It uses the overlay's colour function, and the two pictures agree except on 3.8 % of Bistro's pixels — where two triangles meet at equal depth and the winner is arbitrary |
+
+The framework is `bin\vis_modes.py`: it runs each view on both paths and compares the decoded PNGs pixel by pixel.
+Cornell's full sweep reports **0 differing pixels for all fourteen views**; `--no-auto-exposure
+--disable-sampler-feedback` are pinned, because an auto-exposure step turns a one-LSB albedo difference into a global
+brightness shift that hides what the view itself does.
+
 ---
 
 ## 9. Phase 5 — Correctness hardening
