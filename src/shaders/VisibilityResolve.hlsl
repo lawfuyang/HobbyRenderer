@@ -21,6 +21,8 @@
 */
 
 static const Texture2D<uint> g_VisibilityBuffer = srrhi::VisibilityResolveInputs::GetVisibilityBuffer();
+static const StructuredBuffer<srrhi::ClusterJob> g_ClusterJobsCompute =
+    srrhi::VisibilityResolveInputs::GetClusterJobsCompute();
 
 static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobs       = srrhi::BasePassInputs::GetClusterJobs();
 static const StructuredBuffer<srrhi::ClusterJob>    g_ClusterJobsSecond = srrhi::BasePassInputs::GetClusterJobsSecond();
@@ -66,12 +68,14 @@ GBufferOut PSMain(FullScreenVertexOut input)
     const uint jobIndex = ((id >> kVisJobShift) & kVisJobMask) - 1u;
     const uint triangleIndex = id & kVisTriangleMask;
 
-    // The id names a slot in the list its bucket drew from, and one frame can hold ids from all three.
+    // The id names a slot in the list its bucket drew from, and one frame can hold ids from all four.
     srrhi::ClusterJob job = g_ClusterJobs[jobIndex];
     if (idList == 1u)
         job = g_ClusterJobsSecond[jobIndex];
     else if (idList == 2u)
         job = g_ClusterJobsMasked[jobIndex];
+    else if (idList == 3u)
+        job = g_ClusterJobsCompute[jobIndex];
 
     // The per-triangle view is native here, and cheaper than the raster path's version: the id already carries the
     // triangle's index inside its cluster, so this needs no second draw and no re-emitted corners. The colour is

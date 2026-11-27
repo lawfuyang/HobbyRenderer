@@ -1,0 +1,8 @@
+// The compute software rasteriser's outputs. One stamp per covered sample; the args block is the draw the stamp
+// pass consumes and the kernel writes it, so the draw count never leaves the GPU.
+[space(1)]
+srinput ClusterComputeRasterInputs
+{
+    RWStructuredBuffer<uint4> Stamps;      // u0, (x, y, asuint(ndcZ), id)
+    RWStructuredBuffer<uint>  StampArgs;   // u1, [0] vertex count, [1] instance count, [2] start vertex, [3] dropped
+};

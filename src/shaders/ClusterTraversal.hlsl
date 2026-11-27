@@ -63,12 +63,19 @@ static RWStructuredBuffer<srrhi::ClusterStreamCounters>     g_StreamCounters   =
 // classification the raster seeds with.
 static RWStructuredBuffer<uint>                             g_InstanceLOD      = srrhi::ClusterTraversalInputs::GetInstanceLOD();
 
+// The compute software raster's list: clusters whose projected size is small enough that the hardware rasteriser
+// would spend more on helper lanes than the geometry is worth (ClusterComputeRaster.hlsl).
+static RWStructuredBuffer<srrhi::ClusterJob>                g_ClusterJobsCompute     = srrhi::ClusterTraversalInputs::GetClusterJobsCompute();
+static RWStructuredBuffer<uint>                             g_ClusterJobCountCompute = srrhi::ClusterTraversalInputs::GetClusterJobCountCompute();
+
 // The grid slots the traversal owns in ClusterIndirectArgs: the first pass' mesh dispatch, the second pass'
-// INIT grid, its mesh dispatch, and the grid of the pass that re-tests the per-cluster rejections.
+// INIT grid, its mesh dispatch, the grid of the pass that re-tests the per-cluster rejections, and the compute
+// software raster's dispatch (kClusterIndirectSlotComputeRaster in BasePassCommon.h).
 static const uint kIndirectSlotFirstPassMesh = 0;
 static const uint kIndirectSlotSecondPassInit = 1;
 static const uint kIndirectSlotSecondPassMesh = 2;
 static const uint kIndirectSlotRejectClusters = 3;
+static const uint kIndirectSlotComputeRaster = 4;
 
 static const uint kNoGroup = 0xFFFFFFFFu;
 static const uint kNoForcedLOD = 0xFFFFFFFFu;
@@ -246,13 +253,12 @@ void UnpackClusterSphere(uint clusterIndex, const srrhi::PerInstanceData instanc
 	centerView = MatrixMultiply(float4(centerWorld, 1.0f), g_Traversal.m_View).xyz;
 }
 
-// A cluster whose projected half-extent is under a pixel on both axes cannot land on a sample, so drawing it is
-// pure geometry cost. vk_lod_clusters calls this CULL_MIN_PIXEL_SIZE.
-//
-// Two cases are left alone: without an HZB the screen dimensions are zero and every cluster would test as
-// sub-pixel, and a sphere crossing the near plane does not have the tight conservative rect this reads.
-bool ClusterTooSmall(float3 centerView, float radiusWorld)
+// A cluster's projected half-extent in pixels. False when the rectangle is not trustworthy: without an HZB the
+// screen dimensions are zero, and a sphere crossing the near plane does not have the tight conservative rect this
+// reads. Both callers treat "not trustworthy" as "leave it on the mesh path".
+bool ClusterHalfExtentPixels(float3 centerView, float radiusWorld, out float2 halfExtent)
 {
+	halfExtent = 0.0f;
 	if (g_Traversal.m_HZBWidth == 0 || g_Traversal.m_HZBHeight == 0)
 		return false;
 
@@ -262,8 +268,33 @@ bool ClusterTooSmall(float3 centerView, float radiusWorld)
 	float4 aabb;
 	ProjectSphereView(centerView, radiusWorld, 0.1f, g_Traversal.m_P00, g_Traversal.m_P11, aabb);
 
-	const float2 halfExtent = (aabb.zw - aabb.xy) * 0.5f * float2(g_Traversal.m_HZBWidth, g_Traversal.m_HZBHeight);
+	halfExtent = (aabb.zw - aabb.xy) * 0.5f * float2(g_Traversal.m_HZBWidth, g_Traversal.m_HZBHeight);
+	return true;
+}
+
+// A cluster whose projected half-extent is under a pixel on both axes cannot land on a sample, so drawing it is
+// pure geometry cost. vk_lod_clusters calls this CULL_MIN_PIXEL_SIZE.
+bool ClusterTooSmall(float3 centerView, float radiusWorld)
+{
+	float2 halfExtent;
+	if (!ClusterHalfExtentPixels(centerView, radiusWorld, halfExtent))
+		return false;
+
 	return !any(halfExtent > kMinClusterPixelSize);
+}
+
+// Small enough that the hardware rasteriser would spend more on helper lanes and fixed-function setup than the
+// geometry is worth, so the compute software raster covers it (ClusterComputeRaster.hlsl).
+bool ClusterBelongsOnComputeRaster(float3 centerView, float radiusWorld)
+{
+	if (g_Traversal.m_ComputeRasterMaxPixels <= 0.0f)
+		return false;
+
+	float2 halfExtent;
+	if (!ClusterHalfExtentPixels(centerView, radiusWorld, halfExtent))
+		return false;
+
+	return max(halfExtent.x, halfExtent.y) <= g_Traversal.m_ComputeRasterMaxPixels;
 }
 
 bool ClusterOccluded(float3 centerView, float radiusWorld)
@@ -743,6 +774,37 @@ void ClusterTraversalGroups_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 			}
 		}
 
+		// Small on screen and past both culls: the mesh rasteriser would spend a full quad of pixel-shader
+		// invocations and a fixed-function setup on a triangle that covers at most a few samples, so the compute
+		// software raster covers it instead. The id still has to name a list, which is why the routed clusters
+		// get one of their own (id list 3) rather than a range of the mesh list: the two dispatches are then
+		// sized independently and neither has to know where the other starts.
+		if (g_Traversal.m_CullPass == 0 && ClusterBelongsOnComputeRaster(clusterCenterView, clusterRadiusWorld))
+		{
+			uint computeIndex;
+			InterlockedAdd(g_ClusterJobCountCompute[0], 1, computeIndex);
+			if (g_Traversal.m_MaxClusters != 0 && computeIndex >= g_Traversal.m_MaxClusters)
+			{
+				InterlockedAdd(g_Counters[0].m_ClusterCapped, 1);
+				continue;
+			}
+
+			srrhi::ClusterJob computeJob;
+			computeJob.m_InstanceIndex = groupRef.m_InstanceIndex;
+			computeJob.m_ClusterIndex = clusterIndex;
+			g_ClusterJobsCompute[computeIndex] = computeJob;
+
+			// A routed cluster is drawn, just not by the mesh shader, so it stays in the drawn tally the CPU cut
+			// reference is compared against; the separate counter is what a perf run reads.
+			InterlockedAdd(g_Counters[0].m_ClusterCount, 1);
+			InterlockedAdd(g_Counters[0].m_ComputeClusterCount, 1);
+			if (group.m_LODLevel != 0)
+				InterlockedAdd(g_Counters[0].m_CoarseClusterCount, 1);
+			if (bDiscrete)
+				InterlockedAdd(g_Counters[0].m_DiscreteClusterCount, 1);
+			continue;
+		}
+
 		// Every kept cluster takes its own slot. Reserving the whole group up front would leave the skipped
 		// clusters as holes, and the mesh dispatch draws the list by index. Each pass appends to its own list so
 		// the first pass' draw is still reading its own when the second pass fills its.
@@ -798,6 +860,18 @@ void ClusterBuildArgs_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 	g_ClusterIndirectArgs[slot].m_ThreadGroupCountX = clusterCount;
 	g_ClusterIndirectArgs[slot].m_ThreadGroupCountY = 1;
 	g_ClusterIndirectArgs[slot].m_ThreadGroupCountZ = 1;
+
+	if (g_Traversal.m_CullPass == 0)
+	{
+		// The compute software raster dispatches one group per routed cluster, so its grid is that list' length.
+		uint computeCount = g_ClusterJobCountCompute[0];
+		if (g_Traversal.m_MaxClusters != 0)
+			computeCount = min(computeCount, g_Traversal.m_MaxClusters);
+
+		g_ClusterIndirectArgs[kIndirectSlotComputeRaster].m_ThreadGroupCountX = computeCount;
+		g_ClusterIndirectArgs[kIndirectSlotComputeRaster].m_ThreadGroupCountY = 1;
+		g_ClusterIndirectArgs[kIndirectSlotComputeRaster].m_ThreadGroupCountZ = 1;
+	}
 
 	if (g_Traversal.m_CullPass != 0)
 		return;

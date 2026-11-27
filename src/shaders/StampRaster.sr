@@ -1,0 +1,17 @@
+// The stamp replay's inputs: the list the compute software raster appended, and the target size that turns a pixel
+// index back into clip space. Push constants, so the replay needs no other binding set (SPD.sr's arrangement).
+cbuffer StampConstants
+{
+    uint m_Width;
+    uint m_Height;
+    uint m_Pad0;
+    uint m_Pad1;
+};
+
+srinput StampRasterInputs
+{
+    [push_constant]
+    StampConstants m_Constants;
+
+    StructuredBuffer<uint4> Stamps;   // t0, (x, y, asuint(ndcZ), id)
+};

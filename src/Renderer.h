@@ -463,6 +463,14 @@ public:
             Config::Get().m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS;
     }
 
+    // The compute software raster writes ids too, so it rides on the same two conditions plus its own switch and a
+    // non-zero size threshold. The panel's checkbox owns it at runtime; --compute-raster sets its start value.
+    bool m_bComputeRaster = false;
+    bool IsComputeRasterActive() const
+    {
+        return IsVisibilityBufferActive() && m_bComputeRaster && Config::Get().m_ComputeRasterPixels > 0.0f;
+    }
+
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().
     static constexpr uint32_t kClusterCounterReadbackBuffers = 2;
     struct ClusterCountersReadback

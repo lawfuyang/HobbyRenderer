@@ -13,11 +13,13 @@ static_assert(sizeof(srrhi::DrawIndexedIndirectArguments) == 20,
 static_assert(sizeof(srrhi::DispatchIndirectArguments) == 12,
               "must match D3D12_DISPATCH_MESH_ARGUMENTS (the stock dispatchMeshIndirectSignature stride)");
 
-// ClusterTraversal.hlsl owns four grids in that buffer: the first pass' mesh dispatch, the second pass' INIT
-// grid, its mesh dispatch, and the grid of the pass that re-tests the per-cluster rejections.
-constexpr uint32_t kClusterIndirectSlotCount = 4;
+// ClusterTraversal.hlsl owns five grids in that buffer: the first pass' mesh dispatch, the second pass' INIT
+// grid, its mesh dispatch, the grid of the pass that re-tests the per-cluster rejections, and the compute software
+// raster's dispatch (kClusterIndirectSlotComputeRaster).
+constexpr uint32_t kClusterIndirectSlotCount = 5;
 
 RGBufferHandle g_RG_VisClusterJobLists[kVisIdListCount];
+RGBufferHandle g_RG_ClusterIndirectArgs;
 
 void BasePassResources::Initialize()
 {
@@ -224,6 +226,30 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
                 .setDebugName((std::string(rendererName) + "_ClusterJobCount").c_str());
 
             rg.DeclareBuffer(desc, m_ClusterJobCount);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(scene.m_MaxClusterJobCount[bucket] * sizeof(srrhi::ClusterJob))
+                .setStructStride(sizeof(srrhi::ClusterJob))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterJobsCompute").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterJobsCompute);
+        }
+
+        {
+            RGBufferDesc desc;
+            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
+                .setStructStride(sizeof(uint32_t))
+                .setCanHaveUAVs(true)
+                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                .setKeepInitialState(true)
+                .setDebugName((std::string(rendererName) + "_ClusterJobCountCompute").c_str());
+
+            rg.DeclareBuffer(desc, m_ClusterJobCountCompute);
         }
 
         {

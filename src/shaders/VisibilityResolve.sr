@@ -2,8 +2,13 @@
 //
 // Register space 1, because the pass also binds the base pass' own set at space 0: the resolve evaluates the same
 // material code on the same bindings the raster path does, and the id buffer is the one thing it adds.
+#include "Cluster.sr"
+
 [space(1)]
 srinput VisibilityResolveInputs
 {
     Texture2D<uint> VisibilityBuffer;   // t0, space 1
+    // The compute software raster's bucket: its ids are list 3, and it is a list of its own because the mesh
+    // dispatch and the compute dispatch are sized independently.
+    StructuredBuffer<ClusterJob> ClusterJobsCompute;   // t1, space 1
 };

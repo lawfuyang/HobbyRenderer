@@ -444,6 +444,9 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
                                                                      : Config::Get().m_ClusterDrawEnabled != 0;
     m_EnableVisibilityBuffer = Config::Get().m_EnableVisibilityBuffer;
     SDL_Log("[Init] Visibility buffer: %s", m_EnableVisibilityBuffer ? "on" : "off");
+    m_bComputeRaster = Config::Get().m_bComputeRaster;
+    SDL_Log("[Init] Compute software raster: %s (half-extent <= %.1f px)", m_bComputeRaster ? "on" : "off",
+            static_cast<double>(Config::Get().m_ComputeRasterPixels));
     if (Config::Get().m_bNoTAA)
         m_bTAAEnabled = false;
     if (Config::Get().m_OmmDebugPrimitive >= 0 || Config::Get().m_OmmDumpMipsPrimitive >= 0)
@@ -1665,6 +1668,10 @@ void Renderer::ScheduleAndRunAllRenderers()
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OpaqueRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("MaskedPassRenderer"));
+        // The software raster runs on clusters the cull set aside for it, and its stamp replay depth-tests
+        // against everything both base-pass buckets wrote, so it belongs after them and before the resolve.
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ComputeRasterRenderer"));
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ComputeStampRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("VisibilityResolveRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("HZBGeneratorPhase2"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("TLASRenderer"));
@@ -1698,6 +1705,9 @@ void Renderer::ScheduleDebugView()
     schedule("ClearRenderer");
     schedule("OpaqueRenderer");
     schedule("MaskedPassRenderer");
+    // The debug views read the same surfaces, so the software raster's clusters have to land in them too.
+    schedule("ComputeRasterRenderer");
+    schedule("ComputeStampRenderer");
     // The visibility path's albedo comes out of the resolve rather than the raster, so a view that reads the
     // G-buffer has to run it; it gates itself on the same switch the raster does.
     schedule("VisibilityResolveRenderer");
@@ -2740,10 +2750,11 @@ void Renderer::LogClusterCounters()
         const uint32_t drawnClusters = counters.m_ClusterCount + counters.m_SecondPassClusterCount;
 
         SDL_Log("[ClusterLod] %s traversal: %u instances, %u nodes, %u groups, %u clusters (%u capped, %u above "
-            "level 0), %u revived | rejected %u nodes, %u groups and %u clusters | CPU cut reference: %u clusters (%s)",
+            "level 0, %u on the compute raster), %u revived | rejected %u nodes, %u groups and %u clusters | CPU cut "
+            "reference: %u clusters (%s)",
             readback.m_BucketName, counters.m_InstanceCount, counters.m_NodeCount, counters.m_GroupCount,
             counters.m_ClusterCount, counters.m_ClusterCapped, counters.m_CoarseClusterCount,
-            counters.m_SecondPassClusterCount,
+            counters.m_ComputeClusterCount, counters.m_SecondPassClusterCount,
             counters.m_RejectNodeCount, counters.m_RejectGroupCount, counters.m_RejectClusterCount, reference,
             drawnClusters == reference ? "match" : "differs");
 

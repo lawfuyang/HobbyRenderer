@@ -757,8 +757,37 @@ Only what a measurement justifies.
 | Legacy meshlet path ids | keeps `--cluster-draw 0` comparable | needs a 64-bit id or a meshlet-index export |
 | Per-material indirect bins | Hable's divergence fix if the resolve is shown to be cache-bound | Filmic Worlds part 1 (material count → prefix sum → pixel list) |
 | Triangle filter / batch binning | The-Forge's alternative to per-cluster traversal on CPU/GPU | `TriangleFiltering.h.fsl`, `TriangleBinning.h.fsl`, `BatchCompaction.h.fsl` |
-| Compute software raster | removes raster fixed-function for sub-pixel triangles | `MeshletRasterize.hlsl`, `RasterCompute.hlsl`; requires SM 6.6 + `Int64ShaderOps` |
 | Software VRS / DVM / visibility TAA | the techniques that need this buffer to exist | Filmic Worlds parts 2–4 |
+
+**Compute software raster — built and measured (2026-11-27), kept off by default.**
+
+`--compute-raster <0|1>` (default 0) with `--compute-raster-pixels <px>` (default 2, projected half-extent).
+
+As built: the cull routes a cluster whose projected half-extent is at most the threshold into a list of its own
+(id list 3) instead of the mesh list, `ClusterComputeRaster.hlsl` walks that list one group per cluster, decodes the
+vertices exactly as `ClusterVis.hlsl` does, tests each pixel centre with edge functions and appends
+`(x, y, asuint(ndcZ), id)` per covered sample, and `StampRaster.hlsl` replays the list as one-pixel points through
+the hardware depth test with the base pass' stencil replace. Depth and stencil stay the rasteriser's, which is what
+avoids writing D24S8 from compute.
+
+Correctness (animals, `--debug 4`, static pose): at a threshold of 2 px, **681 of 71,838 clusters** are routed and
+the image is bit-identical to the mesh path's; at 8 px, **55,339 clusters (78 %)** are routed and exactly
+**1 pixel of 2,073,600** differs (by 240 — one boundary sample where the pixel-centre test and the rasteriser's
+coverage rule disagree). `--compute-raster 0` is bit-identical to the pre-change build on Cornell.
+
+Performance (engine GPU timers, 120 settled frames, PIX frame 90 for attribution):
+
+| Scene | off | 2 px (681 / 5.5 k clusters) | 8 px (78 % of clusters) |
+|---|---|---|---|
+| animals | 9.70 ms | 10.25 ms (+5.7 %) | 11.15 ms (+15.0 %) |
+| Bistro | 22.35 ms | 22.25 ms (−0.4 %) | 22.60 ms (+1.1 %) |
+
+PIX on animals at 2 px: `Compute Raster` 5.1 M instructions, `Compute Stamp` < 0.1 M, `Opaque Renderer` ×1.003, all
+markers ×1.003 — so the cost is not instructions, it is two extra synchronising passes plus a per-sample atomic and
+store, against a pixel shader that was already a single `uint` store. **There is nothing left to save on the raster
+side**: `Opaque Renderer` is 31 M of Bistro's 8,192 M instructions. Helper-lane waste only pays when the raster's
+pixel shader is expensive, and in this renderer the material work lives in the resolve. Kept as a measured control,
+not as a default; the 16 MB stamp list is allocated only when the switch is on.
 
 ---
 

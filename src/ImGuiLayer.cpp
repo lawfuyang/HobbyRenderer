@@ -232,6 +232,12 @@ void ImGuiLayer::UpdateFrame()
                     "Needs the cluster draw: with it off the raster path stays in use.\n"
                     "The resolve currently shows the ids as hash colours.");
 
+            ImGui::Checkbox("Compute software raster", &g_Renderer.m_bComputeRaster);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Software-rasterises clusters whose projected half-extent is at most --compute-raster-pixels\n"
+                    "in a compute pass, and replays their samples as points through the hardware depth test.\n"
+                    "Needs the visibility buffer: the ids it writes are what the resolve decodes.");
+
             ImGui::SeparatorText("Cluster traversal");
             ImGui::SliderFloat("LOD pixel error", &Config::Get().m_ClusterPixelError, 0.05f, 8.0f, "%.2f px");
             ImGui::SliderInt("Forced cluster LOD", &Config::Get().m_ClusterForcedLOD, -1, static_cast<int>(ClusterLod::kMaxLODLevels) - 1,

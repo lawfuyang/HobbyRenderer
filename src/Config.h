@@ -103,6 +103,22 @@ struct Config
     // A/B reference, as the fallback for the culling-bounds overlay, and as the path the meshlet draw uses.
     bool m_EnableVisibilityBuffer = true;
 
+    // Compute software raster for sub-pixel clusters: the cull routes clusters whose projected half-extent is at
+    // most m_ComputeRasterPixels into a list of their own, a compute kernel finds the samples each of their
+    // triangles covers, and one indirect point draw replays those samples through the hardware depth test. Needs
+    // the visibility buffer, because the ids it produces are what the resolve decodes.
+    //
+    // It works and it is correct (animals: 78 % of clusters routed, 1 pixel of 2,073,600 differs), but it loses:
+    // +5.7 % GPU time at a 2 px threshold and +15 % at 8 px, a wash (-0.4 %) on Bistro. The saving it exists for is
+    // helper-lane waste, and the id pass has almost none to waste - its pixel shader is one `uint` store, 31 M of
+    // Bistro's 8,192 M instructions - while the pass costs a dispatch, a barrier and a per-sample atomic. Software
+    // rasterisation only pays once the raster shades materials itself; here that work is in the resolve. Kept as a
+    // measured control, not as a candidate for the default.
+    bool m_bComputeRaster = false;
+    // Projected half-extent in pixels at or below which a cluster goes to the compute path. 0 disables the split and
+    // leaves every cluster on the mesh shader.
+    float m_ComputeRasterPixels = 2.0f;
+
     // TAA is on by default; a pixel-exact A/B needs it off, and the panel was the only way to turn it off.
     bool m_bNoTAA = false;
 

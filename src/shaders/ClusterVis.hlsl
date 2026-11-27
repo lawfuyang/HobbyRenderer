@@ -118,13 +118,6 @@ void MSMain(
     }
 }
 
-uint PackVisId(uint jobIndex, uint triangleIndex)
-{
-    const uint idList = g_PerFrame.m_VisListIndex & kVisListMask;
-    const uint job = (jobIndex + 1u) & kVisJobMask;
-    return (idList << kVisListShift) | (job << kVisJobShift) | (triangleIndex & kVisTriangleMask);
-}
-
 uint PSMain(VisPrimitiveOut primitive) : SV_TARGET
 {
     return PackVisId(primitive.m_JobIndex, primitive.m_TriangleIndex);

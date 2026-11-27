@@ -4,10 +4,16 @@
 #include "RenderGraph.h"
 
 // The visible-cluster list behind each visibility id list (the id packing is in BasePassCommon.hlsli): 0 = the
-// opaque pass' own list, 1 = its two-pass culled list, 2 = the masked bucket's. The pass that fills a list publishes
-// it here, so the resolve decodes an id against exactly the list the raster wrote it from.
-inline constexpr uint32_t kVisIdListCount = 3;
+// opaque pass' own list, 1 = its two-pass culled list, 2 = the masked bucket's, 3 = the clusters the cull routed to
+// the compute software raster. The pass that fills a list publishes it here, so the resolve decodes an id against
+// exactly the list the raster wrote it from.
+inline constexpr uint32_t kVisIdListCount = 4;
 extern RGBufferHandle g_RG_VisClusterJobLists[kVisIdListCount];
+
+// The cluster indirect-argument buffer, published for the compute software raster: its traversal slot holds the
+// number of routed clusters, which is exactly the group count that pass dispatches.
+inline constexpr uint32_t kClusterIndirectSlotComputeRaster = 4;
+extern RGBufferHandle g_RG_ClusterIndirectArgs;
 
 struct BasePassResources
 {
@@ -23,6 +29,10 @@ struct BasePassResources
     RGBufferHandle m_ClusterGroupQueueCount;
     RGBufferHandle m_ClusterJobs;
     RGBufferHandle m_ClusterJobCount;
+    // The clusters the cull routed to the compute software raster, in their own list so the mesh dispatch count
+    // and the compute dispatch count stay independent.
+    RGBufferHandle m_ClusterJobsCompute;
+    RGBufferHandle m_ClusterJobCountCompute;
     RGBufferHandle m_ClusterIndirectBuffer;
     RGBufferHandle m_ClusterCountersBuffer;
 

@@ -53,6 +53,13 @@ static const uint kVisListMask      = 0x3u;
 static const uint kVisJobMask       = 0x7FFFFFu;
 static const uint kVisTriangleMask  = 0x7Fu;
 
+uint PackVisId(uint jobIndex, uint triangleIndex)
+{
+    const uint idList = g_PerFrame.m_VisListIndex & kVisListMask;
+    const uint job = (jobIndex + 1u) & kVisJobMask;
+    return (idList << kVisListShift) | (job << kVisJobShift) | (triangleIndex & kVisTriangleMask);
+}
+
 struct VSOut
 {
     float4 Position : SV_POSITION;

@@ -134,6 +134,7 @@ struct ClusterCounters
     uint m_DiscreteInstanceCount;   // instances whose cut fits one LOD level, seeded at it
     uint m_DiscreteClusterCount;    // drawn clusters that came from such a discrete level
     uint m_RefCapped;       // node and group refs dropped because their queue was full
+    uint m_ComputeClusterCount;     // drawn clusters the cull routed to the compute software raster
 };
 
 // ── Geometry streaming ───────────────────────────────────────────────────────────────────────────────
@@ -216,7 +217,9 @@ cbuffer ClusterTraversalConstants
     // append past the end is dropped and counted instead of written.
     uint  m_MaxNodeRefs;
     uint  m_MaxGroupRefs;
-    uint  m_Pad0;
+    // Projected half-extent, in pixels, at or below which a cluster is routed to the compute software raster.
+    // 0 keeps every cluster on the mesh path.
+    float m_ComputeRasterMaxPixels;
     uint  m_Pad1;
 };
 
@@ -273,6 +276,11 @@ srinput ClusterTraversalInputs
     // The per-instance LOD the ray-tracing structures are patched with (TLASPatch.hlsl): the per-mesh LOD whose
     // error matches the level the cluster cut draws, so rasterisation and ray tracing agree on the geometry.
     RWStructuredBuffer<uint>           InstanceLOD;   // u22
+
+    // The compute software raster's own job list and its length: the first pass appends a routed cluster here
+    // instead of the mesh list, and ClusterBuildArgs turns the length into that pass' dispatch grid.
+    RWStructuredBuffer<ClusterJob>     ClusterJobsCompute;     // u23
+    RWStructuredBuffer<uint>           ClusterJobCountCompute; // u24
 };
 
 // The patch pass (ClusterStreaming.hlsl). One thread per entry of the patch list; the host only writes the

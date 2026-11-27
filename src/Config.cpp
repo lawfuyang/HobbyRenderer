@@ -173,6 +173,8 @@ void PrintHelp()
     SDL_Log("  --split-primitive-tris <n>       Split primitives into n-triangle parts (0 = never)");
     SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
     SDL_Log("  --vis-buffer <0|1>               Render the opaque/masked buckets into a visibility buffer (default 1)");
+    SDL_Log("  --compute-raster <0|1>           Software-rasterise sub-pixel clusters with a compute pass (default 0)");
+    SDL_Log("  --compute-raster-pixels <px>     Projected half-extent at or below which a cluster goes to that pass (default 2)");
     SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
     SDL_Log("  --restir-preset <name>           balanced (default, matches FullSample Medium), highperf, highquality");
     SDL_Log("  --restir-checkerboard <0|1>      Override the preset's checkerboard rendering (Balanced/highperf on, highquality off)");
@@ -245,6 +247,14 @@ void Config::ParseCommandLine(int argc, char* argv[])
         else if (args.Is("--vis-buffer"))
         {
             ReadBool(args, cfg.m_EnableVisibilityBuffer, "Visibility buffer");
+        }
+        else if (args.Is("--compute-raster"))
+        {
+            ReadBool(args, cfg.m_bComputeRaster, "Compute software raster");
+        }
+        else if (args.Is("--compute-raster-pixels"))
+        {
+            ReadFloat(args, cfg.m_ComputeRasterPixels, "Compute raster half-extent threshold (pixels)");
         }
         else if (args.Is("--cluster-stats"))
         {

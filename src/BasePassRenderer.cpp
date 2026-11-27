@@ -136,6 +136,8 @@ public:
         nvrhi::BufferHandle clusterGroupQueueCount;
         nvrhi::BufferHandle clusterJobs;
         nvrhi::BufferHandle clusterJobCount;
+        nvrhi::BufferHandle clusterJobsCompute;
+        nvrhi::BufferHandle clusterJobCountCompute;
         nvrhi::BufferHandle clusterIndirect;
         nvrhi::BufferHandle clusterCounters;
         nvrhi::BufferHandle clusterRejectNodes;
@@ -333,6 +335,7 @@ protected:
         renderGraph.WriteBuffer(res.m_ClusterGroupQueueCount);
         renderGraph.WriteBuffer(res.m_ClusterJobs);
         renderGraph.WriteBuffer(res.m_ClusterJobCount);
+        renderGraph.WriteBuffer(res.m_ClusterJobsCompute);
         renderGraph.WriteBuffer(res.m_ClusterIndirectBuffer);
         renderGraph.WriteBuffer(res.m_ClusterCountersBuffer);
         renderGraph.WriteBuffer(res.m_ClusterRejectNodes);
@@ -356,6 +359,8 @@ protected:
         handles.clusterGroupQueueCount = renderGraph.GetBuffer(res.m_ClusterGroupQueueCount, RGResourceAccessMode::Write);
         handles.clusterJobs = renderGraph.GetBuffer(res.m_ClusterJobs, RGResourceAccessMode::Write);
         handles.clusterJobCount = renderGraph.GetBuffer(res.m_ClusterJobCount, RGResourceAccessMode::Write);
+        handles.clusterJobsCompute = renderGraph.GetBuffer(res.m_ClusterJobsCompute, RGResourceAccessMode::Write);
+        handles.clusterJobCountCompute = renderGraph.GetBuffer(res.m_ClusterJobCountCompute, RGResourceAccessMode::Write);
         handles.clusterIndirect = renderGraph.GetBuffer(res.m_ClusterIndirectBuffer, RGResourceAccessMode::Write);
         handles.clusterCounters = renderGraph.GetBuffer(res.m_ClusterCountersBuffer, RGResourceAccessMode::Write);
         handles.clusterRejectNodes = renderGraph.GetBuffer(res.m_ClusterRejectNodes, RGResourceAccessMode::Write);
@@ -400,6 +405,9 @@ protected:
         inputs.SetGroupQueueCount(bSecondPass ? handles.clusterRejectGroupCount : handles.clusterGroupQueueCount);
         inputs.SetClusterJobs(handles.clusterJobs);
         inputs.SetClusterJobCount(handles.clusterJobCount);
+        // The compute software raster's list: the cull routes small clusters here instead of the mesh list.
+        inputs.SetClusterJobsCompute(handles.clusterJobsCompute);
+        inputs.SetClusterJobCountCompute(handles.clusterJobCountCompute);
         inputs.SetClusterIndirectArgs(handles.clusterIndirect);
         inputs.SetCounters(handles.clusterCounters);
         inputs.SetRejectNodes(handles.clusterRejectNodes);
@@ -482,6 +490,8 @@ protected:
             Scene::kClusterBucketOpaque : Scene::kClusterBucketMasked;
         data.SetMaxNodeRefs(scene.m_MaxClusterNodeCount[clusterBucket]);
         data.SetMaxGroupRefs(scene.m_MaxClusterGroupCount[clusterBucket]);
+        // The compute software raster's split: 0 leaves every cluster on the mesh path.
+        data.SetComputeRasterMaxPixels(g_Renderer.IsComputeRasterActive() ? Config::Get().m_ComputeRasterPixels : 0.0f);
         data.SetStreamingEnabled(streaming != nullptr ? 1u : 0u);
         data.SetFrameIndex(streaming != nullptr ? streaming->GetFrameIndex() : 0u);
         data.SetMaxLoads(streaming != nullptr ? streaming->GetMaxLoads() : 0u);
@@ -536,6 +546,7 @@ protected:
         }
         commandList->clearBufferUInt(handles.clusterGroupQueueCount, 0);
         commandList->clearBufferUInt(handles.clusterJobCount, 0);
+        commandList->clearBufferUInt(handles.clusterJobCountCompute, 0);
         commandList->clearBufferUInt(handles.clusterCounters, 0);
 
         // The reject machinery is only written and read when a second pass follows, and every one of these is a
@@ -1042,6 +1053,9 @@ public:
             {
                 g_RG_VisClusterJobLists[0] = res.m_ClusterJobs;
                 g_RG_VisClusterJobLists[1] = res.m_ClusterJobsSecond;
+                // The compute software raster's bucket, and the argument buffer whose fourth slot holds its grid.
+                g_RG_VisClusterJobLists[3] = res.m_ClusterJobsCompute;
+                g_RG_ClusterIndirectArgs = res.m_ClusterIndirectBuffer;
             }
         }
 
