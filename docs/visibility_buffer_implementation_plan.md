@@ -54,8 +54,9 @@ gradient estimate rather than the hardware's footprint.
 
 ### 1.3 Feature-flag discipline
 
-- One switch: `Config::m_EnableVisibilityBuffer`, `--vis-buffer <0|1>`, **default 0** until the
-  milestone that flips it explicitly says so.
+- One switch: `Config::m_EnableVisibilityBuffer`, `--vis-buffer <0|1>`, **default 1** since M5
+  (Phase 6 recorded the measurements the flip was taken on); `--vis-buffer 0` is the raster
+  reference and stays supported.
 - With the flag off, the build must be behaviourally identical to the commit before the work
   started (Class A, checked at every milestone).
 - Nothing in the vis path may become load-bearing for non-vis paths. If a shared function has to
@@ -691,6 +692,59 @@ Goal: a number, not an impression.
 - `docs/pix-capture-debugging.md` §10.1: the OMM A/B is the exact precedent for this analysis
   (controls ×1.000, absolute counters, ratio tables).
 
+**Result (measured 2026-11-27).** Verdict: **keep, on by default** (`m_EnableVisibilityBuffer = true`;
+`--vis-buffer 0` stays as the raster reference).
+
+Frame time, from the engine's own GPU timers (`--hitch-log 0.001`, 200 frames, the 120 samples after
+the warmup and the history fill), two runs per configuration so the spread is visible:
+
+| Scene | Raster (GPU ms) | Visibility (GPU ms) | Delta |
+|---|---|---|---|
+| Cornell — a few enormous triangles | 3.90 | 4.00 | +0.1 ms (+2.6 %) |
+| Bistro — dense props and foliage | 21.30 / 21.50 | 19.30 / 19.30 | **−2.1 ms (−9.4 %)** |
+| animals — 6 M vertices | 9.65 | 8.50 | **−1.2 ms (−11.9 %)** |
+
+PIX counters, frame 90, same static pose, per marker name (`bin\pix_passes.py` on
+`save-event-list --counters=gpu__* --counters=smsp__inst_executed.sum --counters=l1tex__t_sectors.sum
+--counters=dram__bytes.sum`):
+
+| Marker | Bistro off → on | animals off → on |
+|---|---|---|
+| `Opaque Renderer` | 544.7 M → 31.1 M (**×0.057**) | 458.9 M → 183.3 M (×0.399) |
+| — of which `DispatchMesh` | 509.8 M → 242.3 M (×0.475) | 289.7 M → 206.6 M (×0.713) |
+| — of which `VisibilityRaster` | — (raster) | — → 82.6 M |
+| `MaskedPass` | 342.1 M → 77.6 M (×0.227) | no masked geometry |
+| `Visibility Resolve` | — → 241.2 M (PS 120.6 M) | — → 109.6 M (PS 54.8 M) |
+| `FSR3 TAA` / `NRD Denoise` / `RTXDIRenderer` | ×1.001 / ×1.002 / ×1.000 | ×1.001 / ×1.000 / ×1.002 |
+| `Deferred` / `TransparentPass` / `HZBGeneratorPhase2` | ×1.000 / ×1.000 / ×0.999 | ×1.000 / — / ×1.001 |
+| l1tex sectors, all markers | ×0.945 | ×0.977 |
+| dram bytes, all markers | ×0.890 | ×0.994 |
+| instructions, all markers | **×0.864** | ×0.953 |
+
+The controls are ×1.000–1.002, so both captures describe the same frame and the A/B is valid. Marker
+totals nest (a marker contains its children), so the "all markers" rows are comparable between the two
+sides but are not a disjoint sum; the per-pass rows are the attribution.
+
+**The cost is VRAM, and it is not the id target.** The target itself is 1920×1080×4 = 8.3 MB, and
+Cornell's total moves by −1 MB and animals' by +0.6 MB. Bistro moves by **+368 MB**, and the hitch
+line says why: the resolve's sampling drives the tile streamer to keep **7,680 of 29,092 tiles (480 MB
+in 30 heaps)** resident where the raster keeps **1,792 (112 MB in 7 heaps)**. The growth tracks this
+scene's boundary-pixel share, which is where a full-screen pass' uv derivatives stop describing the
+triangle the pixel actually belongs to, so the LOD estimate asks for finer mips than the raster's
+hardware footprint does. It does not cost frame time (that fell), but it is the first thing to fix if
+a scene ever runs out of VRAM, and it is the concrete motivation for the analytic-derivative item in
+Phase 7.
+
+**P6.5 was answered without the readback it asked for.** The three numbers it wanted (pixels resolved,
+empty pixels, per-list counts) are exactly what a dump of the id target plus a per-list tally reports
+offline — `bin\vis_check.py lists` prints `{0: …, 1: …}` / list 2 over the 2,073,600 pixels of the
+frame (Bistro at `--camera-spin 90 --cluster-two-pass 1`: 1,274,346 list-0, **589,383** list-1,
+178,538 list-2, the rest background). The arity question does not need a counter at all: the resolve is
+one full-screen triangle sized to the swapchain extent, so its pixel-shader invocation count is the
+pixel count by construction — there is no quad to over-shade and no overdraw to repeat. A
+`--vis-buffer-stats-frame` no-op flag was therefore removed from `Config` rather than kept as a
+promise; there is no renderer-side readback to maintain.
+
 ---
 
 ## 11. Phase 7 — Optional backlog
@@ -699,6 +753,7 @@ Only what a measurement justifies.
 
 | Item | Why it exists | Reference |
 |---|---|---|
+| Analytic per-triangle derivatives | the resolve's uv derivatives come from screen-space differences, which stop describing the pixel's triangle at a boundary; on Bistro that shows up as **4.3× the resident tile set (112 → 480 MB)** and as the residual image difference | Filmic Worlds part 3 (ray/plane reconstruction), Schied & Dachsbacher DAIS |
 | Legacy meshlet path ids | keeps `--cluster-draw 0` comparable | needs a 64-bit id or a meshlet-index export |
 | Per-material indirect bins | Hable's divergence fix if the resolve is shown to be cache-bound | Filmic Worlds part 1 (material count → prefix sum → pixel list) |
 | Triangle filter / batch binning | The-Forge's alternative to per-cluster traversal on CPU/GPU | `TriangleFiltering.h.fsl`, `TriangleBinning.h.fsl`, `BatchCompaction.h.fsl` |

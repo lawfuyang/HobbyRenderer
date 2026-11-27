@@ -771,10 +771,13 @@ void ResolvePixel(uint2 pixel, out GBufferOut o, out bool bValid)
 
 ### 6.5 Config and UI
 
-- `Config::m_EnableVisibilityBuffer` + `--vis-buffer <0|1>`, default 0 until gates pass.
+- `Config::m_EnableVisibilityBuffer` + `--vis-buffer <0|1>`, **default 1** (see §10 for the
+  measurements the default was taken on); `--vis-buffer 0` is the raster reference.
 - ImGui checkbox next to "Use Meshlet Rendering" / "Enable Cluster LOD".
-- A `--vis-buffer-stats-frame <n>` readback (pixels shaded, ids decoded, empty-pixel ratio) in
-  the spirit of the existing cluster counter panel.
+- The per-list id counts, the empty-pixel count and the arity check that this section originally
+  assigned to a `--vis-buffer-stats-frame` readback are read from a capture instead: the id target
+  is dumped by `replay_dump textures` and tallied by list, and the resolve's invocation count is a
+  PIX counter. No renderer-side readback was added.
 
 ---
 
@@ -844,7 +847,7 @@ result being good — the plumbing is the same either way.
 
 ### Phase 0 — plumbing (no behaviour change)
 
-1. `Config`: `m_EnableVisibilityBuffer` (default `false`), `--vis-buffer <0|1>`, help text.
+1. `Config`: `m_EnableVisibilityBuffer` (shipped as default `true`, §10), `--vis-buffer <0|1>`, help text.
 2. `CommonRenderers.cpp`: declare `g_RG_VisibilityBuffer` (`R32_UINT`, `isRenderTarget`,
    `keepInitialState = true`), clear it to 0 in `ClearRenderer::Render` with `clearTextureUInt`.
 3. `BasePassCommon.h`: add the resolve's resource handles to `BasePassResources`, or a small
@@ -993,6 +996,29 @@ Open questions for the maintainer (also listed in §2.3):
    no re-emitted corners, and it uses the overlay's colour function (they agree except where two
    triangles meet at equal depth). The culling-bounds overlay is the one view that stays on the raster
    path, because a line overlay cannot travel in an id target.
+
+**Decision: on by default (2026-11-27).** `--vis-buffer` now starts at 1; `--vis-buffer 0` is the
+raster reference and stays supported.
+
+| Measured (PIX frame 90 / engine GPU timers, 120 frames after warmup) | Cornell | Bistro | animals |
+|---|---|---|---|
+| GPU ms, raster → visibility | 3.90 → 4.00 | **21.30 → 19.30** | **9.65 → 8.50** |
+| PIX instructions, all markers | — | **×0.864** | ×0.953 |
+| `Opaque Renderer` instructions | — | 544.7 M → 31.1 M (×0.057) | 458.9 M → 183.3 M (×0.399) |
+| `MaskedPass` instructions | — | 342.1 M → 77.6 M (×0.227) | — (no masked geometry) |
+| `Visibility Resolve` | — | 241.2 M (120.6 M in the PS) | 109.6 M (54.8 M in the PS) |
+| l1tex sectors / dram bytes | — | ×0.945 / ×0.890 | ×0.977 / ×0.994 |
+| VRAM | −1 MB | **+368 MB** | +0.6 MB |
+
+Control passes are ×1.000–1.002 on both scenes (RTXDI, NRD/REBLUR, FSR3 TAA, Deferred, transparent,
+HZB, bloom), so the A/B compares the same frame twice. The Cornell wash and the two wins are the shape
+§7.4 predicted: the pass pays a fixed cost and wins once triangles stop being huge.
+
+The Bistro VRAM increase is **not** the id target (1920×1080×4 = 8.3 MB): the resolve's sampling drives
+the tile streamer to keep 7,680 of 29,092 tiles resident (480 MB in 30 heaps) where the raster keeps
+1,792 (112 MB in 7 heaps), a 4.3× growth that tracks the boundary-pixel share this scene has. Isolating
+the resolve's LOD estimator is the first backlog item it implies; the GPU time already improves despite
+it.
 
 ---
 

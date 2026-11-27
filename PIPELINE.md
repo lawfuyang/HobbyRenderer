@@ -109,6 +109,7 @@ dependencies (the render graph resolves the rest):
 | `TLASRenderer` | Builds/updates the top-level acceleration structure |
 | `OpaqueRenderer` | Base pass: GPU culling + mesh/meshlet raster → G-Buffer |
 | `MaskedPassRenderer` | Alpha-tested geometry (2nd culling phase) |
+| `VisibilityResolveRenderer` | Decodes the cluster ids the two base-pass buckets wrote (`R32_UINT`, one id per pixel) and writes all six G-buffer targets from them; active by default, `--vis-buffer 0` keeps the raster G-buffer path |
 | `HZBGeneratorPhase2` | Generates hierarchical Z-buffer for occlusion culling |
 | `RTXDIRenderer` | ReSTIR DI + GI sampling & resampling |
 | `SHARCRenderer` | SHARC cache-based indirect lighting |

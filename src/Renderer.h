@@ -451,7 +451,7 @@ public:
 
     // Visibility buffer: the opaque/masked cluster buckets write ids into this target and a resolve turns them back
     // into the G-buffer. The panel's checkbox owns this at runtime; --vis-buffer sets its start value.
-    bool m_EnableVisibilityBuffer = false;
+    bool m_EnableVisibilityBuffer = true;
 
     // The ids can only come from the cluster raster, so the switch alone is not enough: with the cluster draw off
     // there is nothing to write them, and the raster path stays the only one that can produce the G-buffer.
