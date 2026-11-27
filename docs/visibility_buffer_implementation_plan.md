@@ -625,6 +625,40 @@ Goal: everything that is *adjacent* to the change is proven untouched.
 - OMM note: a `.rdc` cannot show OMM at all (DXR 1.1 clamp); if OMM is in the run, validate it in
   PIX or with `--enable-omm` logs, not RenderDoc.
 
+**Result (measured 2026-11-27).**
+
+| Task | Result |
+|---|---|
+| P5.1 | the revived list resolves: `--camera-spin 20 --cluster-two-pass 1` on Bistro carries **201 list-1 pixels**; at `--camera-spin 90` it is **589,383 list-1 pixels (28 % of the frame)** beside 1,274,346 list-0 and 178,538 list-2, and the resolved picture is a correct, fully textured Bistro view — a mis-decode over 28 % of the frame would be unmissable |
+| P5.2 | **the plan's `--stream-budget 16` command is not a usable gate** (see below). At a budget the scene streams in, the budget changes nothing about the picture: `--stream-budget 1024` and the default budget give the **same** cross-path difference (47.9 % of pixels differ, 22k above 8, 682 above 32) with geometry fully resident on both paths (5,378 of 5,378 groups) — that residue is the Phase 3/4 boundary-precision difference, not streaming |
+| P5.3 | static pose, `--no-auto-exposure`, TAA on, Bistro frame 60: raster-vs-raster **14.3 % of pixels differ** (worst 101) — the composited output is not bit-reproducible — while raster-vs-vis differs on 55.5 % but only **11,667 pixels above 8** and **471 above 32 (0.02 %)**. The spread follows the G-buffer's boundary deltas through the history, not a ghosting change, and the motion view is exact where the transform is unchanged (P4) |
+| P5.4 | `rdc_analysis hazards` on a deterministic full-schedule pair gives **10 findings (5 loop, 5 state) on both paths, the same five resources** (HZB/SPD ×2, RTXDI local + env light PDF, OpaqueColorTexture ×2) — no new class, and none on the visibility buffer. `verify`: `problems: 0` |
+| P5.5 | `--vis-buffer 1` with `--cluster 0`, `--cluster-draw 0`, `--no-indirect --no-denoise --no-sky`, `--rendergraph-own-barriers`, `--execute-per-pass`: every run exits 0 without an assert |
+| P5.6 | `rdc_analysis memory` on the spinning capture: `VisibilityBuffer_RG` lives `#20792..#21264` and **shares its heap offset with `NRD Transient [0]`**, i.e. the render graph already hands its memory to a later pass in the same frame — it is a one-frame transient and cannot be read stale |
+| P5.7 | the analysis document's four open questions are answered below |
+
+**Validation sweep.** All six scenes with `--vis-buffer 1 --rhidebug --rendergraph-strict-access`, frame 10: Cornell 4 s,
+Sponza 9 s, bunny 13 s, DragonAttenuation 18 s, Bistro 27 s, animals 38 s — **every run exit 0 with 0 asserts and no
+`D3D12 ERROR` or render-graph error**, OMM off the raster path in all of them (micromaps are attached to the ray-tracing
+BLAS only, so both paths alpha-test exactly alike).
+
+**Three harness constraints this phase established.**
+
+1. **`--camera-spin` is not reproducible.** Three identical `--camera-spin 20` runs produced three different screenshot
+   hashes, and two identical RenderDoc captures differ in depth on **every** pixel (worst |Δz| 0.213). The step is a
+   fixed 1/60 s but the number of steps before the capture is not. Consequence: **no cross-path image A/B under motion.**
+   Static poses for A/B, motion only for "does it look right".
+2. **A 16 MB streaming budget cannot be measured, only diagnosed.** Bistro never reaches the screenshot frame at 16,
+   64, 128 or 256 MB — not even with `--debug 4`/`--debug 5`, and not on the **raster** path, so it is the texturing
+   side starving, not this change. animals settles with **868 of 10,917 groups resident** and drops every further
+   request; Sponza settles at **126 of 751**. In those states the scene does not even reproduce itself: raster-vs-raster
+   differs on 44–50 % of pixels (worst 255) because residency, not the path, decides what is drawn. The id path is not
+   the unstable one — its own run-to-run spread is **≤ 4/255** on Sponza where the raster's is 77.
+3. **Pin `--no-auto-exposure` for every numeric image comparison.** The same Bistro pair measured 47.9 % with the
+   exposure pinned and 90.3 % without, because the exposure adaptation is a temporal filter that has not converged by
+   frame 20: a one-LSB change in the G-buffer becomes a global brightness shift, and the shift is different on every
+   run. The raster's own floor rises from 3.7–5.5 % (pinned) to 31 % (unpinned) for the same reason.
+
 ---
 
 ## 10. Phase 6 — Performance verdict

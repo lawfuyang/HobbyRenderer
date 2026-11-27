@@ -978,6 +978,22 @@ Open questions for the maintainer (also listed in §2.3):
 3. Is a non-bit-identical image acceptable for the gate, with a documented pixel budget?
 4. Should the resolve own the per-triangle debug view (mode 15) and retire the overlay dispatch?
 
+**Answered as built (2026-11-27).**
+
+1. **Opaque and masked together.** The masked bucket resolves its own alpha test in the raster pass
+   (`PSMainAlphaTest`), so it writes ids like the opaque bucket and needs only a third job list — the
+   extra cost this question was weighing did not materialise.
+2. **Not supported.** `--vis-buffer` applies to the cluster path only; the meshlet path keeps its
+   forward G-buffer and is the A/B reference.
+3. **Yes.** Cornell is bit-identical across all fourteen debug views, so the gate is exact there; on
+   Bistro the differences are the precision of screen-space barycentrics on sub-pixel triangles
+   (sub-1 % of the encoded value for 73 % of differing pixels), measured against the raster path's own
+   run-to-run floor rather than against zero.
+4. **Yes, it does.** The id carries the triangle index, so the per-triangle view needs no overlay and
+   no re-emitted corners, and it uses the overlay's colour function (they agree except where two
+   triangles meet at equal depth). The culling-bounds overlay is the one view that stays on the raster
+   path, because a line overlay cannot travel in an id target.
+
 ---
 
 ## 11. References
