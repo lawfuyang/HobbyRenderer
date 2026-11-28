@@ -28,16 +28,11 @@ struct GBufferOut
     float2 GeoNormal     : SV_TARGET5;  // World-space geometric normal (no normal map), oct-encoded
 };
 
-float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIndex, uint clusterID)
+float3 GetDebugColor(uint debugMode, uint instanceID, uint lodIndex, uint clusterID)
 {
     if (debugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES)
     {
         return HashColor(instanceID);
-    }
-    else if (debugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS)
-    {
-        // Color by meshlet ID
-        return HashColor(meshletID);
     }
     else if (debugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS)
     {
@@ -65,7 +60,7 @@ float3 GetDebugColor(uint debugMode, uint instanceID, uint meshletID, uint lodIn
             float3(0.0, 0.5, 0.0)  // 7: Dark Green
         };
 
-        // A cluster's LOD level rides in lodIndex and can go past the eight meshlet LODs, so wrap instead of
+        // A cluster's LOD level rides in lodIndex and can go past the eight raster LODs, so wrap instead of
         // reading past the table.
         return lodColors[lodIndex % srrhi::CommonConsts::MAX_LOD_COUNT];
     }
@@ -197,12 +192,11 @@ GBufferOut EvaluateGBufferMaterial(VSOut input)
     if (g_PerFrame.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE)
     {
         if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES ||
-            g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
         {
-            float3 debugColor = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex, input.clusterID);
+            float3 debugColor = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.lodIndex, input.clusterID);
             output.Albedo = float4(debugColor, alpha);
             output.Normal = float2(0.5f, 0.5f); // Default normal
             output.ORM = float2(0.5f, 0.0f); // Default ORM

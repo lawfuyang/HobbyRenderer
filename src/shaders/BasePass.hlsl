@@ -1,4 +1,4 @@
-﻿#include "Culling.hlsli"
+#include "Culling.hlsli"
 #include "Bindless.hlsli"
 #include "CommonLighting.hlsli"
 #include "Atmosphere.hlsli"
@@ -8,10 +8,6 @@
 
 #include "srrhi/hlsl/BasePass.hlsli"
 
-static const StructuredBuffer<srrhi::Meshlet>           g_Meshlets         = srrhi::BasePassInputs::GetMeshlets();
-static const StructuredBuffer<uint>                     g_MeshletVertices  = srrhi::BasePassInputs::GetMeshletVertices();
-static const StructuredBuffer<uint>                     g_MeshletTriangles = srrhi::BasePassInputs::GetMeshletTriangles();
-static const StructuredBuffer<srrhi::MeshletJob>        g_MeshletJobs      = srrhi::BasePassInputs::GetMeshletJobs();
 static const StructuredBuffer<srrhi::MeshData>          g_MeshData         = srrhi::BasePassInputs::GetMeshData();
 static const Texture2D<float>                           g_HZB              = srrhi::BasePassInputs::GetHZB();
 static const RaytracingAccelerationStructure            g_SceneAS          = srrhi::BasePassInputs::GetSceneAS();
@@ -26,109 +22,7 @@ VSOut VSMain(uint vertexID : SV_VertexID, uint instanceID : SV_StartInstanceLoca
 {
     srrhi::PerInstanceData inst = g_Instances[instanceID];
     srrhi::Vertex v = UnpackVertex(g_Vertices[vertexID]);
-    return PrepareVSOut(v, inst, instanceID, 0xFFFFFFFF, 0);
-}
-
-struct MeshPayload
-{
-    uint m_InstanceIndex;
-    uint m_LODIndex;
-    uint m_MeshletIndices[srrhi::CommonConsts::kThreadsPerGroup];
-};
-
-groupshared MeshPayload s_Payload;
-
-[numthreads(srrhi::CommonConsts::kThreadsPerGroup, 1, 1)]
-void ASMain(
-    uint3 dispatchThreadID : SV_DispatchThreadID,
-    uint3 groupThreadID : SV_GroupThreadID,
-    uint3 groupId : SV_GroupID,
-    uint groupIndex : SV_GroupIndex
-)
-{
-    // The dispatch launches one threadgroup per job in the flat job list, so the dispatch group
-    // id is the job index - no per-command root constant is involved.
-    srrhi::MeshletJob      job = g_MeshletJobs[groupId.x];
-    uint instanceIndex, lodIndex, meshletIndex, absoluteMeshletIndex;
-    srrhi::PerInstanceData inst;
-    srrhi::Meshlet         meshlet;
-
-    AS_WritePayloadHeader(s_Payload, job.m_InstanceIndex, job.m_LODIndex, groupThreadID);
-
-    bool bVisible = AS_DecodeMeshletIndex(
-        job, g_Instances, g_MeshData, groupThreadID, groupId,
-        instanceIndex, lodIndex, meshletIndex, absoluteMeshletIndex,
-        inst, meshlet, g_Meshlets);
-
-    if (bVisible)
-    {
-        float3 meshletCenter;
-        float  meshletRadius;
-        UnpackMeshletBV(meshlet, meshletCenter, meshletRadius);
-
-        float4 worldCenter = MatrixMultiply(float4(meshletCenter, 1.0f), inst.m_World);
-        float3 viewCenter  = MatrixMultiply(worldCenter, g_PerFrame.m_View.m_MatWorldToView).xyz;
-        float  worldRadius = meshletRadius * GetMaxScale(inst.m_World);
-
-        if (g_PerFrame.m_EnableFrustumCulling)
-            bVisible = FrustumSphereTest(viewCenter, worldRadius, g_PerFrame.m_FrustumPlanes);
-
-        if (bVisible && g_PerFrame.m_EnableOcclusionCulling)
-        {
-            SamplerState minSam = SamplerDescriptorHeap[NonUniformResourceIndex(srrhi::CommonConsts::SAMPLER_MIN_REDUCTION_INDEX)];
-            bVisible &= OcclusionSphereTest(viewCenter, worldRadius, uint2(g_PerFrame.m_HZBWidth, g_PerFrame.m_HZBHeight), g_PerFrame.m_P00, g_PerFrame.m_P11, g_HZB, minSam);
-        }
-
-        if (bVisible && g_PerFrame.m_EnableConeCulling)
-        {
-            uint   packedCone = meshlet.m_ConeAxisAndCutoff;
-            float3 coneAxis;
-            coneAxis.x = (float(packedCone & 0xFF) / 255.0f) * 2.0f - 1.0f;
-            coneAxis.y = (float((packedCone >> 8) & 0xFF) / 255.0f) * 2.0f - 1.0f;
-            coneAxis.z = (float((packedCone >> 16) & 0xFF) / 255.0f) * 2.0f - 1.0f;
-            float coneCutoff = float((packedCone >> 24) & 0xFF) / 254.0f;
-
-            float3 worldConeAxis = TransformNormal(coneAxis, inst.m_World);
-            float3 dir = worldCenter.xyz - g_PerFrame.m_CullingCameraPos.xyz;
-            if (dot(worldConeAxis, dir) >= coneCutoff * length(dir) + worldRadius)
-                bVisible = false;
-        }
-    }
-
-    AS_CompactAndDispatch(s_Payload, bVisible, absoluteMeshletIndex);
-}
-
-[numthreads(srrhi::CommonConsts::kMaxMeshletTriangles, 1, 1)]
-[outputtopology("triangle")]
-void MSMain(
-    uint3 dispatchThreadID : SV_DispatchThreadID,
-    uint3 groupThreadID : SV_GroupThreadID,
-    uint3 groupId : SV_GroupID,
-    uint groupIndex : SV_GroupIndex,
-    in payload MeshPayload payload,
-    out vertices VSOut vout[srrhi::CommonConsts::kMaxMeshletVertices],
-    out indices uint3 triangles[srrhi::CommonConsts::kMaxMeshletTriangles]
-)
-{
-    uint meshletIndex = payload.m_MeshletIndices[groupId.x];
-    uint instanceIndex = payload.m_InstanceIndex;
-    uint outputIdx = groupThreadID.x;
-
-    srrhi::Meshlet m = g_Meshlets[meshletIndex];
-    
-    SetMeshOutputCounts(m.m_VertexCount, m.m_TriangleCount);
-    
-    if (outputIdx < m.m_VertexCount)
-    {
-        uint vertexIndex = g_MeshletVertices[m.m_VertexOffset + outputIdx];
-        srrhi::Vertex v = UnpackVertex(g_Vertices[vertexIndex]);
-        
-        srrhi::PerInstanceData inst = g_Instances[instanceIndex];
-        vout[outputIdx] = PrepareVSOut(v, inst, instanceIndex, meshletIndex, payload.m_LODIndex);
-    }
-    
-    if (outputIdx < m.m_TriangleCount)
-        triangles[outputIdx] = UnpackTriangle(g_MeshletTriangles[m.m_TriangleOffset + outputIdx]);
+    return PrepareVSOut(v, inst, instanceID, 0);
 }
 
 // Direction of refracted light.
@@ -336,12 +230,11 @@ float4 Forward_PSMain(VSOut input) : SV_TARGET
     if (g_PerFrame.m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_NONE)
     {
         if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_INSTANCES ||
-            g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MESHLETS ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTERS ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_LOD ||
             g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_LOD)
         {
-            color = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.meshletID, input.lodIndex, input.clusterID);
+            color = GetDebugColor(g_PerFrame.m_DebugMode, input.instanceID, input.lodIndex, input.clusterID);
         }
         else if (g_PerFrame.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_WORLD_NORMALS)
             color = N * 0.5f + 0.5f;
@@ -358,22 +251,6 @@ float4 Forward_PSMain(VSOut input) : SV_TARGET
     }
 
     return float4(color, alpha);
-}
-
-#elif defined(ALPHA_TEST)
-GBufferOut GBuffer_PSMain_AlphaTest(VSOut input)
-{
-    return EvaluateGBufferMaterial(input);
-}
-
-#else
-// The opaque variant has no discard, so the depth/stencil test can run before it: SampleBindlessStreamedTexture
-// requires that (it writes sampler feedback), and without it every rasterised fragment pays the streaming texture
-// chain, occluded or not.
-[earlydepthstencil]
-GBufferOut GBuffer_PSMain(VSOut input)
-{
-    return EvaluateGBufferMaterial(input);
 }
 
 #endif

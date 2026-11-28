@@ -44,28 +44,23 @@ srinput BasePassInputs
     StructuredBuffer<PerInstanceData> Instances;         // t0
     StructuredBuffer<MaterialConstants> Materials;        // t1
     StructuredBuffer<VertexQuantized> Vertices;           // t2
-    StructuredBuffer<Meshlet> Meshlets;                   // t3
-    StructuredBuffer<uint> MeshletVertices;               // t4
-    StructuredBuffer<uint> MeshletTriangles;              // t5
-    StructuredBuffer<MeshletJob> MeshletJobs;             // t6
-    StructuredBuffer<MeshData> MeshData;                  // t7
+    StructuredBuffer<MeshData> MeshData;                  // t3
     Texture2D<float> HZB;                                 // t8
     RaytracingAccelerationStructure SceneAS;               // t9
     StructuredBuffer<uint> Indices;                       // t10
     Texture2D<float4> OpaqueColor;                        // t11
     StructuredBuffer<GPULight> Lights;                    // t12
 
-    // Cluster LOD (phase 2). The cluster mesh shader reads the visible-cluster list the traversal wrote and
-    // resolves each cluster's geometry through these; the pixel shader only reads ClusterGroups, for the
-    // cluster-bounds debug view. All five are bound to dummies when cluster rendering is off.
+    // Cluster LOD: the cluster mesh shader reads the visible-cluster list the traversal wrote and resolves each
+    // cluster's geometry through these.
     StructuredBuffer<ClusterJob>    ClusterJobs;          // t13
     StructuredBuffer<ClusterRecord> ClusterRecords;       // t14
     StructuredBuffer<uint>          ClusterStreamData;    // t15, the streaming arena: triangle and vertex words
     StructuredBuffer<ClusterGroup>  ClusterGroups;        // t16
     StructuredBuffer<ClusterGroupState> ClusterGroupStates; // t17, resolves a cluster's store through the group
 
-    // The two-pass culled list, which the visibility ids' list 1 names. Only the resolve reads it: the revived draw
-    // binds its list to ClusterJobs above, and the raster path never looks at this slot.
+    // The two-pass culled list, which the visibility ids' list 1 names. Only the resolve reads it: the revived
+    // draw binds its list to ClusterJobs above.
     StructuredBuffer<ClusterJob>    ClusterJobsSecond;    // t19
 
     // The masked bucket's list, which the visibility ids' list 2 names. Same arrangement as ClusterJobsSecond.

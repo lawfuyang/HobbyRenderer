@@ -73,15 +73,10 @@ float4 DeferredLighting_PSMain(FullScreenVertexOut input) : SV_Target
         if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_MOTION_VECTORS)
             return float4(abs(g_GBufferMotion.Load(uint3(uvInt, 0)).xy), 0.0f, alpha);
 
-        // The bounds overlay draws its lines into the emissive target instead of the albedo one, so the
-        // lines only survive if the view adds that target back.
-        if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS)
-            return float4(baseColor + emissive, alpha);
-
         if (g_Deferred.m_DebugMode == srrhi::CommonConsts::DEBUG_MODE_STREAMING_MIP)
             return float4(emissive, alpha); // the base pass writes this view into the emissive target
 
-        // Every remaining view (instances, meshlets, clusters, cluster LOD/triangles, LOD) writes its colour
+        // Every remaining view (instances, clusters, cluster LOD/triangles, LOD) writes its colour
         // into the albedo target; passing it through unlit is what makes it readable, and lighting it would
         // mix in the noise the view exists to see past.
         return float4(baseColor, alpha);
