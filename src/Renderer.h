@@ -443,32 +443,12 @@ public:
     // Rendering mode
     RenderingMode m_Mode = RenderingMode::Normal;
 
-    // Rendering options
-    bool m_UseMeshletRendering = true;
-    // Cluster LOD: draws through the cluster mesh path. The panel's "Enable Cluster LOD" checkbox owns this at
-    // runtime; --cluster-draw sets its A/B start value (see Config::m_ClusterDrawEnabled).
-    bool m_EnableClusterRendering = true;
-
-    // Visibility buffer: the opaque/masked cluster buckets write ids into this target and a resolve turns them back
-    // into the G-buffer. The panel's checkbox owns this at runtime; --vis-buffer sets its start value.
-    bool m_EnableVisibilityBuffer = true;
-
-    // The ids can only come from the cluster raster, so the switch alone is not enough: with the cluster draw off
-    // there is nothing to write them, and the raster path stays the only one that can produce the G-buffer.
-    // The culling-bounds view is the second exception: it is a line overlay into the G-buffer, which the id path
-    // does not carry, so that view keeps the raster path instead of drawing nothing.
-    bool IsVisibilityBufferActive() const
-    {
-        return m_EnableVisibilityBuffer && m_EnableClusterRendering &&
-            Config::Get().m_DebugMode != srrhi::CommonConsts::DEBUG_MODE_CLUSTER_BOUNDS;
-    }
-
-    // The compute software raster writes ids too, so it rides on the same two conditions plus its own switch and a
-    // non-zero size threshold. The panel's checkbox owns it at runtime; --compute-raster sets its start value.
+    // The compute software raster writes ids too, so it rides on its own switch and a non-zero size threshold. The
+    // panel's checkbox owns it at runtime; --compute-raster sets its start value.
     bool m_bComputeRaster = false;
     bool IsComputeRasterActive() const
     {
-        return IsVisibilityBufferActive() && m_bComputeRaster && Config::Get().m_ComputeRasterPixels > 0.0f;
+        return m_bComputeRaster && Config::Get().m_ComputeRasterPixels > 0.0f;
     }
 
     // Set by RequestClusterCountersReadback() on the stats frame, consumed by LogClusterCounters().

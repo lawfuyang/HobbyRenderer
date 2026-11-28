@@ -153,12 +153,11 @@ void PrintHelp()
     SDL_Log("  --cluster-force-lod <n>          Force one cluster LOD level; -1 = pick from the metric");
     SDL_Log("  --cluster-max <n>                Cap the number of clusters drawn (0 = scene-derived)");
     SDL_Log("  --cluster-no-culling             Request every cluster of every visible instance");
-    SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 1 clusters, 2 lod level, 3 bounds (these are Debug Modes 12-14), 4 counters");
-    SDL_Log("  --force-lod <n>                  Force the meshlet path's LOD index; -1 = automatic (A/B against the cluster cut)");
-    SDL_Log("  --cluster-draw <0|1>             Draw through the cluster mesh shader; 0 keeps the legacy meshlet draw");
+    SDL_Log("  --cluster-debug <n>              Cluster debug view: 0 off, 1 clusters, 2 lod level (Debug Modes 11-12), 4 counters");
+    SDL_Log("  --force-lod <n>                  Force the raster path's LOD index; -1 = automatic");
     SDL_Log("  --cluster-two-pass <0|1>         Re-test what the first cluster pass rejected against this frame's depth");
     SDL_Log("  --cluster-discrete-lod <0|1>     Draw instances whose cut fits one LOD level from that level alone (default 1)");
-    SDL_Log("  --debug <n>                      Base pass debug view (0 none, 4 albedo, 3 world normals, 12-15 cluster views)");
+    SDL_Log("  --debug <n>                      Base pass debug view (0 none, 1 instances, 2 world normals, 3 albedo, 11-13 cluster views)");
     SDL_Log("  --no-rt-shadows                  Disable ray-traced sun shadows (isolates the draw path in an A/B)");
     SDL_Log("  --no-restir-di                   Disable ReSTIR DI, so the sun shadow is one hard ray per pixel");
     SDL_Log("  --no-auto-exposure               Fixed exposure (no adaptation history in an exactness A/B)");
@@ -172,7 +171,6 @@ void PrintHelp()
     SDL_Log("  --import-limit-primitives <n>    Stop the streamed import after n primitives (0 = all)");
     SDL_Log("  --split-primitive-tris <n>       Split primitives into n-triangle parts (0 = never)");
     SDL_Log("  --cluster-stream-stats-frame <n> Print the streaming residency stats on frame n");
-    SDL_Log("  --vis-buffer <0|1>               Render the opaque/masked buckets into a visibility buffer (default 1)");
     SDL_Log("  --compute-raster <0|1>           Software-rasterise sub-pixel clusters with a compute pass (default 0)");
     SDL_Log("  --compute-raster-pixels <px>     Projected half-extent at or below which a cluster goes to that pass (default 2)");
     SDL_Log("  --no-taa                         Disable TAA (pixel-exact A/B and captures)");
@@ -240,14 +238,6 @@ void Config::ParseCommandLine(int argc, char* argv[])
         {
             SetFlag(cfg.m_EnableOmm, true, "Opacity micromaps enabled via command line");
         }
-        else if (args.Is("--cluster"))
-        {
-            ReadBool(args, cfg.m_EnableClusterLod, "Cluster LOD");
-        }
-        else if (args.Is("--vis-buffer"))
-        {
-            ReadBool(args, cfg.m_EnableVisibilityBuffer, "Visibility buffer");
-        }
         else if (args.Is("--compute-raster"))
         {
             ReadBool(args, cfg.m_bComputeRaster, "Compute software raster");
@@ -281,13 +271,9 @@ void Config::ParseCommandLine(int argc, char* argv[])
             SetFlag(cfg.m_ClusterDisableCulling, true,
                 "Cluster culling disabled: every cluster of a visible instance is requested");
         }
-        else if (args.Is("--cluster-draw"))
-        {
-            ReadInt(args, cfg.m_ClusterDrawEnabled, "Cluster draw (-1 follow cluster LOD, 0 legacy meshlet path)");
-        }
         else if (args.Is("--force-lod"))
         {
-            ReadInt(args, cfg.m_ForcedLOD, "Meshlet LOD forced to");
+            ReadInt(args, cfg.m_ForcedLOD, "Raster LOD forced to");
         }
         else if (args.Is("--no-rt-shadows"))
         {
@@ -335,7 +321,7 @@ void Config::ParseCommandLine(int argc, char* argv[])
             if (!value)
                 continue;
 
-            // The cluster views are Debug Modes of their own now, so 1-3 select them there and get the debug
+            // The cluster views are Debug Modes of their own now, so 1-2 select them there and get the debug
             // mode's settings (no bloom, no auto exposure); 4 is the traversal's own counters.
             const int mode = std::atoi(value);
             if (mode == 4)
@@ -343,14 +329,14 @@ void Config::ParseCommandLine(int argc, char* argv[])
                 cfg.m_ClusterDebugMode = 4;
                 SDL_Log("[Config] Cluster debug view mode 4 (traversal counters)");
             }
-            else if (mode >= 1 && mode <= 3)
+            else if (mode >= 1 && mode <= 2)
             {
                 cfg.m_DebugMode = srrhi::CommonConsts::DEBUG_MODE_CLUSTERS + (mode - 1);
                 SDL_Log("[Config] Cluster debug view mode %d maps to Debug Mode %d", mode, cfg.m_DebugMode);
             }
             else if (mode != 0)
             {
-                SDL_Log("[Config] Cluster debug view %d does not exist (0 off, 1 clusters, 2 lod level, 3 bounds, 4 counters)",
+                SDL_Log("[Config] Cluster debug view %d does not exist (0 off, 1 clusters, 2 lod level, 4 counters)",
                     mode);
             }
         }

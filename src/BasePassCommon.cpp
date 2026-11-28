@@ -97,50 +97,7 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
         }
     }
 
-    if (g_Renderer.m_UseMeshletRendering)
-    {
-        {
-            RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(sizeof(uint32_t))
-                .setStructStride(sizeof(uint32_t))
-                .setIsDrawIndirectArgs(true)
-                .setCanHaveUAVs(true)
-                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-                .setKeepInitialState(true)
-                .setDebugName((std::string(rendererName) + "_MeshletJobCount").c_str());
-
-            rg.DeclareBuffer(desc, m_MeshletJobCountBuffer);
-        }
-
-        {
-            RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(sizeof(srrhi::DispatchIndirectArguments))
-                .setStructStride(sizeof(srrhi::DispatchIndirectArguments))
-                .setIsDrawIndirectArgs(true)
-                .setCanHaveUAVs(true)
-                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-                .setKeepInitialState(true)
-                .setDebugName((std::string(rendererName) + "_MeshletIndirectBuffer").c_str());
-
-            rg.DeclareBuffer(desc, m_MeshletIndirectBuffer);
-        }
-
-        {
-            // The job list holds one entry per meshlet group, not per instance, so size it by the
-            // worst case. That is computed once per scene in Scene::FinalizeLoadedScene().
-            RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(g_Renderer.m_Scene.m_MaxMeshletJobCount * sizeof(srrhi::MeshletJob))
-                .setStructStride(sizeof(srrhi::MeshletJob))
-                .setCanHaveUAVs(true)
-                .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-                .setKeepInitialState(true)
-                .setDebugName((std::string(rendererName) + "_MeshletJobBuffer").c_str());
-
-            rg.DeclareBuffer(desc, m_MeshletJobBuffer);
-        }
-    }
-
-    if (g_Renderer.m_EnableClusterRendering && clusterBucket >= 0)
+    if (clusterBucket >= 0)
     {
         const Scene& scene = g_Renderer.m_Scene;
         SDL_assert(clusterBucket < int(Scene::kClusterBucketCount));
@@ -353,13 +310,17 @@ void BasePassResources::DeclareResources(RenderGraph& rg, std::string_view rende
         }
 
         {
-            // One bit per cluster of this bucket, set when the per-cluster occlusion test defers it. A bitmask
-            // rather than a list: a group has to be able to leave several scattered rejections behind, and pass 1
-            // already knows which groups to look at.
-            const uint32_t wordCount = (scene.m_MaxClusterJobCount[bucket] + 31u) / 32u;
+            // One bit per cluster *record of the scene*, set when the per-cluster occlusion test defers it. The
+            // kernel indexes this with the cluster's global record index (the same index it reads
+            // m_ClusterRecordBuffer with), not with its slot in this bucket's job list - and a bucket only owns the
+            // records of its own primitives, which sit anywhere in that array. Sizing it by the bucket's capacity
+            // therefore wrote past the end as soon as a bucket's primitives were not the first ones in the scene.
+            // A bitmask rather than a list: a group has to be able to leave several scattered rejections behind,
+            // and pass 1 already knows which groups to look at.
+            const uint32_t wordCount = (scene.m_ClusterRecordCount + 31u) / 32u;
 
             RGBufferDesc desc;
-            desc.m_NvrhiDesc.setByteSize(wordCount * sizeof(uint32_t))
+            desc.m_NvrhiDesc.setByteSize(std::max<uint32_t>(wordCount, 1u) * sizeof(uint32_t))
                 .setStructStride(sizeof(uint32_t))
                 .setCanHaveUAVs(true)
                 .setInitialState(nvrhi::ResourceStates::UnorderedAccess)

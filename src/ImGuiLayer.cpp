@@ -101,7 +101,6 @@ void ImGuiLayer::UpdateFrame()
         static const char* kDebugModes[] = {
             "None",
             "Instances",
-            "Meshlets",
             "World Normals",
             "Albedo",
             "Roughness",
@@ -113,7 +112,6 @@ void ImGuiLayer::UpdateFrame()
             "Streaming Mip",
             "Cluster IDs",
             "Cluster LOD Level",
-            "Cluster Bounds",
             "Triangles"
         };
         ImGui::Combo("Debug Mode", &Config::Get().m_DebugMode, kDebugModes, IM_ARRAYSIZE(kDebugModes));
@@ -202,36 +200,13 @@ void ImGuiLayer::UpdateFrame()
             ImGui::TreePop();
         }
 
-        // Level of detail: which path draws geometry and how much of it. Both paths keep a forced-level control, so
-        // the two carry the path they belong to in their labels instead of being two identically named sliders in
-        // two different nodes.
+        // Level of detail: how much geometry the cluster cut draws.
         const ImGuiTreeNodeFlags lodPanelFlags =
             Config::Get().m_ClusterDebugMode != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
         const bool bLodPanelOpen = ImGui::TreeNodeEx("Level of Detail", lodPanelFlags);
         g_Renderer.SetClusterCountersPanelOpen(bLodPanelOpen);
         if (bLodPanelOpen)
         {
-            ImGui::Checkbox("Use Meshlet Rendering", &g_Renderer.m_UseMeshletRendering);
-
-            // The cluster switch is live: the DAG is cooked at load time (on by default), so this only chooses
-            // which path draws. A scene cooked with --cluster 0 has no cluster data to draw from, and then there is
-            // nothing to switch to. The worst-case job/group/node counts are clamped to at least one so their
-            // buffers are never empty, so the depth (which has no such clamp) is what tells the two apart.
-            const bool bHasClusterData = g_Renderer.m_Scene.m_MaxClusterTreeDepth > 0;
-            ImGui::BeginDisabled(!bHasClusterData);
-            ImGui::Checkbox("Enable Cluster LOD", &g_Renderer.m_EnableClusterRendering);
-            ImGui::EndDisabled();
-            if (!bHasClusterData)
-                ImGui::TextDisabled("No cooked cluster data in this scene: it was cooked with --cluster 0.");
-
-            // The ids are the raster pass' output now; the resolve that turns them back into G-buffer values is
-            // still a debug view, so the image is expected to be the id hash rather than the scene.
-            ImGui::Checkbox("Visibility buffer", &g_Renderer.m_EnableVisibilityBuffer);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Rasterises cluster ids into a visibility buffer and resolves them into the G-buffer.\n"
-                    "Needs the cluster draw: with it off the raster path stays in use.\n"
-                    "The resolve currently shows the ids as hash colours.");
-
             ImGui::Checkbox("Compute software raster", &g_Renderer.m_bComputeRaster);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Software-rasterises clusters whose projected half-extent is at most --compute-raster-pixels\n"
@@ -328,10 +303,10 @@ void ImGuiLayer::UpdateFrame()
                 ImGui::Text("GPU: %.3f ms", static_cast<double>(traversalMilliseconds));
             }
 
-            ImGui::SeparatorText("Meshlet path");
+            ImGui::SeparatorText("Raster path");
             const char* lodNames[] = { "Auto", "LOD 0", "LOD 1", "LOD 2", "LOD 3", "LOD 4", "LOD 5", "LOD 6", "LOD 7" };
             int forcedLODIdx = Config::Get().m_ForcedLOD + 1;
-            if (ImGui::SliderInt("Forced meshlet LOD", &forcedLODIdx, 0, srrhi::CommonConsts::MAX_LOD_COUNT))
+            if (ImGui::SliderInt("Forced LOD", &forcedLODIdx, 0, srrhi::CommonConsts::MAX_LOD_COUNT))
             {
                 Config::Get().m_ForcedLOD = forcedLODIdx - 1;
             }

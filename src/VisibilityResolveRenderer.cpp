@@ -23,9 +23,6 @@ class VisibilityResolveRenderer : public IRenderer
 public:
     bool Setup(RenderGraph& renderGraph) override
     {
-        if (!g_Renderer.IsVisibilityBufferActive())
-            return false;
-
         renderGraph.ReadTexture(g_RG_VisibilityBuffer);
 
         // An id names a slot in the list its bucket drew from, and one frame can hold ids from all four lists.
@@ -84,17 +81,13 @@ public:
         cb.SetHeight(height);
         commandList->writeBuffer(perFrameCB, &cb, sizeof(cb), 0);
 
-        // The base pass' binding set. The slots the G-buffer evaluation never reads (the meshlet path's buffers, the
-        // HZB, the opaque colour) are placeholders, which is also what keeps them out of the render graph's checks.
+        // The base pass' binding set. The slots the G-buffer evaluation never reads (the HZB, the opaque colour) are
+        // placeholders, which is also what keeps them out of the render graph's checks.
         srrhi::BasePassInputs inputs;
         inputs.SetPerFrameCB(perFrameCB);
         inputs.SetInstances(scene.m_InstanceDataBuffer);
         inputs.SetMaterials(scene.m_MaterialConstantsBuffer);
         inputs.SetVertices(scene.m_VertexBufferQuantized);
-        inputs.SetMeshlets(common.GetDummyStructuredSRV(sizeof(srrhi::Meshlet)));
-        inputs.SetMeshletVertices(common.GetDummyStructuredSRV(sizeof(uint32_t)));
-        inputs.SetMeshletTriangles(common.GetDummyStructuredSRV(sizeof(uint32_t)));
-        inputs.SetMeshletJobs(common.GetDummyStructuredSRV(sizeof(srrhi::MeshletJob)));
         inputs.SetMeshData(scene.m_MeshDataBuffer);
         inputs.SetHZB(common.DefaultTextureBlack);
         inputs.SetSceneAS(scene.m_TLAS);

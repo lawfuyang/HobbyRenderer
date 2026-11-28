@@ -17,10 +17,6 @@ extern RGBufferHandle g_RG_ClusterIndirectArgs;
 
 struct BasePassResources
 {
-    RGBufferHandle m_MeshletJobBuffer;
-    RGBufferHandle m_MeshletJobCountBuffer;
-    RGBufferHandle m_MeshletIndirectBuffer;
-
     // Cluster LOD traversal: the node queue ping-pongs between depth passes, groups are queued once and
     // then turned into the visible-cluster list.
     RGBufferHandle m_ClusterNodeQueue[2];

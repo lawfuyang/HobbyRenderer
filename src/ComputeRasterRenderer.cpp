@@ -68,10 +68,6 @@ namespace
         inputs.SetInstances(scene.m_InstanceDataBuffer);
         inputs.SetMaterials(scene.m_MaterialConstantsBuffer);
         inputs.SetVertices(scene.m_VertexBufferQuantized);
-        inputs.SetMeshlets(common.GetDummyStructuredSRV(sizeof(srrhi::Meshlet)));
-        inputs.SetMeshletVertices(common.GetDummyStructuredSRV(sizeof(uint32_t)));
-        inputs.SetMeshletTriangles(common.GetDummyStructuredSRV(sizeof(uint32_t)));
-        inputs.SetMeshletJobs(common.GetDummyStructuredSRV(sizeof(srrhi::MeshletJob)));
         inputs.SetMeshData(scene.m_MeshDataBuffer);
         inputs.SetHZB(common.DefaultTextureBlack);
         inputs.SetSceneAS(scene.m_TLAS);

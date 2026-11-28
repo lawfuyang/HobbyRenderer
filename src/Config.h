@@ -46,15 +46,6 @@ struct Config
     // Dumps the cooked cluster LOD of every primitive (clusters, groups, levels, triangles and worst error per
     // level, plus the phase 0 DAG and cut checks) once the scene is loaded.
     bool m_bClusterStats = false;
-    // Cooks the per-primitive cluster LOD into the cooked mesh file. This is the load-time half of the switch: the
-    // panel's "Enable Cluster LOD" checkbox only chooses the draw path at runtime, so a scene cooked with
-    // --cluster 0 has no cluster data to draw from.
-    bool m_EnableClusterLod = true;
-    // Draws through the cluster mesh shader. -1 = follow m_EnableClusterLod, 0 = keep drawing through the legacy
-    // meshlet path while the cluster data is still cooked, which is what an A/B needs: the cooked cache is the
-    // same file for both legs, so neither run has to re-cook the scene. The panel's "Enable Cluster LOD" checkbox
-    // continues this value at runtime.
-    int m_ClusterDrawEnabled = -1;
     // Frame on which --cluster-stats prints the GPU cluster counters. -1 = never.
     int m_ClusterStatsFrame = -1;
 
@@ -98,11 +89,6 @@ struct Config
     // Prints the streaming residency stats on this frame. -1 = never.
     int m_ClusterStreamStatsFrame = -1;
 
-    // Renders the opaque and masked cluster buckets into a visibility buffer and resolves it into the G-buffer,
-    // instead of shading the G-buffer in the raster pass. It needs the cluster draw; the raster path stays as the
-    // A/B reference, as the fallback for the culling-bounds overlay, and as the path the meshlet draw uses.
-    bool m_EnableVisibilityBuffer = true;
-
     // Compute software raster for sub-pixel clusters: the cull routes clusters whose projected half-extent is at
     // most m_ComputeRasterPixels into a list of their own, a compute kernel finds the samples each of their
     // triangles covers, and one indirect point draw replays those samples through the hardware depth test. Needs
@@ -138,8 +124,8 @@ struct Config
     // mean, which is larger than the shadow difference an exactness A/B is looking for.
     bool m_bNoAutoExposure = false;
 
-    // The legacy meshlet path's LOD override: -1 = automatic. A cluster A/B compares the cluster cut at
-    // forced level 0 against the meshlet path at LOD 0, and the panel was the only way to set it.
+    // The raster path's LOD override: -1 = automatic. The cluster cut has its own level, so this chooses the LOD a
+    // forward-drawn (transparent) instance uses.
     int m_ForcedLOD = -1;
 
     // Opens the Phase 5 texel-classification view on this primitive index (0 = the first primitive). The panel

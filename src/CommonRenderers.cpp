@@ -104,9 +104,8 @@ public:
         }
 
         // Visibility buffer: one id per pixel for the cluster resolve. R32_UINT, render target only; the resolve
-        // (not part of this pass) reads it. Declared only when the path is on, so the raster path keeps the same
-        // transient set and the same cost as before.
-        if (g_Renderer.IsVisibilityBufferActive() && g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
+        // (not part of this pass) reads it. Not declared in the reference path tracer, which has no raster pass.
+        if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
         {
             RGTextureDesc desc;
             desc.m_NvrhiDesc.width = width;
@@ -194,7 +193,7 @@ public:
             commandList->clearTextureFloat(gbufferMotion, nvrhi::AllSubresources, nvrhi::Color{});
 
             // Zero means "no surface" for the id decode, so the target is cleared every frame.
-            if (g_Renderer.IsVisibilityBufferActive())
+            if (g_Renderer.m_Mode != RenderingMode::ReferencePathTracer)
             {
                 nvrhi::TextureHandle visibility = renderGraph.GetTexture(g_RG_VisibilityBuffer, RGResourceAccessMode::Write);
                 commandList->clearTextureUInt(visibility, nvrhi::AllSubresources, 0);

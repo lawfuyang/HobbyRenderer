@@ -95,7 +95,7 @@ public:
     // Placeholders for the structured slots a renderer leaves unfilled. A structured buffer's descriptor carries the
     // element stride its shader declares and D3D12 compares the two, so a slot filled with a placeholder of another
     // element size is a validation error (`GPU_BASED_VALIDATION_STRUCTURED_BUFFER_STRIDE_MISMATCH`) rather than a
-    // harmless empty resource -- and the slots in this renderer declare `uint`, `MeshletJob`, `ClusterGroupState`, ...
+    // harmless empty resource -- and the slots in this renderer declare `uint`, `ClusterGroupState`, ...
     // So there is one placeholder per element stride, made the first time a slot asks for it: `structStride` is
     // `sizeof` of the type that slot's shader declares.
     nvrhi::BufferHandle GetDummyStructuredSRV(uint32_t structStride) const;

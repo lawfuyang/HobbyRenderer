@@ -440,10 +440,6 @@ bool Renderer::InitializeGPUStack(SDL_Window* window)
     // Opacity micromaps need DXR 1.2; optional, so a device without it simply renders as before.
     m_bOmmSupported = m_RHI->m_NvrhiDevice->queryFeatureSupport(nvrhi::Feature::RayTracingOpacityMicromap);
     m_bEnableOmm = m_bOmmSupported && Config::Get().m_EnableOmm;
-    m_EnableClusterRendering = Config::Get().m_ClusterDrawEnabled < 0 ? Config::Get().m_EnableClusterLod
-                                                                     : Config::Get().m_ClusterDrawEnabled != 0;
-    m_EnableVisibilityBuffer = Config::Get().m_EnableVisibilityBuffer;
-    SDL_Log("[Init] Visibility buffer: %s", m_EnableVisibilityBuffer ? "on" : "off");
     m_bComputeRaster = Config::Get().m_bComputeRaster;
     SDL_Log("[Init] Compute software raster: %s (half-extent <= %.1f px)", m_bComputeRaster ? "on" : "off",
             static_cast<double>(Config::Get().m_ComputeRasterPixels));
@@ -1667,6 +1663,9 @@ void Renderer::ScheduleAndRunAllRenderers()
     {
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClearRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("OpaqueRenderer"));
+        // The two-pass revival is its own pass so the graph can order the HZB build that reads the depth the
+        // opaque pass wrote before this one writes it again.
+        m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("ClusterRevivalRenderer"));
         m_RenderGraph.ScheduleRenderer(RendererRegistry::GetRenderer("MaskedPassRenderer"));
         // The software raster runs on clusters the cull set aside for it, and its stamp replay depth-tests
         // against everything both base-pass buckets wrote, so it belongs after them and before the resolve.
@@ -1704,6 +1703,7 @@ void Renderer::ScheduleDebugView()
     // only view a ray-traced technique produces, and keeps them out of every other one.
     schedule("ClearRenderer");
     schedule("OpaqueRenderer");
+    schedule("ClusterRevivalRenderer");
     schedule("MaskedPassRenderer");
     // The debug views read the same surfaces, so the software raster's clusters have to land in them too.
     schedule("ComputeRasterRenderer");
@@ -2772,9 +2772,9 @@ void Renderer::LogClusterCounters()
         readback.m_BucketName = nullptr;
     }
 
-    // The opaque renderer's own query, i.e. the draw path under test: meshlets report IA primitives, the cluster
-    // path reports mesh-shader primitives, and the pixel-shader invocations say whether both shaded the same
-    // surface. One line per run, two frames after the stats frame so the double-buffered query has resolved.
+    // The opaque renderer's own query, i.e. the draw path under test: the cluster path reports mesh-shader
+    // primitives, and the pixel-shader invocations say whether it shaded the same surface. One line per run, two
+    // frames after the stats frame so the double-buffered query has resolved.
     if (m_SelectedRendererIndexForPipelineStatistics != -1 && Config::Get().m_ClusterStatsFrame >= 0 &&
         m_FrameNumber == uint64_t(Config::Get().m_ClusterStatsFrame) + 2)
     {
