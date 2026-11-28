@@ -2,7 +2,8 @@
 
 A real-time renderer built in C++20 on Direct3D 12, with an NVIDIA RTX feature set: ReSTIR
 direct and indirect illumination, a spatial-hash radiance cache, NRD denoising, ray-traced shadows,
-opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedback virtual texturing.
+opacity micromaps, GPU-driven cluster-LOD geometry with a visibility buffer, and sampler-feedback virtual
+texturing.
 
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/241f11a4-709c-4598-a0d2-2364fb758e73" />
 <img width="1600" height="900" alt="screenshot" src="https://github.com/user-attachments/assets/d8f3c499-4f13-4549-8c5e-dd43b4b3b963" />
@@ -36,15 +37,25 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
 - **Ray-traced shadows**: inline ray queries for the sun, with an option to disable shadow tracing
 
 ### Geometry and acceleration structures
-- **GPU-driven meshlet rendering**: mesh and amplification shaders over generated meshlets (64 vertices,
-  96 triangles), with indirect dispatch built on the GPU. Kept as the reference path the cluster LOD draw
-  is measured against (`--cluster-draw 0`)
+- **GPU-driven geometry**: one mesh-shader workgroup per cluster, dispatched indirectly over the visible
+  cluster list the traversal wrote. Cluster LOD plus the visibility buffer is the only geometry pipeline —
+  there is no vertex-shader G-buffer path and no meshlet fallback for opaque and masked geometry
+- **Visibility buffer**: the opaque and masked buckets rasterise a packed 32-bit visibility id per pixel
+  instead of six G-buffer values, and a compute resolve turns the ids back into albedo, normals, ORM,
+  emissive and motion vectors. The pixel shader that writes an id is one `uint` store, so the draw is
+  bandwidth- and instruction-cheap; material evaluation happens once per pixel in the resolve, which is
+  where a future material graph belongs (`docs/visibility_buffer_implementation_plan.md`)
+- **Compute software raster**: clusters whose projected half-extent is under a pixel threshold are routed
+  to a compute rasteriser that writes coverage stamps replayed through the hardware depth test, instead of
+  paying mesh-shader launch and helper-lane cost for a few pixels. It is implemented and correct but ships
+  off (`--compute-raster`), because the id pass has so little shading to waste that the dispatch and barrier
+  cost more than they save — measured at +5.7 % GPU time on the animals scene, a wash on Bistro
 - **Two-phase occlusion culling**: frustum culling in phase 1, HZB occlusion culling with a phase-2 pass
   over the survivors, cone/silhouette culling, and per-instance LOD selection
 - **Hierarchical Z-buffer**: built with AMD FidelityFX Single Pass Downsampler (min reduction)
 - **Hierarchical LOD**: up to 8 levels generated with meshoptimizer progressive simplification, plus
-  vertex quantization. The opaque and masked buckets draw through the cluster LOD DAG below instead, so
-  this per-mesh chain now serves the transparent bucket and the legacy path
+  vertex quantization. The cluster LOD DAG below replaces it for opaque and masked geometry; this per-mesh
+  chain now serves the transparent bucket and ray tracing
 - **Multi-LOD acceleration structures**: per-LOD BLAS with a `TLASPatch` compute pass keeping the TLAS
   instance addresses current as LODs change. When the cluster path draws, the LOD it patches is the one
   the cluster traversal classified, so rays and rasterisation consume the same geometry
@@ -72,25 +83,23 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
   checks the DAG, the watertightness of a cut in welded position space and the cooked payload without a
   device
 - **One mesh-shader workgroup per cluster**: `DispatchMeshIndirect` over the visible-cluster list, the mesh
-  shader decoding a cluster's packed micro-indices into the same vertex output the meshlet path writes, so
-  the G-buffer and alpha-test pixel shaders are shared. Opaque and masked draw through it; the transparent
-  bucket keeps the vertex-shader path until OIT lands
+  shader decoding a cluster's packed micro-indices into a 32-bit visibility id per pixel. Opaque and masked
+  draw through it; the transparent bucket keeps the vertex-shader forward path until OIT lands
 - **Per-cluster culling**: each cluster's own bounding sphere is tested against the HZB (a group spans
   several clusters, so its sphere is rarely occluded), sub-pixel clusters are dropped outright, and
   `--cluster-two-pass <0|1>` records what occlusion alone rejected so a second pass can revive it against
   the depth the first pass just wrote
-- **Budgeted traversal queues**: the per-bucket node and group queues and the meshlet job list are sized
-  as fixed budgets (`kMaxClusterNodeRefs`, `kMaxClusterGroupRefs`, `kMaxMeshletJobs`) instead of
+- **Budgeted traversal queues**: the per-bucket node and group queues are sized
+  as fixed budgets (`kMaxClusterNodeRefs`, `kMaxClusterGroupRefs`) instead of
   instances × tree, which an instanced scene turns into billions of references. An append past the
   capacity is dropped and counted (`ClusterCounters::m_RefCapped`, shown in the counters panel), so a
   cap costs image coverage and never a buffer overrun
 - **Discrete LOD**: an instance whose cut resolves to a single level is seeded at that level's node and
   drawn whole, which costs the traversal nothing where it applies and gives ray tracing the level to match
-- **Debug views**: cluster ids, a 32-level LOD ramp, group bounds as wireframe boxes and a per-triangle
-  overlay (Debug Modes 12–15, `--cluster-debug`), plus live traversal counters in the panel and
+- **Debug views**: cluster ids, a 32-level LOD ramp and a per-triangle
+  overlay (Debug Modes 11–13, `--cluster-debug`), plus live traversal counters in the panel and
   `--cluster-stats-frame <n>`, which compares the GPU's cut against the CPU reference of the same rule
-- **A/B switches**: `--cluster <0|1>` cooks the DAG, `--cluster-draw <0|1>` keeps the cooked data but draws
-  through the legacy meshlet path, and `--cluster-force-lod <n>`, `--cluster-max <n>`,
+- **A/B switches**: `--cluster-force-lod <n>`, `--cluster-max <n>`,
   `--cluster-no-culling`, `--cluster-discrete-lod <0|1>` and `--cluster-freeze-culling` isolate the cut
   from the draw
 
@@ -150,8 +159,8 @@ opacity micromaps, GPU-driven cluster-LOD and meshlet geometry and sampler-feedb
 - **Capture support**: PIX3 markers, in-app PIX captures (`--pix`, `--pix-capture-frame`,
   `--pix-capture-load`, `--pix-capture-dir`) and in-app RenderDoc captures (`--renderdoc`,
   `--renderdoc-capture-frame`) — never both on one frame
-- **Scene loading**: glTF 2.0 via cgltf, a versioned binary scene cache, mesh optimization, meshlet and
-  LOD generation, the cluster LOD cook, and an animation system (linear, step, cubic spline, SLERP,
+- **Scene loading**: glTF 2.0 via cgltf, a versioned binary scene cache, mesh optimization, LOD and
+  cluster DAG generation, the cluster LOD cook, and an animation system (linear, step, cubic spline, SLERP,
   Catmull-Rom; transform and material-emissive channels, topologically sorted)
 - **Camera state**: per-scene position, yaw and pitch persisted and restored on load
 - **Screenshots**: `--screenshot-frame <n>` writes a lossless `bin/screenshot.png` and exits; `Ctrl+P`
@@ -204,7 +213,7 @@ Every switch is parsed in `src/Config.cpp`; the useful ones:
 | `--hide-ui` | draw no ImGui windows |
 | `--screenshot-frame <n>` | write `bin/screenshot.png` on frame n and exit |
 | `--enable-omm`, `--omm-max-level`, `--omm-target-edge`, `--omm-debug` | opacity micromaps |
-| `--cluster <0\|1>`, `--cluster-draw <0\|1>` | cook the cluster DAG / draw through it (`0` = legacy meshlet path) |
+| `--cluster-debug <0\|1\|2\|4>` | cluster debug view: off, cluster ids, LOD ramp, traversal counters |
 | `--cluster-error <px>`, `--cluster-force-lod <n>`, `--cluster-max <n>` | cluster cut: pixel error, forced level, cluster cap |
 | `--cluster-no-culling`, `--cluster-two-pass <0\|1>`, `--cluster-discrete-lod <0\|1>` | cluster cut: isolation, second pass, discrete LOD |
 | `--cluster-stats`, `--cluster-stats-frame <n>` | dump the cooked DAG / print the traversal's counters |
@@ -242,7 +251,7 @@ own GPU timer group. Passes can be toggled individually from the panel.
   roulette and BRDF importance sampling, accumulated progressively
 
 ### Scene
-glTF 2.0 through cgltf, cached to a versioned binary, with meshlet, LOD and cluster-DAG cooking, animation,
+glTF 2.0 through cgltf, cached to a versioned binary, with LOD and cluster-DAG cooking, animation,
 a light buffer for ray tracing (directional with angular size, point/spot, environment), and OMM baking.
 
 ## Dependencies
