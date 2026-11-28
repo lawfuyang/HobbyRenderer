@@ -30,9 +30,6 @@ static RWStructuredBuffer<uint>                                    g_VisibleCoun
 static RWStructuredBuffer<uint>                                    g_OccludedIndices     = srrhi::GPUCullingInputs::GetOccludedIndices();
 static RWStructuredBuffer<uint>                                    g_OccludedCount       = srrhi::GPUCullingInputs::GetOccludedCount();
 static RWStructuredBuffer<srrhi::DispatchIndirectArguments>        g_DispatchIndirectArgs = srrhi::GPUCullingInputs::GetDispatchIndirectArgs();
-static RWStructuredBuffer<srrhi::MeshletJob>                       g_MeshletJobs         = srrhi::GPUCullingInputs::GetMeshletJobs();
-static RWStructuredBuffer<uint>                                    g_MeshletJobCount     = srrhi::GPUCullingInputs::GetMeshletJobCount();
-static RWStructuredBuffer<srrhi::DispatchIndirectArguments>        g_MeshletIndirectArgs = srrhi::GPUCullingInputs::GetMeshletIndirectArgs();
 static RWStructuredBuffer<uint>                                    g_InstanceLOD         = srrhi::GPUCullingInputs::GetInstanceLOD();
 
 [numthreads(srrhi::CommonConsts::kThreadsPerGroup, 1, 1)]
@@ -99,43 +96,20 @@ void Culling_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             }
         }
 
-        if (g_Culling.m_UseMeshletRendering)
-        {
-            // Emit one job per meshlet group so the base pass can be a single DispatchMesh:
-            // the atomic hands out both the job index and, at the end, the total job count.
-            const uint groupCount = DivideAndRoundUp(mesh.m_MeshletCounts[lodIndex], srrhi::CommonConsts::kThreadsPerGroup);
+        // Write at the instance's own slot instead of compacting: the draw uses the fixed
+        // count indirect variant and relies on culled instances being left as all-zero
+        // (zero-instance) entries by the per-pass clear.
+        srrhi::DrawIndexedIndirectArguments args;
+        args.m_IndexCount = mesh.m_IndexCounts[lodIndex];
+        args.m_InstanceCount = 1;
+        args.m_StartIndexLocation = mesh.m_IndexOffsets[lodIndex];
+        args.m_BaseVertexLocation = 0;
+        args.m_StartInstanceLocation = actualInstanceIndex;
 
-            for (uint groupIndex = 0; groupIndex < groupCount; ++groupIndex)
-            {
-                uint jobIndex;
-                InterlockedAdd(g_MeshletJobCount[0], 1, jobIndex);
-                if (g_Culling.m_MaxMeshletJobs != 0 && jobIndex >= g_Culling.m_MaxMeshletJobs)
-                    continue;
+        g_VisibleArgs[actualInstanceIndex] = args;
 
-                srrhi::MeshletJob job;
-                job.m_InstanceIndex     = actualInstanceIndex;
-                job.m_LODIndex          = lodIndex;
-                job.m_MeshletGroupIndex = groupIndex;
-                g_MeshletJobs[jobIndex] = job;
-            }
-        }
-        else
-        {
-            // Write at the instance's own slot instead of compacting: the draw uses the fixed
-            // count indirect variant and relies on culled instances being left as all-zero
-            // (zero-instance) entries by the per-pass clear.
-            srrhi::DrawIndexedIndirectArguments args;
-            args.m_IndexCount = mesh.m_IndexCounts[lodIndex];
-            args.m_InstanceCount = 1;
-            args.m_StartIndexLocation = mesh.m_IndexOffsets[lodIndex];
-            args.m_BaseVertexLocation = 0;
-            args.m_StartInstanceLocation = actualInstanceIndex;
-
-            g_VisibleArgs[actualInstanceIndex] = args;
-
-            uint visibleIndex;
-            InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
-        }
+        uint visibleIndex;
+        InterlockedAdd(g_VisibleCount[0], 1, visibleIndex);
 
         // Always write the selected LOD index for this instance so TLASRenderer
         // can patch the correct BLAS address regardless of rendering path.
@@ -163,10 +137,4 @@ void BuildIndirect_CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     g_DispatchIndirectArgs[0].m_ThreadGroupCountX = DivideAndRoundUp(g_OccludedCount[0], srrhi::CommonConsts::kThreadsPerGroup);
     g_DispatchIndirectArgs[0].m_ThreadGroupCountY = 1;
     g_DispatchIndirectArgs[0].m_ThreadGroupCountZ = 1;
-
-    // The mesh base pass is a single DispatchMesh over the flat job list, so its grid is just
-    // the number of jobs the culling pass appended. A grid of zero launches nothing.
-    g_MeshletIndirectArgs[0].m_ThreadGroupCountX = g_MeshletJobCount[0];
-    g_MeshletIndirectArgs[0].m_ThreadGroupCountY = 1;
-    g_MeshletIndirectArgs[0].m_ThreadGroupCountZ = 1;
 }

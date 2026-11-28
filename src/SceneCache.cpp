@@ -71,12 +71,8 @@ bool SaveCookedMesh(
     const std::filesystem::path& cachePath,
     const std::vector<Scene::Mesh>&           meshes,
     const std::vector<srrhi::MeshData>&       meshData,
-    const std::vector<srrhi::Meshlet>&        meshlets,
-    const std::vector<uint32_t>&              meshletVertices,
-    const std::vector<uint32_t>&              meshletTriangles,
     const std::vector<srrhi::VertexQuantized>& allVerticesQuantized,
     const std::vector<uint32_t>&              allIndices,
-    bool                                      bCookClusters,
     ClusterLod::BlobFile&                     outBlobs)
 {
     std::ofstream os(cachePath, std::ios::binary | std::ios::trunc);
@@ -90,7 +86,6 @@ bool SaveCookedMesh(
     WritePOD(os, kCookedMeshMagic);
     WritePOD(os, kCookedMeshVersion);
     WritePOD(os, ClusterLod::GetCacheConfigHash(ClusterLod::GetActiveConfig()));
-    WritePOD(os, uint32_t(bCookClusters ? 1 : 0));
 
     // Meshes — serialize field-by-field (Scene::Mesh is not trivially copyable)
     const uint32_t meshCount = static_cast<uint32_t>(meshes.size());
@@ -117,36 +112,30 @@ bool SaveCookedMesh(
 
     // POD arrays
     WriteVector(os, meshData);
-    WriteVector(os, meshlets);
-    WriteVector(os, meshletVertices);
-    WriteVector(os, meshletTriangles);
     WriteVector(os, allVerticesQuantized);
     WriteVector(os, allIndices);
 
     // Group blobs: the exact bytes the arena holds, in BuildGpuData's group order. Writing them here (instead of
     // in the per-primitive records) is what lets a load skip them and stream from the mapping later.
     std::vector<GroupSource> groupSources;
-    if (bCookClusters)
+    for (const Scene::Mesh& mesh : meshes)
     {
-        for (const Scene::Mesh& mesh : meshes)
+        SDL_assert(mesh.m_Clusters.size() == mesh.m_Primitives.size());
+        if (mesh.m_Clusters.size() != mesh.m_Primitives.size())
+            continue;
+
+        for (size_t pi = 0; pi < mesh.m_Primitives.size(); ++pi)
         {
-            SDL_assert(mesh.m_Clusters.size() == mesh.m_Primitives.size());
-            if (mesh.m_Clusters.size() != mesh.m_Primitives.size())
+            const ClusterLod::PrimitiveClusters& clusters = mesh.m_Clusters[pi];
+            if (clusters.IsEmpty())
+                continue;
+            if (mesh.m_Primitives[pi].m_MeshDataIndex >= meshData.size())
                 continue;
 
-            for (size_t pi = 0; pi < mesh.m_Primitives.size(); ++pi)
-            {
-                const ClusterLod::PrimitiveClusters& clusters = mesh.m_Clusters[pi];
-                if (clusters.IsEmpty())
-                    continue;
-                if (mesh.m_Primitives[pi].m_MeshDataIndex >= meshData.size())
-                    continue;
-
-                SDL_assert(clusters.m_Clusters.size() == clusters.m_GeneratingGroups.size());
-                for (const ClusterLod::Group& group : clusters.m_Groups)
-                    groupSources.push_back(GroupSource{ &clusters, &group, &allVerticesQuantized,
-                        mesh.m_Primitives[pi].m_VertexOffset });
-            }
+            SDL_assert(clusters.m_Clusters.size() == clusters.m_GeneratingGroups.size());
+            for (const ClusterLod::Group& group : clusters.m_Groups)
+                groupSources.push_back(GroupSource{ &clusters, &group, &allVerticesQuantized,
+                    mesh.m_Primitives[pi].m_VertexOffset });
         }
     }
 
@@ -556,12 +545,9 @@ bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vecto
             ClusterLod::WriteToStream(os, clusters);
     }
 
-    // The legacy vertex/index/meshlet arrays are absent from a streamed scene; m_MeshData is not legacy - the
-    // cluster path and the node bounds read it - so it is written as usual.
+    // The vertex/index arrays are absent from a streamed scene; m_MeshData is not - the cluster path and the node
+    // bounds read it - so it is written as usual.
     WriteVector(os, meshData);
-    WriteVector(os, std::vector<srrhi::Meshlet>{});
-    WriteVector(os, std::vector<uint32_t>{});
-    WriteVector(os, std::vector<uint32_t>{});
     WriteVector(os, std::vector<srrhi::VertexQuantized>{});
     WriteVector(os, std::vector<uint32_t>{});
 
@@ -659,12 +645,8 @@ bool LoadCookedMesh(
     const std::filesystem::path& cachePath,
     std::vector<Scene::Mesh>&            outMeshes,
     std::vector<srrhi::MeshData>&        outMeshData,
-    std::vector<srrhi::Meshlet>&         outMeshlets,
-    std::vector<uint32_t>&               outMeshletVertices,
-    std::vector<uint32_t>&               outMeshletTriangles,
     std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
     std::vector<uint32_t>&               outIndices,
-    bool                                 bCookClusters,
     ClusterLod::BlobFile&                outBlobs)
 {
     std::ifstream is(cachePath, std::ios::binary);
@@ -701,15 +683,6 @@ bool LoadCookedMesh(
         return false;
     }
 
-    uint32_t clustersCooked = 0;
-    ReadPOD(is, clustersCooked);
-    if ((clustersCooked != 0) != bCookClusters)
-    {
-        SDL_Log("[SceneCache] Cache was cooked with cluster LOD %s, this run wants %s: %s",
-            clustersCooked ? "on" : "off", bCookClusters ? "on" : "off", cachePath.string().c_str());
-        return false;
-    }
-
     // Meshes
     uint32_t meshCount = 0;
     ReadPOD(is, meshCount);
@@ -739,9 +712,6 @@ bool LoadCookedMesh(
 
     // POD arrays
     ReadVector(is, outMeshData);
-    ReadVector(is, outMeshlets);
-    ReadVector(is, outMeshletVertices);
-    ReadVector(is, outMeshletTriangles);
     ReadVector(is, outVerticesQuantized);
     ReadVector(is, outIndices);
 
@@ -775,7 +745,6 @@ bool LoadOrCookMeshData(
     Scene& scene,
     std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
     std::vector<uint32_t>& outIndices,
-    bool bCookClusters,
     ClusterLod::BlobFile& outBlobs)
 {
     outBlobs.Clear();
@@ -788,12 +757,9 @@ bool LoadOrCookMeshData(
         bool loaded = LoadCookedMesh(cachePath,
             scene.m_Meshes,
             scene.m_MeshData,
-            scene.m_Meshlets,
-            scene.m_MeshletVertices,
-            scene.m_MeshletTriangles,
+
             outVerticesQuantized,
             outIndices,
-            bCookClusters,
             outBlobs);
         if (loaded)
         {
@@ -816,7 +782,7 @@ bool LoadOrCookMeshData(
     // cache's own path plus ".parts".
     SceneLoader::SetStreamImportPartsBase(cachePath);
     bool success = SceneLoader::ProcessMeshesFromGLTF(
-        scenePath.string(), scene, outVerticesQuantized, outIndices, bCookClusters);
+        scenePath.string(), scene, outVerticesQuantized, outIndices);
     if (!success)
     {
         SDL_Log("[SceneCache] Failed to process meshes from glTF");
@@ -843,12 +809,8 @@ bool LoadOrCookMeshData(
         saved = SaveCookedMesh(cachePath,
             scene.m_Meshes,
             scene.m_MeshData,
-            scene.m_Meshlets,
-            scene.m_MeshletVertices,
-            scene.m_MeshletTriangles,
             outVerticesQuantized,
             outIndices,
-            bCookClusters,
             outBlobs);
     }
     if (saved)

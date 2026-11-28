@@ -142,9 +142,7 @@ namespace ClusterLod
     struct Config
     {
         // The unit size is what decides how well occlusion culling works: a cluster's bounding sphere is what the
-        // HZB test sees, and a sphere over 128 triangles pokes past an occluder that a meshlet's does not. These
-        // match the meshlet path's own limits (kMaxMeshletVertices / kMaxMeshletTriangles) so both paths cull at
-        // the same granularity.
+        // HZB test sees, and a sphere over 128 triangles pokes past an occluder that a smaller unit would not.
         uint32_t m_MaxTriangles = 96;
         uint32_t m_MaxVertices = 64;
         // Partition target in clusters; the reference renderer uses 16, and a smaller group also means a tighter

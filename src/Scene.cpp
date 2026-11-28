@@ -10,7 +10,7 @@
 #include "Omm/OmmSceneBaker.h"
 #include "Omm/OmmRuntime.h"
 
-// Capacities of the per-bucket traversal queues and of the meshlet job list. These used to be sized by the
+// Capacities of the per-bucket traversal queues. These used to be sized by the
 // instances x tree worst case, which is what a scene with one instance per node needs and what a scene with
 // millions of EXT_mesh_gpu_instancing placements cannot afford: that worst case becomes billions of refs and
 // tens of GB, while one frame can only use a few million. The shaders drop an append past the end and count it
@@ -18,7 +18,6 @@
 constexpr uint32_t kMaxClusterJobs      = 4u << 20;   // 33.5 MB per bucket at 8 B per job
 constexpr uint32_t kMaxClusterNodeRefs  = 2u << 20;   // 25.2 MB per node queue at 12 B per ref
 constexpr uint32_t kMaxClusterGroupRefs = 2u << 20;   // 25.2 MB per group queue at 12 B per ref
-constexpr uint32_t kMaxMeshletJobs      = 4u << 20;   // 4.2 M x sizeof(MeshletJob)
 
 Scene::GeometryFootprint Scene::MeasureGeometryFootprint() const
 {
@@ -220,24 +219,6 @@ void Scene::FinalizeLoadedScene()
     PushInstances(transparentStatic);
 	PushInstances(transparentDynamic);
 
-	// Worst-case number of meshlet jobs the base pass can emit: one job per meshlet group, with
-	// every instance rendering its most detailed LOD. Used to size the meshlet job buffer, so it is
-	// capped like the traversal queues above; GPUCulling drops the jobs past the end.
-	uint64_t meshletJobCount = 0;
-	for (const srrhi::PerInstanceData& inst : m_InstanceData)
-	{
-		const srrhi::MeshData& meshData = m_MeshData[inst.m_MeshDataIndex];
-
-		uint32_t maxMeshlets = 0;
-		for (uint32_t lod = 0; lod < meshData.m_LODCount; ++lod)
-		{
-			maxMeshlets = std::max(maxMeshlets, meshData.m_MeshletCounts[lod]);
-		}
-
-		meshletJobCount += DivideAndRoundUp(maxMeshlets, srrhi::CommonConsts::kThreadsPerGroup);
-	}
-	m_MaxMeshletJobCount = uint32_t(std::clamp<uint64_t>(meshletJobCount, 1ull, kMaxMeshletJobs));
-
 	// Worst-case cluster traversal work: every instance drawing every cluster, group and node of its
 	// primitive. The primitive is found through its MeshDataIndex, which is what the traversal indexes too.
 	std::unordered_map<uint32_t, const ClusterLod::PrimitiveClusters*> clustersByMeshData;
@@ -246,6 +227,12 @@ void Scene::FinalizeLoadedScene()
 		for (size_t pi = 0; pi < mesh.m_Primitives.size() && pi < mesh.m_Clusters.size(); ++pi)
 			clustersByMeshData[mesh.m_Primitives[pi].m_MeshDataIndex] = &mesh.m_Clusters[pi];
 	}
+
+	// The reject bitmask of the two-pass culling is indexed by a cluster's global record index, so its width is the
+	// record count of the whole scene - every primitive's clusters once, however many instances draw them.
+	m_ClusterRecordCount = 0;
+	for (const auto& entry : clustersByMeshData)
+		m_ClusterRecordCount += uint32_t(entry.second->m_Clusters.size());
 
 	// Bounded per bucket rather than over the whole scene: each bucket owns its own traversal buffers, and the
 	// masked bucket is usually a small fraction of the opaque one, so a scene-wide bound would reserve that
@@ -377,7 +364,7 @@ void Scene::LoadScene()
 		{
 			// Load or cook mesh data (cache-aware)
 			success = SceneCache::LoadOrCookMeshData(sceneFilePath, *this, allVerticesQuantized, allIndices,
-				Config::Get().m_EnableClusterLod, g_Renderer.m_ClusterBlobFile);
+				g_Renderer.m_ClusterBlobFile);
 				// A streamed (cluster-only) scene has no scene-wide geometry arrays; nothing that needs them can
 				// run for it, RT included.
 				m_bLegacyGeometryAbsent = success && allVerticesQuantized.empty() && allIndices.empty();

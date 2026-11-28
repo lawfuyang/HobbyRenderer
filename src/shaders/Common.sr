@@ -55,10 +55,8 @@ srinput CommonConsts
     static const float M_PI = 3.14159265359f;
     static const float kEpsilon = 1e-5f;    // general-purpose epsilon for division/sqrt guards
 
-    // Thread group / meshlet limits
+    // Thread group limit
     static const uint kThreadsPerGroup = 32;
-    static const uint kMaxMeshletVertices = 64;
-    static const uint kMaxMeshletTriangles = 96;
 
     // Cluster limits: ClusterLod::Config builds 128-triangle / 128-vertex clusters, so the mesh shader has to
     // declare that many outputs and run that many threads.
@@ -87,22 +85,19 @@ srinput CommonConsts
     // Debug modes
     static const int DEBUG_MODE_NONE = 0;
     static const int DEBUG_MODE_INSTANCES = 1;
-    static const int DEBUG_MODE_MESHLETS = 2;
-    static const int DEBUG_MODE_WORLD_NORMALS = 3;
-    static const int DEBUG_MODE_ALBEDO = 4;
-    static const int DEBUG_MODE_ROUGHNESS = 5;
-    static const int DEBUG_MODE_METALLIC = 6;
-    static const int DEBUG_MODE_EMISSIVE = 7;
-    static const int DEBUG_MODE_LOD = 8;
-    static const int DEBUG_MODE_MOTION_VECTORS = 9;
-    static const int DEBUG_MODE_REGIR_CELLS = 10;
-    static const int DEBUG_MODE_STREAMING_MIP = 11;
-    // The cluster views read what the cluster mesh shader wrote into the vertex output, so they show nothing
-    // when the base pass draws through the legacy meshlet path.
-    static const int DEBUG_MODE_CLUSTERS = 12;        // hash colour per visible cluster
-    static const int DEBUG_MODE_CLUSTER_LOD = 13;     // ramp over the cluster cut's LOD level
-    static const int DEBUG_MODE_CLUSTER_BOUNDS = 14;  // the culling bounds of every visible cluster, as boxes
-static const int DEBUG_MODE_CLUSTER_TRIANGLES = 15; // hash colour per triangle, to read the cluster's triangulation
+    static const int DEBUG_MODE_WORLD_NORMALS = 2;
+    static const int DEBUG_MODE_ALBEDO = 3;
+    static const int DEBUG_MODE_ROUGHNESS = 4;
+    static const int DEBUG_MODE_METALLIC = 5;
+    static const int DEBUG_MODE_EMISSIVE = 6;
+    static const int DEBUG_MODE_LOD = 7;
+    static const int DEBUG_MODE_MOTION_VECTORS = 8;
+    static const int DEBUG_MODE_REGIR_CELLS = 9;
+    static const int DEBUG_MODE_STREAMING_MIP = 10;
+    // The cluster views read what the cluster mesh shader wrote into the vertex output.
+    static const int DEBUG_MODE_CLUSTERS = 11;        // hash colour per visible cluster
+    static const int DEBUG_MODE_CLUSTER_LOD = 12;     // ramp over the cluster cut's LOD level
+static const int DEBUG_MODE_CLUSTER_TRIANGLES = 13; // hash colour per triangle, to read the cluster's triangulation
 
     // Rendering modes
     static const int RENDERING_MODE_NORMAL = 0;

@@ -56,7 +56,7 @@ namespace ClusterLod
         std::vector<StreamGroup> m_StreamGroups;
 
         // Primitives the cluster path cannot draw, because they have no cluster data (fewer than three indices,
-        // or a failed build). They disappear once the cluster base pass replaces the meshlet draw.
+        // or a failed build).
         uint32_t m_PrimitivesWithoutData = 0;
 
         uint64_t GetMemoryBytes() const;

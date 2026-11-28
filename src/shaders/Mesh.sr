@@ -19,27 +19,5 @@ struct MeshData
     uint  m_LODCount;
     uint  m_IndexOffsets[8];
     uint  m_IndexCounts[8];
-    uint  m_MeshletOffsets[8];
-    uint  m_MeshletCounts[8];
     float m_LODErrors[8];
-};
-
-struct Meshlet
-{
-    uint m_CenterRadius[2];
-    uint m_VertexOffset;
-    uint m_TriangleOffset;
-    uint m_VertexCount;
-    uint m_TriangleCount;
-    uint m_ConeAxisAndCutoff;
-};
-
-struct MeshletJob
-{
-    uint m_InstanceIndex;
-    uint m_LODIndex;
-    // Which threadgroup's worth of meshlets this job covers, within the instance's LOD.
-    // The base pass dispatches one job per meshlet group, so the group index has to travel
-    // with the job instead of being derived from the dispatch group id.
-    uint m_MeshletGroupIndex;
 };

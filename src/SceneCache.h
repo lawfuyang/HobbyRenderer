@@ -17,9 +17,6 @@ namespace SceneCache
     //                                 [clusterCount:uint32_t][PrimitiveClusters * clusterCount]
     //                          Primitive = [m_VertexOffset:uint32_t][m_VertexCount:uint32_t][m_MaterialIndex:int32_t][m_MeshDataIndex:uint32_t]
     // var     var    MeshData:  [count:uint64_t][srrhi::MeshData * count]
-    // var     var    Meshlets:  [count:uint64_t][srrhi::Meshlet * count]
-    // var     var    MletVerts: [count:uint64_t][uint32_t * count]
-    // var     var    MletTris:  [count:uint64_t][uint32_t * count]
     // var     var    VerticesQ: [count:uint64_t][srrhi::VertexQuantized * count]
     // var     var    Indices:   [count:uint64_t][uint32_t * count]
     // var     8      Group blobs: [count:uint64_t][ClusterLod::GroupBlobRef * count]
@@ -38,7 +35,7 @@ namespace SceneCache
     // Bump when:
     // - meshoptimizer library is upgraded to a new major version
     // - ProcessMeshes algorithm changes (new passes, different quantization)
-    // - VertexQuantized or Meshlet struct layout changes
+    // - VertexQuantized struct layout changes
     // - LOD generation parameters change
     // 3: cluster LOD data written per primitive, plus the cluster config hash in the header.
     // 5: terminal (stuck) groups, regularised simplification and the meshoptimizer vertex dedup.
@@ -48,7 +45,10 @@ namespace SceneCache
     //    cluster path no longer reads the scene-global vertex buffer.
     // 10: the cluster record carries the +-1 lod overlap table (one 8 b record per group plus its links).
     // 11: group blobs store their vertex run meshopt-encoded (ClusterLod::EncodeGroupBlob).
-    constexpr uint32_t kCookedMeshVersion = 11;
+    // 12: the meshlet arrays and MeshData's meshlet offsets/counts are gone (the cluster path is the only geometry
+    //     source), so the MeshData layout changed and three sections left the file.
+    // 13: the header no longer carries a "clusters cooked" flag; every cook builds the DAG.
+    constexpr uint32_t kCookedMeshVersion = 13;
 
     // ── Streamed import: one part file per primitive ──────────────────────────
     //
@@ -114,7 +114,7 @@ namespace SceneCache
     bool ReadCookedPart(const std::filesystem::path& partPath, CookedPartHeader& header,
                         ClusterLod::PrimitiveClusters& clusters);
 
-    // Assembles the parts into a cooked mesh with no legacy vertex/index/meshlet arrays (the cluster path and the
+    // Assembles the parts into a cooked mesh with no vertex/index arrays (the cluster path and the
     // group blobs are all a streamed scene has), streaming each part's blob region into the file. Parts are
     // deleted as they are copied, so peak disk is the cache plus one part.
     bool AssembleCookedMesh(const std::filesystem::path& cachePath, const std::vector<Scene::Mesh>& meshes,
@@ -162,12 +162,8 @@ namespace SceneCache
         const std::filesystem::path& cachePath,
         const std::vector<Scene::Mesh>&           meshes,
         const std::vector<srrhi::MeshData>&       meshData,
-        const std::vector<srrhi::Meshlet>&        meshlets,
-        const std::vector<uint32_t>&              meshletVertices,
-        const std::vector<uint32_t>&              meshletTriangles,
         const std::vector<srrhi::VertexQuantized>& allVerticesQuantized,
         const std::vector<uint32_t>&              allIndices,
-        bool                                      bCookClusters,
         ClusterLod::BlobFile&                     outBlobs);
 
     // Load mesh-processed data from a binary file.
@@ -176,12 +172,8 @@ namespace SceneCache
         const std::filesystem::path& cachePath,
         std::vector<Scene::Mesh>&            outMeshes,
         std::vector<srrhi::MeshData>&        outMeshData,
-        std::vector<srrhi::Meshlet>&         outMeshlets,
-        std::vector<uint32_t>&               outMeshletVertices,
-        std::vector<uint32_t>&               outMeshletTriangles,
         std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
         std::vector<uint32_t>&               outIndices,
-        bool                                 bCookClusters,
         ClusterLod::BlobFile&                outBlobs);
 
     // Check whether the cached file exists and is newer than the source file.
@@ -196,7 +188,6 @@ namespace SceneCache
         Scene& scene,
         std::vector<srrhi::VertexQuantized>& outVerticesQuantized,
         std::vector<uint32_t>& outIndices,
-        bool bCookClusters,
         ClusterLod::BlobFile& outBlobs);
 
 } // namespace SceneCache
