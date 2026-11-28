@@ -146,18 +146,18 @@ GBufferOut PSMain(FullScreenVertexOut input)
                       float4(TransformNormal(v1.m_Tangent.xyz, instance.m_World), v1.m_Tangent.w),
                       float4(TransformNormal(v2.m_Tangent.xyz, instance.m_World), v2.m_Tangent.w), weights);
     o.worldPos = Blend(w0.xyz, w1.xyz, w2.xyz, weights);
-    // The previous world position as the current one plus the blended per-vertex delta: a vertex whose transform has
-    // not changed contributes an exact zero, so a static object's motion is exactly zero, the same guarantee the
-    // raster path gets from interpolating two identical sets of vertex positions.
-    o.prevWorldPos = o.worldPos + Blend(
-        w0.xyz - MatrixMultiply(float4(v0.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
-        w1.xyz - MatrixMultiply(float4(v1.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
-        w2.xyz - MatrixMultiply(float4(v2.m_Pos, 1.0f), instance.m_PrevWorld).xyz, weights);
+    // The previous world position is this same interpolation run on the previous transform - what the raster path's
+    // vertex shader wrote per vertex and the rasteriser interpolated. It cannot be expressed as the current world
+    // position plus a blended delta: that adds the delta to an already-blended position, giving 2*current - previous,
+    // which is the exact negation of the motion the temporal passes need. A static instance's two sets of vertices are
+    // identical, so its motion stays exactly zero either way.
+    o.prevWorldPos = Blend(MatrixMultiply(float4(v0.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
+                           MatrixMultiply(float4(v1.m_Pos, 1.0f), instance.m_PrevWorld).xyz,
+                           MatrixMultiply(float4(v2.m_Pos, 1.0f), instance.m_PrevWorld).xyz, weights);
 
     // The values the raster path carried through its interpolant, so the instance, cluster and LOD debug views keep
-    // working. A cluster has no meshlet, so that id stays invalid, exactly as the cluster mesh shader leaves it.
+    // working.
     o.instanceID = job.m_InstanceIndex;
-    o.meshletID = 0xFFFFFFFFu;
     o.lodIndex = cluster.m_LODLevel;
     o.clusterID = job.m_ClusterIndex;
 
